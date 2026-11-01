@@ -1,5 +1,9 @@
 # Project instructions
 
+## Code review
+
+When reviewing code, apply `CODING_STANDARDS.md`.
+
 ## GitHub issue tracker
 
 This repository uses GitHub Issues for specifications and implementation tickets.
