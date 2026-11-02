@@ -1,7 +1,7 @@
 # Hồ sơ phát hành 0.1.0 (#17)
 
 License code đã được chủ sở hữu duyệt: [tiếng Anh chính](../../../../LICENSE),
-[tiếng Việt tham khảo](../../../../LICENSE.vi). Tag dự kiến `v0.1.0`; image dự kiến
+[tiếng Việt tham khảo](https://github.com/nguyencanhtrung/asr-studio/blob/fe1e685/LICENSE.vi). Tag dự kiến `v0.1.0`; image dự kiến
 `ghcr.io/nguyencanhtrung/asr-en-vi:v0.1.0`, `linux/amd64` và `linux/arm64`.
 **Chưa công bố hoặc xác minh artifact registry cuối.**
 

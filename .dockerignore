@@ -2,7 +2,6 @@
 !pyproject.toml
 !README.md
 !LICENSE
-!LICENSE.vi
 !uv.lock
 !src/
 !src/asr_studio/

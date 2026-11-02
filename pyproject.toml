@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "Local-first meeting notes workspace"
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"
-license-files = ["LICENSE", "LICENSE.vi"]
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "av>=11,<19",
@@ -50,7 +50,6 @@ include = [
     "/pyproject.toml",
     "/README.md",
     "/LICENSE",
-    "/LICENSE.vi",
     "/uv.lock",
 ]
 

@@ -32,7 +32,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_PYTHON=/usr/bin/python3
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE LICENSE.vi uv.lock ./
+COPY pyproject.toml README.md LICENSE uv.lock ./
 COPY src/ ./src/
 COPY scripts/use-system-openmp.py /tmp/use-system-openmp.py
 RUN PKG_CONFIG_PATH=/opt/asr-media/lib/pkgconfig LDFLAGS=-Wl,-rpath,/opt/asr-media/lib \
@@ -83,7 +83,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.licenses="PolyForm-Noncommercial-1.0.0"
 WORKDIR /app
-COPY LICENSE LICENSE.vi /usr/local/share/licenses/asr-studio/
+COPY LICENSE /usr/local/share/licenses/asr-studio/
 COPY third_party/notices/ /usr/local/share/licenses/asr-studio/third-party/
 COPY third_party/platform-coverage.json /usr/local/share/licenses/asr-studio/platform-coverage.json
 COPY --from=builder /app/.venv /app/.venv
