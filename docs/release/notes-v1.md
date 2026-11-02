@@ -16,6 +16,5 @@ The [notes summary](notes-v0.1.0.md) preserves the observed quality limitations.
 Later code changes alone do not change those historical results.
 
 The English [application license](../../LICENSE) remains authoritative.
-[LICENSE.vi](../../LICENSE.vi) is a reference translation.
 Dependencies and model weights retain their own terms.
 See [third-party notices](../../third_party/README.md) and the [user guide](../user-guide.md) for details.

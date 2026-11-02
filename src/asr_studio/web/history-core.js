@@ -461,7 +461,7 @@ function showSourceTab(state, action) {
   const at = addressOf(action);
   const { meetingId, snapshotId, segmentId } = action;
   if (state.view !== "meeting" || !state.meeting || state.meeting.id !== meetingId) return out(state);
-  const query = `?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}`;
+  const query = `?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}${action.group ? `&group=${encodeURIComponent(action.group)}` : ""}`;
   const url = `${meetingPath(meetingId)}${query}#transcript`;
   const effects = `${at.pathname}${at.search}${at.hash}` !== url ? pushMeetingUrl(state, at, url, "transcript") : [];
   return then(out(state, effects), (next) => setTab(next, "transcript"));

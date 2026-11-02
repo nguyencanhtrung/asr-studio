@@ -383,10 +383,10 @@ function selectTab(tab, { focus = false } = {}) {
 
 // Opening a saved source from the notes: the Transcript tab, as one new history entry so Back returns to
 // the notes. A pasted or restored link already names that address, so only a click needs this.
-function showNotesSourceTab({ meetingId, snapshotId, segmentId }) {
+function showNotesSourceTab({ meetingId, snapshotId, segmentId, group }) {
   const state = nav();
   if (state.view !== "meeting" || !state.meeting || state.meeting.id !== meetingId) return false;
-  dispatch({ type: "history/source-tab-shown", meetingId, snapshotId, segmentId });
+  dispatch({ type: "history/source-tab-shown", meetingId, snapshotId, segmentId, group });
   return true;
 }
 
@@ -693,7 +693,7 @@ async function seekNotesSource(source) {
   const { meetingId, snapshotId, segmentId, startSeconds } = source; // no source at all rejects, as before 4d
   if (!validSource(source)) return false;
   const path = `/meetings/${encodeURIComponent(meetingId)}`;
-  const query = `?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}`;
+  const query = `?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}${source.group ? `&group=${encodeURIComponent(source.group)}` : ""}`;
   if (window.location.pathname !== path || window.location.search !== query) {
     // Opening a source does not change the tab: the new entry keeps the address's hash and the tab shown.
     const state = nav();

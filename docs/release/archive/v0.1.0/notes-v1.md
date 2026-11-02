@@ -20,7 +20,7 @@ digest từng kiến trúc và kết quả smoke bên dưới.
 ## License
 
 [PolyForm Noncommercial 1.0.0 tiếng Anh](../../../../LICENSE) là bản chính;
-[tiếng Việt](../../../../LICENSE.vi) chỉ để tham khảo. Mục đích thương mại ngoài các
+[tiếng Việt](https://github.com/nguyencanhtrung/asr-studio/blob/fe1e685/LICENSE.vi) chỉ để tham khảo. Mục đích thương mại ngoài các
 quyền được license cho phép cần có chấp thuận riêng của chủ sở hữu. Dependency,
 font, base image và model giữ điều khoản riêng; xem [hồ sơ thành phần](../../README.md).
 

@@ -94,9 +94,9 @@ def test_image_build_context_is_allowlisted_and_excludes_user_owned_files():
     assert "!uv.lock" in dockerignore
     assert "!src/asr_studio/**" in dockerignore
     assert "COPY ." not in dockerfile
-    assert "COPY pyproject.toml README.md LICENSE LICENSE.vi uv.lock ./" in dockerfile
-    assert {"!LICENSE", "!LICENSE.vi"} <= set(dockerignore)
-    assert "COPY LICENSE LICENSE.vi /usr/local/share/licenses/asr-studio/" in dockerfile
+    assert "COPY pyproject.toml README.md LICENSE uv.lock ./" in dockerfile
+    assert {"!LICENSE"} <= set(dockerignore)
+    assert "COPY LICENSE /usr/local/share/licenses/asr-studio/" in dockerfile
     assert 'org.opencontainers.image.licenses="PolyForm-Noncommercial-1.0.0"' in dockerfile
     assert "uv sync --locked --no-dev --no-editable" in dockerfile
     assert "nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04" in dockerfile

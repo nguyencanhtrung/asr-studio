@@ -162,7 +162,7 @@ from pathlib import Path
 assert shutil.which('cuda-gdb') is None
 assert not list(Path('/usr/local').glob('cuda*/bin/cuda-gdb*'))
 base=Path('/usr/local/share/licenses/asr-studio')
-assert (base/'LICENSE').is_file() and (base/'LICENSE.vi').is_file()
+assert (base/'LICENSE').is_file()
 for name, expected in json.loads(sys.argv[1]).items():
     assert hashlib.sha256((base/'third-party'/name).read_bytes()).hexdigest()==expected
 r=json.loads((base/'openmp-runtime.json').read_text())

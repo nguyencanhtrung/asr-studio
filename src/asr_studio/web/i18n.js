@@ -444,6 +444,8 @@ const { t, UI_LOCALE } = (() => {
       "Mức suy luận mới chưa được lưu.": "The new reasoning effort is not saved yet.",
       "Mức suy luận này không được mô hình đã chọn hỗ trợ.": "The selected model does not support this reasoning effort.",
       "Mức suy nghĩ": "Thinking level",
+      "{label} · {count} đoạn": "{label} · {count} segments",
+      "Nghe lại nhóm nguồn {label}, {count} đoạn": "Replay source group {label}, {count} segments",
       "Nghe lại đoạn nguồn lúc {label}": "Replay the source segment at {label}",
       "Nguyên tắc ngôn ngữ": "Language principle",
       "Nguyên tắc nội dung": "Content principle",

@@ -634,6 +634,21 @@ def _source_link_warnings(
     return warnings
 
 
+def _display_citations(connection: sqlite3.Connection, row: sqlite3.Row) -> list:
+    from asr_studio.citation_groups import group_citations
+
+    citations = _stored_citations(row)
+    if not citations:
+        return []
+    stored = connection.execute(
+        "SELECT snapshot_json FROM notes_sources WHERE id = ?", (row["source_snapshot_id"],)
+    ).fetchone()
+    try:
+        return group_citations(citations, json.loads(stored["snapshot_json"]))
+    except (TypeError, KeyError, ValueError):
+        return citations
+
+
 def _revision_payload(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
@@ -661,6 +676,7 @@ def _revision_payload(
         "markdown": markdown,
         "warnings": _source_link_warnings(connection, row, markdown),
         "citations": _stored_citations(row),
+        "display_citations": _display_citations(connection, row),
         "edit_version": row["edit_version"],
         "source_state": source_state,
         "provider": row["provider"],

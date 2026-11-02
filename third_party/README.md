@@ -8,8 +8,7 @@ and the package-specific terms retained in the image. Intel oneMKL retains its
 
 The notice tree is copied to `/usr/local/share/licenses/asr-en-vi/third-party/`.
 System copyright files remain in `/usr/share/doc`; OMP notices remain in
-`/usr/local/share/licenses/omp/`. The English application license is authoritative;
-`LICENSE.vi` is a reference translation.
+`/usr/local/share/licenses/omp/`. The [application license](../LICENSE) applies to original project code.
 
 For each loaded platform image, run:
 
