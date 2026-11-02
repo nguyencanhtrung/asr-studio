@@ -200,3 +200,25 @@ Xem [bằng chứng và đánh đổi theo tag](release/privacy-v0.1.0.md),
 [các thay đổi notes](release/notes-v0.1.0.md) và
 [chỉ mục thay đổi](architecture-changes-v1.md). Số đo lịch sử giữ nguyên điều kiện
 và revision gốc; không phải phép đo lại artifact 0.1.0.
+
+
+### Citation display groups (#153)
+
+Notes revision responses additionally expose `display_citations`, a read-only projection of
+`citations` using only that revision's immutable snapshot. Entry shape stays `{section, text,
+sources}`; each display source includes `members: [{id, start_seconds}]` and, when validated,
+`end_seconds`. Stored `citations` and snapshot JSON remain unchanged. Missing structural metadata
+falls back to individual sources. Legacy snapshots have no acoustic quality flags; absence of
+flags is not evidence that acoustic overlap is absent.
+
+Only adjacent positions in the full snapshot with the same non-null speaker ID can join.
+Uncited segments, invalid/overlapping intervals and snapshot quality barriers prevent joining.
+The policy is gap <= 1 second and group span <= 60 seconds; long single segments stay single.
+The API adds no snapshot fetch to rendering. Opening a source uses the existing snapshot cache
+(one fetch per snapshot per page session). The projection adds member IDs/timestamps to revision
+payloads, but does not send the whole snapshot. Group links carry an optional `group` query value
+(the ordered member IDs); the source card resolves it only against the selected revision's
+projection. Member links preserve that value through Back/Forward. Copy/export use saved Markdown.
+
+Real EN/VI recording evaluation, listening, before/after screenshots and measured payload sizes
+remain required before merge (AC-12); synthetic fixtures cannot establish acoustic accuracy.

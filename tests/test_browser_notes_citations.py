@@ -676,7 +676,7 @@ def test_chips_and_the_source_card_fit_360px_and_read_in_both_themes(
     _write_test_recording(live.settings.data_dir, meeting_id, tmp_path)
     open_notes(live, page, meeting_id)
     assert page.evaluate("document.documentElement.dataset.theme") == scheme
-    expect(page.locator(CHIP)).to_have_count(14)
+    expect(page.locator(CHIP)).to_have_count(3)
     assert page.evaluate(OVERFLOW) == 0
     assert (
         page.evaluate(
@@ -820,3 +820,88 @@ def test_a_tab_switch_keeps_keyboard_focus_on_a_citation_chip(live, signed_in):
     )
 
     expect(chip).to_be_focused()
+
+
+@pytest.mark.parametrize("viewport", [DESKTOP, NARROW])
+def test_adjacent_group_opens_all_members_and_keyboard_seeks(live, signed_in, tmp_path, viewport):
+    _context, page = signed_in(viewport=viewport)
+    meeting_id, revision, snapshot, ids = seed_cited_notes(
+        live.settings.data_dir, segment_starts=[1.0, 2.0]
+    )
+    _write_test_recording(live.settings.data_dir, meeting_id, tmp_path)
+    open_notes(live, page, meeting_id)
+    group = page.locator(CHIP).filter(has_text="2 đoạn")
+    expect(group).to_have_text("00:01–00:03 · 2 đoạn")
+    group.focus()
+    group.press("Enter")
+    members = page.locator("#notes-source-members a")
+    expect(members).to_have_count(2)
+    expect(page.locator("#notes-source-text")).to_have_text("Segment 0.")
+    members.nth(1).focus()
+    members.nth(1).press("Enter")
+    expect(page.locator("#notes-source-text")).to_have_text("Segment 1.")
+    expect(page.locator("#notes-source-heading")).to_be_focused()
+    expect(page.locator("#notes-source-status")).not_to_be_empty()
+    assert page.evaluate(OVERFLOW) <= 1
+    page.go_back()
+    expect(page.locator("#notes-source-text")).to_have_text("Segment 0.")
+    page.go_forward()
+    expect(page.locator("#notes-source-text")).to_have_text("Segment 1.")
+
+
+def test_group_keeps_clicked_item_members_and_historical_revision(live, signed_in):
+    def document(ids):
+        result = default_cited_document(ids)
+        result["overview"] = [
+            {"text": "Two sources.", "source_ids": ids[:2]},
+            {"text": "Three sources.", "source_ids": ids[:3]},
+        ]
+        return result
+
+    _context, page = signed_in(viewport=NARROW)
+    meeting_id, first, snapshot, ids = seed_cited_notes(
+        live.settings.data_dir, document, segment_starts=[1.0, 2.0, 3.0]
+    )
+    rerun_transcript(live.settings.data_dir, meeting_id)
+    open_notes(live, page, meeting_id)
+    page.locator(CHIP).filter(has_text="3 đoạn").click()
+    expect(page.locator("#notes-source-members a")).to_have_count(3)
+    expect(page.locator("#notes-source-difference")).to_contain_text("lần chép lời khác")
+    page.locator("#notes-source-members a").nth(2).click()
+    expect(page.locator("#notes-source-text")).to_have_text("Segment 2.")
+    page.go_back()
+    expect(page.locator("#notes-source-members a")).to_have_count(3)
+    page.locator("#meeting-tab-notes").click()
+    page.locator(CHIP).filter(has_text="2 đoạn").click()
+    expect(page.locator("#notes-source-members a")).to_have_count(2)
+
+
+def test_group_projection_switches_with_notes_revision(live, signed_in):
+    _context, page = signed_in(viewport=DESKTOP)
+    meeting_id, first, snapshot, ids = seed_cited_notes(
+        live.settings.data_dir, segment_starts=[1.0, 2.0]
+    )
+    update_current_generation_segment_text(
+        live.settings.data_dir,
+        meeting_id,
+        ids[0],
+        expected_generation_id=snapshot["generation_id"],
+        expected_source_version=1,
+        text="Revised transcript.",
+    )
+    _, second, _, _ = seed_cited_notes(
+        live.settings.data_dir,
+        existing=(meeting_id, snapshot["generation_id"], ids),
+        source_version=2,
+        segment_starts=[10.0, 20.0],
+    )
+    open_notes(live, page, meeting_id)
+    expect(page.locator(CHIP).filter(has_text="2 đoạn")).to_have_count(0)
+    page.locator("#notes-revision-selector").select_option(first["id"])
+    group = page.locator(CHIP).filter(has_text="2 đoạn")
+    expect(group).to_have_text("00:01–00:03 · 2 đoạn")
+    group.click()
+    expect(page.locator("#notes-source-text")).to_have_text("Segment 0.")
+    page.locator("#meeting-tab-notes").click()
+    page.locator("#notes-revision-selector").select_option(second["id"])
+    expect(page.locator(CHIP).filter(has_text="2 đoạn")).to_have_count(0)

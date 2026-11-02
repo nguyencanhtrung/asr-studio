@@ -596,7 +596,7 @@
 }
 
 /* A timestamp citation after a bullet in Xem. It is a link to the saved source, never part of the Markdown. */
-.notes-markdown-preview a.notes-citation-chip {
+a.notes-citation-chip {
   display: inline-flex;
   min-height: 24px;
   align-items: center;
@@ -613,17 +613,17 @@
   vertical-align: baseline;
 }
 
-.notes-markdown-preview a.notes-citation-chip:hover {
+a.notes-citation-chip:hover {
   background: var(--accent);
   color: var(--accent-contrast);
 }
 
-.notes-markdown-preview a.notes-citation-chip:focus-visible {
+a.notes-citation-chip:focus-visible {
   outline-offset: 2px;
 }
 
 @media (forced-colors: active) {
-  .notes-markdown-preview a.notes-citation-chip {
+  a.notes-citation-chip {
     border-color: LinkText;
     color: LinkText;
   }
@@ -768,3 +768,5 @@
     align-items: flex-start;
   }
 }
+
+#notes-source-members { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 8px; }

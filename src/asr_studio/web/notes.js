@@ -145,7 +145,7 @@ function citationChip(chip) {
   link.dataset.snapshotId = chip.snapshotId;
   link.dataset.segmentId = chip.segmentId;
   link.setAttribute("aria-label", tr(chip.aria));
-  link.textContent = chip.label;
+  link.textContent = tr(chip.label);
   return link;
 }
 
@@ -317,6 +317,12 @@ function renderSavedWork(work) {
 }
 
 function renderSource(source) {
+  const members = document.getElementById("notes-source-members");
+  const key = JSON.stringify(source.members);
+  if (members.dataset.key !== key) {
+    members.dataset.key = key;
+    members.replaceChildren(...source.members.map(citationChip));
+  }
   setProp(els.sourceView, "hidden", source.hidden);
   setProp(els.sourceContext, "textContent", tr(source.context));
   setProp(els.sourceTime, "textContent", source.time);
@@ -477,7 +483,7 @@ els.keepDraft.addEventListener("click", () => dispatch({ type: "notes/keep-draft
 els.useLatest.addEventListener("click", () => dispatch({ type: "notes/use-latest-clicked" }));
 els.copy.addEventListener("click", () => dispatch({ type: "notes/copy-clicked" }));
 els.export.addEventListener("click", () => dispatch({ type: "notes/export-clicked" }));
-els.preview.addEventListener("click", (event) => {
+function openSourceLink(event) {
   const link = event.target.closest("a[data-notes-source-link]");
   if (
     !link
@@ -492,7 +498,9 @@ els.preview.addEventListener("click", (event) => {
   if (!reference || reference.segmentId !== link.dataset.segmentId) return;
   event.preventDefault();
   dispatch({ type: "notes/source-opened", reference, fromClick: true });
-});
+}
+els.preview.addEventListener("click", openSourceLink);
+els.sourceView.addEventListener("click", openSourceLink);
 els.sourceClose.addEventListener("click", () => dispatch({ type: "notes/source-closed", href: window.location.href }));
 els.sourceSeek.addEventListener("click", () => dispatch({ type: "notes/source-seek-clicked" }));
 

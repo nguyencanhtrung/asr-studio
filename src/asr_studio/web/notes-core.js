@@ -203,6 +203,7 @@ function normalizeRevision(revision, meetingId) {
     ...revision,
     output_language: ["en", "vi"].includes(revision.output_language) ? revision.output_language : "en",
     citations: normalizeCitations(revision.citations),
+    display_citations: normalizeCitations(revision.display_citations || revision.citations),
     // The source links of the saved Markdown that open no source; a server without the field names none.
     warnings: Array.isArray(revision.warnings)
       ? revision.warnings.filter((warning) => warning && typeof warning.href === "string")
@@ -330,8 +331,8 @@ function isCompletePendingRequest(pending) {
 // ---- source links ----
 
 // The address of a saved source: the Transcript tab, where its card sits under the player.
-export function sourceHref(meetingId, snapshotId, segmentId) {
-  return `/meetings/${encodeURIComponent(meetingId)}?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}#transcript`;
+export function sourceHref(meetingId, snapshotId, segmentId, group = "") {
+  return `/meetings/${encodeURIComponent(meetingId)}?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}${group ? `&group=${encodeURIComponent(group)}` : ""}#transcript`;
 }
 
 // A source link is spelled with the literal notes_source=; the server names the broken ones by that spelling.
@@ -361,7 +362,7 @@ export function sourceReference(rawHref, origin, expectedMeetingId = null, expec
   if (!meetingId || meetingId.includes("/")) return null;
   const params = [...url.searchParams.entries()];
   if (
-    params.length !== 2
+    (params.length !== 2 && !(params.length === 3 && params[2][0] === "group" && params[2][1]))
     || params[0][0] !== "notes_source"
     || params[1][0] !== "segment"
     || !params[0][1]
@@ -373,7 +374,7 @@ export function sourceReference(rawHref, origin, expectedMeetingId = null, expec
     (expectedMeetingId && meetingId !== expectedMeetingId)
     || (expectedSnapshotId && snapshotId !== expectedSnapshotId)
   ) return null;
-  return { meetingId, snapshotId, segmentId, href: sourceHref(meetingId, snapshotId, segmentId) };
+  return { meetingId, snapshotId, segmentId, ...(url.searchParams.has("group") ? { group: url.searchParams.get("group") } : {}), href: sourceHref(meetingId, snapshotId, segmentId, url.searchParams.get("group")) };
 }
 
 // The source named by the page address (`href` is the full URL), or null.
@@ -397,7 +398,7 @@ export function sourceFromHref(href) {
   if (
     !meetingId
     || meetingId.includes("/")
-    || params.length !== 2
+    || (params.length !== 2 && !(params.length === 3 && params[2][0] === "group" && params[2][1]))
     || params[0][0] !== "notes_source"
     || params[1][0] !== "segment"
     || !params[0][1]
@@ -408,11 +409,12 @@ export function sourceFromHref(href) {
     meetingId,
     snapshotId: params[0][1],
     segmentId: params[1][1],
-    href: sourceHref(meetingId, params[0][1], params[1][1]),
+    ...(url.searchParams.has("group") ? { group: url.searchParams.get("group") } : {}),
+    href: sourceHref(meetingId, params[0][1], params[1][1], url.searchParams.get("group")),
   };
 }
 
-const referenceKey = (reference) => `${reference.meetingId}\u0000${reference.snapshotId}\u0000${reference.segmentId}`;
+const referenceKey = (reference) => `${reference.meetingId}\u0000${reference.snapshotId}\u0000${reference.segmentId}${reference.group ? `\u0000${reference.group}` : ""}`;
 
 // ---- Markdown shaping ----
 
@@ -496,15 +498,16 @@ function inlineNodes(text, revision, origin) {
   return nodes;
 }
 
-function citationChip(revision, source) {
-  const label = chipLabel(source.start_seconds);
+function citationChip(revision, source, group = "") {
+  const count = source.members?.length || 1;
+  const label = count > 1 ? `${chipLabel(source.start_seconds)}–${chipLabel(source.end_seconds)}` : chipLabel(source.start_seconds);
   return {
-    href: sourceHref(revision.meeting_id, revision.source_snapshot_id, source.id),
+    href: sourceHref(revision.meeting_id, revision.source_snapshot_id, source.id, group || (source.members?.length > 1 ? source.members.map((member) => member.id).join(",") : "")),
     meetingId: revision.meeting_id,
     snapshotId: revision.source_snapshot_id,
     segmentId: source.id,
-    label,
-    aria: t("Nghe lại đoạn nguồn lúc {label}", { label }),
+    label: count > 1 ? t("{label} · {count} đoạn", { label, count }) : label,
+    aria: count > 1 ? t("Nghe lại nhóm nguồn {label}, {count} đoạn", { label, count }) : t("Nghe lại đoạn nguồn lúc {label}", { label }),
   };
 }
 
@@ -516,7 +519,7 @@ function markdownBlocks(markdown, revision, mode, origin) {
     ...lines.map((line) => line.match(/^(#{1,6})\s+(.+)$/)).filter(Boolean).map((match) => match[1].length),
   );
   // Chips belong to Xem; the Markdown, Viết, the copy and the download never carry a reference.
-  const cited = mode === "view" ? citedBullets(lines, revision.citations || []) : new Map();
+  const cited = mode === "view" ? citedBullets(lines, revision.display_citations || revision.citations || []) : new Map();
   const blocks = [];
   let list = null;
   let paragraph = null;
@@ -1409,6 +1412,7 @@ function openSnapshot(state, reference, snapshot, id) {
     || Number(segment.start_seconds) < 0
   ) return sourceFailed(state, t("Không tìm thấy đoạn trong bản chụp transcript đã lưu."));
   const source = {
+    group: reference.group || "",
     snapshotId: snapshot.id,
     meetingId: reference.meetingId,
     generationId: snapshot.generation_id,
@@ -1959,6 +1963,10 @@ function savedWorkView(state, data) {
 function sourceView(state) {
   const { current, visible, status, focus } = state.source;
   return {
+    members: current ? (selectedRevision(state)?.display_citations || [])
+      .flatMap((entry) => entry.sources)
+      .filter((group) => selectedRevision(state).source_snapshot_id === current.snapshotId && group.members?.length > 1 && group.members.map((member) => member.id).join(",") === current.group && group.members.some((member) => member.id === current.segmentId))
+      .slice(0, 1).flatMap((group) => group.members.length > 1 ? group.members.map((member) => citationChip(selectedRevision(state), member, current.group)) : []) : [],
     hidden: !visible,
     context: current ? t("Đang xem bản chụp transcript bất biến. Nội dung này không đổi khi transcript hiện tại được sửa.") : "",
     time: current ? formatSeconds(current.startSeconds) : "",
