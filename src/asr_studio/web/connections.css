@@ -652,10 +652,45 @@
   }
 }
 
+.asr-default-control {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.asr-default-control label {
+  font-weight: 600;
+}
+
+.asr-default-control select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-control);
+}
+
+.asr-default-control select:disabled {
+  color: var(--ink-2);
+}
+
 .asr-default {
   margin: 0 0 12px;
   color: var(--ink-2);
   font-size: var(--text-small);
+}
+
+.asr-default.is-broken,
+.asr-default-refusal {
+  color: var(--danger, var(--ink));
+  font-size: var(--text-small);
+}
+
+.asr-default-refusal {
+  margin: 0 0 12px;
 }
 
 .asr-models {

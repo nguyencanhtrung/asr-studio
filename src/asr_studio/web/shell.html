@@ -860,7 +860,12 @@
           <div class="settings-panel" id="settings-panel-asr" role="tabpanel" aria-labelledby="settings-tab-asr" tabindex="0" hidden>
             <h3 class="settings-group-title">ASR Model</h3>
             <p class="connections-intro" id="asr-intro">Trạng thái model chép lời trên máy này. Mỗi lần chép lời có thể chọn model riêng; mặc định của hệ thống không đổi.</p>
+            <div class="asr-default-control" id="asr-default-control" hidden>
+              <label for="asr-default-select">Model mặc định</label>
+              <select id="asr-default-select"></select>
+            </div>
             <p class="asr-default" id="asr-default" hidden></p>
+            <p class="asr-default-refusal" id="asr-default-refusal" role="alert" hidden></p>
             <p class="connection-message" id="asr-status" role="status" aria-live="polite"></p>
             <ul class="asr-models" id="asr-models"></ul>
           </div>

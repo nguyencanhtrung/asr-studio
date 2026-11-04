@@ -18,6 +18,9 @@ const asrEls = {
   status: document.querySelector("#asr-status"),
   defaultText: document.querySelector("#asr-default"),
   list: document.querySelector("#asr-models"),
+  control: document.querySelector("#asr-default-control"),
+  select: document.querySelector("#asr-default-select"),
+  refusal: document.querySelector("#asr-default-refusal"),
 };
 
 const els = {
@@ -143,8 +146,17 @@ function renderLauncher(d, s) {
 function renderAsr(asr) {
   const view = selectAsr(asr);
   setProp(asrEls.status, "textContent", tr(view.text));
-  setProp(asrEls.defaultText, "hidden", !view.defaultText);
-  setProp(asrEls.defaultText, "textContent", tr(view.defaultText));
+  const control = view.defaultControl;
+  setProp(asrEls.control, "hidden", !control);
+  setProp(asrEls.defaultText, "hidden", !control || control.disabled);
+  if (control) {
+    renderOptions(asrEls.select, control.options, control.value);
+    setProp(asrEls.select, "disabled", control.disabled);
+    setProp(asrEls.defaultText, "textContent", tr(control.text));
+    asrEls.defaultText.classList.toggle("is-broken", control.broken);
+    setProp(asrEls.refusal, "hidden", !control.refusal);
+    setProp(asrEls.refusal, "textContent", tr(control.refusal));
+  }
   const signature = JSON.stringify(view.rows.map(({ copy, progress, ...row }) => ({ ...row, progressKind: progress ? (progress.ratio === null ? "indeterminate" : "bar") : null })));
   if (asrEls.list.dataset.rows !== signature) {
     asrEls.list.dataset.rows = signature;
@@ -414,6 +426,8 @@ els.dialog.addEventListener("close", () => dispatch({ type: "provider/dialog-clo
 els.dialog.addEventListener("click", (event) => {
   if (event.target === els.dialog) els.dialog.close();
 });
+
+asrEls.select.addEventListener("change", () => dispatch({ type: "provider/asr-default-chosen", value: asrEls.select.value }));
 
 const chatgpt = (action) => dispatch({ ...action, provider: CHATGPT.id });
 els.signIn.addEventListener("click", () => chatgpt({ type: "provider/login-requested" }));

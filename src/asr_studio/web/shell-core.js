@@ -307,7 +307,7 @@ function selectAsrModel(state, disabled) {
   const selected = choices.find((choice) => choice.id === value);
   const note = value === "auto"
     ? selected.model_name
-      ? t("Theo phần cứng của máy: {model}.", { model: selected.model_name })
+      ? t(selected.chosen ? "Theo Cài đặt: {model}." : "Theo phần cứng của máy: {model}.", { model: selected.model_name })
       : t("Theo phần cứng của máy.")
     : ASR_MODEL_TEXT[value].note;
   const warning = choices.some((choice) => choice.id !== "auto" && !choice.ready)

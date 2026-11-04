@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import uuid
 
 import pytest
@@ -329,3 +331,67 @@ def test_a_model_removed_after_the_page_loaded_is_refused_and_the_page_recovers(
     selector.select_option("pho-whisper-large")
     expect(start).to_be_disabled()
     expect(page.locator("#transcription-model-guidance")).to_be_visible()
+
+
+def _choose_default(page, live, asr_model):
+    reply = page.request.put(
+        f"{live.url}/api/asr-models/default",
+        data={"asr_model": asr_model},
+        headers={"Origin": live.url},
+    )
+    assert reply.ok, reply.text()
+
+
+def test_automatic_runs_the_default_from_settings_and_one_run_can_still_differ(
+    live, signed_in, worker
+):
+    _context, page = signed_in()
+    data_dir = live.settings.data_dir
+    object.__setattr__(
+        live.settings,
+        "asr_phowhisper_model_path",
+        _prepare_browser_asr_model(data_dir.parent / "pho-whisper-large"),
+    )
+    _choose_default(page, live, "pho-whisper-large")
+    meeting_id = seed_meeting(data_dir, "Default model", "2026-10-17", duration_seconds=30.0)
+
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    selector = page.get_by_label("Model ASR")
+    expect(selector).to_have_value("auto")
+    expect(page.locator("#transcription-model-help")).to_have_text(
+        "Theo Cài đặt: pho-whisper-large."
+    )
+    page.get_by_role("button", name="Bắt đầu chép lời").click()
+    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    finish_run(live, "Theo mặc định.")
+    meta = page.locator("#generation-meta")
+    expect(meta).to_contain_text("pho-whisper-large · GPU · CUDA · float16", timeout=8_000)
+
+    # One run with another model leaves the default where it was.
+    selector.select_option("whisper-large-v3")
+    page.get_by_role("button", name="Chạy lại bản ghi").click()
+    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    finish_run(live, "Một lần khác.")
+    expect(meta).to_contain_text("whisper-large-v3 · GPU · CUDA · float16", timeout=8_000)
+    body = page.request.get(f"{live.url}/api/asr-models").json()
+    assert body["default_model"] == "pho-whisper-large"
+
+
+def test_automatic_is_refused_with_guidance_when_the_chosen_default_is_gone(
+    live, signed_in, worker
+):
+    _context, page = signed_in()
+    data_dir = live.settings.data_dir
+    pho = _prepare_browser_asr_model(data_dir.parent / "pho-whisper-large")
+    object.__setattr__(live.settings, "asr_phowhisper_model_path", pho)
+    _choose_default(page, live, "pho-whisper-large")
+    shutil.rmtree(pho)
+    meeting_id = seed_meeting(data_dir, "Default gone", "2026-10-17", duration_seconds=30.0)
+
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    expect(page.get_by_label("Model ASR")).to_have_value("auto")
+    command = page.get_by_label("Lệnh chuẩn bị model")
+    expect(command.first).to_have_value(re.compile("--asr-model pho-whisper-large"))
+    assert page.request.get(f"{live.url}/api/asr-models").json()["default_model"] == (
+        "pho-whisper-large"
+    )

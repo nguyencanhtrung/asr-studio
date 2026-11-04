@@ -9,7 +9,15 @@ from pathlib import Path
 import pytest
 from seeding import prepare_diarization_model, seed_meeting
 
-from asr_studio.asr_models import CATALOG, model_choices, prepare_command, resolve_run
+from asr_studio.asr_models import (
+    CATALOG,
+    DEFAULT_MODEL_FILE,
+    model_choices,
+    prepare_command,
+    read_default_model,
+    resolve_run,
+    write_default_model,
+)
 from asr_studio.config import Settings
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.runtime import MODEL_REPOSITORIES, RuntimeProfile
@@ -266,3 +274,108 @@ def test_a_whisper_model_without_a_preprocessor_file_is_prepared_as_whisper_smal
     preprocessor.write_text("{}", encoding="utf-8")
     with pytest.raises(ModelConfigurationError):  # a file that is there must still be right
         prepared_engine_directory("whisper", model)
+
+
+def _auto(settings, profile):
+    return next(item for item in model_choices(settings, profile) if item["id"] == "auto")
+
+
+@pytest.mark.parametrize(
+    ("chosen", "engine_dir", "compute_type", "model_name"),
+    [
+        ("pho-whisper-large", "asr_phowhisper_model_path", "float16", "pho-whisper-large"),
+        ("qwen3-asr-1.7b", "asr_qwen_model_path", "bfloat16", "qwen3-asr-1.7b"),
+        ("whisper-small", "asr_cpu_model_path", "float16", "whisper-small"),
+    ],
+)
+def test_automatic_runs_use_the_chosen_default_with_its_own_runtime(
+    tmp_path, chosen, engine_dir, compute_type, model_name
+):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir(parents=True)
+    write_default_model(settings, chosen)
+    run = resolve_run(settings, _gpu(settings), "auto")
+
+    assert run["asr_model"] == chosen  # the worker picks the engine from this, so it must be named
+    assert run["model_path"] == getattr(settings, engine_dir)
+    assert run["compute_type"] == compute_type
+    assert _auto(settings, _gpu(settings))["model_name"] == model_name
+    assert _auto(settings, _gpu(settings))["chosen"] is True
+
+
+def test_a_run_that_names_a_model_ignores_the_default(tmp_path):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir(parents=True)
+    write_default_model(settings, "pho-whisper-large")
+    run = resolve_run(settings, _gpu(settings), "whisper-large-v3")
+    assert (run["asr_model"], run["model_path"]) == (
+        "whisper-large-v3",
+        settings.asr_gpu_model_path,
+    )
+
+
+def test_going_back_to_the_hardware_default_clears_the_choice(tmp_path):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir(parents=True)
+    write_default_model(settings, "pho-whisper-large")
+    write_default_model(settings, None)
+
+    assert read_default_model(settings) is None
+    assert resolve_run(settings, _gpu(settings), "auto")["asr_model"] == "auto"
+    assert _auto(settings, _gpu(settings))["chosen"] is False
+    assert [path.name for path in settings.data_dir.iterdir()].count(DEFAULT_MODEL_FILE) == 1
+    assert not list(settings.data_dir.glob(f".{DEFAULT_MODEL_FILE}*"))  # no temp left behind
+
+
+@pytest.mark.parametrize(
+    "damage", ["not json", "[]", '{"asr_model": "../etc"}', '{"asr_model": 1}']
+)
+def test_a_damaged_setting_counts_as_no_choice(tmp_path, damage):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir(parents=True)
+    (settings.data_dir / DEFAULT_MODEL_FILE).write_text(damage, encoding="utf-8")
+    assert read_default_model(settings) is None
+    assert resolve_run(settings, _gpu(settings), "auto")["asr_model"] == "auto"
+
+
+def test_a_default_that_cannot_run_makes_automatic_not_ready_and_never_swaps_model(tmp_path):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir(parents=True)
+    write_default_model(settings, "pho-whisper-large")  # the folder is not there
+    auto = _auto(settings, _gpu(settings))
+    assert (auto["ready"], auto["reason"]) == (False, "not_prepared")
+    assert auto["prepare_command"].endswith("--asr-model pho-whisper-large")
+
+    _qwen_dir(settings.asr_qwen_model_path)
+    write_default_model(settings, "qwen3-asr-1.7b")
+    cpu = RuntimeProfile("cpu", "int8", settings.asr_cpu_model_path)
+    auto = _auto(settings, cpu)
+    assert (auto["ready"], auto["reason"]) == (False, "gpu_required")
+
+
+def test_an_automatic_run_records_and_runs_the_chosen_default(tmp_path):
+    settings = _settings(tmp_path)
+    initialize(settings.data_dir)
+    prepare_diarization_model(settings.diarization_model_path)
+    _whisper_dir(settings.asr_phowhisper_model_path)
+    write_default_model(settings, "pho-whisper-large")
+    meeting_id = seed_meeting(settings.data_dir, "Chosen default")
+
+    task = _accept(settings, meeting_id, "request-default-1", "auto")
+
+    assert task["asr_model"] == "pho-whisper-large"  # worker.py takes the engine from this name
+    # A retry of the same request answers from the run it already accepted.
+    assert _accept(settings, meeting_id, "request-default-1", "auto")["id"] == task["id"]
+
+
+def test_an_automatic_run_is_refused_when_the_chosen_default_is_gone(tmp_path):
+    settings = _settings(tmp_path)
+    initialize(settings.data_dir)
+    prepare_diarization_model(settings.diarization_model_path)
+    write_default_model(settings, "pho-whisper-large")
+    meeting_id = seed_meeting(settings.data_dir, "Default gone")
+
+    with pytest.raises(TaskError) as refused:
+        _accept(settings, meeting_id, "request-default-2", "auto")
+
+    assert (refused.value.status_code, refused.value.code) == (503, "model_unavailable")

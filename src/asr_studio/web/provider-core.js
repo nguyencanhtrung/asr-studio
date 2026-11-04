@@ -1081,7 +1081,7 @@ function reduceAsr(state, action) {
   switch (action.type) {
     case "provider/dialog-opened": {
       const request = state.request + 1;
-      return done({ ...state, status: "loading", request, copy: null, notice: null, open: true }, [asrFetch(request)]);
+      return done({ ...state, status: "loading", request, copy: null, notice: null, defaultRefusal: null, open: true }, [asrFetch(request)]);
     }
     case "provider/dialog-closed":
       return done({ ...state, open: false }, [{ type: "cancel", key: "provider/asr-poll" }]);
@@ -1096,7 +1096,9 @@ function reduceAsr(state, action) {
       if (!Array.isArray(list)) return done({ ...state, status: "error" });
       const models = list.filter((choice) => isObject(choice) && (choice.id === "auto" || Object.hasOwn(ASR_MODEL_TEXT, choice.id)));
       const installer = action.response.body?.installer;
-      const next = { ...state, models, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
+      const defaultModel = typeof action.response.body?.default_model === "string" ? action.response.body.default_model : null;
+      const hardwareModel = typeof action.response.body?.hardware_model === "string" ? action.response.body.hardware_model : null;
+      const next = { ...state, models, defaultModel: state.defaultPending === undefined ? defaultModel : state.defaultPending, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
         // A reply with no usable model must say so; an empty list would leave the section blank.
         status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
       return withPoll(next);
@@ -1105,6 +1107,23 @@ function reduceAsr(state, action) {
       // A failed poll keeps the rows: the next tick reads again.
       if (action.meta.id !== state.request) return done(state);
       return state.status === "ready" ? withPoll(state) : done({ ...state, status: "error" });
+    // The new value shows at once. A catalog read already in flight predates it and is dropped.
+    case "provider/asr-default-chosen": {
+      const value = action.value === "auto" ? null : action.value;
+      const defaultMutation = (state.defaultMutation ?? 0) + 1;
+      const init = { method: "PUT", headers: { Accept: "application/json", "Content-Type": "application/json" }, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ asr_model: value }) };
+      return done({ ...state, request: state.request + 1, defaultMutation, defaultPending: value, defaultRefusal: null }, [
+        { type: "fetch", key: "provider/asr-default", url: "/api/asr-models/default", init, ok: "provider/asr-default-saved", error: "provider/asr-default-refused", meta: { mutation: defaultMutation } },
+      ]);
+    }
+    case "provider/asr-default-saved":
+    case "provider/asr-default-refused": {
+      if (action.meta.mutation !== state.defaultMutation) return done(state);
+      const refused = action.type === "provider/asr-default-refused";
+      const request = state.request + 1;
+      const value = refused ? state.defaultModel : state.defaultPending;
+      return done({ ...state, request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request)]);
+    }
     case "provider/asr-install-requested":
       return asrInstallCall(state, action, "POST", { state: "queued", sending: true });
     case "provider/asr-cancel-requested":
@@ -1173,6 +1192,39 @@ const ASR_COPY = {
   copied: t("Đã sao chép lệnh."),
   selected: t("Không sao chép được. Lệnh đã được chọn; nhấn Ctrl+C."),
 };
+
+const DEFAULT_REFUSALS = {
+  not_prepared: t("Model này chưa được cài, nên chưa đặt làm mặc định được."),
+  gpu_required: t("Model này cần GPU NVIDIA, nên không đặt làm mặc định được trên máy này."),
+  worker_unavailable: t("Worker chưa sẵn sàng nên chưa đổi được model mặc định."),
+};
+
+// The control above the list: the hardware's default, or one model that can run here now.
+function defaultControl(s, auto, models, usable) {
+  const chosen = s.defaultPending !== undefined ? s.defaultPending : s.defaultModel ?? null;
+  const hardware = s.hardwareModel;
+  const label = (row) => (row.ready ? ASR_MODEL_TEXT[row.id].label : t("{model} · chưa sẵn sàng", { model: ASR_MODEL_TEXT[row.id].label }));
+  const options = [
+    { value: "auto", label: hardware ? t("Tự động theo phần cứng ({model})", { model: hardware }) : t("Tự động theo phần cứng") },
+    ...models.map((row) => ({ value: row.id, label: label(row), disabled: !row.ready })),
+  ];
+  const name = chosen && ASR_MODEL_TEXT[chosen]?.label;
+  const broken = Boolean(chosen && auto && !auto.ready && s.defaultPending === undefined);
+  return {
+    value: chosen ?? "auto",
+    options,
+    disabled: !usable,
+    refusal: s.defaultRefusal ? DEFAULT_REFUSALS[s.defaultRefusal] ?? t("Chưa đổi được model mặc định. Hãy thử lại.") : null,
+    text: broken
+      ? t("Model mặc định {model} chưa chạy được trên máy này. Lần chép lời Tự động sẽ bị từ chối cho đến khi bạn cài lại hoặc chọn mặc định khác.", { model: name })
+      : chosen
+        ? t("Lần chép lời Tự động dùng {model}. Mỗi lần chạy vẫn chọn được model khác.", { model: name })
+        : hardware
+          ? t("Mặc định theo phần cứng của máy: {model}.", { model: hardware })
+          : t("Mặc định theo phần cứng của máy."),
+    broken,
+  };
+}
 
 const INSTALL_GUIDANCE = t("Tải model công khai về máy này. Bản ghi không rời khỏi máy.");
 const INSTALL_PHASES = {
@@ -1260,14 +1312,9 @@ export function selectAsr(s) {
   });
   // No worker means no model can be checked: say it once, above the list, instead of on every row.
   if (rows.length && rows.every((row) => row.state === "worker_unavailable")) {
-    return { text: ASR_MODEL_GUIDANCE.worker_unavailable, defaultText: null, rows: rows.map((row) => ({ ...row, guidance: null })) };
+    return { text: ASR_MODEL_GUIDANCE.worker_unavailable, defaultText: null, defaultControl: auto ? defaultControl(s, auto, rows.map((row) => ({ id: row.id, ready: false })), false) : null, rows: rows.map((row) => ({ ...row, guidance: null })) };
   }
-  const defaultText = auto
-    ? defaultName
-      ? t("Mặc định theo phần cứng của máy: {model}.", { model: defaultName })
-      : t("Mặc định theo phần cứng của máy. Chưa biết model vì worker chưa sẵn sàng.")
-    : null;
-  return { text, defaultText, rows };
+  return { text, defaultText: null, defaultControl: auto ? defaultControl(s, auto, rows.map((row) => ({ id: row.id, ready: row.state === "ready" })), true) : null, rows };
 }
 
 export function selectView(d, s) {

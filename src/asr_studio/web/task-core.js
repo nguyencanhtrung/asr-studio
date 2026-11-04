@@ -558,7 +558,7 @@ function selectModel(state, shown, disabled) {
   const note = value !== "auto"
     ? ASR_MODEL_TEXT[value].note
     : choice && choice.model_name
-      ? t("Theo phần cứng của máy: {model}.", { model: choice.model_name })
+      ? t(choice.chosen ? "Theo Cài đặt: {model}." : "Theo phần cứng của máy: {model}.", { model: choice.model_name })
       : t("Theo phần cứng của máy.");
   const reason = choice ? choice.reason : null;
   return {

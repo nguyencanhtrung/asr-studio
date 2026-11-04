@@ -1009,7 +1009,8 @@ test("opening Settings reads the real catalog and lists the three models with re
   ]);
   assert.deepEqual(view.rows.map((row) => row.command), ["", "prepare pho", ""]); // only an unprepared model has one
   assert.match(view.rows[2].guidance.text, /chỉ chạy trên GPU NVIDIA/);
-  assert.deepEqual(view.defaultText.params, { model: "whisper-large-v3" });
+  assert.deepEqual(view.defaultControl.options.map((item) => item.value), ["auto", "whisper-large-v3", "pho-whisper-large", "qwen3-asr-1.7b"]);
+  assert.equal(view.defaultControl.value, "auto");
 });
 
 test("a model catalog reply of an older read is dropped, and a failed read shows an error", async () => {
@@ -1314,4 +1315,47 @@ test("a job found running when Settings opens is shown at once, and stays shown 
   assert.equal(phoRow(stopped).install, null); // no installer: back to the command, not a bar that never moves
   assert.equal(phoRow(stopped).command, `prepare ${PHO}`);
   assert.deepEqual(stopped.live(), []); // and nothing keeps reading for a service that is gone
+});
+
+// ---- the default model in Settings ----
+
+test("a model that cannot run here cannot be chosen as the default", () => {
+  const state = { ...initialState.asr, status: "ready", models: ASR.asr_models.filter((m) => m.id !== "future-model"), installer: { available: true, models_writable: true }, hardwareModel: "whisper-large-v3" };
+  const control = selectAsr(state).defaultControl;
+  assert.deepEqual(control.options.filter((o) => o.disabled).map((o) => o.value), ["pho-whisper-large", "qwen3-asr-1.7b"]);
+  assert.equal(control.options.find((o) => o.value === "whisper-large-v3").disabled, false);
+  assert.equal(control.disabled, false);
+});
+
+test("a chosen default that stopped working says so instead of looking fine", () => {
+  const models = [{ id: "auto", model_name: "pho", ready: false, reason: "not_prepared", chosen: true }, ...ASR.asr_models.slice(1, 3)];
+  const state = { ...initialState.asr, status: "ready", models, defaultModel: "pho-whisper-large", installer: { available: true, models_writable: true } };
+  const control = selectAsr(state).defaultControl;
+  assert.equal(control.broken, true);
+  assert.equal(control.value, "pho-whisper-large");
+  assert.deepEqual(control.text.params, { model: "PhoWhisper-large" });
+});
+
+test("choosing sends the id, and the hardware choice sends null", () => {
+  for (const [value, sent] of [["whisper-large-v3", "whisper-large-v3"], ["auto", null]]) {
+    const { state: next, effects } = reduce({ ...initialState, asr: { ...initialState.asr, status: "ready", models: ASR.asr_models } }, { type: "provider/asr-default-chosen", value });
+    const put = effects.find((e) => e.url === "/api/asr-models/default");
+    assert.equal(put.init.method, "PUT");
+    assert.deepEqual(JSON.parse(put.init.body), { asr_model: sent });
+    assert.equal(next.asr.defaultPending, sent);
+  }
+});
+
+test("a refused choice goes back to what the server has and says why; a read in flight cannot undo a click", () => {
+  const base = { ...initialState, asr: { ...initialState.asr, status: "ready", models: ASR.asr_models, defaultModel: "whisper-large-v3", request: 5 } };
+  const { state: chosen } = reduce(base, { type: "provider/asr-default-chosen", value: "auto" });
+  assert.equal(chosen.asr.request, 6);
+  const { state: stale } = reduce(chosen, { type: "provider/asr-loaded", meta: { id: 5 }, response: { body: { ...ASR, default_model: "whisper-large-v3" } } });
+  assert.equal(stale.asr.defaultPending, null);
+  const { state: refused } = reduce(chosen, { type: "provider/asr-default-refused", meta: { mutation: chosen.asr.defaultMutation }, error: { body: { detail: { code: "not_prepared" } } } });
+  assert.equal(refused.asr.defaultModel, "whisper-large-v3");
+  assert.equal(refused.asr.defaultRefusal, "not_prepared");
+  const { state: newer } = reduce(chosen, { type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+  const { state: late } = reduce(newer, { type: "provider/asr-default-saved", meta: { mutation: chosen.asr.defaultMutation } });
+  assert.equal(late.asr.defaultPending, "whisper-large-v3");
 });
