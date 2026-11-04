@@ -1316,6 +1316,32 @@ textarea:focus-visible {
   margin: 2px 0 0 21px;
 }
 
+.create-asr-model {
+  margin: 7px 0 0 21px;
+}
+
+.create-asr-model select {
+  width: 100%;
+  min-height: 39px;
+  padding: 0 11px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+}
+
+.create-asr-model select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.create-asr-model .field-help {
+  margin: -2px 0 0;
+  line-height: 1.35;
+}
+
 .upload-state {
   margin-top: 18px;
   padding: 11px 13px 10px;
@@ -1849,6 +1875,17 @@ textarea:focus-visible {
   max-width: 210px;
   margin: 0;
   line-height: 1.35;
+}
+
+.transcription-model-guidance {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.transcription-model-guidance p {
+  margin: 0;
+  line-height: 1.45;
 }
 
 .runtime-profile {

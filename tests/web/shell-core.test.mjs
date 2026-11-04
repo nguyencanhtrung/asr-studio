@@ -22,6 +22,14 @@ test("workspace authentication failure is exact and does not classify provider 4
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const reply = (status, body) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
 const POLICY = { supported_extensions: ["wav", ".mp3", "mp4"], max_bytes: 1000, max_duration_seconds: 7200, chunk_bytes: 1000 };
+const ASR_MODELS = {
+  asr_models: [
+    { id: "auto", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+    { id: "whisper-large-v3", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+    { id: "pho-whisper-large", model_name: "pho-whisper-large", ready: false, reason: "not_prepared", prepare_command: "docker compose run prepare" },
+    { id: "qwen3-asr-1.7b", model_name: "qwen3-asr-1.7b", ready: true, reason: null, prepare_command: null },
+  ],
+};
 const FILE = { name: "Weekly sync.wav", size: 500 };
 const CHUNKED_POLICY = { ...POLICY, chunk_bytes: 4 };
 const CHUNKED_FILE = {
@@ -134,9 +142,10 @@ function setup() {
   };
 }
 
-async function opened(env, stored = {}, policy = POLICY) {
+async function opened(env, stored = {}, policy = POLICY, models = ASR_MODELS) {
   env.store.dispatch({ type: "shell/dialog-opened", stored });
   await env.answer(env.is("GET", "/api/uploads/policy"), 200, policy);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, models);
 }
 
 async function selected(env, file = FILE, policy = POLICY) {
@@ -176,13 +185,101 @@ test("opening loads the policy; a reply for a closed or reopened dialog is stale
   assert.deepEqual(env.state().policy, { extensions: [".wav", ".mp3", ".mp4"], maxBytes: 1000, maxDurationSeconds: 7200, chunkBytes: 1000 });
 });
 
+test("opening loads the model catalog, ignores stale replies, and hides it after a failed load", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "shell/dialog-opened", stored: {} });
+  const first = env.state().asrModelsRequest;
+  assert.equal(env.state().asrModels, null);
+  // A reply for the closed dialog, then one from before the reopen: both are stale if they reach the reducer.
+  env.store.dispatch({ type: "shell/dialog-close-requested" });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, ASR_MODELS); // cancelled by close: ignored
+  env.store.dispatch({ type: "shell/asr-models-loaded", meta: { id: env.state().asrModelsRequest }, response: { body: ASR_MODELS } });
+  assert.equal(env.state().asrModels, null);
+  env.store.dispatch({ type: "shell/dialog-opened", stored: {} });
+  env.store.dispatch({ type: "shell/asr-models-loaded", meta: { id: first }, response: { body: ASR_MODELS } });
+  assert.equal(env.state().asrModels, null);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, ASR_MODELS);
+  assert.equal(env.state().asrModels.length, 4);
+  assert.equal(selectView(env.state()).asrModel.options.length, 4);
+
+  const failed = setup();
+  failed.store.dispatch({ type: "shell/dialog-opened", stored: {} });
+  await failed.answer(failed.is("GET", "/api/asr-models"), 500, {});
+  assert.equal(failed.state().asrModels, null);
+  assert.equal(selectView(failed.state()).asrModel, null);
+});
+
+test("a model this page does not know is dropped from the catalog", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "shell/dialog-opened", stored: {} });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, { asr_models: [null, { id: "future-model", ready: true }, ...ASR_MODELS.asr_models] });
+  assert.deepEqual(
+    selectView(env.state()).asrModel.options.map((option) => option.id),
+    ASR_MODELS.asr_models.map((choice) => choice.id),
+  );
+});
+
 test("remembered choices fill the form; unknown language is ignored", () => {
   const env = setup();
   env.store.dispatch({ type: "shell/dialog-opened", stored: { language: "vi", autoTranscribe: "0" } });
-  assert.deepEqual(env.state().form, { title: "", date: "", language: "vi", autoTranscribe: false });
+  assert.deepEqual(env.state().form, { title: "", date: "", language: "vi", autoTranscribe: false, asrModel: "auto" });
   env.store.dispatch({ type: "shell/dialog-close-requested" });
   env.store.dispatch({ type: "shell/dialog-opened", stored: { language: "fr", autoTranscribe: null } });
-  assert.deepEqual(env.state().form, { title: "", date: "", language: "", autoTranscribe: true });
+  assert.deepEqual(env.state().form, { title: "", date: "", language: "", autoTranscribe: true, asrModel: "auto" });
+});
+
+test("the create model selector shows readiness, accepts ready ids only, and resets on reopen", async () => {
+  const env = setup();
+  await opened(env);
+  let view = selectView(env.state());
+  assert.equal(view.asrModel.value, "auto");
+  assert.deepEqual(view.asrModel.options.map((option) => [option.id, option.ready, option.disabled]), [
+    ["auto", true, false],
+    ["whisper-large-v3", true, false],
+    ["pho-whisper-large", false, true],
+    ["qwen3-asr-1.7b", true, false],
+  ]);
+  assert.match(view.asrModel.help.at(-1).text, /Model chưa sẵn sàng/);
+
+  env.store.dispatch({ type: "shell/asr-model-chosen", model: "pho-whisper-large" });
+  assert.equal(env.state().form.asrModel, "auto");
+  env.store.dispatch({ type: "shell/asr-model-chosen", model: "qwen3-asr-1.7b" });
+  assert.equal(env.state().form.asrModel, "qwen3-asr-1.7b");
+  env.store.dispatch({ type: "shell/asr-model-chosen", model: "cloud-model" });
+  assert.equal(env.state().form.asrModel, "qwen3-asr-1.7b");
+
+  env.store.dispatch({ type: "shell/auto-transcribe-toggled", value: false });
+  assert.equal(selectView(env.state()).asrModel, null);
+  env.store.dispatch({ type: "shell/auto-transcribe-toggled", value: true });
+  view = selectView(env.state());
+  assert.equal(view.asrModel.value, "qwen3-asr-1.7b");
+
+  env.store.dispatch({ type: "shell/dialog-close-requested" });
+  await opened(env);
+  assert.equal(env.state().form.asrModel, "auto");
+});
+
+test("auto remains selectable when the worker is down", async () => {
+  const env = setup();
+  const workerDown = {
+    asr_models: ASR_MODELS.asr_models.map((choice) => ({
+      ...choice,
+      model_name: null,
+      ready: false,
+      reason: "worker_unavailable",
+      prepare_command: null,
+    })),
+  };
+  await opened(env);
+  env.store.dispatch({ type: "shell/asr-model-chosen", model: "qwen3-asr-1.7b" });
+  env.store.dispatch({
+    type: "shell/asr-models-loaded",
+    meta: { id: env.state().asrModelsRequest },
+    response: { body: workerDown },
+  });
+  env.store.dispatch({ type: "shell/asr-model-chosen", model: "auto" });
+  assert.equal(env.state().form.asrModel, "auto");
+  assert.equal(selectView(env.state()).asrModel.options[0].disabled, false);
 });
 
 test("a policy that fails to load or parse leaves an error and no upload", async () => {
@@ -264,9 +361,22 @@ test("one button: cleans, creates the upload, uploads with progress, checks, the
   assert.equal(env.state().phase, "saved");
   assert.deepEqual(env.written, [
     ["local", "asr-studio:last-language-hint", "en"],
-    ["session", `${AUTO_TRANSCRIBE_HANDOFF_PREFIX}m 1`, "1"],
+    ["session", `${AUTO_TRANSCRIBE_HANDOFF_PREFIX}m 1`, "auto"],
   ]);
   assert.deepEqual(env.navigated, ["/meetings/m%201"]);
+});
+
+test("a ready create-model choice is handed off for one run and is not stored locally", async () => {
+  const env = setup();
+  await ready(env);
+  env.store.dispatch({ type: "shell/asr-model-chosen", model: "qwen3-asr-1.7b" });
+  env.store.dispatch({ type: "shell/submit-requested" });
+  await env.answer(env.is("POST", "/api/meetings"), 201, { meeting: { id: "m-model" } });
+  assert.deepEqual(env.written, [
+    ["local", "asr-studio:last-language-hint", "en"],
+    ["session", `${AUTO_TRANSCRIBE_HANDOFF_PREFIX}m-model`, "qwen3-asr-1.7b"],
+  ]);
+  assert.equal(env.written.some(([, key]) => key.includes("asrModel")), false);
 });
 
 test("chunked upload sends sequential slices, resumes a failed chunk, and keeps cumulative progress", async () => {

@@ -193,6 +193,8 @@ Token rotation changes only the auth state. `docker compose down` keeps the volu
 | Runtime     | Docker, `faster-whisper` 1.2.1, `pyannote.audio` 4.0.7, locked in `uv.lock`                        | The operator installs Docker. A GPU needs the NVIDIA driver and Container Toolkit. |
 | ASR GPU     | [Systran faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3), MIT, public    | `model prepare` can download it. No gated terms.                                 |
 | ASR CPU     | [Systran faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small), MIT, public          | `model prepare` can download it. No gated terms.                                 |
+| ASR, optional | [vinai/PhoWhisper-large](https://huggingface.co/vinai/PhoWhisper-large), BSD-3-Clause, public | `model prepare --asr-model` downloads and converts it. No gated terms. |
+| ASR, optional | [Qwen/Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf), Apache-2.0, public, GPU only | `model prepare --asr-model` downloads it. No gated terms. |
 | Diarization | [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1), CC-BY-4.0, gated | The operator accepts the conditions and downloads it. The app does not.            |
 | UI          | HTML, CSS, JavaScript and fonts in the wheel                                                             | Served locally.                                                                    |
 
@@ -215,12 +217,46 @@ Each model needs valid `model.bin`, `config.json`, `tokenizer.json` and
 | ---------------------------------------------- | ---------------------------------------- |
 | `ASR_MODEL_HOST_PATH`                        | Model directory on the host.             |
 | `ASR_GPU_MODEL_PATH`, `ASR_CPU_MODEL_PATH` | Model directories in the container.      |
+| `ASR_PHOWHISPER_MODEL_PATH`, `ASR_QWEN_MODEL_PATH` | Optional model directories in the container. |
 | `ASR_DEVICE`                                 | `auto` (default), `cpu` or `cuda`. |
 | `ASR_MODEL_PATH`, `ASR_COMPUTE_TYPE`       | Explicit overrides for special tests.    |
 
+### Choose a model for one run
+
+Next to the start button, **Transcription model for this run** lists each model and whether it is
+ready. The choice is sent with that run only. It does not change the system default, and each run
+keeps its own transcript generation, so you can compare them with the generation selector. The
+selector keeps your choice while the page stays open; a new page starts on **Automatic**.
+
+| Choice           | Use it for                                 | Limits                                                                |
+| ---------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| Automatic        | The default chosen for this hardware.      | `whisper-large-v3` on GPU, `whisper-small` on CPU.                    |
+| Whisper large-v3 | Multilingual meetings with language detection. | Slowest of the three, and the most likely to repeat sentences. |
+| PhoWhisper-large | Meetings in Vietnamese.                    | Not for English or content that mixes in many technical terms. Segments are longer, so speaker labels are coarser. |
+| Qwen3-ASR-1.7B   | Mixed Vietnamese and English, and speed.   | GPU only, about 8.5 GB of VRAM on a 75-minute meeting. No confidence score: **Listen again** only catches repetition and speaker issues, so its count does not compare with other models. |
+
+These results come from a few real meetings without a reference transcript, so treat them as a
+starting point and compare on your own recordings.
+
+The two optional models are not downloaded at setup. An unprepared model cannot start a task, and
+the page shows this command for it. Run it in the application folder, then reload the page. It
+downloads model files only and sends no recording. The worker does not need a restart:
+
+```sh
+docker compose -f compose.yaml -f compose.model-prepare.yaml run --pull never --rm --no-deps \
+  --user "$(id -u):$(id -g)" -e HF_HOME=/tmp/huggingface -e HF_HUB_OFFLINE=0 \
+  -e TRANSFORMERS_OFFLINE=0 worker python -m asr_studio.cli model prepare --asr-model pho-whisper-large
+```
+
+Run it with the same `COMPOSE_PROJECT_NAME`, `ASR_IMAGE` and `ASR_MODEL_HOST_PATH` as the running
+installation, or the model lands where the app does not look. Use `--asr-model qwen3-asr-1.7b`
+for Qwen. For an offline machine, copy a prepared directory to
+`./models/pho-whisper-large` or `./models/qwen3-asr-1.7b`.
+
 The image contains CUDA 12.8 and cuDNN 9. At runtime, the worker opens models from local paths
 only, in offline mode, with telemetry off. Audio does not leave the machine. The collapsed
-**Processing details** section of the Transcript block shows the backend, compute type and model.
+**Processing details** section of the Transcript block shows the backend, compute type and default
+model. Each transcript generation shows the model, backend and compute type of the run that made it.
 
 ## Speaker diarization model
 
@@ -285,10 +321,13 @@ This happens on any web page, not only in this workspace. Select the file and cl
 or drag the file onto the upload area. Closing the picker without a file leaves **New meeting**
 open.
 
-**Transcribe after create** is on by default. The browser remembers your last choice. When it is
-on, the meeting page sends one transcription request. Reload or Back does not send it again. If
-the machine is busy or the worker is not ready, the page shows the reason and a
-**Start transcription** button. It does not retry.
+**Transcribe after create** is on by default. The browser remembers that checkbox choice. When it
+is on, the dialog also shows **Transcription model** after the model catalog loads: **Automatic**
+is always available, while a model that is not ready is shown but cannot be selected. The model
+choice is for this one meeting only and is not saved as a preference. The meeting page sends one
+transcription request. Reload or Back does not send it again. If the machine is busy, the worker
+is not ready, or the selected model was removed, the page shows the reason and a **Start
+transcription** button with the preparation guidance. It does not retry.
 
 ### Transcription
 
@@ -306,7 +345,7 @@ timestamps.
 The app marks a segment **Needs check** for multiple speakers, overlap, low speaker dominance or
 no speaker match. It marks a segment **Listen again** when `avg_logprob < -1.0`,
 `no_speech_prob >= 0.6` or `compression_ratio > 2.4`. These are Whisper decode thresholds, not
-probabilities that the text is correct.
+probabilities that the text is correct. Qwen3-ASR reports only `compression_ratio`.
 
 ### Meeting page
 

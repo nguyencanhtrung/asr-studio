@@ -74,6 +74,7 @@ function setup(path = "/meetings/m1") {
     return {
       id: current.id,
       language: current.language_hint,
+      asrModels: current.transcription?.asr_models ?? [],
       task: transcription.task || null,
       generation: Boolean(generation),
       generationLanguage: generation ? generation.language_hint : null,
@@ -94,7 +95,7 @@ function setup(path = "/meetings/m1") {
     if (seen.left.rev !== was.left.rev) send("task/meeting-left");
     if (seen.readyRev !== was.readyRev) {
       const id = seen.meeting.id;
-      send("task/meeting-ready", { requestId: `new-${nextId += 1}`, stored: stored.get(requestStorageKey(id)) ?? null, autoStart: stored.has(autoStartStorageKey(id)) });
+      send("task/meeting-ready", { requestId: `new-${nextId += 1}`, stored: stored.get(requestStorageKey(id)) ?? null, autoStart: stored.get(autoStartStorageKey(id)) ?? null });
     }
   });
   const open = (match) => (r) => !r.done && !r.signal.aborted && match(r);
@@ -374,12 +375,12 @@ test("opening the same meeting again clears the line about it and repaints", asy
 test("a start that cannot reach the server keeps the request id and asks to verify with it", async () => {
   const env = await opened(meeting("m1"));
   env.send("task/start-clicked", { requestId: "q1" });
-  assert.deepEqual(env.sent("/api/tasks")[0].body, { meeting_id: "m1", request_id: "q1", language_hint: "en" });
+  assert.deepEqual(env.sent("/api/tasks")[0].body, { meeting_id: "m1", request_id: "q1", language_hint: "en", asr_model: "auto" });
   assert.equal(selectRequestBusy(env.task()), true);
   await env.fail((r) => r.url === "/api/tasks");
 
   assert.equal(selectRequestBusy(env.task()), false);
-  assert.match(text(env.view().error.message), /Bấm lại để xác minh bằng cùng request ID và ngôn ngữ gợi ý\.$/);
+  assert.match(text(env.view().error.message), /Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model\.$/);
   assert.equal(env.view().notice, null);
   assert.equal(env.task().pending.requestId, "q1");
   assert.ok(env.stored.has(requestStorageKey("m1")));
@@ -423,7 +424,7 @@ test("a start answer that is not a task is a failed start that can be verified",
   env.send("task/start-clicked", { requestId: "q1" });
   await env.answer((r) => r.url === "/api/tasks", 200, null);
   assert.equal(selectRequestBusy(env.task()), false);
-  assert.equal(text(env.view().error.message), "Không thể xác nhận yêu cầu. Bấm lại để xác minh bằng cùng request ID và ngôn ngữ gợi ý.");
+  assert.equal(text(env.view().error.message), "Không thể xác nhận yêu cầu. Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   assert.equal(env.task().pending.requestId, "q1");
 });
 
@@ -593,6 +594,156 @@ test("an answer to a cancel that was never sent is ignored", () => {
   assert.equal(failed.state, initialState);
 });
 
+// ---- the model chosen for one run ----
+
+const CHOICES = [
+  { id: "auto", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+  { id: "whisper-large-v3", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+  { id: "pho-whisper-large", model_name: "pho-whisper-large", ready: false, reason: "not_prepared", prepare_command: "docker compose run prepare" },
+  { id: "qwen3-asr-1.7b", model_name: "qwen3-asr-1.7b", ready: true, reason: null, prepare_command: null },
+];
+const withChoices = (extra = {}, choices = CHOICES) => meeting("m1", {}, { asr_models: choices, ...extra });
+
+test("the selector starts on Tự động and names what the hardware default is", async () => {
+  const env = await opened(withChoices());
+  const { model } = env.view();
+  assert.equal(model.value, "auto");
+  assert.equal(text(model.note), "Theo phần cứng của máy: whisper-large-v3.");
+  assert.deepEqual(model.options.map((option) => [option.id, option.ready]), CHOICES.map((choice) => [choice.id, choice.ready]));
+  assert.equal(model.blocked, false);
+});
+
+test("no list from the server, no selector: a run stays on the hardware default", async () => {
+  const env = await opened(meeting("m1"));
+  assert.equal(env.view().model, null);
+  env.send("task/start-clicked", { requestId: "q1" });
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "auto");
+});
+
+test("the chosen model goes with this run's request and with its uncertain retry", async () => {
+  const env = await opened(withChoices());
+  env.send("task/model-chosen", { model: "qwen3-asr-1.7b" });
+  env.send("task/start-clicked", { requestId: "q1" });
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "qwen3-asr-1.7b");
+  assert.equal(JSON.parse(env.stored.get(requestStorageKey("m1"))).asrModel, "qwen3-asr-1.7b");
+  assert.equal(env.view().model.value, "qwen3-asr-1.7b");
+  assert.equal(env.view().model.disabled, true);
+});
+
+test("a restored request keeps its model; a record from an older page means Tự động", async () => {
+  const kept = JSON.stringify({ requestId: "k", languageHint: "en", asrModel: "qwen3-asr-1.7b" });
+  const restored = await opened(withChoices(), { stored: { [requestStorageKey("m1")]: kept } });
+  assert.equal(restored.view().model.value, "qwen3-asr-1.7b");
+  restored.send("task/start-clicked", { requestId: "fresh" });
+  assert.equal(restored.sent("/api/tasks")[0].body.asr_model, "qwen3-asr-1.7b");
+
+  const older = JSON.stringify({ requestId: "k", languageHint: "en" });
+  assert.equal((await opened(withChoices(), { stored: { [requestStorageKey("m1")]: older } })).view().model.value, "auto");
+  const forged = JSON.stringify({ requestId: "k", languageHint: "en", asrModel: "cloud" });
+  assert.equal((await opened(withChoices(), { stored: { [requestStorageKey("m1")]: forged } })).view().model.value, "auto");
+});
+
+test("a model that is not prepared cannot start and says how to prepare it", async () => {
+  const env = await opened(withChoices());
+  env.send("task/model-chosen", { model: "pho-whisper-large" });
+  const { model } = env.view();
+  assert.equal(model.blocked, true);
+  assert.match(text(model.guidance), /chưa được chuẩn bị/);
+  assert.equal(model.command, "docker compose run prepare");
+  env.send("task/start-clicked", { requestId: "q1" });
+  assert.equal(env.sent("/api/tasks").length, 0);
+  assert.equal(env.stored.has(requestStorageKey("m1")), false);
+});
+
+test("a GPU-only model on a CPU worker is refused with a reason and no command", async () => {
+  const choices = CHOICES.map((choice) => choice.id === "qwen3-asr-1.7b" ? { ...choice, ready: false, reason: "gpu_required" } : choice);
+  const env = await opened(withChoices({}, choices));
+  env.send("task/model-chosen", { model: "qwen3-asr-1.7b" });
+  assert.equal(env.view().model.blocked, true);
+  assert.match(text(env.view().model.guidance), /chỉ chạy trên GPU/);
+  assert.equal(env.view().model.command, "");
+});
+
+test("a worker that is down keeps the server's own refusal instead of a dead button", async () => {
+  const choices = CHOICES.map((choice) => ({ ...choice, model_name: null, ready: false, reason: "worker_unavailable" }));
+  const env = await opened(withChoices({}, choices));
+  assert.equal(env.view().model.blocked, false);
+  assert.equal(text(env.view().model.note), "Theo phần cứng của máy.");
+  env.send("task/start-clicked", { requestId: "q1" });
+  assert.equal(env.sent("/api/tasks").length, 1);
+});
+
+test("PhoWhisper is described for Vietnamese and never as the choice for English or mixed content", async () => {
+  const env = await opened(withChoices());
+  env.send("task/model-chosen", { model: "pho-whisper-large" });
+  assert.match(text(env.view().model.note), /^Tối ưu cho tiếng Việt\. Không dành cho English/);
+});
+
+test("a running task shows its own model and locks the selector", async () => {
+  const env = await opened(withChoices({ task: task("t1", "running", { asr_model: "qwen3-asr-1.7b" }) }));
+  assert.equal(env.view().model.value, "qwen3-asr-1.7b");
+  assert.equal(env.view().model.disabled, true);
+  assert.equal(env.view().model.guidance, null);
+});
+
+test("the server refusing a model unlocks the selector: no task exists, so nothing needs verifying", async () => {
+  const stale = CHOICES.map((choice) => choice.id === "pho-whisper-large" ? { ...choice, ready: true, reason: null, prepare_command: null } : choice);
+  const env = await opened(withChoices({}, stale));
+  env.send("task/model-chosen", { model: "pho-whisper-large" });
+  env.send("task/start-clicked", { requestId: "q1" });
+  assert.equal(env.view().model.disabled, true);
+  await env.answer((r) => r.url === "/api/tasks", 503, { detail: { code: "model_unavailable", message: "x" } });
+  assert.equal(env.task().pending, null);
+  assert.equal(env.stored.has(requestStorageKey("m1")), false);
+  assert.equal(env.view().model.disabled, false);
+  assert.match(text(env.view().error.message), /^Model đã chọn chưa được chuẩn bị\. Tải lại trang/);
+
+  env.send("task/start-clicked", { requestId: "q2" });
+  assert.equal(env.sent("/api/tasks")[1].body.request_id, "q2");
+  await env.answer((r) => r.url === "/api/tasks", 503, { detail: { code: "model_requires_gpu", message: "x" } });
+  assert.equal(env.view().model.disabled, false);
+  assert.equal(text(env.view().error.message), "Model đã chọn chỉ chạy trên GPU NVIDIA. Hãy chọn model khác.");
+});
+
+for (const code of ["worker_unavailable", "processing_unavailable", "diarization_model_unavailable"]) {
+  test(`a ${code} refusal created no task: the choice is free again`, async () => {
+    const env = await opened(withChoices());
+    env.send("task/model-chosen", { model: "qwen3-asr-1.7b" });
+    env.send("task/start-clicked", { requestId: "q1" });
+    await env.answer((r) => r.url === "/api/tasks", 503, { detail: { code, message: "x" } });
+    assert.equal(env.task().pending, null);
+    assert.equal(env.view().model.disabled, false);
+    assert.equal(env.view().model.value, "qwen3-asr-1.7b");
+  });
+}
+
+test("a restored request for a model that became unusable can still be resolved and then unlocks", async () => {
+  const kept = JSON.stringify({ requestId: "k", languageHint: "en", asrModel: "pho-whisper-large" });
+  const env = await opened(withChoices(), { stored: { [requestStorageKey("m1")]: kept } });
+  assert.equal(env.view().model.disabled, true);
+  assert.equal(env.view().model.blocked, false);
+  env.send("task/start-clicked", { requestId: "fresh" });
+  assert.equal(env.sent("/api/tasks")[0].body.request_id, "k");
+  await env.answer((r) => r.url === "/api/tasks", 503, { detail: { code: "model_unavailable", message: "x" } });
+  assert.equal(env.view().model.disabled, false);
+  assert.equal(env.view().model.blocked, true);
+  assert.equal(env.view().model.command, "docker compose run prepare");
+});
+
+test("a 503 from something other than the app stays uncertain: the same id is resent", async () => {
+  const env = await opened(withChoices());
+  env.send("task/start-clicked", { requestId: "q1" });
+  await env.answer((r) => r.url === "/api/tasks", 503, { detail: { code: "gateway_said_no", message: "x" } });
+  assert.equal(env.task().pending.requestId, "q1");
+  assert.equal(env.view().model.disabled, true);
+});
+
+test("a choice that is not in the catalog is ignored", async () => {
+  const env = await opened(withChoices());
+  env.send("task/model-chosen", { model: "cloud-model" });
+  assert.equal(env.view().model.value, "auto");
+});
+
 // ---- the pending request id across a page reload ----
 
 test("a pending request is restored after a reload: language shown and locked, the same id and language resent", async () => {
@@ -602,13 +753,13 @@ test("a pending request is restored after a reload: language shown and locked, t
   assert.deepEqual(env.view().language, { value: "vi", disabled: true });
 
   env.send("task/start-clicked", { requestId: "fresh" });
-  assert.deepEqual(env.sent("/api/tasks")[0].body, { meeting_id: "m1", request_id: "kept", language_hint: "vi" });
+  assert.deepEqual(env.sent("/api/tasks")[0].body, { meeting_id: "m1", request_id: "kept", language_hint: "vi", asr_model: "auto" });
 });
 
 test("an older page stored the request id as plain text; it is read, kept in the meeting's language and rewritten as JSON", async () => {
   const env = await opened(meeting("m1", { language_hint: "vi" }), { stored: { [requestStorageKey("m1")]: "legacy-id" } });
-  assert.deepEqual(env.task().pending, { meetingId: "m1", requestId: "legacy-id", languageHint: "vi" });
-  assert.equal(env.stored.get(requestStorageKey("m1")), JSON.stringify({ requestId: "legacy-id", languageHint: "vi" }));
+  assert.deepEqual(env.task().pending, { meetingId: "m1", requestId: "legacy-id", languageHint: "vi", asrModel: "auto" });
+  assert.equal(env.stored.get(requestStorageKey("m1")), JSON.stringify({ requestId: "legacy-id", languageHint: "vi", asrModel: "auto" }));
 });
 
 test("a stored record that is JSON of another kind, empty or without an id is not a pending request", async () => {
@@ -652,7 +803,7 @@ test("a request pending for another meeting does not leak into this one", async 
   await env.answer(GET_MEETING("m2"), 200, meeting("m2", { language_hint: "vi" }));
   assert.equal(env.view().language.disabled, false);
   env.send("task/start-clicked", { requestId: "q2" });
-  assert.deepEqual(env.sent("/api/tasks")[1].body, { meeting_id: "m2", request_id: "q2", language_hint: "vi" });
+  assert.deepEqual(env.sent("/api/tasks")[1].body, { meeting_id: "m2", request_id: "q2", language_hint: "vi", asr_model: "auto" });
 });
 
 // ---- automatic start ----
@@ -662,6 +813,7 @@ test("the create dialog's hand-off starts the transcription once and is consumed
   assert.equal(env.stored.has(autoStartStorageKey("m1")), false);
   assert.equal(env.sent("/api/tasks").length, 1);
   assert.equal(env.sent("/api/tasks")[0].body.request_id, "new-1");
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "auto");
 
   await env.fail((r) => r.url === "/api/tasks");
   // The meeting loads again with the hand-off still readable: the reducer starts nothing a second time.
@@ -670,6 +822,13 @@ test("the create dialog's hand-off starts the transcription once and is consumed
   await env.answer(GET_MEETING("m1"), 200, meeting("m1"));
   assert.equal(env.sent("/api/tasks").length, 1);
   assert.equal(env.stored.has(autoStartStorageKey("m1")), false);
+});
+
+test("a named create-dialog hand-off selects that model for the automatic start", async () => {
+  const env = await opened(withChoices(), { stored: { [autoStartStorageKey("m1")]: "qwen3-asr-1.7b" } });
+  assert.equal(env.stored.has(autoStartStorageKey("m1")), false);
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "qwen3-asr-1.7b");
+  assert.equal(env.view().model.value, "qwen3-asr-1.7b");
 });
 
 test("the hand-off does not start a meeting that already has a task or a transcript, and is still consumed", async () => {

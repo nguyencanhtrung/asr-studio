@@ -125,7 +125,7 @@ def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
         "notes_revisions",
         "notes_preferences",
     }
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     with sqlite3.connect(database) as connection:
         meeting_columns = {row[1] for row in connection.execute("PRAGMA table_info(meetings)")}
     assert {"deletion_requested_at", "deletion_error_code"}.issubset(meeting_columns)
@@ -167,6 +167,7 @@ def test_schema_v1_database_migrates_transactionally_and_preserves_existing_data
             (12,),
             (13,),
             (14,),
+            (15,),
         ]
         tables = {
             row[0]
@@ -218,7 +219,7 @@ def test_schema_v4_migration_preserves_existing_generation_and_backfills_its_spe
         ).fetchone() == (1, 0)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (14,)
+        ).fetchone() == (15,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -274,6 +275,7 @@ def test_schema_v5_rebuild_preserves_tasks_transcript_rows_and_processing_slot(t
             (12,),
             (13,),
             (14,),
+            (15,),
         ]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -323,7 +325,7 @@ def test_schema_v6_migration_backfills_existing_notes_as_english(tmp_path):
         ).fetchone() == ("en", "## Overview\n\nLegacy English notes.")
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (14,)
+        ).fetchone() == (15,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -387,7 +389,7 @@ def test_schema_v8_migration_keeps_a_populated_v7_database_and_allows_antigravit
         ]
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (14,)
+        ).fetchone() == (15,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         indexes = {
             row[0]
@@ -476,7 +478,7 @@ def test_schema_v9_adds_a_validated_coverage_column_and_keeps_existing_revisions
         assert connection.execute(
             "SELECT markdown, coverage_json FROM notes_revisions WHERE id = 'old-revision'"
         ).fetchone() == ("Kept notes.", None)
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (14,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (15,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         connection.execute(
             "UPDATE notes_revisions SET coverage_json = ? WHERE id = 'old-revision'",
@@ -538,7 +540,7 @@ def test_schema_v10_adds_a_validated_citations_column_and_keeps_a_populated_v9_d
             "SELECT markdown, edit_version, coverage_json, citations_json FROM notes_revisions "
             "WHERE id = 'old-revision'"
         ).fetchone() == (edited, 4, '{"version":1}', None)
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (14,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (15,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         connection.execute(
             "UPDATE notes_revisions SET citations_json = '[]' WHERE id = 'old-revision'"
@@ -596,7 +598,7 @@ def test_schema_v11_forbids_updating_a_notes_source_and_keeps_a_populated_v10_da
 
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (14,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (15,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
             "SELECT snapshot_json, meeting_date FROM notes_sources WHERE id = 'old-source'"
@@ -612,4 +614,39 @@ def test_schema_v11_forbids_updating_a_notes_source_and_keeps_a_populated_v10_da
             "INSERT INTO notes_sources(id, meeting_id, generation_id, source_version, "
             "notes_source_version, meeting_date, snapshot_json) VALUES "
             "('new-source', 'old-meeting', 'old-generation', 2, 1, NULL, '{}')"
+        )
+
+
+def test_schema_v15_records_the_runtime_of_existing_generations(tmp_path):
+    data_dir = tmp_path / "data"
+    database = initialize(data_dir)
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 15")
+        connection.execute("ALTER TABLE tasks DROP COLUMN asr_model")
+        connection.execute("ALTER TABLE transcript_generations DROP COLUMN device")
+        connection.execute("ALTER TABLE transcript_generations DROP COLUMN compute_type")
+        connection.execute(
+            "INSERT INTO meetings(id, title, language_hint) VALUES ('m', 'Older', 'vi')"
+        )
+        connection.execute(
+            "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
+            "model_name, device, compute_type, language_hint, status, stage, "
+            "audio_duration_seconds) VALUES ('t', 'r', 'h', 'm', 'transcription', '/m', 'm', "
+            "'cuda', 'float16', 'vi', 'succeeded', 'succeeded', 1)"
+        )
+        connection.execute(
+            "INSERT INTO transcript_generations(id, meeting_id, task_id, generation_number, "
+            "status, language_hint, model_name, uncertainty_policy, segment_count) "
+            "VALUES ('g', 'm', 't', 1, 'complete', 'vi', 'm', 'p', 0)"
+        )
+
+    initialize(data_dir)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT device, compute_type FROM transcript_generations WHERE id = 'g'"
+        ).fetchone() == ("cuda", "float16")
+        assert connection.execute("SELECT asr_model FROM tasks WHERE id = 't'").fetchone() == (
+            "auto",
         )

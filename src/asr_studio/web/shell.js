@@ -24,6 +24,9 @@ const selectedFileSize = document.querySelector("#selected-file-size");
 const titleInput = document.querySelector("#meeting-name");
 const dateInput = document.querySelector("#meeting-date-input");
 const autoTranscribeInput = document.querySelector("#auto-transcribe");
+const asrModelControl = document.querySelector("#create-asr-model-control");
+const asrModelInput = document.querySelector("#create-asr-model");
+const asrModelHelp = document.querySelector("#create-asr-model-help");
 const languageInputs = [...form.querySelectorAll('input[name="language_hint"]')];
 const createButton = document.querySelector("#create-meeting");
 const changeFileButton = document.querySelector("#change-file");
@@ -108,6 +111,23 @@ function render(state) {
   for (const input of languageInputs) setProp(input, "checked", input.value === state.form.language);
   setProp(autoTranscribeInput, "checked", state.form.autoTranscribe);
   for (const input of [titleInput, dateInput, autoTranscribeInput, ...languageInputs]) setProp(input, "disabled", view.fieldsDisabled);
+  setProp(asrModelControl, "hidden", !view.asrModel);
+  if (view.asrModel) {
+    const optionsKey = view.asrModel.options.map((option) => `${option.id}:${option.ready}`).join("|");
+    if (asrModelInput.dataset.optionsKey !== optionsKey) {
+      asrModelInput.replaceChildren(...view.asrModel.options.map((option) => {
+        const element = document.createElement("option");
+        element.value = option.id;
+        element.disabled = option.disabled;
+        element.textContent = `${tr(option.label)} · ${t(option.ready ? "sẵn sàng" : "chưa sẵn sàng")}`;
+        return element;
+      }));
+      asrModelInput.dataset.optionsKey = optionsKey;
+    }
+    setProp(asrModelInput, "value", view.asrModel.value);
+    setProp(asrModelInput, "disabled", view.asrModel.disabled);
+    setProp(asrModelHelp, "textContent", tr(view.asrModel.help));
+  }
 
   setProp(retryUploadButton, "hidden", view.retryHidden);
   setProp(retryUploadButton, "disabled", view.retryDisabled);
@@ -199,6 +219,9 @@ form.addEventListener("submit", (event) => {
 });
 autoTranscribeInput.addEventListener("change", () => {
   dispatch({ type: "shell/auto-transcribe-toggled", value: autoTranscribeInput.checked });
+});
+asrModelInput.addEventListener("change", () => {
+  dispatch({ type: "shell/asr-model-chosen", model: asrModelInput.value });
 });
 
 const editForm = () => dispatch({ type: "shell/form-edited", form: readForm() });

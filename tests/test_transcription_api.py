@@ -93,6 +93,18 @@ async def test_task_routes_accept_poll_cancel_and_rediscover_meeting_state(tmp_p
                     json={**payload, "model_id": "cloud-model", "hf_token": "hidden"},
                 )
                 assert invalid_model.status_code == 400
+                unknown_model = await client.post(
+                    "/api/tasks", headers=headers, json={**payload, "asr_model": "cloud-model"}
+                )
+                assert unknown_model.status_code == 400
+                assert unknown_model.json()["detail"]["code"] == "invalid_asr_model"
+                unprepared = await client.post(
+                    "/api/tasks",
+                    headers=headers,
+                    json={**payload, "asr_model": "pho-whisper-large"},
+                )
+                assert unprepared.status_code == 503
+                assert unprepared.json()["detail"]["code"] == "model_unavailable"
                 accepted = await client.post("/api/tasks", headers=headers, json=payload)
                 retry = await client.post("/api/tasks", headers=headers, json=payload)
                 assert accepted.status_code == 202
@@ -107,6 +119,28 @@ async def test_task_routes_accept_poll_cancel_and_rediscover_meeting_state(tmp_p
                 detail = (await client.get(f"/api/meetings/{meeting_id}")).json()
                 assert detail["transcription"]["task"]["id"] == accepted.json()["id"]
                 assert detail["transcription"]["generation"] is None
+                renamed = await client.patch(
+                    f"/api/meetings/{meeting_id}",
+                    headers=headers,
+                    json={
+                        "expected_metadata_version": detail["metadata_version"],
+                        "title": "Task routes renamed",
+                    },
+                )
+                assert renamed.status_code == 200
+                # The page replaces its meeting with this answer: it must not lose these.
+                reread = (await client.get(f"/api/meetings/{meeting_id}")).json()
+                assert (
+                    renamed.json()["transcription"]["asr_models"]
+                    == (reread["transcription"]["asr_models"])
+                )
+                assert (
+                    renamed.json()["transcription"]["runtime"]
+                    == (reread["transcription"]["runtime"])
+                )
+                choices = {c["id"]: c for c in detail["transcription"]["asr_models"]}
+                assert choices["auto"]["ready"] is True
+                assert choices["pho-whisper-large"]["reason"] == "not_prepared"
                 assert detail["transcription"]["runtime"] == {
                     "device": "cuda",
                     "compute_type": "float16",
@@ -128,6 +162,32 @@ async def test_task_routes_accept_poll_cancel_and_rediscover_meeting_state(tmp_p
                 )
             finally:
                 os.close(lock_fd)
+
+
+async def test_asr_models_route_requires_auth_and_matches_meeting_choices(tmp_path, monkeypatch):
+    monkeypatch.setattr(routes, "run_in_threadpool", _run_inline)
+    diarization_model_dir = prepare_diarization_model(tmp_path / "diarization-model")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_model_path=_prepared_model(tmp_path / "model"),
+        diarization_model_path=diarization_model_dir,
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url=settings.public_url) as client:
+            refused = await client.get("/api/asr-models")
+            assert refused.status_code == 401
+            headers = await _authorize(client, settings)
+            meeting_id = seed_meeting(settings.data_dir, "Model catalog")
+
+            catalog = await client.get("/api/asr-models", headers=headers)
+            meeting = await client.get(f"/api/meetings/{meeting_id}", headers=headers)
+            assert catalog.status_code == 200
+            assert meeting.status_code == 200
+            assert catalog.json() == {"asr_models": meeting.json()["transcription"]["asr_models"]}
 
 
 async def test_task_route_persists_per_run_language_and_checks_idempotency(tmp_path, monkeypatch):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import huggingface_hub
 import pytest
@@ -443,3 +444,84 @@ def test_model_prepare_downloads_the_automatically_selected_cpu_model(
     assert main(["model", "prepare"]) == 0
     assert downloaded == [("Systran/faster-whisper-small", target.resolve())]
     assert "ready" in capsys.readouterr().out
+
+
+def test_prepare_converts_phowhisper_and_publishes_only_a_complete_model(
+    tmp_path, monkeypatch, capsys
+):
+    target = tmp_path / "pho-whisper-large"
+    monkeypatch.setenv("ASR_PHOWHISPER_MODEL_PATH", str(target))
+    downloaded = []
+
+    def download(*, repo_id, local_dir):
+        downloaded.append(repo_id)
+        Path(local_dir).mkdir()
+
+    class Converter:
+        def __init__(self, source, **kwargs):
+            self.kwargs = kwargs
+
+        def convert(self, output, **kwargs):
+            assert not target.exists()
+            assert self.kwargs["copy_files"] == ["tokenizer.json", "preprocessor_config.json"]
+            assert kwargs == {"quantization": "float16"}
+            _prepared_model(Path(output))
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
+    monkeypatch.setattr("ctranslate2.converters.TransformersConverter", Converter)
+
+    assert main(["model", "prepare", "--asr-model", "pho-whisper-large"]) == 0
+
+    assert downloaded == ["vinai/PhoWhisper-large"]
+    assert (target / "model.bin").is_file()
+    assert [path.name for path in tmp_path.iterdir()] == ["pho-whisper-large"]
+    assert "ready" in capsys.readouterr().out
+
+
+def test_prepare_of_an_optional_model_never_replaces_existing_files(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "pho-whisper-large"
+    target.mkdir()
+    (target / "operator-file").write_text("kept", encoding="utf-8")
+    monkeypatch.setenv("ASR_PHOWHISPER_MODEL_PATH", str(target))
+    downloaded = []
+    monkeypatch.setattr(
+        huggingface_hub,
+        "snapshot_download",
+        lambda *, repo_id, local_dir: downloaded.append(repo_id),
+    )
+
+    assert main(["model", "prepare", "--asr-model", "pho-whisper-large"]) == 1
+
+    # Refused before spending 3 GB of download on a conversion it could not publish.
+    assert downloaded == []
+    assert (target / "operator-file").read_text(encoding="utf-8") == "kept"
+    error = capsys.readouterr().err
+    assert "model_preparation_failed" in error
+    assert "not empty" in error
+
+
+def test_prepare_downloads_qwen_without_touching_the_hardware_default(tmp_path, monkeypatch):
+    target = tmp_path / "qwen3-asr-1.7b"
+    monkeypatch.setenv("ASR_QWEN_MODEL_PATH", str(target))
+    downloaded = []
+
+    def download(*, repo_id, local_dir):
+        downloaded.append(repo_id)
+        Path(local_dir).mkdir()
+        (Path(local_dir) / "config.json").write_text(
+            '{"model_type": "qwen3_asr"}', encoding="utf-8"
+        )
+        for name in (
+            "model.safetensors",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "generation_config.json",
+            "processor_config.json",
+        ):
+            (Path(local_dir) / name).write_text("{}", encoding="utf-8")
+        (Path(local_dir) / "chat_template.jinja").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
+
+    assert main(["model", "prepare", "--asr-model", "qwen3-asr-1.7b"]) == 0
+    assert downloaded == ["Qwen/Qwen3-ASR-1.7B-hf"]

@@ -687,7 +687,31 @@ def test_worker_runner_command_never_forces_the_language_hint(tmp_path):
         "cuda",
         "--compute-type",
         "float16",
+        "--engine",
+        "whisper",
     ]
+
+
+@pytest.mark.parametrize(
+    ("asr_model", "engine"),
+    [
+        ("auto", "whisper"),
+        ("whisper-large-v3", "whisper"),
+        ("pho-whisper-large", "whisper_vi"),
+        ("qwen3-asr-1.7b", "qwen"),
+    ],
+)
+def test_worker_runs_the_engine_of_the_model_chosen_for_the_task(tmp_path, asr_model, engine):
+    command = worker._runner_command(
+        {
+            "model_path": tmp_path / "model",
+            "device": "cuda",
+            "compute_type": "float16",
+            "asr_model": asr_model,
+        },
+        tmp_path / "recording.m4a",
+    )
+    assert command[-2:] == ["--engine", engine]
 
 
 def test_diarization_command_passes_task_and_meeting_diagnostic_ids(tmp_path):

@@ -405,7 +405,7 @@ def test_runtime_details_sit_in_a_closed_disclosure(live, signed_in):
         details.locator("summary").click()
         expect(details).to_have_attribute("open", "")
         expect(page.get_by_text("Compute backend")).to_be_visible()
-        expect(page.get_by_text("Model tự chọn")).to_be_visible()
+        expect(page.get_by_text("Model mặc định theo phần cứng")).to_be_visible()
         expect(page.locator("#runtime-backend")).to_have_text("GPU · CUDA · float16")
         expect(page.locator("#runtime-model")).to_have_text("whisper-large-v3")
     finally:
