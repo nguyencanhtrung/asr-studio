@@ -340,7 +340,7 @@ function initial(d) {
   };
 }
 
-export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false }, asr: { status: "idle", models: [], request: 0, copy: null } };
+export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false, section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null } };
 
 const done = (state, effects = []) => ({ state, effects });
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1029,13 +1029,22 @@ function onFailure(d, s, meta, error) {
   }
 }
 
-// The launcher slice: the page-load status read, and the one-shot scroll to the Google section.
+// The sections of the settings dialog, and the session key a language change leaves so the reloaded page
+// reopens at its section. i18n.js writes that key: it is a plain script and cannot import this module.
+export const SETTINGS_SECTIONS = ["ai", "asr", "theme", "about"];
+export const SETTINGS_SECTION_KEY = "asr-studio:settings-section";
+
+// The launcher slice: the page-load status read, the one-shot scroll to the Google section, and the open section.
 function reduceLauncher(state, action) {
   if (action.type === "provider/header-requested") {
     return { state, effects: [{ type: "fetch", key: "provider/header", url: CHATGPT.endpoints.providers, init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" }, ok: "provider/response", error: "provider/request-failed", meta: { op: "header" } }] };
   }
-  if (action.type === "provider/dialog-opened") return done({ scroll: action.launcher === "antigravity" });
-  if (action.type === "provider/scroll-handled") return done({ scroll: false });
+  if (action.type === "provider/dialog-opened") {
+    const reopened = action.section ? [{ type: "storage", key: SETTINGS_SECTION_KEY, area: "session", op: "remove" }] : [];
+    return done({ section: action.section ?? "ai", scroll: action.launcher === "antigravity" }, reopened);
+  }
+  if (action.type === "provider/settings-section-selected") return done({ section: action.section, scroll: false });
+  if (action.type === "provider/scroll-handled") return done({ ...state, scroll: false });
   return done(state);
 }
 
@@ -1130,6 +1139,10 @@ export function selectAsr(s) {
       copy: s.copy?.id === choice.id ? ASR_COPY[s.copy.how] : null,
     };
   });
+  // No worker means no model can be checked: say it once, above the list, instead of on every row.
+  if (rows.length && rows.every((row) => row.state === "worker_unavailable")) {
+    return { text: ASR_MODEL_GUIDANCE.worker_unavailable, defaultText: null, rows: rows.map((row) => ({ ...row, guidance: null })) };
+  }
   const defaultText = auto
     ? defaultName
       ? t("Mặc định theo phần cứng của máy: {model}.", { model: defaultName })

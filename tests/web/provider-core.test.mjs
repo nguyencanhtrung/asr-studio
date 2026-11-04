@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createRunner, createStore } from "../../src/asr_studio/web/store.js";
-import { ANTIGRAVITY, CHATGPT, initialState, reduce, selectAsr, selectLauncher, selectView } from "../../src/asr_studio/web/provider-core.js";
+import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, initialState, reduce, selectAsr, selectLauncher, selectView } from "../../src/asr_studio/web/provider-core.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const reply = (status, body) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
@@ -122,6 +122,31 @@ async function loaded(env, { list = LIST, open = true } = {}) {
     await env.answer(env.is("GET", "/api/providers/antigravity/models"), 200, MODELS.antigravity);
   }
 }
+
+// ---- settings sections ----
+
+test("the settings dialog opens at AI provider, or at the section a language change left", () => {
+  const opened = (state, action) => reduce(state, { type: "provider/dialog-opened", ...action });
+  const selected = reduce(initialState, { type: "provider/settings-section-selected", section: "about" }).state;
+  assert.equal(selected.launcher.section, "about");
+  assert.equal(opened(selected, { launcher: null }).state.launcher.section, "ai");
+  assert.equal(opened(selected, { launcher: "chatgpt" }).state.launcher.section, "ai");
+
+  const reopened = opened(initialState, { launcher: null, section: "theme" });
+  assert.equal(reopened.state.launcher.section, "theme");
+  const removal = reopened.effects.filter((effect) => effect.key === SETTINGS_SECTION_KEY);
+  assert.deepEqual(removal, [{ type: "storage", key: SETTINGS_SECTION_KEY, area: "session", op: "remove" }]);
+  assert.equal(opened(initialState, { launcher: null }).effects.some((effect) => effect.key === SETTINGS_SECTION_KEY), false);
+});
+
+test("choosing a section drops a pending scroll to the Google part; the scroll keeps the section", () => {
+  const pending = reduce(initialState, { type: "provider/dialog-opened", launcher: "antigravity" }).state;
+  assert.equal(pending.launcher.scroll, true);
+  const moved = reduce(pending, { type: "provider/settings-section-selected", section: "asr" }).state;
+  assert.deepEqual(moved.launcher, { section: "asr", scroll: false });
+  const handled = reduce(pending, { type: "provider/scroll-handled" }).state;
+  assert.deepEqual(handled.launcher, { section: "ai", scroll: false });
+});
 
 // ---- load ----
 

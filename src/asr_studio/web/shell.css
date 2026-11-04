@@ -248,9 +248,9 @@ textarea:focus-visible {
 }
 
 .sidebar-footer-meta {
-  display: grid;
+  display: flex;
   width: 100%;
-  grid-template-columns: repeat(2, auto);
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 0.35rem 0.5rem;
@@ -260,26 +260,39 @@ textarea:focus-visible {
 }
 
 .version-link {
-  grid-column: 1 / -1;
-  justify-self: center;
+  flex-basis: 100%;
+  text-align: center;
 }
 
-.github-link {
+.github-link,
+.settings-button {
   display: grid;
   width: 27px;
   height: 27px;
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--ink-2);
+  cursor: pointer;
   place-items: center;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
-.github-link:hover {
+.github-link:hover,
+.settings-button:hover {
   background: var(--surface);
-  color: var(--text);
+  color: var(--ink);
 }
 
-.github-link svg {
+.github-link svg,
+.settings-button svg {
   width: 16px;
+  height: 16px;
+}
+
+.settings-button {
+  font-size: var(--text-control);
 }
 
 .version-link {
@@ -1628,6 +1641,17 @@ textarea:focus-visible {
     min-width: 0;
     width: auto;
     flex: 1 1 auto;
+  }
+
+  /* No frame, but the same touch target as the framed controls beside it. */
+  .settings-button {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .settings-button svg {
+    width: 1.125rem;
+    height: 1.125rem;
   }
 
   .brand-mark {

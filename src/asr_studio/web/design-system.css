@@ -224,8 +224,7 @@ a {
 
 /* The language switch shares the theme toggle's box, as on the portfolio header. */
 .theme-toggle,
-.lang-toggle,
-.settings-button {
+.lang-toggle {
   display: grid;
   width: 2.25rem;
   height: 2.25rem;
@@ -242,16 +241,14 @@ a {
 }
 
 .theme-toggle:hover,
-.lang-toggle:hover,
-.settings-button:hover {
+.lang-toggle:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
 }
 
 .theme-toggle:active,
-.lang-toggle:active,
-.settings-button:active {
+.lang-toggle:active {
   transform: translateY(1px);
 }
 
@@ -259,10 +256,6 @@ a {
   font-family: var(--font-mono);
   font-size: var(--text-control);
   letter-spacing: 0.04em;
-}
-
-.settings-button {
-  font-size: var(--text-control);
 }
 
 .theme-icon {

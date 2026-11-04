@@ -44,7 +44,7 @@
 }
 
 .connections-dialog {
-  width: min(580px, calc(100% - 32px));
+  width: min(860px, calc(100% - 32px));
   max-width: none;
   max-height: min(760px, calc(100vh - 32px));
   max-height: min(760px, calc(100dvh - 32px));
@@ -61,11 +61,13 @@
   background: var(--overlay);
 }
 
+/* A fixed height, so moving between sections never resizes the dialog. Only the content column scrolls. */
 .connections-shell {
-  display: flex;
-  max-height: min(760px, calc(100vh - 32px));
-  max-height: min(760px, calc(100dvh - 32px));
-  flex-direction: column;
+  display: grid;
+  height: min(720px, calc(100vh - 32px));
+  height: min(720px, calc(100dvh - 32px));
+  grid-template-columns: 12rem minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border-radius: inherit;
   background: var(--surface);
@@ -73,11 +75,12 @@
 
 .connections-header {
   display: flex;
-  flex: 0 0 auto;
-  align-items: flex-start;
+  grid-column: 1 / -1;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 24px 26px 14px;
+  padding: 18px 26px;
+  border-bottom: 1px solid var(--hairline);
 }
 
 .connections-header h2 {
@@ -87,22 +90,68 @@
   letter-spacing: -0.035em;
 }
 
-.connections-body {
+.settings-tabs {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
   overflow-y: auto;
-  padding: 0 26px 24px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--hairline);
+  background: var(--surface-subtle);
+}
+
+.settings-tab {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: var(--text-control);
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.settings-tab:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.settings-tab[aria-selected="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.settings-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.connections-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 26px;
   overscroll-behavior: contain;
 }
 
-.connections-intro,
+.connections-intro {
+  margin: 0 0 16px;
+  color: var(--ink-2);
+  font-size: var(--text-reading);
+  line-height: 1.6;
+}
+
 .connection-section > p {
   margin: 0;
   color: var(--ink-2);
   font-size: var(--text-control);
   line-height: 1.7;
-}
-
-.connections-intro {
-  padding: 0 0 17px;
 }
 
 .connection-section {
@@ -121,6 +170,13 @@
 .connection-section-heading h4 {
   margin: 0;
   font-size: var(--text-subtitle);
+  font-weight: 560;
+  line-height: 1.3;
+}
+
+.connection-section-heading h5 {
+  margin: 0;
+  font-size: var(--text-reading);
   font-weight: 560;
   line-height: 1.3;
 }
@@ -245,15 +301,16 @@
 }
 
 .connection-disconnect-trigger {
+  padding-inline: 0;
   color: var(--danger);
 }
 
 .connection-disconnect-confirm {
   margin-top: 12px;
   padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--hairline));
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--hairline));
   border-radius: var(--radius-sm);
-  background: var(--warning-soft);
+  background: var(--danger-soft);
 }
 
 .connection-disconnect-confirm p {
@@ -278,10 +335,23 @@
   margin-top: 12px;
 }
 
+.connection-disconnect-actions .primary-button:not(:disabled),
+.connection-disconnect-actions .primary-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
 .connection-model-section form {
   display: grid;
   justify-items: start;
-  gap: 8px;
+  gap: 16px;
+}
+
+.connection-field {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 4px;
 }
 
 .connection-model-section label {
@@ -309,9 +379,9 @@
 .connection-model-status,
 .connection-verification-result {
   margin: 0;
-  color: var(--ink-3);
-  font-size: var(--text-label);
-  line-height: 1.65;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  line-height: 1.6;
 }
 
 .connection-model-status:empty,
@@ -338,9 +408,9 @@
 }
 
 .connection-provider-divider {
-  margin-top: 8px;
+  margin-top: 16px;
   padding: 24px 0 18px;
-  border-top: 3px double var(--line-strong);
+  border-top: 1px solid var(--line-strong);
 }
 
 .connection-provider-divider > p {
@@ -348,13 +418,6 @@
   color: var(--ink-2);
   font-size: var(--text-small);
   line-height: 1.65;
-}
-
-.connection-provider-kicker {
-  font-family: var(--font-mono);
-  font-size: var(--text-label) !important;
-  font-weight: 700;
-  letter-spacing: 0.08em;
 }
 
 .antigravity-login {
@@ -388,8 +451,9 @@
 }
 
 .connection-usage-link {
-  display: inline-block;
-  margin-left: 12px;
+  display: block;
+  width: fit-content;
+  margin-top: 12px;
   font-size: var(--text-control);
 }
 
@@ -446,12 +510,12 @@
   }
 
   .connections-shell {
-    max-height: calc(100vh - 16px);
-    max-height: calc(100dvh - 16px);
+    height: calc(100vh - 16px);
+    height: calc(100dvh - 16px);
   }
 
   .connections-header {
-    padding: 19px 17px 12px;
+    padding: 14px 17px;
   }
 
   .connections-header h2 {
@@ -459,17 +523,12 @@
   }
 
   .connections-body {
-    padding: 0 17px 18px;
+    padding: 16px 17px 18px;
   }
 
   .connection-ledger > div {
     grid-template-columns: minmax(92px, 0.72fr) minmax(0, 1.28fr);
     gap: 10px;
-  }
-
-  .connection-usage-link {
-    display: block;
-    margin: 10px 0 0;
   }
 }
 
@@ -484,16 +543,113 @@
 }
 
 .settings-group-title {
-  margin: 0 0 12px;
-  font-size: var(--text-subtitle);
+  margin: 0 0 8px;
+  font-size: var(--text-heading);
   font-weight: 560;
   line-height: 1.3;
 }
 
-.settings-asr {
-  margin-top: 8px;
-  padding: 24px 0 18px;
-  border-top: 3px double var(--line-strong);
+.settings-panel .connection-ledger a {
+  color: var(--accent);
+}
+
+.settings-field {
+  min-width: 0;
+  margin: 0 0 24px;
+  padding: 0;
+  border: 0;
+}
+
+.settings-field legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--ink);
+  font-size: var(--text-control);
+  font-weight: 620;
+}
+
+.settings-field .language-options {
+  flex-wrap: wrap;
+}
+
+.settings-field .language-option {
+  min-height: 44px;
+  flex: 1 1 auto;
+  font-size: var(--text-control);
+}
+
+.settings-field .language-option:hover,
+.settings-field .language-option:has(input:checked) {
+  border-color: var(--accent);
+}
+
+.settings-field .language-option:has(input:checked) {
+  font-weight: 600;
+}
+
+/* The ring goes round the whole choice, not tight against its label. */
+.settings-field .language-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-field .language-option input {
+  width: 16px;
+  height: 16px;
+  outline: 0;
+}
+
+@media (min-width: 681px) {
+  .settings-field .language-options {
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+  }
+}
+
+/* Beside the content there is room for a column; on a phone the sections become a row above it. */
+@media (max-width: 680px) {
+  .connections-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .settings-tabs {
+    flex-flow: row wrap;
+    padding: 8px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .settings-tab {
+    flex: 1 1 auto;
+    padding: 8px 6px;
+    text-align: center;
+  }
+}
+
+/* Four sections and three display modes do not fit one row here: two even rows, then one choice per row.
+   In rem, so a larger browser text size reaches this layout sooner. */
+@media (max-width: 22.5rem) {
+  .settings-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-field .language-option {
+    flex-basis: 100%;
+  }
+}
+
+/* Forced colours drop the fill and paint a transparent border as CanvasText: only the selected section keeps one. */
+@media (forced-colors: active) {
+  .settings-tab {
+    border-color: Canvas;
+  }
+
+  .settings-tab[aria-selected="true"] {
+    border-color: Highlight;
+  }
 }
 
 .asr-default {
@@ -503,19 +659,16 @@
 }
 
 .asr-models {
-  display: grid;
-  gap: 10px;
   margin: 0;
   padding: 0;
+  border-bottom: 1px solid var(--hairline);
   list-style: none;
 }
 
 .asr-model {
   min-width: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background: var(--surface-subtle);
+  padding: 14px 0;
+  border-top: 1px solid var(--hairline);
 }
 
 .asr-model p {
@@ -541,10 +694,10 @@
 }
 
 .asr-badge {
-  padding: 3px 7px;
+  padding: 4px 7px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--surface-subtle);
   color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: var(--text-label);
@@ -575,39 +728,63 @@
 }
 
 .asr-command-field {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 8px;
-  margin-top: 5px;
+  margin-top: 4px;
 }
 
-.asr-command-field input {
+/* The model name sits at the end of the command, so all of it must show. An invisible copy of the text,
+   in the same grid cell, sizes the box in every browser. */
+.asr-command-text {
+  display: grid;
   width: 100%;
   min-width: 0;
-  padding: 8px 9px;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: var(--text-control);
 }
 
-.asr-command-field button {
-  flex: 0 0 auto;
-  padding: 7px 10px;
-  border: 1px solid var(--ink-3);
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--ink);
-  font: inherit;
+.asr-command-text::after {
+  content: attr(data-value);
+  visibility: hidden;
+  white-space: pre-wrap;
+}
+
+.asr-command-text::after,
+.asr-command-text textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  font-family: var(--font-mono);
   font-size: var(--text-control);
-  cursor: pointer;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  grid-area: 1 / 1;
+}
+
+.asr-command-text textarea {
+  display: block;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--ink);
+  resize: none;
 }
 
 .asr-command-result {
   display: block;
-  min-height: 1em;
-  margin-top: 4px;
   color: var(--ink-2);
   font-size: var(--text-small);
+}
+
+.asr-command-result:not(:empty) {
+  margin-top: 4px;
+}
+
+@media (max-width: 30rem) {
+  .asr-command-field {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
 }

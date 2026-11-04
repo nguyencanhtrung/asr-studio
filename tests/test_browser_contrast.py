@@ -41,8 +41,19 @@ SPECIMENS = """
 <div class="notes-revision-select-wrap"><select><option>Phiên bản 1</option></select></div>
 <div class="connection-model-section"><select><option>Model</option></select></div>
 <div class="notes-frame"><textarea>Viết notes</textarea></div>
-<section class="settings-asr">
-  <h3 class="settings-group-title" data-text>Các model chép lời</h3>
+<div class="settings-tabs"><button class="settings-tab" data-text>ASR Model</button>
+  <button class="settings-tab" aria-selected="true" data-text>Theme</button></div>
+<div class="settings-panel">
+  <p class="connections-intro" data-text>ASR Studio chép lời và ghi chú cuộc họp.</p>
+  <fieldset class="settings-field"><legend data-text>Ngôn ngữ</legend><div
+    class="language-options"><label class="language-option"><input type="radio" name="s"><span
+    data-text>Sáng</span></label><label class="language-option"><input type="radio" name="s"
+    checked><span data-text>Tối</span></label></div></fieldset>
+  <dl class="connection-ledger"><div><dt data-text>Website</dt><dd><a href="#" data-text
+    >bibo.id.vn</a></dd></div></dl>
+</div>
+<section>
+  <h3 class="settings-group-title" data-text>ASR Model</h3>
   <p class="asr-default" data-text>Mặc định theo phần cứng của máy: whisper-large-v3.</p>
   <ul class="asr-models">
     <li class="asr-model" data-state="ready"><div class="asr-model-head">
@@ -55,8 +66,9 @@ SPECIMENS = """
       <span class="asr-badge" data-kind="status" data-text>Chưa chuẩn bị</span></div>
       <p class="asr-model-guidance" data-text>Chạy lệnh sau trong thư mục ứng dụng.</p>
       <div class="asr-command"><label data-text>Lệnh chuẩn bị model</label>
-        <div class="asr-command-field"><input readonly value="docker compose run"><button
-          data-text>Sao chép</button></div>
+        <div class="asr-command-field"><div class="asr-command-text"><textarea
+          readonly>docker compose run</textarea></div><button
+          class="secondary-button" data-text>Sao chép</button></div>
         <span class="asr-command-result" data-text>Đã sao chép lệnh.</span></div></li>
     <li class="asr-model" data-state="gpu_required"><div class="asr-model-head">
       <strong data-text>Qwen</strong>
