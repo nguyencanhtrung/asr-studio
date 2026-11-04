@@ -16,6 +16,7 @@ from starlette.requests import ClientDisconnect
 
 from asr_studio import __version__
 from asr_studio.antigravity import AntigravityError, AntigravityProvider
+from asr_studio.asr_models import AUTO, model_choices, resolve_run, selectable_models
 from asr_studio.auth import AuthStateError, create_session_cookie, token_matches
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
 from asr_studio.config import Settings
@@ -750,6 +751,19 @@ def install_routes(
     async def read_meeting_history(q: str | None = Query(default=None, max_length=200)):
         return await run_in_threadpool(list_meetings, settings.data_dir, query=q)
 
+    async def with_runtime(meeting: dict[str, object]) -> dict[str, object]:
+        """What this machine can run now: the page replaces its meeting with these answers."""
+        profile = (
+            await run_in_threadpool(read_runtime_profile, settings.data_dir)
+            if worker_is_healthy(settings.data_dir)
+            else None
+        )
+        transcription = meeting["transcription"]
+        assert isinstance(transcription, dict)
+        transcription["runtime"] = profile.public_summary() if profile is not None else None
+        transcription["asr_models"] = await run_in_threadpool(model_choices, settings, profile)
+        return meeting
+
     @app.patch("/api/meetings/{meeting_id}")
     async def edit_meeting(meeting_id: str, request: Request) -> dict[str, object]:
         payload = await _json_object(
@@ -758,13 +772,14 @@ def install_routes(
             optional={"title", "meeting_date"},
         )
         try:
-            return await run_in_threadpool(
+            meeting = await run_in_threadpool(
                 update_meeting,
                 settings.data_dir,
                 meeting_id,
                 expected_version=payload["expected_metadata_version"],
                 fields={key: payload[key] for key in ("title", "meeting_date") if key in payload},
             )
+            return await with_runtime(meeting)
         except RecordingError as error:
             _raise_recording_error(error)
 
@@ -779,15 +794,7 @@ def install_routes(
     async def read_meeting(meeting_id: str) -> dict[str, object]:
         try:
             meeting = await run_in_threadpool(get_meeting, settings.data_dir, meeting_id)
-            profile = (
-                await run_in_threadpool(read_runtime_profile, settings.data_dir)
-                if worker_is_healthy(settings.data_dir)
-                else None
-            )
-            transcription = meeting["transcription"]
-            assert isinstance(transcription, dict)
-            transcription["runtime"] = profile.public_summary() if profile is not None else None
-            return meeting
+            return await with_runtime(meeting)
         except RecordingError as error:
             _raise_recording_error(error)
 
@@ -796,19 +803,20 @@ def install_routes(
         payload = await _json_object(
             request,
             required={"meeting_id", "request_id"},
-            optional={"language_hint"},
+            optional={"language_hint", "asr_model"},
         )
         worker_ready = worker_is_healthy(settings.data_dir)
         profile = read_runtime_profile(settings.data_dir) if worker_ready else None
+        asr_model = payload.get("asr_model", AUTO)
+        if asr_model not in selectable_models():
+            _raise_task_error(
+                TaskError(400, "invalid_asr_model", "Choose an ASR model from the list.")
+            )
         task_options = {
             "meeting_id": payload["meeting_id"],
             "request_id": payload["request_id"],
-            "model_path": profile.model_path
-            if profile is not None
-            else settings.asr_gpu_model_path,
+            **resolve_run(settings, profile, asr_model),
             "diarization_model_path": settings.diarization_model_path,
-            "device": profile.device if profile is not None else "auto",
-            "compute_type": profile.compute_type if profile is not None else "default",
             "worker_ready": worker_ready and profile is not None,
         }
         if "language_hint" in payload:

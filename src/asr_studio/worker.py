@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from asr_studio.alignment import AlignmentError, align_segments_to_speakers, validate_turns
+from asr_studio.asr_models import AUTO, engine_of
 from asr_studio.config import Settings
 from asr_studio.diarization_runner import (
     DIARIZATION_ERROR_MESSAGES,
@@ -263,6 +264,8 @@ def _runner_command(task: dict[str, Any], audio_path: Path) -> list[str]:
         str(task["device"]),
         "--compute-type",
         str(task["compute_type"]),
+        "--engine",
+        engine_of(task.get("asr_model", AUTO)),
     ]
 
 

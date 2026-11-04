@@ -6,7 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -545,6 +545,19 @@ def _migrate_v14(connection: sqlite3.Connection) -> None:
     connection.execute("ALTER TABLE tasks ADD COLUMN progress_unit TEXT")
 
 
+def _migrate_v15(connection: sqlite3.Connection) -> None:
+    """Record each run's chosen ASR model and the runtime its transcript really came from."""
+    connection.execute("ALTER TABLE tasks ADD COLUMN asr_model TEXT NOT NULL DEFAULT 'auto'")
+    connection.execute("ALTER TABLE transcript_generations ADD COLUMN device TEXT")
+    connection.execute("ALTER TABLE transcript_generations ADD COLUMN compute_type TEXT")
+    connection.execute(
+        "UPDATE transcript_generations SET "
+        "device = (SELECT device FROM tasks WHERE tasks.id = transcript_generations.task_id), "
+        "compute_type = (SELECT compute_type FROM tasks "
+        "WHERE tasks.id = transcript_generations.task_id)"
+    )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -666,6 +679,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 14:
             _migrate_v14(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (14)")
+        if current_version < 15:
+            _migrate_v15(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (15)")
         connection.commit()
     finally:
         connection.close()

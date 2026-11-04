@@ -55,13 +55,35 @@ const AUTO_START_REASONS = {
   diarization_model_unavailable: t("Model nhận dạng người nói chưa được chuẩn bị."),
 };
 
+// Refused by the app before it created a task, whatever the HTTP status: a retry has nothing to verify. A 503 without
+// one of these codes may come from something in front of the app, and stays uncertain.
+const REFUSED_BEFORE_ACCEPT = new Set([...Object.keys(AUTO_START_REASONS), "model_requires_gpu"]);
+const MODEL_REFUSALS = {
+  model_unavailable: t("Model đã chọn chưa được chuẩn bị. Tải lại trang để xem cách chuẩn bị, hoặc chọn model khác."),
+  model_requires_gpu: t("Model đã chọn chỉ chạy trên GPU NVIDIA. Hãy chọn model khác."),
+};
+
 const LANGUAGE_HINTS = new Set(Object.keys(LANGUAGES));
+
+// The choices of the model selector. The server owns which exist and whether each is ready.
+const ASR_MODEL_TEXT = {
+  auto: { label: t("Tự động") },
+  "whisper-large-v3": { label: "Whisper large-v3", note: t("Đa ngôn ngữ, tự phát hiện ngôn ngữ. Đôi khi lặp lại câu.") },
+  "pho-whisper-large": { label: "PhoWhisper-large", note: t("Tối ưu cho tiếng Việt. Không dành cho English hoặc nội dung trộn nhiều thuật ngữ kỹ thuật.") },
+  "qwen3-asr-1.7b": { label: "Qwen3-ASR-1.7B", note: t("Đa ngôn ngữ, chỉ chạy trên GPU. Không có điểm tin cậy: “cần kiểm tra” chỉ bắt đoạn lặp và vấn đề người nói, nên đừng so số này với model khác.") },
+};
+const ASR_MODEL_GUIDANCE = {
+  not_prepared: t("Model này chưa được chuẩn bị trên máy. Chạy lệnh sau trong thư mục ứng dụng (chỉ tải model, không gửi bản ghi), rồi tải lại trang."),
+  gpu_required: t("Model này chỉ chạy trên GPU NVIDIA, còn worker đang chạy CPU. Hãy chọn model khác."),
+  worker_unavailable: t("Worker chép lời chưa sẵn sàng nên chưa kiểm tra được model."),
+};
 
 export const initialState = {
   hidden: false, // the page is in the background: the poll slows down
   poll: null, // { meetingId, taskId, phase: waiting | fetching }: the one task being followed
-  pending: null, // { meetingId, requestId, languageHint }: a start whose answer is not known yet (also kept in sessionStorage)
+  pending: null, // { meetingId, requestId, languageHint, asrModel }: a start whose answer is not known yet (also kept in sessionStorage)
   language: null, // { meetingId, selection }: the language the user chose for the next run
+  asrModel: null, // { meetingId, selection }: the model the user chose for the next run; never a system default
   start: null, // { meetingId, requestId, auto, refreshing }: a start request on the wire (global, as the old flag was)
   cancelling: [], // ids of tasks with a cancel request on the wire
   error: null, // { meetingId, message }: the last start or cancel refusal
@@ -81,6 +103,7 @@ const isObject = (value) => value !== null && typeof value === "object" && !Arra
 
 export const isActive = (task) => Boolean(task && ACTIVE_TASK_STATES.includes(task.status));
 const validLanguage = (value) => (typeof value === "string" && LANGUAGE_HINTS.has(value) ? value : null);
+const validModel = (value) => (typeof value === "string" && Object.hasOwn(ASR_MODEL_TEXT, value) ? value : null);
 
 // ---- language ----
 
@@ -107,13 +130,35 @@ export function displayedLanguage(state, shown) {
   );
 }
 
+// The same order for the model, except that the last task's model is not read back: a new page starts on Tự động,
+// and a choice lasts while this page stays on the meeting.
+export function displayedModel(state, shown) {
+  const pending = pendingFor(state, shown.id);
+  const remembered = state.asrModel && state.asrModel.meetingId === shown.id ? validModel(state.asrModel.selection) : null;
+  return (
+    (pending && validModel(pending.asrModel))
+    || (isActive(shown.task) && validModel(shown.task.asr_model))
+    || remembered
+    || "auto"
+  );
+}
+
+// A worker that is down keeps its own refusal; a model known to be unusable cannot start. An uncertain start may
+// still be retried: the server answers it from the run it already accepted.
+function modelBlocked(state, shown) {
+  if (pendingFor(state, shown.id)) return false;
+  const choice = (shown.asrModels || []).find((entry) => entry.id === displayedModel(state, shown));
+  return Boolean(choice && ["not_prepared", "gpu_required"].includes(choice.reason));
+}
+
 // ---- the pending request id ----
 
-// The stored record: JSON {requestId, languageHint}, or the plain request id that older pages wrote.
+// The stored record: JSON {requestId, languageHint, asrModel}, or the plain request id that older pages wrote.
 function parseStored(raw, fallbackLanguage) {
   if (!raw) return null;
   let requestId = raw;
   let languageHint = fallbackLanguage;
+  let asrModel = "auto";
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === "string") {
@@ -121,12 +166,13 @@ function parseStored(raw, fallbackLanguage) {
     } else if (parsed && typeof parsed === "object") {
       requestId = parsed.requestId;
       languageHint = validLanguage(parsed.languageHint) || fallbackLanguage;
+      asrModel = validModel(parsed.asrModel) || "auto";
     }
   } catch {
     // an older page stored the request id as plain text
   }
   if (typeof requestId !== "string" || !requestId) return null;
-  return { requestId, languageHint: validLanguage(languageHint) || "en" };
+  return { requestId, languageHint: validLanguage(languageHint) || "en", asrModel };
 }
 
 const rememberEffect = (pending) => ({
@@ -134,7 +180,7 @@ const rememberEffect = (pending) => ({
   key: requestStorageKey(pending.meetingId),
   area: "session",
   op: "write",
-  value: JSON.stringify({ requestId: pending.requestId, languageHint: pending.languageHint }),
+  value: JSON.stringify({ requestId: pending.requestId, languageHint: pending.languageHint, asrModel: pending.asrModel }),
 });
 
 function remember(state, pending) {
@@ -244,11 +290,11 @@ function pollLoaded(state, action) {
 // ---- start ----
 
 function startRequest(state, shown, requestId, auto) {
-  if (!shown || state.start || shown.blocked) return out(state);
+  if (!shown || state.start || shown.blocked || (!auto && modelBlocked(state, shown))) return out(state);
   let result = out(state);
   let pending = pendingFor(state, shown.id);
   if (!pending) {
-    pending = { meetingId: shown.id, requestId, languageHint: displayedLanguage(state, shown) };
+    pending = { meetingId: shown.id, requestId, languageHint: displayedLanguage(state, shown), asrModel: displayedModel(state, shown) };
     result = remember(state, pending);
   }
   const startEffect = {
@@ -260,7 +306,7 @@ function startRequest(state, shown, requestId, auto) {
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
-      body: JSON.stringify({ meeting_id: shown.id, request_id: pending.requestId, language_hint: pending.languageHint }),
+      body: JSON.stringify({ meeting_id: shown.id, request_id: pending.requestId, language_hint: pending.languageHint, asr_model: pending.asrModel }),
     },
     ok: "task/start-succeeded",
     error: "task/start-failed",
@@ -274,18 +320,25 @@ function startFailed(state, error, auto) {
   const { meetingId } = state.start;
   if (isWorkspaceAuthenticationFailure(error?.status, error?.body)) return sessionEnded(state, meetingId);
   const failure = failureOf(error, t("Không thể xác nhận yêu cầu."));
-  const definitive = Boolean(failure.api && Number.isInteger(failure.status) && failure.status >= 400 && failure.status < 500);
+  const definitive = Boolean(failure.api && Number.isInteger(failure.status) && ((failure.status >= 400 && failure.status < 500) || REFUSED_BEFORE_ACCEPT.has(failure.code)));
   const guidance = definitive
     ? t("Bấm lại để gửi một yêu cầu mới.")
-    : t("Bấm lại để xác minh bằng cùng request ID và ngôn ngữ gợi ý.");
-  const message = auto && Object.hasOwn(AUTO_START_REASONS, failure.code)
-    ? t("{reason} Cuộc họp đã được lưu nhưng chưa chép lời. Ứng dụng không tự thử lại; bấm “Bắt đầu chép lời” khi máy sẵn sàng.", { reason: AUTO_START_REASONS[failure.code] })
-    : [failure.message, " ", guidance];
+    : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
+  let message = [failure.message, " ", guidance];
+  if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
+    message = t("{reason} Cuộc họp đã được lưu nhưng chưa chép lời. Ứng dụng không tự thử lại; bấm “Bắt đầu chép lời” khi máy sẵn sàng.", { reason: AUTO_START_REASONS[failure.code] });
+  } else if (Object.hasOwn(MODEL_REFUSALS, failure.code)) {
+    // The shared text for this code names a notes provider, which has no place here.
+    message = MODEL_REFUSALS[failure.code];
+  }
   const base = definitive ? forget(state, meetingId) : out(state);
+  // A request restored after a reload is the only record of its model: the selector must keep showing what was refused.
+  const refused = definitive && pendingFor(state, meetingId);
   return then(base, (s) => out(repaint({
     ...s,
     start: null,
     error: { meetingId, message },
+    asrModel: refused ? { meetingId, selection: refused.asrModel } : s.asrModel,
   })));
 }
 
@@ -398,7 +451,8 @@ export function reduce(state, action) {
       if (!shown) return out(state);
       const task = shown.task;
       const language = state.language && state.language.meetingId === shown.id ? state.language : null;
-      let result = out({ ...state, copy: null, notice: null, language });
+      const asrModel = state.asrModel && state.asrModel.meetingId === shown.id ? state.asrModel : null;
+      let result = out({ ...state, copy: null, notice: null, language, asrModel });
       if (!pendingFor(state, shown.id)) {
         const fallback = task && !isActive(task) ? validLanguage(task.language_hint) || "en" : defaultLanguage(shown, task);
         const stored = parseStored(action.stored, fallback);
@@ -424,6 +478,13 @@ export function reduce(state, action) {
       const language = validLanguage(action.language);
       if (!action.shown || !language) return out(state);
       return out({ ...state, language: { meetingId: action.shown.id, selection: language } });
+    }
+
+    case "task/model-chosen": {
+      const asrModel = validModel(action.model);
+      if (!action.shown || !asrModel) return out(state);
+      // The start button and the guidance follow the choice.
+      return out(repaint({ ...state, asrModel: { meetingId: action.shown.id, selection: asrModel } }));
     }
 
     case "task/start-clicked":
@@ -490,6 +551,28 @@ export function selectRuntime(runtime) {
   return { device: device || "unavailable", backend, model: runtime && runtime.model_name ? runtime.model_name : t("Chưa xác định") };
 }
 
+function selectModel(state, shown, disabled) {
+  const choices = (shown.asrModels || []).filter((choice) => validModel(choice.id));
+  if (!choices.length) return null;
+  const value = displayedModel(state, shown);
+  const choice = choices.find((entry) => entry.id === value);
+  const note = value !== "auto"
+    ? ASR_MODEL_TEXT[value].note
+    : choice && choice.model_name
+      ? t("Theo phần cứng của máy: {model}.", { model: choice.model_name })
+      : t("Theo phần cứng của máy.");
+  const reason = choice ? choice.reason : null;
+  return {
+    value,
+    disabled,
+    options: choices.map((entry) => ({ id: entry.id, label: ASR_MODEL_TEXT[entry.id].label, ready: Boolean(entry.ready) })),
+    note,
+    blocked: modelBlocked(state, shown),
+    guidance: reason && !disabled ? ASR_MODEL_GUIDANCE[reason] ?? null : null,
+    command: choice && !disabled ? choice.prepare_command || "" : "",
+  };
+}
+
 // What the task half of the page shows for the meeting on screen. `shown` is the same facts the view stamps on actions.
 export function selectTask(state, shown) {
   const task = shown ? shown.task : null;
@@ -514,6 +597,7 @@ export function selectTask(state, shown) {
     stopping: Boolean(task && task.status === "stopping"),
     progress: active ? progressOf(task) : null,
     language: shown ? { value: displayedLanguage(state, shown), disabled: active || Boolean(pending) } : null,
+    model: shown ? selectModel(state, shown, active || Boolean(pending)) : null,
     error: { visible: failed || Boolean(refusal), message, diagnostic },
     notice,
     copy: how,

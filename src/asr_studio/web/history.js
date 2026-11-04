@@ -137,6 +137,7 @@ function shownNow() {
     id: meeting.id,
     language: meeting.language_hint,
     task: transcription.task || null,
+    asrModels: Array.isArray(transcription.asr_models) ? transcription.asr_models : [],
     meeting, // the transcript slice reasons about the meeting's generations (the object is never changed in place)
     view: state.view,
     installRev: state.installRev,
@@ -1197,6 +1198,7 @@ function renderGenerationNavigation(transcription) {
       const option = document.createElement("option");
       option.value = generation.id;
       option.textContent = `Transcript #${generation.generation_number}`
+        + (generation.model_name ? ` · ${generation.model_name}` : "")
         + (current && current.id === generation.id ? t(" · hiện tại") : t(" · lịch sử"));
       selector.append(option);
     }
@@ -1377,16 +1379,22 @@ function renderTranscriptGeneration(generation, editable) {
   const meta = [
     t("Gợi ý: {language}", { language: tr(LANGUAGES[generation.language_hint]) || generation.language_hint }),
     generation.model_name,
+    // Older transcripts carry no runtime when their task row is gone.
+    generation.device ? tr(selectRuntime(generation).backend) : null,
     t("{count} đoạn", { count: generation.segment_count }),
   ].filter(Boolean);
   if (typeof generation.language_probability === "number") {
     meta.push(`language_probability ${generation.language_probability.toFixed(3)}`);
   }
+  const segments = Array.isArray(generation.segments) ? generation.segments : [];
+  // No confidence score: the review count cannot catch a misheard word, so it does not compare across models.
+  if (segments.length && segments.every((segment) => segment.avg_logprob === null)) {
+    meta.push(t("“cần kiểm tra” không xét độ tin cậy của chữ"));
+  }
   if (generation.diarization_model_name) meta.push(`Diarization · ${generation.diarization_model_name}`);
   $("#generation-meta").textContent = meta.join(" · ");
   renderSpeakerCatalog(generation, editable);
 
-  const segments = Array.isArray(generation.segments) ? generation.segments : [];
   $("#transcript-empty").hidden = segments.length > 0;
   for (const segment of segments) list.append(buildSegmentRow(generation, segment, editable));
   if (tstate().mutation) syncTranscriptMutationControls();
@@ -2308,10 +2316,11 @@ function renderTranscription(transcription) {
   const measurements = $("#task-measurements");
 
   renderLanguageControl(view);
+  renderModelControl(view);
   renderRuntimeProfile(transcription && transcription.runtime);
 
   startButton.hidden = view.active;
-  startButton.disabled = view.requestBusy || sourceMutationUnavailable();
+  startButton.disabled = view.requestBusy || sourceMutationUnavailable() || Boolean(view.model && view.model.blocked);
   startButton.textContent = generation ? t("Chạy lại bản ghi") : t("Bắt đầu chép lời");
   // The first run is the decisive action; running again over a transcript is not.
   startButton.classList.toggle("primary-button", !generation);
@@ -2323,10 +2332,14 @@ function renderTranscription(transcription) {
   measurements.hidden = !task;
   renderTaskError(view);
 
+  // With the button off, the model guidance says what to do: do not also invite a click on it.
+  const modelBlocked = Boolean(view.model && view.model.blocked);
   if (!task) {
     $("#transcription-status").textContent = generation
       ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
-      : t("Bản ghi đã lưu. Bấm “Bắt đầu chép lời” khi bạn muốn chạy nhận dạng local.");
+      : modelBlocked
+        ? t("Bản ghi đã lưu.")
+        : t("Bản ghi đã lưu. Bấm “Bắt đầu chép lời” khi bạn muốn chạy nhận dạng local.");
   } else {
     const statusText = {
       accepted: t("Tác vụ đã được nhận. Worker sẽ bắt đầu xử lý."),
@@ -2337,7 +2350,9 @@ function renderTranscription(transcription) {
       canceled: generation
         ? t("Đã hủy sau khi runner dừng. Transcript hoàn chỉnh trước đó vẫn được giữ.")
         : t("Đã hủy sau khi runner dừng. Chưa có transcript hoàn chỉnh được lưu."),
-      interrupted: t("Worker đã dừng giữa tác vụ. Không tự chạy lại; hãy bấm để thử lại."),
+      interrupted: modelBlocked
+        ? t("Worker đã dừng giữa tác vụ. Không tự chạy lại.")
+        : t("Worker đã dừng giữa tác vụ. Không tự chạy lại; hãy bấm để thử lại."),
     };
     $("#transcription-status").textContent = workerChecking
       ? task.status === "accepted"
@@ -2363,6 +2378,31 @@ function renderLanguageControl(view) {
   if (!selector || !view.language) return;
   setProp(selector, "value", view.language.value);
   setProp(selector, "disabled", view.language.disabled);
+}
+
+function renderModelControl(view) {
+  const { model } = view;
+  setProp($("#transcription-model-control"), "hidden", !model);
+  const guidance = $("#transcription-model-guidance");
+  setProp(guidance, "hidden", !(model && model.guidance));
+  if (!model) return;
+  const selector = $("#transcription-model");
+  const optionsKey = model.options.map((option) => `${option.id}:${option.ready}`).join("|");
+  if (selector.dataset.optionsKey !== optionsKey) {
+    selector.replaceChildren(...model.options.map((option) => {
+      const element = document.createElement("option");
+      element.value = option.id;
+      element.textContent = `${tr(option.label)} · ${option.ready ? t("sẵn sàng") : t("chưa sẵn sàng")}`;
+      return element;
+    }));
+    selector.dataset.optionsKey = optionsKey;
+  }
+  setProp(selector, "value", model.value);
+  setProp(selector, "disabled", model.disabled);
+  setProp($("#transcription-model-help"), "textContent", tr(model.note));
+  if (model.guidance) setProp($("#transcription-model-guidance-text"), "textContent", tr(model.guidance));
+  setProp($("#transcription-model-command-wrap"), "hidden", !model.command);
+  setProp($("#transcription-model-command"), "value", model.command);
 }
 
 // ---- transcription task: the view of task-core.js ----
@@ -2532,6 +2572,7 @@ $("#meeting-edit").addEventListener("submit", (event) => {
 $("#transcription-language").addEventListener("change", (event) => {
   dispatch({ type: "task/language-chosen", language: event.currentTarget.value });
 });
+$("#transcription-model").addEventListener("change", (event) => dispatch({ type: "task/model-chosen", model: event.target.value }));
 $("#start-transcription").addEventListener("click", () => dispatch({ type: "task/start-clicked", requestId: newRequestId() }));
 $("#cancel-transcription").addEventListener("click", () => dispatch({ type: "task/cancel-clicked" }));
 $("#task-diagnostic-copy").addEventListener("click", () => dispatch({ type: "task/copy-clicked" }));

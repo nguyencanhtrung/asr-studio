@@ -24,6 +24,32 @@ Chọn **Whisper large-v3 để chuyển âm thanh thành transcript** và **pya
 
 Qwen3-14B từng được chọn làm mốc vì có artifact GGUF chính thức đã xác minh, không phải kết luận nó mới nhất hoặc tốt hơn Qwen3.5-9B. Chưa có phép đo nào trong repo chứng minh model tạo notes, local hoặc cloud, đáp ứng dữ liệu cuộc họp này. Việc hoãn Qwen tạo notes không tự loại ứng viên ASR cùng thương hiệu khỏi nghiên cứu âm thanh.
 
+## Đo trên bản ghi thật (11-2026)
+
+Phép đo phục vụ #28, chạy trên GPU 16 GB, trong network namespace rỗng để âm thanh không thể ra ngoài: hai cuộc họp đầy đủ (67 và 75 phút) và năm đoạn 5 đến 10 phút gồm tiếng Việt, English và chuyển ngôn ngữ giữa chừng. Bản ghi riêng tư nên không nằm trong repo.
+
+**Giới hạn: không có bản chép tay chuẩn nên không có WER trên cuộc họp thật.** Các cột dưới là số đo gián tiếp; bản thân độ đúng chỉ được đọc đối chiếu trên vài đoạn.
+
+| Model và cấu hình | RTF | VRAM đỉnh (MiB) | Đoạn trên 2 cuộc họp | % từ trong cụm lặp | Đoạn trùng liền kề |
+| --- | --- | --- | --- | --- | --- |
+| Whisper large-v3, cấu hình app | 0,075 đến 0,076 | 5554 | 1717 | 4,2 và 5,7 | 117 và 57 |
+| Whisper large-v3, `vad_filter` và không nối ngữ cảnh | 0,025 đến 0,029 | 5362 | 1172 | 1,1 và 1,5 | 0 và 0 |
+| PhoWhisper-large, VAD im lặng 1,5 s (`whisper_vi`) | 0,032 đến 0,036 | 5362 | 480 | 2,5 và 2,3 | 0 và 0 |
+| Qwen3-ASR-1.7B (`qwen`), batch 8 | 0,008 đến 0,009 | 12456 | 1597 | 3,1 và 2,4 | 2 và 1 |
+| Zipformer-30M-6000h, CPU | 0,006 | 0 | 1597 | không so | không so |
+
+Đọc đối chiếu:
+
+- **Qwen3-ASR**: tốt nhất trên English và câu trộn, có viết hoa và dấu câu; có đoạn nghe nhầm từ kỹ thuật. Không dùng được logprob làm độ tin cậy (trung vị khoảng −4,4 cả trên đoạn rõ).
+- **PhoWhisper-large**: tiếng Việt tự nhiên; trên English thì dịch sang tiếng Việt hoặc phiên âm, và có tự chế câu trên đoạn ngắn hoặc nhiễu. Ngưỡng `_asr_uncertain` không bắt được các câu này. Tăng khoảng lặng VAD từ 0,5 lên 1,5 s giảm số đoạn dày chữ bất thường (hơn 30 ký tự mỗi giây) từ 38 xuống 9.
+- **Zipformer**: chính xác trên từ và tên tiếng Việt và dẫn đầu N-WER trên [bảng xếp hạng tiếng Việt](https://vietaudio-team-vietnamese-asr-leaderboard.hf.space/), nhưng toàn chữ hoa, không dấu câu, English sai, và giấy phép CC-BY-NC-ND. Chưa đưa vào danh mục.
+- **Parakeet CTC Vietnamese**: vỡ âm tiết, English sai, dependency NeMo nặng. Loại.
+- **Whisper large-v3**: `vad_filter=True` với `condition_on_previous_text=False` giảm lặp mạnh và nhanh gấp khoảng 2,6 lần, nhưng có đoạn mất tiếng Việt ngay sau khi đổi ngôn ngữ. Chưa đổi mặc định; để #80 quyết định.
+
+Giải thích cột: RTF là thời gian xử lý chia độ dài âm thanh, nhỏ hơn là nhanh hơn. Cột có hai giá trị theo thứ tự cuộc họp 67 và 75 phút. Số đoạn khác nhau vì cách chia đoạn khác nhau. App chạy Qwen với batch 4: VRAM đỉnh 8312 MiB trên cuộc họp 75 phút, RTF khoảng 0,016 (72 giây phần ASR).
+
+Việc chọn model theo từng lần chạy: [ADR 0011](adr/0011-asr-model-per-run.md).
+
 ## Bộ nhớ và cách chạy
 
 Pipeline hiện tại chạy lần lượt ASR và diarization local, giải phóng GPU giữa các model; sau đó gọi provider cloud cho notes. Cách dùng tiến trình con và thu hồi tài nguyên còn cần kiểm chứng. Huấn luyện nhận diện danh tính là phase sau, không bổ sung model training vào v1.

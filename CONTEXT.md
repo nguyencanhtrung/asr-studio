@@ -46,7 +46,7 @@ Bản giữ nguyên nguồn đã dùng để tạo một bản notes, gồm nộ
 _Avoid_: Thế hệ transcript, bản notes
 
 **Lần xử lý bản ghi (Recording processing run)**:
-Một lần chuyển bản ghi thành transcript, có thể kèm tạo meeting notes. Chạy lại từ bản ghi là một lần xử lý mới, khác với việc tạo notes từ transcript đã có.
+Một lần chuyển bản ghi thành transcript, có thể kèm tạo meeting notes. Chạy lại từ bản ghi là một lần xử lý mới, khác với việc tạo notes từ transcript đã có. Mỗi lần xử lý dùng model ASR được chọn riêng cho lần đó; lựa chọn này không đổi mặc định của hệ thống.
 
 **Lần tạo notes (Notes generation run)**:
 Một lần tạo bản notes mới từ nguồn tạo notes của cuộc họp. Lần tạo notes có thể thuộc quá trình xử lý bản ghi hoặc do người vận hành yêu cầu sau khi đã có transcript.

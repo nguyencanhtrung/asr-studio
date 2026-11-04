@@ -10,7 +10,7 @@ Q21 chọn thế hệ mới nhất đã lưu đầy đủ làm mặc định đ�
 
 Mỗi lần chạy lưu riêng trường language_hint cùng model/runtime configuration của task và generation.
 Giá trị mặc định là gợi ý của Recording để giữ tương thích với client cũ; khi chạy lại, người vận
-hành có thể chọn en hoặc vi cho riêng lần chạy đó. Đây chỉ là metadata gợi ý: runner vẫn để
-decoder tự phát hiện ngôn ngữ, và request retry phải giữ nguyên cặp request ID/ngôn ngữ đã chọn.
+hành có thể chọn en hoặc vi cho riêng lần chạy đó. Đây chỉ là metadata gợi ý: runner không dùng nó để ép ngôn ngữ
+của decoder, và request retry phải giữ nguyên request ID, ngôn ngữ và model đã chọn. Model cũng được chọn theo từng lần chạy, xem [ADR 0011](0011-asr-model-per-run.md).
 
 Giữ thế hệ cũ giải quyết việc chạy lại âm thanh. Việc bảo toàn nguồn khi sửa ngay trong cùng thế hệ được quyết định riêng tại [ADR 0008](0008-notes-source-snapshots.md).

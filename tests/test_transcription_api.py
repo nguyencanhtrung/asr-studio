@@ -93,6 +93,18 @@ async def test_task_routes_accept_poll_cancel_and_rediscover_meeting_state(tmp_p
                     json={**payload, "model_id": "cloud-model", "hf_token": "hidden"},
                 )
                 assert invalid_model.status_code == 400
+                unknown_model = await client.post(
+                    "/api/tasks", headers=headers, json={**payload, "asr_model": "cloud-model"}
+                )
+                assert unknown_model.status_code == 400
+                assert unknown_model.json()["detail"]["code"] == "invalid_asr_model"
+                unprepared = await client.post(
+                    "/api/tasks",
+                    headers=headers,
+                    json={**payload, "asr_model": "pho-whisper-large"},
+                )
+                assert unprepared.status_code == 503
+                assert unprepared.json()["detail"]["code"] == "model_unavailable"
                 accepted = await client.post("/api/tasks", headers=headers, json=payload)
                 retry = await client.post("/api/tasks", headers=headers, json=payload)
                 assert accepted.status_code == 202
@@ -107,6 +119,28 @@ async def test_task_routes_accept_poll_cancel_and_rediscover_meeting_state(tmp_p
                 detail = (await client.get(f"/api/meetings/{meeting_id}")).json()
                 assert detail["transcription"]["task"]["id"] == accepted.json()["id"]
                 assert detail["transcription"]["generation"] is None
+                renamed = await client.patch(
+                    f"/api/meetings/{meeting_id}",
+                    headers=headers,
+                    json={
+                        "expected_metadata_version": detail["metadata_version"],
+                        "title": "Task routes renamed",
+                    },
+                )
+                assert renamed.status_code == 200
+                # The page replaces its meeting with this answer: it must not lose these.
+                reread = (await client.get(f"/api/meetings/{meeting_id}")).json()
+                assert (
+                    renamed.json()["transcription"]["asr_models"]
+                    == (reread["transcription"]["asr_models"])
+                )
+                assert (
+                    renamed.json()["transcription"]["runtime"]
+                    == (reread["transcription"]["runtime"])
+                )
+                choices = {c["id"]: c for c in detail["transcription"]["asr_models"]}
+                assert choices["auto"]["ready"] is True
+                assert choices["pho-whisper-large"]["reason"] == "not_prepared"
                 assert detail["transcription"]["runtime"] == {
                     "device": "cuda",
                     "compute_type": "float16",

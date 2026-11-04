@@ -16,6 +16,8 @@ DEFAULT_MAX_RECORDING_SECONDS = 4 * 60 * 60
 DEFAULT_UPLOAD_CHUNK_BYTES = 64 * 1024**2
 DEFAULT_ASR_GPU_MODEL_PATH = Path("/models/whisper-large-v3")
 DEFAULT_ASR_CPU_MODEL_PATH = Path("/models/whisper-small")
+DEFAULT_ASR_PHOWHISPER_MODEL_PATH = Path("/models/pho-whisper-large")
+DEFAULT_ASR_QWEN_MODEL_PATH = Path("/models/qwen3-asr-1.7b")
 DEFAULT_DIARIZATION_MODEL_PATH = Path("/models/speaker-diarization-community-1")
 ASR_DEVICES = frozenset({"auto", "cpu", "cuda"})
 ASR_COMPUTE_TYPES = frozenset(
@@ -108,6 +110,8 @@ class Settings:
     asr_compute_type: str | None = None
     asr_gpu_model_path: Path = DEFAULT_ASR_GPU_MODEL_PATH
     asr_cpu_model_path: Path = DEFAULT_ASR_CPU_MODEL_PATH
+    asr_phowhisper_model_path: Path = DEFAULT_ASR_PHOWHISPER_MODEL_PATH
+    asr_qwen_model_path: Path = DEFAULT_ASR_QWEN_MODEL_PATH
     asr_gpu_compute_type: str = "float16"
     asr_cpu_compute_type: str = "int8"
     diarization_model_path: Path = DEFAULT_DIARIZATION_MODEL_PATH
@@ -125,6 +129,8 @@ class Settings:
             object.__setattr__(self, "asr_model_path", Path(self.asr_model_path))
         object.__setattr__(self, "asr_gpu_model_path", Path(self.asr_gpu_model_path))
         object.__setattr__(self, "asr_cpu_model_path", Path(self.asr_cpu_model_path))
+        object.__setattr__(self, "asr_phowhisper_model_path", Path(self.asr_phowhisper_model_path))
+        object.__setattr__(self, "asr_qwen_model_path", Path(self.asr_qwen_model_path))
         object.__setattr__(self, "diarization_model_path", Path(self.diarization_model_path))
         object.__setattr__(self, "public_url", _validate_public_url(self.public_url))
         callback_url = self.chatgpt_callback_url
@@ -187,6 +193,12 @@ class Settings:
             ),
             asr_cpu_model_path=Path(
                 os.environ.get("ASR_CPU_MODEL_PATH", str(DEFAULT_ASR_CPU_MODEL_PATH))
+            ),
+            asr_phowhisper_model_path=Path(
+                os.environ.get("ASR_PHOWHISPER_MODEL_PATH", str(DEFAULT_ASR_PHOWHISPER_MODEL_PATH))
+            ),
+            asr_qwen_model_path=Path(
+                os.environ.get("ASR_QWEN_MODEL_PATH", str(DEFAULT_ASR_QWEN_MODEL_PATH))
             ),
             asr_gpu_compute_type=os.environ.get("ASR_GPU_COMPUTE_TYPE", "float16"),
             asr_cpu_compute_type=os.environ.get("ASR_CPU_COMPUTE_TYPE", "int8"),

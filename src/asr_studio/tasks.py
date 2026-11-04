@@ -15,11 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from asr_studio.alignment import ALIGNMENT_POLICY, ASR_UNCERTAINTY_POLICY
+from asr_studio.asr_models import AUTO, engine_of
 from asr_studio.diarization_runner import (
     DiarizationConfigurationError,
     prepared_diarization_directory,
 )
-from asr_studio.runner import ModelConfigurationError, prepared_model_directory
+from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.storage import database_path
 
 UNCERTAINTY_POLICY = ASR_UNCERTAINTY_POLICY
@@ -167,6 +168,8 @@ def _task_summary(row: sqlite3.Row) -> dict[str, object]:
         if isinstance(row["progress_unit"], str) and row["progress_unit"]
         else None
     )
+    if row["kind"] == "transcription":
+        summary["asr_model"] = row["asr_model"]
     if row["kind"] == "notes":
         summary["output_language"] = row["notes_output_language"]
         summary["provider"] = row["notes_provider"]
@@ -186,6 +189,7 @@ def accept_transcription_task(
     device: str,
     compute_type: str,
     worker_ready: bool,
+    asr_model: str = AUTO,
 ) -> dict[str, object]:
     """Accept one request atomically, returning the original row for HTTP retries."""
     if not isinstance(meeting_id, str) or not meeting_id:
@@ -225,12 +229,11 @@ def accept_transcription_task(
             "SELECT * FROM tasks WHERE request_id = ?", (normalized_request_id,)
         ).fetchone()
         if existing is not None:
-            if existing["language_hint"] != normalized_language_hint or existing[
-                "request_hash"
-            ] not in {
-                request_hash,
-                legacy_request_hash,
-            }:
+            if (
+                existing["language_hint"] != normalized_language_hint
+                or existing["asr_model"] != asr_model
+                or existing["request_hash"] not in {request_hash, legacy_request_hash}
+            ):
                 raise TaskError(
                     409,
                     "idempotency_conflict",
@@ -251,13 +254,20 @@ def accept_transcription_task(
             )
         if not worker_ready:
             raise TaskError(503, "worker_unavailable", "The transcription worker is unavailable.")
+        engine = engine_of(asr_model)
+        if engine == "qwen" and device != "cuda":
+            raise TaskError(
+                503,
+                "model_requires_gpu",
+                "The selected ASR model runs only on an NVIDIA GPU.",
+            )
         try:
-            prepared_model_directory(Path(normalized_model_path))
+            prepared_engine_directory(engine, Path(normalized_model_path))
         except ModelConfigurationError:
             raise TaskError(
                 503,
                 "model_unavailable",
-                "The configured local faster-whisper model is not prepared.",
+                "The selected local ASR model is not prepared.",
             ) from None
         try:
             prepared_diarization_directory(Path(normalized_diarization_model_path))
@@ -277,9 +287,9 @@ def accept_transcription_task(
         connection.execute(
             "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
             "diarization_model_path, "
-            "model_name, device, compute_type, language_hint, status, stage, "
+            "asr_model, model_name, device, compute_type, language_hint, status, stage, "
             "audio_duration_seconds) "
-            "VALUES (?, ?, ?, ?, 'transcription', ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?)",
+            "VALUES (?, ?, ?, ?, 'transcription', ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?)",
             (
                 task_id,
                 normalized_request_id,
@@ -287,6 +297,7 @@ def accept_transcription_task(
                 meeting_id,
                 normalized_model_path,
                 normalized_diarization_model_path,
+                asr_model,
                 model_name,
                 device,
                 compute_type,
@@ -728,9 +739,10 @@ def publish_complete_generation(
         ).fetchone()[0]
         connection.execute(
             "INSERT INTO transcript_generations(id, meeting_id, task_id, generation_number, "
-            "status, language_hint, model_name, language_probability, uncertainty_policy, "
-            "segment_count, diarization_model_name, regular_turn_count, exclusive_turn_count, "
-            "alignment_policy) VALUES (?, ?, ?, ?, 'complete', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status, language_hint, model_name, device, compute_type, language_probability, "
+            "uncertainty_policy, segment_count, diarization_model_name, regular_turn_count, "
+            "exclusive_turn_count, alignment_policy) "
+            "VALUES (?, ?, ?, ?, 'complete', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 generation_id,
                 task["meeting_id"],
@@ -738,6 +750,8 @@ def publish_complete_generation(
                 generation_number,
                 task["language_hint"],
                 task["model_name"],
+                task["device"],
+                task["compute_type"],
                 normalized_language_probability,
                 UNCERTAINTY_POLICY,
                 len(rows),
@@ -913,6 +927,8 @@ def _generation_payload(
         "status": generation["status"],
         "language_hint": generation["language_hint"],
         "model_name": generation["model_name"],
+        "device": generation["device"],
+        "compute_type": generation["compute_type"],
         "language_probability": generation["language_probability"],
         "source_version": generation["source_version"],
         "uncertainty_policy": generation["uncertainty_policy"],
