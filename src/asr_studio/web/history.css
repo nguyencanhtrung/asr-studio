@@ -9,7 +9,8 @@
   border-radius: var(--radius-sm);
   background: var(--surface-subtle);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--text-control);
+  text-overflow: ellipsis;
 }
 
 .history-search::placeholder {
@@ -53,12 +54,12 @@
 .link-date {
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .meeting-link-deletion-state {
   color: var(--warning);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .meeting-link-deletion-state[data-state="failed"] {
@@ -79,6 +80,10 @@
   margin-top: 26px;
 }
 
+.mini-calendar-section .section-heading {
+  margin-bottom: 8px;
+}
+
 /* The month keeps its full label: "Hôm nay" drops to its own row when a scrollbar leaves the rail too narrow. */
 .mini-calendar-section .cal-pick {
   display: flex;
@@ -91,7 +96,7 @@
 }
 
 .mini-calendar-section .cal-year {
-  width: 56px;
+  width: 4.25rem;
   flex: none;
 }
 
@@ -110,7 +115,7 @@
 }
 
 .cal-title {
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 650;
 }
 
@@ -125,13 +130,13 @@
   background: var(--surface-subtle);
   color: var(--text);
   cursor: pointer;
-  font-size: 10px;
+  font-size: var(--text-control);
 }
 
 .cal-step {
   width: 28px;
   height: 28px;
-  font-size: 15px;
+  font-size: var(--text-reading);
   line-height: 1;
 }
 
@@ -163,7 +168,7 @@
 .cal-summary {
   margin: 0;
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .cal-weekdays,
@@ -175,7 +180,7 @@
 
 .cal-weekdays span {
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
   text-align: center;
 }
 
@@ -198,7 +203,7 @@
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
-  font-size: 10px;
+  font-size: var(--text-control);
 }
 
 .cal-day:hover {
@@ -225,21 +230,14 @@
   gap: 1px;
 }
 
-.calendar:not(.calendar-large) .cal-count {
-  position: static;
-}
-
 .cal-count {
-  position: absolute;
-  top: 1px;
-  right: 2px;
   min-width: 12px;
   padding: 0 3px;
   border-radius: var(--radius-md);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 9px;
-  line-height: 12px;
+  font-size: var(--text-label);
+  line-height: 1;
   text-align: center;
 }
 
@@ -276,7 +274,7 @@
 
 .calendar-head h2 {
   margin: 6px 0 4px;
-  font-size: 26px;
+  font-size: var(--text-title-lg);
   font-weight: 500;
   letter-spacing: -0.03em;
 }
@@ -284,7 +282,7 @@
 .calendar-sub {
   margin: 0;
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .calendar-layout {
@@ -308,7 +306,7 @@
 }
 
 .calendar-large .cal-title {
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .calendar-large .cal-pick {
@@ -334,17 +332,13 @@
 
 .calendar-large .cal-day {
   min-height: 22px;
-  justify-content: flex-start;
+  flex-wrap: wrap;
+  justify-content: space-between;
   padding: 0 4px;
 }
 
 .calendar-large .cal-day.is-selected {
   outline: 1px solid var(--accent);
-}
-
-.calendar-large .cal-count {
-  top: 3px;
-  right: 3px;
 }
 
 .cal-chip {
@@ -354,7 +348,7 @@
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 9px;
+  font-size: var(--text-label);
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -367,7 +361,7 @@
 .cal-more {
   min-height: 18px;
   padding: 0 5px;
-  font-size: 9px;
+  font-size: var(--text-control);
   text-align: left;
 }
 
@@ -387,7 +381,7 @@
 
 .day-panel h3 {
   margin: 6px 0 0;
-  font-size: 17px;
+  font-size: var(--text-subtitle);
   font-weight: 560;
 }
 
@@ -397,14 +391,14 @@
   border-radius: var(--radius-lg);
   background: var(--teal-wash);
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--text-label);
   text-align: center;
 }
 
 .day-panel-empty {
   margin: 12px 0 0;
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .day-meeting {
@@ -414,7 +408,7 @@
   border-left: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--surface-subtle);
-  font-size: 11px;
+  font-size: var(--text-small);
   text-decoration: none;
 }
 
@@ -447,7 +441,7 @@
   color: inherit;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-control);
   text-align: left;
 }
 
@@ -481,7 +475,7 @@
   border-radius: var(--radius-md);
   background: var(--warning-soft);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--text-control);
   line-height: 1.55;
 }
 
@@ -527,14 +521,14 @@
 .meeting-delete-header h2 {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 24px;
+  font-size: var(--text-title);
   font-weight: 500;
 }
 
 .meeting-delete-body {
   padding: 0 24px 24px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--text-control);
   line-height: 1.6;
 }
 
@@ -556,7 +550,7 @@
   display: block;
   margin-bottom: 6px;
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 600;
 }
 
@@ -599,7 +593,7 @@
   min-height: 1em;
   margin: 8px 0 0;
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .meeting-edit {
@@ -631,7 +625,7 @@
   border-radius: var(--radius-md);
   background: var(--warning-soft);
   color: var(--amber);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.55;
 }
 
@@ -704,13 +698,13 @@
   border-radius: var(--radius-lg);
   background: var(--warning-soft);
   color: var(--warning);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .segment-details {
   grid-column: 2;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-control);
 }
 
 .segment-details summary {
@@ -724,7 +718,7 @@
   display: block;
   margin-top: 4px;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .speaker-chip-item {
@@ -746,7 +740,7 @@
 /* The one visible label of an inline rename: control size, not the 9px caption of the add form.
    The id it names can be 39 characters without a break, so it wraps anywhere. */
 .speaker-chip-item.is-renaming .speaker-name-form label {
-  font-size: 12px;
+  font-size: var(--text-control);
   overflow-wrap: anywhere;
 }
 
@@ -761,7 +755,7 @@
   border-radius: var(--radius-lg);
   background: var(--surface);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 600;
 }
 
@@ -793,7 +787,7 @@ button.speaker-chip:disabled {
   border: 1px solid currentColor;
   border-radius: var(--radius-lg);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 500;
 }
 

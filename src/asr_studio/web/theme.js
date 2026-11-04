@@ -29,6 +29,9 @@
       button.setAttribute("aria-label", label);
       button.setAttribute("title", label);
     }
+    for (const input of document.querySelectorAll("[data-theme-choice]")) {
+      input.checked = input.value === safePreference;
+    }
   }
 
   function renderAtomically(preference) {
@@ -60,6 +63,9 @@
       button.addEventListener("click", () => {
         setPreference(root.dataset.theme === "dark" ? "light" : "dark");
       });
+    }
+    for (const input of document.querySelectorAll("[data-theme-choice]")) {
+      input.addEventListener("change", () => setPreference(input.value));
     }
   });
 

@@ -453,6 +453,8 @@ Store: `combine({ chatgpt, antigravity, launcher })`; mọi reducer thấy mọi
 
 Cuộn tới mục Google (`launcher.scroll`): đặt khi mở từ nút Google; view cuộn khi cả hai provider hết `loading`, rồi dispatch `scroll-handled`. Một lượt tải mới hơn trong lúc chờ không hủy cuộn (khác bản cũ, chỉ cuộn khi lượt tải của ChatGPT không đổi).
 
+Mục của Cài đặt (`launcher.section`: `ai`, `asr`, `theme`, `about`): `dialog-opened` đặt về `ai`, hoặc về `action.section` khi mở lại sau lần đổi ngôn ngữ và khi đó xóa khóa phiên `asr-studio:settings-section`; `settings-section-selected` đổi mục và hủy cuộn còn chờ. Ngôn ngữ và chế độ hiển thị vẫn do `i18n.js` và `theme.js` giữ, ngoài store.
+
 **Lỗi cần đăng nhập lại** (tải, lưu, kiểm tra): mã `*reconnect_required` và các mã hết quyền (ChatGPT, trừ HTTP 401 là phiên workspace) hoặc `reconnect_required`/`provider_disconnected` (Google).
 
 | Từ | Sự kiện | Tới | Effect |

@@ -41,15 +41,18 @@
             </span>
             <span class="brand-wordmark">ASR Studio</span>
           </a>
-          <button class="theme-toggle" type="button" data-theme-toggle aria-label="Chuyển giao diện">
-            <svg class="theme-icon theme-icon-moon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <path d="M16.25 12.15A6.65 6.65 0 0 1 7.85 3.75 6.7 6.7 0 1 0 16.25 12.15Z" />
-            </svg>
-            <svg class="theme-icon theme-icon-sun" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <circle cx="10" cy="10" r="3.25" />
-              <path d="M10 1.75v1.5M10 16.75v1.5M18.25 10h-1.5M3.25 10h-1.5M15.83 4.17l-1.06 1.06M5.23 14.77l-1.06 1.06M15.83 15.83l-1.06-1.06M5.23 5.23 4.17 4.17" />
-            </svg>
-          </button>
+          <div class="sidebar-masthead-controls">
+            <button class="theme-toggle" type="button" data-theme-toggle aria-label="Chuyển giao diện">
+              <svg class="theme-icon theme-icon-moon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M16.25 12.15A6.65 6.65 0 0 1 7.85 3.75 6.7 6.7 0 1 0 16.25 12.15Z" />
+              </svg>
+              <svg class="theme-icon theme-icon-sun" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <circle cx="10" cy="10" r="3.25" />
+                <path d="M10 1.75v1.5M10 16.75v1.5M18.25 10h-1.5M3.25 10h-1.5M15.83 4.17l-1.06 1.06M5.23 14.77l-1.06 1.06M15.83 15.83l-1.06-1.06M5.23 5.23 4.17 4.17" />
+              </svg>
+            </button>
+            <button class="lang-toggle" type="button" data-lang-toggle>EN</button>
+          </div>
         </div>
 
         <section class="recent-section" aria-labelledby="recent-heading">
@@ -83,34 +86,6 @@
         </section>
 
         <footer class="sidebar-footer">
-          <a
-            class="github-link"
-            href="https://github.com/nguyencanhtrung/asr-studio"
-            aria-label="Mã nguồn ASR Studio trên GitHub"
-            rel="noopener noreferrer"
-            target="_blank"
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.56.1.76-.24.76-.54v-2.1c-3.1.68-3.76-1.32-3.76-1.32-.5-1.3-1.24-1.65-1.24-1.65-1.02-.7.08-.68.08-.68 1.13.08 1.72 1.17 1.72 1.17 1 .1.74 1.92 3.42 1.38.1-.72.39-1.2.7-1.48-2.48-.28-5.08-1.24-5.08-5.52 0-1.22.44-2.22 1.16-3-.12-.28-.5-1.42.11-2.96 0 0 .95-.3 3.06 1.15a10.6 10.6 0 0 1 5.57 0c2.12-1.45 3.06-1.15 3.06-1.15.61 1.54.23 2.68.11 2.96.72.78 1.16 1.78 1.16 3 0 4.3-2.61 5.23-5.1 5.5.4.35.75 1.02.75 2.06v3.05c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9Z" />
-            </svg>
-          </a>
-          <a class="version-link" href="https://github.com/nguyencanhtrung/asr-studio/releases" rel="noopener noreferrer" target="_blank">Version {{ASR_STUDIO_VERSION}}</a>
-        </footer>
-      </aside>
-
-      <main class="workspace" id="workspace">
-        <header class="workspace-header">
-          <h1 class="visually-hidden" id="page-title" tabindex="-1">Cuộc họp</h1>
-          <div class="header-actions">
-            <button class="lang-toggle" type="button" data-lang-toggle>EN</button>
-            <button class="secondary-button header-calendar" id="open-calendar" type="button">Lịch</button>
-            <button class="primary-button header-create" type="button" data-open-meeting-dialog>
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path d="M10 4v12M4 10h12" />
-              </svg>
-              <span>Cuộc họp mới</span>
-            </button>
-          </div>
           <div class="connection-launchers">
             <button
               class="secondary-button connection-launcher"
@@ -120,6 +95,7 @@
               aria-controls="connections-dialog"
               aria-label="Kết nối OpenAI: đang kiểm tra trạng thái"
             >
+              <svg class="connection-launcher-logo" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>
               <span class="connection-launcher-dot" aria-hidden="true"></span>
               <span class="connection-launcher-name">OpenAI</span>
             </button>
@@ -131,8 +107,52 @@
               aria-controls="connections-dialog"
               aria-label="Kết nối Google: đang kiểm tra trạng thái"
             >
+              <svg class="connection-launcher-logo" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
               <span class="connection-launcher-dot" aria-hidden="true"></span>
               <span class="connection-launcher-name">Google</span>
+            </button>
+          </div>
+          <div class="sidebar-footer-meta">
+            <button
+              class="settings-button"
+              id="settings-open"
+              type="button"
+              aria-haspopup="dialog"
+              aria-controls="connections-dialog"
+              aria-label="Cài đặt"
+              title="Cài đặt"
+            >
+              <svg class="theme-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M15.94 7.90 L18.04 8.37 L18.04 11.63 L15.94 12.10 L15.69 12.71 L16.83 14.53 L14.53 16.83 L12.71 15.69 L12.10 15.94 L11.63 18.04 L8.37 18.04 L7.90 15.94 L7.29 15.69 L5.47 16.83 L3.17 14.53 L4.31 12.71 L4.06 12.10 L1.96 11.63 L1.96 8.37 L4.06 7.90 L4.31 7.29 L3.17 5.47 L5.47 3.17 L7.29 4.31 L7.90 4.06 L8.37 1.96 L11.63 1.96 L12.10 4.06 L12.71 4.31 L14.53 3.17 L16.83 5.47 L15.69 7.29Z" />
+                <circle cx="10" cy="10" r="2.4" />
+              </svg>
+            </button>
+            <a
+              class="github-link"
+              href="https://github.com/nguyencanhtrung/asr-studio"
+              aria-label="Mã nguồn ASR Studio trên GitHub"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.56.1.76-.24.76-.54v-2.1c-3.1.68-3.76-1.32-3.76-1.32-.5-1.3-1.24-1.65-1.24-1.65-1.02-.7.08-.68.08-.68 1.13.08 1.72 1.17 1.72 1.17 1 .1.74 1.92 3.42 1.38.1-.72.39-1.2.7-1.48-2.48-.28-5.08-1.24-5.08-5.52 0-1.22.44-2.22 1.16-3-.12-.28-.5-1.42.11-2.96 0 0 .95-.3 3.06 1.15a10.6 10.6 0 0 1 5.57 0c2.12-1.45 3.06-1.15 3.06-1.15.61 1.54.23 2.68.11 2.96.72.78 1.16 1.78 1.16 3 0 4.3-2.61 5.23-5.1 5.5.4.35.75 1.02.75 2.06v3.05c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9Z" />
+              </svg>
+            </a>
+            <a class="version-link" href="https://github.com/nguyencanhtrung/asr-studio/releases" rel="noopener noreferrer" target="_blank">Version {{ASR_STUDIO_VERSION}}</a>
+          </div>
+        </footer>
+      </aside>
+
+      <main class="workspace" id="workspace">
+        <header class="workspace-header">
+          <h1 class="visually-hidden" id="page-title" tabindex="-1">Cuộc họp</h1>
+          <div class="header-actions">
+            <button class="secondary-button header-calendar" id="open-calendar" type="button">Lịch</button>
+            <button class="primary-button header-create" type="button" data-open-meeting-dialog>
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M10 4v12M4 10h12" />
+              </svg>
+              <span>Cuộc họp mới</span>
             </button>
           </div>
         </header>
@@ -397,7 +417,7 @@
               <h3 id="transcription-heading">Transcript</h3>
               <div class="transcription-actions">
                 <div class="transcription-language-control">
-                  <label for="transcription-language">Ngôn ngữ gợi ý lần chạy</label>
+                  <label for="transcription-language">Ngôn ngữ gợi ý</label>
                   <select id="transcription-language" aria-describedby="transcription-language-help">
                     <option value="en">English</option>
                     <option value="vi">Tiếng Việt</option>
@@ -405,7 +425,7 @@
                   <p class="field-help" id="transcription-language-help">Chỉ là gợi ý; transcript không bị khóa ngôn ngữ.</p>
                 </div>
                 <div class="transcription-language-control" id="transcription-model-control" hidden>
-                  <label for="transcription-model">Model chép lời lần chạy</label>
+                  <label for="transcription-model">Model ASR</label>
                   <select id="transcription-model" aria-describedby="transcription-model-help"></select>
                   <p class="field-help" id="transcription-model-help"></p>
                 </div>
@@ -656,171 +676,227 @@
       class="connections-dialog"
       id="connections-dialog"
       aria-labelledby="connections-title"
-      aria-describedby="connections-intro"
     >
       <div class="connections-shell">
         <header class="connections-header">
-          <h2 id="connections-title">Kết nối tạo notes</h2>
-          <button class="icon-button" id="connections-close" type="button" aria-label="Đóng cài đặt kết nối">
+          <h2 id="connections-title">Cài đặt</h2>
+          <button class="icon-button" id="connections-close" type="button" aria-label="Đóng cài đặt">
             <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
           </button>
         </header>
+        <div class="settings-tabs" id="settings-tabs" role="tablist" aria-label="Các mục cài đặt" aria-orientation="vertical">
+          <button class="settings-tab" id="settings-tab-ai" type="button" role="tab" data-settings-tab="ai" aria-selected="true" aria-controls="settings-panel-ai">AI provider</button>
+          <button class="settings-tab" id="settings-tab-asr" type="button" role="tab" data-settings-tab="asr" aria-selected="false" aria-controls="settings-panel-asr" tabindex="-1">ASR Model</button>
+          <button class="settings-tab" id="settings-tab-theme" type="button" role="tab" data-settings-tab="theme" aria-selected="false" aria-controls="settings-panel-theme" tabindex="-1">Theme</button>
+          <button class="settings-tab" id="settings-tab-about" type="button" role="tab" data-settings-tab="about" aria-selected="false" aria-controls="settings-panel-about" tabindex="-1">About</button>
+        </div>
         <div class="connections-body">
-          <p class="connections-intro" id="connections-intro">
-            Kết nối riêng ChatGPT hoặc Google Antigravity qua OMP. Các tài khoản này tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.
-          </p>
+          <div class="settings-panel" id="settings-panel-ai" role="tabpanel" aria-labelledby="settings-tab-ai" tabindex="0">
+            <h3 class="settings-group-title">AI provider</h3>
+            <p class="connections-intro">
+              Kết nối tài khoản tạo notes. Các tài khoản tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.
+            </p>
 
-          <section class="connection-section" aria-labelledby="connection-section-title">
-            <div class="connection-section-heading">
-              <h3 id="connection-section-title">Tài khoản</h3>
-              <span class="connection-state-badge" id="connection-state-badge" data-state="loading">Đang kiểm tra</span>
-            </div>
-            <dl class="connection-ledger">
-              <div>
-                <dt>Kết nối</dt>
-                <dd id="connection-status">Đang kiểm tra trạng thái</dd>
+            <section class="connection-section" aria-labelledby="connection-section-title">
+              <div class="connection-section-heading">
+                <h4 id="connection-section-title">ChatGPT</h4>
+                <span class="connection-state-badge" id="connection-state-badge" data-state="loading">Đang kiểm tra</span>
               </div>
-              <div>
-                <dt>Tài khoản ChatGPT</dt>
-                <dd id="connection-account">Chưa có thông tin</dd>
+              <dl class="connection-ledger" id="connection-ledger">
+                <div>
+                  <dt>Kết nối</dt>
+                  <dd id="connection-status">Đang kiểm tra trạng thái</dd>
+                </div>
+                <div>
+                  <dt>Tài khoản ChatGPT</dt>
+                  <dd id="connection-account">Chưa có thông tin</dd>
+                </div>
+                <div id="connection-verification-row" hidden>
+                  <dt>Lần kiểm tra gần nhất</dt>
+                  <dd id="connection-verification-summary">Chưa kiểm tra</dd>
+                </div>
+              </dl>
+
+              <p class="connection-message" id="connection-message" role="status" aria-live="polite"></p>
+              <p class="connection-mutation-status" id="connection-mutation-reason" role="status" aria-live="polite" hidden></p>
+              <div class="connection-error" id="connection-error" role="alert" hidden>
+                <span id="connection-error-message"></span>
+                <button class="text-button" id="connection-retry-poll" type="button" hidden>Kiểm tra trạng thái lại</button>
               </div>
-              <div id="connection-verification-row" hidden>
-                <dt>Lần kiểm tra gần nhất</dt>
-                <dd id="connection-verification-summary">Chưa kiểm tra</dd>
+
+              <button class="primary-button connection-sign-in" id="connection-sign-in" type="button">
+                Continue with ChatGPT
+              </button>
+              <div class="connection-pending-actions" id="connection-pending-actions" hidden>
+                <p id="connection-pending-copy" role="status" aria-live="polite">Đang chờ đăng nhập ChatGPT…</p>
+                <button class="secondary-button" id="connection-cancel-sign-in" type="button">Hủy đăng nhập</button>
               </div>
-            </dl>
 
-            <p class="connection-message" id="connection-message" role="status" aria-live="polite"></p>
-            <p class="connection-mutation-status" id="connection-mutation-reason" role="status" aria-live="polite" hidden></p>
-            <div class="connection-error" id="connection-error" role="alert" hidden>
-              <span id="connection-error-message"></span>
-              <button class="text-button" id="connection-retry-poll" type="button" hidden>Kiểm tra trạng thái lại</button>
-            </div>
-
-            <button class="primary-button connection-sign-in" id="connection-sign-in" type="button">
-              Continue with ChatGPT
-            </button>
-            <div class="connection-pending-actions" id="connection-pending-actions" hidden>
-              <p id="connection-pending-copy" role="status" aria-live="polite">Đang chờ đăng nhập ChatGPT…</p>
-              <button class="secondary-button" id="connection-cancel-sign-in" type="button">Hủy đăng nhập</button>
-            </div>
-
-            <div class="connection-disconnect" id="connection-disconnect" hidden>
-              <button class="text-button connection-disconnect-trigger" id="connection-disconnect-trigger" type="button">Ngắt kết nối ChatGPT</button>
-              <div class="connection-disconnect-confirm" id="connection-disconnect-confirm" hidden>
-                <p>
-                  Thao tác này xóa thông tin đăng nhập ChatGPT đã lưu trong workspace. Việc thu hồi quyền truy cập từ xa có thể chưa được xác nhận; nếu cần, hãy kiểm tra tại
-                  <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT → Cài đặt → Mức sử dụng</a>.
-                </p>
-                <div class="connection-disconnect-actions">
-                  <button class="secondary-button" id="connection-disconnect-keep" type="button">Giữ kết nối</button>
-                  <button class="primary-button" id="connection-disconnect-confirm-button" type="button">Ngắt kết nối</button>
+              <div class="connection-disconnect" id="connection-disconnect" hidden>
+                <button class="text-button connection-disconnect-trigger" id="connection-disconnect-trigger" type="button">Ngắt kết nối ChatGPT</button>
+                <div class="connection-disconnect-confirm" id="connection-disconnect-confirm" hidden>
+                  <p>
+                    Thao tác này xóa thông tin đăng nhập ChatGPT đã lưu trong workspace. Việc thu hồi quyền truy cập từ xa có thể chưa được xác nhận; nếu cần, hãy kiểm tra tại
+                    <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT → Cài đặt → Mức sử dụng</a>.
+                  </p>
+                  <div class="connection-disconnect-actions">
+                    <button class="secondary-button" id="connection-disconnect-keep" type="button">Giữ kết nối</button>
+                    <button class="primary-button" id="connection-disconnect-confirm-button" type="button">Ngắt kết nối</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </section>
+              <a class="connection-usage-link" href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Xem mức sử dụng ChatGPT</a>
+            </section>
 
-          <section class="connection-section connection-model-section" id="connection-model-section" aria-labelledby="connection-model-title" hidden>
-            <div class="connection-section-heading">
-              <h3 id="connection-model-title">Mô hình ghi chú cuộc họp</h3>
-            </div>
-            <form id="connection-model-form">
-              <label for="connection-model">Mô hình dùng cho ghi chú cuộc họp</label>
-              <select id="connection-model" name="model" aria-describedby="connection-model-help" disabled>
-                <option value="">Đang tải mô hình khả dụng</option>
-              </select>
-              <label for="connection-effort">Mức suy luận (effort)</label>
-              <select id="connection-effort" name="reasoning_effort" aria-describedby="connection-effort-help" disabled>
-                <option value="default">Mặc định của mô hình</option>
-              </select>
-              <p class="connection-help" id="connection-effort-help">Mức cao hơn có thể mất thêm thời gian và hạn mức sử dụng. Chỉ hiện các mức đã xác nhận cho mô hình được chọn.</p>
-              <p class="connection-help" id="connection-model-help">Mô hình được lưu cho không gian làm việc này. Nếu mô hình đã lưu không còn khả dụng, lựa chọn đó vẫn hiện ra cho đến khi bạn chọn mô hình khác.</p>
-              <p class="connection-model-status" id="connection-model-status" role="status" aria-live="polite"></p>
-              <button class="primary-button" id="connection-model-save" type="submit" disabled>Lưu mô hình và effort</button>
-            </form>
-          </section>
-
-          <section class="connection-section connection-verification-section" aria-labelledby="connection-verification-title">
-            <div class="connection-section-heading">
-              <h3 id="connection-verification-title">Kiểm tra bằng dữ liệu tổng hợp</h3>
-            </div>
-            <p>
-              Thao tác này gửi một yêu cầu nhỏ bằng dữ liệu tổng hợp qua gói ChatGPT của bạn. Yêu cầu không chứa nội dung cuộc họp và có thể được tính vào mức sử dụng gói.
-            </p>
-            <p class="connection-verification-result" id="connection-verification-result" role="status" aria-live="polite"></p>
-            <button class="secondary-button" id="connection-verify" type="button" disabled>Chạy kiểm tra bằng dữ liệu tổng hợp</button>
-            <a class="connection-usage-link" href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Xem mức sử dụng ChatGPT</a>
-          </section>
-
-          <section class="connection-provider-divider" id="antigravity-section" aria-labelledby="antigravity-title">
-            <p class="connection-provider-kicker">OMP · GOOGLE</p>
-            <div class="connection-section-heading">
-              <h3 id="antigravity-title" tabindex="-1">Google Antigravity</h3>
-              <span class="connection-state-badge" id="antigravity-badge" data-state="loading">Đang kiểm tra</span>
-            </div>
-            <p>
-              OMP chạy trong vùng cấu hình riêng, không nạp tools, extensions, skills, MCP hay ngữ cảnh dự án. Quyền dùng model và hạn mức vẫn do tài khoản Google quyết định.
-            </p>
-            <dl class="connection-ledger">
-              <div><dt>Kết nối</dt><dd id="antigravity-status">Đang kiểm tra trạng thái</dd></div>
-              <div><dt>Tài khoản</dt><dd id="antigravity-account">Chưa có thông tin</dd></div>
-              <div id="antigravity-verification-row" hidden>
-                <dt>Lần kiểm tra gần nhất</dt><dd id="antigravity-verification-summary">Chưa kiểm tra</dd>
+            <section class="connection-section connection-model-section" id="connection-model-section" aria-labelledby="connection-model-title" hidden>
+              <div class="connection-section-heading">
+                <h5 id="connection-model-title">Mô hình ghi chú cuộc họp</h5>
               </div>
-            </dl>
-            <p class="connection-message" id="antigravity-message" role="status" aria-live="polite"></p>
-            <p class="connection-mutation-status" id="antigravity-mutation-reason" role="status" aria-live="polite" hidden></p>
-            <div class="connection-error" id="antigravity-error" role="alert" hidden>
-              <span id="antigravity-error-message"></span>
-            </div>
-            <button class="primary-button connection-sign-in" id="antigravity-sign-in" type="button">
-              Kết nối Google Antigravity
-            </button>
-            <div class="antigravity-login" id="antigravity-login" hidden>
-              <p id="antigravity-login-copy">Đang chuẩn bị đăng nhập qua OMP…</p>
-              <a id="antigravity-login-link" target="_blank" rel="noopener noreferrer" hidden>Mở trang đăng nhập Google</a>
-              <form id="antigravity-input-form" hidden>
-                <label for="antigravity-input" id="antigravity-input-label">Mã xác nhận hoặc URL chuyển hướng</label>
-                <input id="antigravity-input" type="text" maxlength="16384" autocomplete="off" />
-                <button class="secondary-button" type="submit">Gửi cho OMP</button>
+              <form id="connection-model-form">
+                <div class="connection-field">
+                  <label for="connection-model">Mô hình dùng cho ghi chú cuộc họp</label>
+                  <select id="connection-model" name="model" aria-describedby="connection-model-help" disabled>
+                    <option value="">Đang tải mô hình khả dụng</option>
+                  </select>
+                  <p class="connection-help" id="connection-model-help">Mô hình được lưu cho không gian làm việc này. Nếu mô hình đã lưu không còn khả dụng, lựa chọn đó vẫn hiện ra cho đến khi bạn chọn mô hình khác.</p>
+                </div>
+                <div class="connection-field">
+                  <label for="connection-effort">Mức suy luận (effort)</label>
+                  <select id="connection-effort" name="reasoning_effort" aria-describedby="connection-effort-help" disabled>
+                    <option value="default">Mặc định của mô hình</option>
+                  </select>
+                  <p class="connection-help" id="connection-effort-help">Mức cao hơn có thể mất thêm thời gian và hạn mức sử dụng. Chỉ hiện các mức đã xác nhận cho mô hình được chọn.</p>
+                </div>
+                <p class="connection-model-status" id="connection-model-status" role="status" aria-live="polite"></p>
+                <button class="primary-button" id="connection-model-save" type="submit" disabled>Lưu mô hình và effort</button>
               </form>
-              <button class="text-button" id="antigravity-cancel" type="button">Hủy đăng nhập</button>
-            </div>
-            <div class="connection-disconnect" id="antigravity-disconnect-wrap" hidden>
-              <button class="text-button connection-disconnect-trigger" id="antigravity-disconnect" type="button">Ngắt kết nối Antigravity</button>
-              <div class="connection-disconnect-confirm" id="antigravity-disconnect-confirm" hidden>
-                <p>Thao tác này xóa credential Antigravity đã lưu trong workspace. Quyền Google từ xa không bị thu hồi.</p>
-                <div class="connection-disconnect-actions">
-                  <button class="secondary-button" id="antigravity-disconnect-keep" type="button">Giữ kết nối</button>
-                  <button class="primary-button" id="antigravity-disconnect-confirm-button" type="button">Ngắt kết nối</button>
+            </section>
+
+            <section class="connection-section connection-verification-section" id="connection-verification-section" aria-labelledby="connection-verification-title" hidden>
+              <div class="connection-section-heading">
+                <h5 id="connection-verification-title">Kiểm tra bằng dữ liệu tổng hợp</h5>
+              </div>
+              <p>
+                Thao tác này gửi một yêu cầu nhỏ bằng dữ liệu tổng hợp qua gói ChatGPT của bạn. Yêu cầu không chứa nội dung cuộc họp và có thể được tính vào mức sử dụng gói.
+              </p>
+              <p class="connection-verification-result" id="connection-verification-result" role="status" aria-live="polite"></p>
+              <button class="secondary-button" id="connection-verify" type="button" disabled>Chạy kiểm tra bằng dữ liệu tổng hợp</button>
+            </section>
+
+            <section class="connection-provider-divider" id="antigravity-section" aria-labelledby="antigravity-title">
+              <div class="connection-section-heading">
+                <h4 id="antigravity-title" tabindex="-1">Google Antigravity</h4>
+                <span class="connection-state-badge" id="antigravity-badge" data-state="loading">Đang kiểm tra</span>
+              </div>
+              <p>
+                OMP chạy trong vùng cấu hình riêng, không nạp tools, extensions, skills, MCP hay ngữ cảnh dự án. Quyền dùng model và hạn mức vẫn do tài khoản Google quyết định.
+              </p>
+              <dl class="connection-ledger" id="antigravity-ledger">
+                <div><dt>Kết nối</dt><dd id="antigravity-status">Đang kiểm tra trạng thái</dd></div>
+                <div><dt>Tài khoản</dt><dd id="antigravity-account">Chưa có thông tin</dd></div>
+                <div id="antigravity-verification-row" hidden>
+                  <dt>Lần kiểm tra gần nhất</dt><dd id="antigravity-verification-summary">Chưa kiểm tra</dd>
+                </div>
+              </dl>
+              <p class="connection-message" id="antigravity-message" role="status" aria-live="polite"></p>
+              <p class="connection-mutation-status" id="antigravity-mutation-reason" role="status" aria-live="polite" hidden></p>
+              <div class="connection-error" id="antigravity-error" role="alert" hidden>
+                <span id="antigravity-error-message"></span>
+              </div>
+              <button class="primary-button connection-sign-in" id="antigravity-sign-in" type="button">
+                Kết nối Google Antigravity
+              </button>
+              <div class="antigravity-login" id="antigravity-login" hidden>
+                <p id="antigravity-login-copy">Đang chuẩn bị đăng nhập qua OMP…</p>
+                <a id="antigravity-login-link" target="_blank" rel="noopener noreferrer" hidden>Mở trang đăng nhập Google</a>
+                <form id="antigravity-input-form" hidden>
+                  <label for="antigravity-input" id="antigravity-input-label">Mã xác nhận hoặc URL chuyển hướng</label>
+                  <input id="antigravity-input" type="text" maxlength="16384" autocomplete="off" />
+                  <button class="secondary-button" type="submit">Gửi cho OMP</button>
+                </form>
+                <button class="text-button" id="antigravity-cancel" type="button">Hủy đăng nhập</button>
+              </div>
+              <div class="connection-disconnect" id="antigravity-disconnect-wrap" hidden>
+                <button class="text-button connection-disconnect-trigger" id="antigravity-disconnect" type="button">Ngắt kết nối Antigravity</button>
+                <div class="connection-disconnect-confirm" id="antigravity-disconnect-confirm" hidden>
+                  <p>Thao tác này xóa credential Antigravity đã lưu trong workspace. Quyền Google từ xa không bị thu hồi.</p>
+                  <div class="connection-disconnect-actions">
+                    <button class="secondary-button" id="antigravity-disconnect-keep" type="button">Giữ kết nối</button>
+                    <button class="primary-button" id="antigravity-disconnect-confirm-button" type="button">Ngắt kết nối</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
 
-          <section class="connection-section connection-model-section" id="antigravity-model-section" aria-labelledby="antigravity-model-title" hidden>
-            <div class="connection-section-heading"><h3 id="antigravity-model-title">Mô hình Antigravity</h3></div>
-            <form id="antigravity-model-form">
-              <label for="antigravity-model">Mô hình dùng cho ghi chú cuộc họp</label>
-              <select id="antigravity-model" aria-describedby="antigravity-model-help" disabled><option value="">Đang tải mô hình khả dụng</option></select>
-              <label for="antigravity-effort">Mức suy nghĩ</label>
-              <select id="antigravity-effort" aria-describedby="antigravity-effort-help" disabled>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-              </select>
-              <p class="connection-help" id="antigravity-effort-help">High đầy đủ hơn nhưng chậm hơn (khoảng 7–10 phút cho cuộc họp 1 giờ). Medium nhanh hơn nhưng có thể bỏ sót việc cần làm.</p>
-              <p class="connection-help" id="antigravity-model-help">Catalog chỉ cho biết model xuất hiện với tài khoản. Hãy chạy kiểm tra tổng hợp để xác nhận model thực sự tạo được đầu ra.</p>
-              <p class="connection-model-status" id="antigravity-model-status" role="status" aria-live="polite"></p>
-              <button class="primary-button" id="antigravity-model-save" type="submit" disabled>Lưu mô hình Antigravity</button>
-            </form>
-          </section>
+            <section class="connection-section connection-model-section" id="antigravity-model-section" aria-labelledby="antigravity-model-title" hidden>
+              <div class="connection-section-heading"><h5 id="antigravity-model-title">Mô hình Antigravity</h5></div>
+              <form id="antigravity-model-form">
+                <div class="connection-field">
+                  <label for="antigravity-model">Mô hình dùng cho ghi chú cuộc họp</label>
+                  <select id="antigravity-model" aria-describedby="antigravity-model-help" disabled><option value="">Đang tải mô hình khả dụng</option></select>
+                  <p class="connection-help" id="antigravity-model-help">Catalog chỉ cho biết model xuất hiện với tài khoản. Hãy chạy kiểm tra tổng hợp để xác nhận model thực sự tạo được đầu ra.</p>
+                </div>
+                <div class="connection-field">
+                  <label for="antigravity-effort">Mức suy luận (effort)</label>
+                  <select id="antigravity-effort" aria-describedby="antigravity-effort-help" disabled>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                  </select>
+                  <p class="connection-help" id="antigravity-effort-help">High đầy đủ hơn nhưng chậm hơn (khoảng 7–10 phút cho cuộc họp 1 giờ). Medium nhanh hơn nhưng có thể bỏ sót việc cần làm.</p>
+                </div>
+                <p class="connection-model-status" id="antigravity-model-status" role="status" aria-live="polite"></p>
+                <button class="primary-button" id="antigravity-model-save" type="submit" disabled>Lưu mô hình Antigravity</button>
+              </form>
+            </section>
 
-          <section class="connection-section connection-verification-section" id="antigravity-verification-section" hidden>
-            <div class="connection-section-heading"><h3>Kiểm tra Antigravity bằng dữ liệu tổng hợp</h3></div>
-            <p>Yêu cầu chỉ chứa chỉ dẫn tổng hợp cố định, không chứa transcript hoặc dữ liệu cuộc họp. OMP không tự gửi lại khi lỗi.</p>
-            <p class="connection-verification-result" id="antigravity-verification-result" role="status" aria-live="polite"></p>
-            <button class="secondary-button" id="antigravity-verify" type="button" disabled>Chạy kiểm tra model đã chọn</button>
-          </section>
+            <section class="connection-section connection-verification-section" id="antigravity-verification-section" hidden>
+              <div class="connection-section-heading"><h5>Kiểm tra Antigravity bằng dữ liệu tổng hợp</h5></div>
+              <p>Yêu cầu chỉ chứa chỉ dẫn tổng hợp cố định, không chứa transcript hoặc dữ liệu cuộc họp. OMP không tự gửi lại khi lỗi.</p>
+              <p class="connection-verification-result" id="antigravity-verification-result" role="status" aria-live="polite"></p>
+              <button class="secondary-button" id="antigravity-verify" type="button" disabled>Chạy kiểm tra model đã chọn</button>
+            </section>
+          </div>
+
+          <div class="settings-panel" id="settings-panel-asr" role="tabpanel" aria-labelledby="settings-tab-asr" tabindex="0" hidden>
+            <h3 class="settings-group-title">ASR Model</h3>
+            <p class="connections-intro" id="asr-intro">Trạng thái model chép lời trên máy này. Mỗi lần chép lời có thể chọn model riêng; mặc định của hệ thống không đổi.</p>
+            <p class="asr-default" id="asr-default" hidden></p>
+            <p class="connection-message" id="asr-status" role="status" aria-live="polite"></p>
+            <ul class="asr-models" id="asr-models"></ul>
+          </div>
+
+          <div class="settings-panel" id="settings-panel-theme" role="tabpanel" aria-labelledby="settings-tab-theme" tabindex="0" hidden>
+            <h3 class="settings-group-title">Theme</h3>
+            <p class="connections-intro">Giá trị mặc định của ASR Studio trên trình duyệt này.</p>
+            <fieldset class="settings-field">
+              <legend>Ngôn ngữ</legend>
+              <div class="language-options">
+                <label class="language-option"><input type="radio" name="settings-language" value="vi" data-lang-choice aria-describedby="settings-language-help" /><span>Tiếng Việt</span></label>
+                <label class="language-option"><input type="radio" name="settings-language" value="en" data-lang-choice aria-describedby="settings-language-help" /><span>English</span></label>
+              </div>
+              <p class="connection-help" id="settings-language-help">Đổi ngôn ngữ sẽ tải lại trang.</p>
+            </fieldset>
+            <fieldset class="settings-field">
+              <legend>Chế độ hiển thị</legend>
+              <div class="language-options">
+                <label class="language-option"><input type="radio" name="settings-theme" value="system" data-theme-choice /><span>Theo hệ thống</span></label>
+                <label class="language-option"><input type="radio" name="settings-theme" value="light" data-theme-choice /><span>Sáng</span></label>
+                <label class="language-option"><input type="radio" name="settings-theme" value="dark" data-theme-choice /><span>Tối</span></label>
+              </div>
+            </fieldset>
+          </div>
+
+          <div class="settings-panel" id="settings-panel-about" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" hidden>
+            <h3 class="settings-group-title">About</h3>
+            <p class="connections-intro">ASR Studio chép lời và ghi chú cuộc họp riêng tư, bằng tiếng Anh và tiếng Việt.</p>
+            <p class="connections-intro">Bản ghi được chép lời ngay trên máy của bạn. Chỉ transcript được gửi đến provider ghi chú bạn chọn, và mỗi ghi chú đều dẫn về đúng khoảnh khắc trong bản ghi.</p>
+            <dl class="connection-ledger">
+              <div><dt>Phiên bản</dt><dd><a id="settings-version" href="https://github.com/nguyencanhtrung/asr-studio/releases" target="_blank" rel="noopener noreferrer">{{ASR_STUDIO_VERSION}}</a></dd></div>
+              <div><dt>Mã nguồn</dt><dd><a href="https://github.com/nguyencanhtrung/asr-studio" target="_blank" rel="noopener noreferrer">nguyencanhtrung/asr-studio</a></dd></div>
+              <div><dt>Người phát triển</dt><dd>Nguyễn Cảnh Trung</dd></div>
+              <div><dt>Website</dt><dd><a id="settings-developer-site" href="https://bibo.id.vn" target="_blank" rel="noopener noreferrer">bibo.id.vn</a></dd></div>
+            </dl>
+          </div>
         </div>
       </div>
     </dialog>

@@ -65,7 +65,7 @@ const MODEL_REFUSALS = {
 
 const LANGUAGE_HINTS = new Set(Object.keys(LANGUAGES));
 
-const ASR_MODEL_GUIDANCE = {
+export const ASR_MODEL_GUIDANCE = {
   not_prepared: t("Model này chưa được chuẩn bị trên máy. Chạy lệnh sau trong thư mục ứng dụng (chỉ tải model, không gửi bản ghi), rồi tải lại trang."),
   gpu_required: t("Model này chỉ chạy trên GPU NVIDIA, còn worker đang chạy CPU. Hãy chọn model khác."),
   worker_unavailable: t("Worker chép lời chưa sẵn sàng nên chưa kiểm tra được model."),

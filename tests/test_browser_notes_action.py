@@ -572,9 +572,13 @@ def test_at_360px_the_action_takes_the_whole_row_and_change_sits_below_it(live, 
     start = page.locator("#notes-start")
     expect(start).to_have_text("Kết nối Google Antigravity để tạo notes")
 
-    action = start.bounding_box()
-    row = page.locator(".notes-run-actions").bounding_box()
-    change = page.locator("#notes-change").bounding_box()
+    # One read: the status strip above can still settle and move both boxes between two reads.
+    action, row, change = page.evaluate(
+        """() => ["#notes-start", ".notes-run-actions", "#notes-change"].map((selector) => {
+          const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect();
+          return { x, y, width, height };
+        })"""
+    )
     assert abs(action["width"] - row["width"]) <= 1, (action, row)
     assert change["y"] >= action["y"] + action["height"] - 1, (action, change)
 

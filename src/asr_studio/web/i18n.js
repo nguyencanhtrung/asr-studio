@@ -2,8 +2,8 @@
 
 // UI language. Every call site keeps its Vietnamese text and asks t() for it; English comes from
 // the EN table below, keyed by that Vietnamese text. The language is fixed for the page's
-// lifetime: a [data-lang-toggle] button stores the other language and reloads, so no caller has
-// to re-render. Pages load this script before theme.js and every other script.
+// lifetime: a [data-lang-toggle] button or [data-lang-choice] radio stores the language and
+// reloads, so no caller has to re-render. Pages load this script before theme.js and every other script.
 const { t, UI_LOCALE } = (() => {
   // Migrate once per key, before theme and feature scripts read their preferences.
   // Remove copied keys so clearing a new preference cannot revive a stale value.
@@ -58,6 +58,23 @@ const { t, UI_LOCALE } = (() => {
     }
   }
 
+  // Without storage the choice cannot survive a reload, so the page stays as it is. The reloaded
+  // page reopens Settings at the section a choice came from (SETTINGS_SECTION_KEY in provider-core.js).
+  function switchTo(value, settingsSection) {
+    try {
+      window.localStorage.setItem(storageKey, value);
+    } catch {
+      return false;
+    }
+    try {
+      if (settingsSection) window.sessionStorage.setItem("asr-studio:settings-section", settingsSection);
+    } catch {
+      // The language still applies; only the return to Settings is lost.
+    }
+    window.location.reload();
+    return true;
+  }
+
   function installToggles() {
     const label = other === "en" ? "Switch to English" : "Chuyển sang tiếng Việt";
     for (const button of document.querySelectorAll("[data-lang-toggle]")) {
@@ -65,13 +82,16 @@ const { t, UI_LOCALE } = (() => {
       button.lang = other;
       button.setAttribute("aria-label", label);
       button.title = label;
-      button.addEventListener("click", () => {
-        try {
-          window.localStorage.setItem(storageKey, other);
-        } catch {
-          return; // ponytail: without storage the choice cannot survive the reload, so stay put.
-        }
-        window.location.reload();
+      button.addEventListener("click", () => switchTo(other));
+    }
+    const choices = document.querySelectorAll("[data-lang-choice]");
+    const showPageLanguage = () => {
+      for (const input of choices) input.checked = input.value === lang;
+    };
+    showPageLanguage();
+    for (const input of choices) {
+      input.addEventListener("change", () => {
+        if (!switchTo(input.value, "theme")) showPageLanguage();
       });
     }
   }
@@ -350,8 +370,6 @@ const { t, UI_LOCALE } = (() => {
       "Kết nối Google Antigravity": "Connect Google Antigravity",
       "Kết nối Google: đang kiểm tra trạng thái": "Google connection: checking status",
       "Kết nối OpenAI: đang kiểm tra trạng thái": "OpenAI connection: checking status",
-      "Kết nối riêng ChatGPT hoặc Google Antigravity qua OMP. Các tài khoản này tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.": "Connect ChatGPT or Google Antigravity through OMP separately. These accounts are separate from workspace access; you do not need to connect both.",
-      "Kết nối tạo notes": "Notes connections",
       "Kết nối {name} đã đổi trong lúc chạy nên tác vụ dừng lại.": "The {name} connection changed during the run, so the task stopped.",
       "Kết nối {name}: {state}": "{name} connection: {state}",
       "Kết nối {provider} để tạo notes": "Connect {provider} to create notes",
@@ -442,7 +460,6 @@ const { t, UI_LOCALE } = (() => {
       "Mức suy luận (effort)": "Reasoning effort",
       "Mức suy luận mới chưa được lưu.": "The new reasoning effort is not saved yet.",
       "Mức suy luận này không được mô hình đã chọn hỗ trợ.": "The selected model does not support this reasoning effort.",
-      "Mức suy nghĩ": "Thinking level",
       "{label} · {count} đoạn": "{label} · {count} segments",
       "Nghe lại nhóm nguồn {label}, {count} đoạn": "Replay source group {label}, {count} segments",
       "Nghe lại đoạn nguồn lúc {label}": "Replay the source segment at {label}",
@@ -462,8 +479,8 @@ const { t, UI_LOCALE } = (() => {
       "Ngày họp đang bị khóa để giữ nguyên nguồn của notes. Tên cuộc họp vẫn có thể được lưu sau khi trả ngày về giá trị ban đầu.": "The meeting date is locked to keep the notes source intact. The meeting name can still be saved after you restore the original date.",
       "Ngày họp, lời thoại, mốc thời gian và tên người nói được gửi tới ChatGPT bằng model và effort đã lưu. Với nguồn dài, các bản tóm tắt trung gian cũng được gửi để tổng hợp notes. File audio/video, tên cuộc họp và thông tin tài khoản không được gửi.": "The meeting date, speech, timestamps and speaker names are sent to ChatGPT with the saved model and effort. For long sources, intermediate summaries are also sent to compile the notes. The audio/video file, meeting name and account details are not sent.",
       "Ngày họp, lời thoại, mốc thời gian và tên người nói được gửi tới {name} bằng model đã chọn. Với nguồn dài, các bản tóm tắt trung gian cũng được gửi để tổng hợp notes. File audio/video, tên cuộc họp và thông tin tài khoản không được gửi.": "The meeting date, speech, timestamps and speaker names are sent to {name} with the selected model. For long sources, intermediate summaries are also sent to compile the notes. The audio/video file, meeting name and account details are not sent.",
-      "Ngôn ngữ gợi ý lần chạy": "Language hint for this run",
-      "Model chép lời lần chạy": "Transcription model for this run",
+      "Ngôn ngữ gợi ý": "Language hint",
+      "Model ASR": "ASR model",
       "Model chép lời": "Transcription model",
       "Lệnh chuẩn bị model": "Model preparation command",
       "Model mặc định theo phần cứng": "Hardware default model",
@@ -830,7 +847,37 @@ const { t, UI_LOCALE } = (() => {
       "Đã xác thực tài khoản ChatGPT.": "ChatGPT account verified.",
       "Đã xóa thông tin đăng nhập trong không gian làm việc và xác nhận thu hồi quyền truy cập từ xa.": "Removed the sign-in from the workspace and confirmed remote access revocation.",
       "Đóng": "Close",
-      "Đóng cài đặt kết nối": "Close connection settings",
+      "Cài đặt": "Settings",
+      "AI provider": "AI provider",
+      "Kết nối tài khoản tạo notes. Các tài khoản tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.": "Connect the accounts that write notes. The accounts are separate from workspace access; you do not need to connect both.",
+      "Các mục cài đặt": "Settings sections",
+      "Giá trị mặc định của ASR Studio trên trình duyệt này.": "ASR Studio's defaults in this browser.",
+      "Ngôn ngữ": "Language",
+      "Đổi ngôn ngữ sẽ tải lại trang.": "Changing the language reloads the page.",
+      "Chế độ hiển thị": "Display mode",
+      "Theo hệ thống": "System",
+      "Sáng": "Light",
+      "Tối": "Dark",
+      "ASR Studio chép lời và ghi chú cuộc họp riêng tư, bằng tiếng Anh và tiếng Việt.": "ASR Studio transcribes meetings and writes notes privately, in English and Vietnamese.",
+      "Bản ghi được chép lời ngay trên máy của bạn. Chỉ transcript được gửi đến provider ghi chú bạn chọn, và mỗi ghi chú đều dẫn về đúng khoảnh khắc trong bản ghi.": "Recordings are transcribed on your own machine. Only the transcript goes to the notes provider you choose, and every note links back to the moment in the recording it came from.",
+      "Phiên bản": "Version",
+      "Mã nguồn": "Source code",
+      "Người phát triển": "Developer",
+      "Nguyễn Cảnh Trung": "Trung Nguyen",
+      "Trạng thái model chép lời trên máy này. Mỗi lần chép lời có thể chọn model riêng; mặc định của hệ thống không đổi.": "Transcription models on this machine. Each run can pick its own model; the system default does not change.",
+      "Chưa chuẩn bị": "Not prepared",
+      "Cần GPU NVIDIA": "Needs an NVIDIA GPU",
+      "Chưa kiểm tra được": "Not checked",
+      "Đang tải danh sách model…": "Loading the model list…",
+      "Không tải được danh sách model. Mở lại Cài đặt để thử lại.": "Could not load the model list. Reopen Settings to try again.",
+      "Máy chủ không trả về model nào. Mở lại Cài đặt để thử lại.": "The server returned no models. Reopen Settings to try again.",
+      "Mặc định theo phần cứng của máy. Chưa biết model vì worker chưa sẵn sàng.": "Default follows this machine's hardware. The model is unknown because the worker is not ready.",
+      "Không sao chép được. Lệnh đã được chọn; nhấn Ctrl+C.": "Could not copy. The command is selected; press Ctrl+C.",
+      "Mặc định": "Default",
+      "Sẵn sàng": "Ready",
+      "Sao chép": "Copy",
+      "Mặc định theo phần cứng của máy: {model}.": "Default follows this machine's hardware: {model}.",
+      "Đóng cài đặt": "Close settings",
       "Đóng hộp thoại": "Close dialog",
       "Đóng hộp thoại sau khi xác nhận không hủy yêu cầu xóa. Nếu dọn dẹp bị gián đoạn, cuộc họp sẽ còn được đánh dấu và có thể thử lại sau khi khắc phục lỗi lưu trữ.": "Closing the dialog after confirming does not cancel the deletion. If cleanup is interrupted, the meeting stays marked and can be retried after fixing the storage error.",
       "Đóng hộp thoại xác nhận xóa": "Close delete confirmation dialog",

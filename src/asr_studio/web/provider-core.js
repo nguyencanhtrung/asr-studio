@@ -11,7 +11,8 @@
 // with the real t(). A param is a primitive, a t() result, a timestamp() marker, or an array of those.
 
 import { combine } from "./store.js";
-import { errorMessageForCode } from "./shell-core.js";
+import { ASR_MODEL_TEXT, errorMessageForCode } from "./shell-core.js";
+import { ASR_MODEL_GUIDANCE } from "./task-core.js";
 
 const t = (text, params) => (params ? { text, params } : { text });
 const fill = (message, params) => ({ ...message, params });
@@ -339,7 +340,7 @@ function initial(d) {
   };
 }
 
-export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false } };
+export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false, section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null } };
 
 const done = (state, effects = []) => ({ state, effects });
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1028,14 +1029,57 @@ function onFailure(d, s, meta, error) {
   }
 }
 
-// The launcher slice: the page-load status read, and the one-shot scroll to the Google section.
+// The sections of the settings dialog, and the session key a language change leaves so the reloaded page
+// reopens at its section. i18n.js writes that key: it is a plain script and cannot import this module.
+export const SETTINGS_SECTIONS = ["ai", "asr", "theme", "about"];
+export const SETTINGS_SECTION_KEY = "asr-studio:settings-section";
+
+// The launcher slice: the page-load status read, the one-shot scroll to the Google section, and the open section.
 function reduceLauncher(state, action) {
   if (action.type === "provider/header-requested") {
     return { state, effects: [{ type: "fetch", key: "provider/header", url: CHATGPT.endpoints.providers, init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" }, ok: "provider/response", error: "provider/request-failed", meta: { op: "header" } }] };
   }
-  if (action.type === "provider/dialog-opened") return done({ scroll: action.launcher === "antigravity" });
-  if (action.type === "provider/scroll-handled") return done({ scroll: false });
+  if (action.type === "provider/dialog-opened") {
+    const reopened = action.section ? [{ type: "storage", key: SETTINGS_SECTION_KEY, area: "session", op: "remove" }] : [];
+    return done({ section: action.section ?? "ai", scroll: action.launcher === "antigravity" }, reopened);
+  }
+  if (action.type === "provider/settings-section-selected") return done({ section: action.section, scroll: false });
+  if (action.type === "provider/scroll-handled") return done({ ...state, scroll: false });
   return done(state);
+}
+
+// The ASR slice: the model catalog the settings dialog shows, read each time the dialog opens.
+// The newest read wins; a reply of an older read is dropped by its id.
+function reduceAsr(state, action) {
+  switch (action.type) {
+    case "provider/dialog-opened": {
+      const request = state.request + 1;
+      return done({ ...state, status: "loading", request, copy: null }, [{ type: "fetch", key: "provider/asr-models", url: "/api/asr-models", init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" }, ok: "provider/asr-loaded", error: "provider/asr-failed", meta: { id: request } }]);
+    }
+    case "provider/asr-loaded": {
+      if (action.meta.id !== state.request) return done(state);
+      const list = action.response.body?.asr_models;
+      if (!Array.isArray(list)) return done({ ...state, status: "error" });
+      const models = list.filter((choice) => isObject(choice) && (choice.id === "auto" || Object.hasOwn(ASR_MODEL_TEXT, choice.id)));
+      // A reply with no usable model must say so; an empty list would leave the section blank.
+      return done({ ...state, status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty", models });
+    }
+    case "provider/asr-failed":
+      return action.meta.id === state.request ? done({ ...state, status: "error" }) : done(state);
+    // The copy button: the clipboard is a call effect; the feedback line is state. A refused clipboard selects the command.
+    case "provider/asr-copy-requested": {
+      const command = selectAsr(state).rows.find((row) => row.id === action.id)?.command;
+      if (!command) return done(state);
+      return done({ ...state, copy: null }, [{ type: "call", key: "provider/asr-copy", name: "clipboard.write", args: [command], ok: "provider/asr-copy-succeeded", error: "provider/asr-copy-failed", meta: { id: action.id, request: state.request } }]);
+    }
+    case "provider/asr-copy-succeeded":
+      return action.meta.request === state.request ? done({ ...state, copy: { id: action.meta.id, how: "copied" } }) : done(state);
+    case "provider/asr-copy-failed":
+      if (action.meta.request !== state.request) return done(state);
+      return done({ ...state, copy: { id: action.meta.id, how: "selected" } }, [{ type: "call", key: "provider/asr-select", name: "asr.select-command", args: [action.meta.id] }]);
+    default:
+      return done(state);
+  }
 }
 
 // One store for every provider; every reducer sees every action.
@@ -1043,6 +1087,7 @@ export const reduce = combine({
   chatgpt: (state, action) => reduceProvider(CHATGPT, state, action),
   antigravity: (state, action) => reduceProvider(ANTIGRAVITY, state, action),
   launcher: reduceLauncher,
+  asr: reduceAsr,
 });
 
 // ---- selectors ----
@@ -1057,6 +1102,53 @@ export function selectLauncher(d, s) {
     ariaLabel: t("Kết nối {name}: {state}", { name: d.launcherName, state: [spoken, account] }),
     title: [d.launcherName, ": ", label],
   };
+}
+
+// What the settings dialog shows for the ASR catalog: the three models with their real readiness, and the default.
+// The default is what "auto" resolves to; it is marked on the model whose directory it is.
+const ASR_STATUS = {
+  ready: t("Sẵn sàng"),
+  not_prepared: t("Chưa chuẩn bị"),
+  gpu_required: t("Cần GPU NVIDIA"),
+  worker_unavailable: t("Chưa kiểm tra được"),
+};
+
+const ASR_COPY = {
+  copied: t("Đã sao chép lệnh."),
+  selected: t("Không sao chép được. Lệnh đã được chọn; nhấn Ctrl+C."),
+};
+
+export function selectAsr(s) {
+  const text = { loading: t("Đang tải danh sách model…"), error: t("Không tải được danh sách model. Mở lại Cài đặt để thử lại."), empty: t("Máy chủ không trả về model nào. Mở lại Cài đặt để thử lại.") }[s.status] ?? null;
+  const auto = s.models.find((choice) => choice.id === "auto");
+  const models = s.models.filter((choice) => choice.id !== "auto");
+  if (s.status === "loading" && !models.length) return { text, defaultText: null, rows: [] };
+  if (s.status === "error" || s.status === "empty") return { text, defaultText: null, rows: [] };
+  const defaultName = auto?.model_name ?? null;
+  const rows = models.map((choice) => {
+    const reason = choice.ready ? "ready" : choice.reason in ASR_STATUS ? choice.reason : "not_prepared";
+    return {
+      id: choice.id,
+      label: ASR_MODEL_TEXT[choice.id].label,
+      note: ASR_MODEL_TEXT[choice.id].note,
+      isDefault: Boolean(defaultName) && choice.model_name === defaultName,
+      state: reason,
+      status: ASR_STATUS[reason],
+      guidance: reason === "ready" ? null : ASR_MODEL_GUIDANCE[reason] ?? null,
+      command: reason === "not_prepared" ? choice.prepare_command || "" : "",
+      copy: s.copy?.id === choice.id ? ASR_COPY[s.copy.how] : null,
+    };
+  });
+  // No worker means no model can be checked: say it once, above the list, instead of on every row.
+  if (rows.length && rows.every((row) => row.state === "worker_unavailable")) {
+    return { text: ASR_MODEL_GUIDANCE.worker_unavailable, defaultText: null, rows: rows.map((row) => ({ ...row, guidance: null })) };
+  }
+  const defaultText = auto
+    ? defaultName
+      ? t("Mặc định theo phần cứng của máy: {model}.", { model: defaultName })
+      : t("Mặc định theo phần cứng của máy. Chưa biết model vì worker chưa sẵn sàng.")
+    : null;
+  return { text, defaultText, rows };
 }
 
 export function selectView(d, s) {
