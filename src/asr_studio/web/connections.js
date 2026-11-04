@@ -4,11 +4,18 @@
 import { providerChoice } from "./channel.js";
 import { createRunner, createStore } from "./store.js";
 import { setAttr, setProp, tr } from "./shell.js";
-import { ANTIGRAVITY, CHATGPT, initialState, reduce, selectLauncher, selectView } from "./provider-core.js";
+import { ANTIGRAVITY, CHATGPT, initialState, reduce, selectAsr, selectLauncher, selectView } from "./provider-core.js";
 
 const launcherElements = {
   chatgpt: document.querySelector("#launcher-chatgpt"),
   antigravity: document.querySelector("#launcher-antigravity"),
+};
+
+const settingsButton = document.querySelector("#settings-open");
+const asrEls = {
+  status: document.querySelector("#asr-status"),
+  defaultText: document.querySelector("#asr-default"),
+  list: document.querySelector("#asr-models"),
 };
 
 const els = {
@@ -126,7 +133,86 @@ function renderLauncher(d, s) {
   setProp(button, "title", tr(launcher.title));
 }
 
+// One row per model. The list is rebuilt only when what it shows changed, so a focused copy button survives.
+function renderAsr(asr) {
+  const view = selectAsr(asr);
+  setProp(asrEls.status, "textContent", tr(view.text));
+  setProp(asrEls.defaultText, "hidden", !view.defaultText);
+  setProp(asrEls.defaultText, "textContent", tr(view.defaultText));
+  const signature = JSON.stringify(view.rows.map(({ copy, ...row }) => row));
+  if (asrEls.list.dataset.rows !== signature) {
+    asrEls.list.dataset.rows = signature;
+    asrEls.list.replaceChildren(...view.rows.map(asrRow));
+  }
+  // The copy feedback changes without a rebuild, so the focused button stays.
+  for (const row of view.rows) {
+    const result = asrEls.list.querySelector(`[data-model="${row.id}"] .asr-command-result`);
+    if (result) setProp(result, "textContent", tr(row.copy));
+  }
+}
+
+function asrRow(row) {
+  const item = document.createElement("li");
+  item.className = "asr-model";
+  item.dataset.model = row.id;
+  item.dataset.state = row.state;
+  const head = document.createElement("div");
+  head.className = "asr-model-head";
+  const name = document.createElement("strong");
+  name.textContent = row.label;
+  head.append(name);
+  if (row.isDefault) head.append(asrBadge("default", t("Mặc định")));
+  head.append(asrBadge("status", tr(row.status)));
+  const note = document.createElement("p");
+  note.textContent = tr(row.note);
+  item.append(head, note);
+  if (row.guidance) {
+    const guidance = document.createElement("p");
+    guidance.className = "asr-model-guidance";
+    guidance.textContent = tr(row.guidance);
+    item.append(guidance);
+  }
+  if (row.command) item.append(asrCommand(row));
+  return item;
+}
+
+function asrBadge(kind, text) {
+  const badge = document.createElement("span");
+  badge.className = "asr-badge";
+  badge.dataset.kind = kind;
+  badge.textContent = text;
+  return badge;
+}
+
+// A read-only field with a copy button; when the clipboard is refused the command stays selected for Ctrl+C.
+function asrCommand(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "asr-command";
+  const label = document.createElement("label");
+  label.htmlFor = `asr-command-${row.id}`;
+  label.textContent = t("Lệnh chuẩn bị model");
+  const field = document.createElement("div");
+  field.className = "asr-command-field";
+  const input = document.createElement("input");
+  input.id = label.htmlFor;
+  input.type = "text";
+  input.readOnly = true;
+  input.spellcheck = false;
+  input.value = row.command;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = t("Sao chép");
+  const result = document.createElement("span");
+  result.className = "asr-command-result";
+  result.setAttribute("role", "status");
+  button.addEventListener("click", () => dispatch({ type: "provider/asr-copy-requested", id: row.id }));
+  field.append(input, button);
+  wrap.append(label, field, result);
+  return wrap;
+}
+
 function render(state) {
+  renderAsr(state.asr);
   const s = state.chatgpt;
   const view = renderSection(els, CHATGPT, s);
   renderLauncher(CHATGPT, s);
@@ -154,7 +240,19 @@ const base = createRunner({
   storage: { local: () => window.localStorage, session: () => window.sessionStorage },
   navigate: (url) => window.location.assign(url),
   open: (url, target) => window.open(url, target),
-  calls: { "provider.choice-changed": () => providerChoice.dispatch({ type: "channel/provider-choice-changed" }) },
+  calls: {
+    "provider.choice-changed": () => providerChoice.dispatch({ type: "channel/provider-choice-changed" }),
+    "clipboard.write": (text) => {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      return navigator.clipboard.writeText(text);
+    },
+    // The row's command field is the only DOM this touches; its id is one of the three catalog ids.
+    "asr.select-command": (id) => {
+      const input = document.getElementById(`asr-command-${id}`);
+      input?.focus();
+      input?.select();
+    },
+  },
   now: () => Date.now(),
 });
 // The reserved window shows a sentence in the page language; the effect carries it as data.
@@ -173,13 +271,16 @@ export function readStored(key) {
   }
 }
 
+// The gear opens the dialog at the top; a provider button opens it at that provider's section.
+function openDialog(launcher) {
+  if (!els.dialog.open) els.dialog.showModal();
+  els.dialog.querySelector(".connections-body").scrollTop = 0; // a closed dialog keeps its scroll
+  dispatch({ type: "provider/dialog-opened", launcher });
+  if (launcher === ANTIGRAVITY.id) document.querySelector("#antigravity-title").focus({ preventScroll: true });
+}
+settingsButton.addEventListener("click", () => openDialog(null));
 for (const provider of [CHATGPT.id, ANTIGRAVITY.id]) {
-  launcherElements[provider].addEventListener("click", () => {
-    if (!els.dialog.open) els.dialog.showModal();
-    els.dialog.querySelector(".connections-body").scrollTop = 0; // a closed dialog keeps its scroll
-    dispatch({ type: "provider/dialog-opened", launcher: provider });
-    if (provider === ANTIGRAVITY.id) document.querySelector("#antigravity-title").focus({ preventScroll: true });
-  });
+  launcherElements[provider].addEventListener("click", () => openDialog(provider));
 }
 els.close.addEventListener("click", () => els.dialog.close());
 els.dialog.addEventListener("click", (event) => {

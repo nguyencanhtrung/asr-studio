@@ -556,17 +556,22 @@ def test_phone_launchers_are_logo_buttons_on_the_wordmark_row(live, signed_in, w
         # The LED sits on the top-right corner, inside the button.
         assert dot["x"] + dot["width"] <= box["x"] + box["width"] + 0.5
         assert dot["x"] > box["x"] + box["width"] / 2 and dot["y"] < box["y"] + box["height"] / 2
-    expect(page.locator(".sidebar-footer-meta")).to_be_hidden()
+    # GitHub and Version stay out of the top bar; the gear joins it after the provider logos.
+    expect(page.locator(".github-link")).to_be_hidden()
     assert page.locator(".version-link").is_hidden()
+    expect(page.locator("#settings-open")).to_be_visible()
 
-    # One row: brand, wordmark, theme, EN, OpenAI, Google share a centre line, left to right.
+    # One row: brand, wordmark, theme, EN, OpenAI, Google and the gear share a centre line, left to
+    # right. Below 360px the wordmark is clipped to keep the row; the brand keeps its name.
+    wordmark = [".sidebar-masthead .brand-wordmark"] if width >= 360 else []
     items = [
         ".sidebar-masthead .brand-mark",
-        ".sidebar-masthead .brand-wordmark",
+        *wordmark,
         ".sidebar-masthead .theme-toggle",
         ".sidebar-masthead .lang-toggle",
         "#launcher-chatgpt",
         "#launcher-antigravity",
+        "#settings-open",
     ]
     boxes = [page.locator(selector).bounding_box() for selector in items]
     centres = [box["y"] + box["height"] / 2 for box in boxes]
@@ -583,10 +588,16 @@ def test_phone_launchers_are_logo_buttons_on_the_wordmark_row(live, signed_in, w
     expect(launchers.nth(0)).to_be_focused()
     page.keyboard.press("Tab")
     expect(launchers.nth(1)).to_be_focused()
+    page.keyboard.press("Tab")
+    expect(page.locator("#settings-open")).to_be_focused()
+    page.keyboard.press("Shift+Tab")
     page.keyboard.press("Enter")
     expect(page.locator("#connections-dialog")).to_be_visible()
     page.keyboard.press("Escape")
     expect(page.locator("#connections-dialog")).to_be_hidden()
+    if width < 360:
+        expect(page.locator(".brand")).to_have_accessible_name("ASR Studio — về workspace")
+        assert page.locator(".sidebar-masthead .brand-wordmark").bounding_box()["width"] <= 1
 
 
 @pytest.mark.browser

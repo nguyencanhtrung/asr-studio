@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createRunner, createStore } from "../../src/asr_studio/web/store.js";
-import { ANTIGRAVITY, CHATGPT, initialState, reduce, selectLauncher, selectView } from "../../src/asr_studio/web/provider-core.js";
+import { ANTIGRAVITY, CHATGPT, initialState, reduce, selectAsr, selectLauncher, selectView } from "../../src/asr_studio/web/provider-core.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const reply = (status, body) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
@@ -46,6 +46,7 @@ function setup() {
   const timers = [];
   const written = [];
   const events = [];
+  const clipboard = { refuse: false, written: [], selected: [] };
   const opened = { blocked: false, popup: null, replaced: [] };
   const open = () => {
     if (opened.blocked) return null;
@@ -70,7 +71,14 @@ function setup() {
     storage: { session: () => ({ setItem: (k, v) => written.push(["write", k, v]), removeItem: (k) => written.push(["remove", k]) }) },
     navigate: () => {},
     open,
-    calls: { "provider.choice-changed": () => events.push("provider.choice-changed") },
+    calls: {
+      "provider.choice-changed": () => events.push("provider.choice-changed"),
+      "clipboard.write": async (text) => {
+        if (clipboard.refuse) throw new Error("denied");
+        clipboard.written.push(text);
+      },
+      "asr.select-command": (id) => clipboard.selected.push(id),
+    },
     now: () => clock.now,
   });
   const store = createStore({ reduce, initialState, run });
@@ -97,7 +105,7 @@ function setup() {
     timer.callback();
   };
   const live = () => timers.filter((item) => item.live).map((item) => item.delay);
-  return { store, calls, answer, fail, is, pending, fire, live, clock, written, events, opened, state: () => store.getState() };
+  return { store, calls, answer, fail, is, pending, fire, live, clock, written, events, clipboard, opened, state: () => store.getState() };
 }
 
 const own = (env, d) => env.state()[d.id];
@@ -948,4 +956,115 @@ test("Google: a login-session answer that is not an object ends the start and fr
   assert.equal(s.error.code, "INVALID_LOGIN_SESSION");
   assert.equal(s.signInDisabled, false);
   assert.equal(s.login, null);
+});
+
+// ---- ASR models in Settings ----
+
+const ASR = {
+  asr_models: [
+    { id: "auto", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+    { id: "whisper-large-v3", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+    { id: "pho-whisper-large", model_name: "pho", ready: false, reason: "not_prepared", prepare_command: "prepare pho" },
+    { id: "qwen3-asr-1.7b", model_name: "qwen", ready: false, reason: "gpu_required", prepare_command: null },
+    { id: "future-model", model_name: "x", ready: true, reason: null, prepare_command: null },
+  ],
+};
+const asrCalls = (env) => env.calls.filter((c) => c.url === "/api/asr-models");
+
+test("opening Settings reads the real catalog and lists the three models with readiness", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  assert.equal(env.state().asr.status, "loading");
+  await env.answer(env.is("GET", "/api/asr-models"), 200, ASR);
+  const view = selectAsr(env.state().asr);
+  assert.deepEqual(view.rows.map((row) => [row.id, row.state, row.isDefault]), [
+    ["whisper-large-v3", "ready", true],
+    ["pho-whisper-large", "not_prepared", false],
+    ["qwen3-asr-1.7b", "gpu_required", false],
+  ]);
+  assert.deepEqual(view.rows.map((row) => row.command), ["", "prepare pho", ""]); // only an unprepared model has one
+  assert.match(view.rows[2].guidance.text, /chỉ chạy trên GPU NVIDIA/);
+  assert.deepEqual(view.defaultText.params, { model: "whisper-large-v3" });
+});
+
+test("a model catalog reply of an older read is dropped, and a failed read shows an error", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  assert.equal(asrCalls(env).length, 2);
+  // A reply of the first read that still arrives (the id is what drops it) changes nothing.
+  env.store.dispatch({ type: "provider/asr-loaded", meta: { id: 1 }, response: { body: ASR } });
+  assert.equal(env.state().asr.status, "loading");
+  env.store.dispatch({ type: "provider/asr-failed", meta: { id: 1 } });
+  assert.equal(env.state().asr.status, "loading");
+  asrCalls(env)[0].done = true; // the runner aborted the first request; only the second can answer
+  await env.answer(env.is("GET", "/api/asr-models"), 500, {});
+  assert.equal(env.state().asr.status, "error");
+  assert.deepEqual(selectAsr(env.state().asr).rows, []);
+});
+
+test("the copy button writes the command through the clipboard effect and the reducer owns the feedback", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, ASR);
+  env.store.dispatch({ type: "provider/asr-copy-requested", id: "pho-whisper-large" });
+  await tick();
+  assert.deepEqual(env.clipboard.written, ["prepare pho"]);
+  assert.deepEqual(env.state().asr.copy, { id: "pho-whisper-large", how: "copied" });
+  const rows = selectAsr(env.state().asr).rows;
+  assert.deepEqual(rows.map((row) => row.copy?.text ?? null), [null, "Đã sao chép lệnh.", null]);
+  // A model without a command, or an unknown id, copies nothing.
+  env.store.dispatch({ type: "provider/asr-copy-requested", id: "qwen3-asr-1.7b" });
+  env.store.dispatch({ type: "provider/asr-copy-requested", id: "nope" });
+  await tick();
+  assert.deepEqual(env.clipboard.written, ["prepare pho"]);
+  // Opening Settings again clears the line.
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  assert.equal(env.state().asr.copy, null);
+});
+
+test("a refused clipboard selects the command and says to press Ctrl+C", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, ASR);
+  env.clipboard.refuse = true;
+  env.store.dispatch({ type: "provider/asr-copy-requested", id: "pho-whisper-large" });
+  await tick();
+  assert.deepEqual(env.clipboard.written, []);
+  assert.deepEqual(env.clipboard.selected, ["pho-whisper-large"]);
+  assert.deepEqual(env.state().asr.copy, { id: "pho-whisper-large", how: "selected" });
+  assert.match(selectAsr(env.state().asr).rows[1].copy.text, /Ctrl\+C/);
+});
+
+test("a copy result that arrives after Settings was reopened changes nothing", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, ASR);
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  env.store.dispatch({ type: "provider/asr-copy-succeeded", meta: { id: "pho-whisper-large", request: 1 } });
+  env.store.dispatch({ type: "provider/asr-copy-failed", meta: { id: "pho-whisper-large", request: 1 } });
+  assert.equal(env.state().asr.copy, null);
+  assert.deepEqual(env.clipboard.selected, []);
+});
+
+test("a catalog reply with no usable model says so instead of showing a blank section", async () => {
+  for (const body of [[], [null, 5, { id: "evil" }], [{ id: "auto", model_name: "x", ready: true }]]) {
+    const env = setup();
+    env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+    await env.answer(env.is("GET", "/api/asr-models"), 200, { asr_models: body });
+    assert.equal(env.state().asr.status, "empty");
+    const view = selectAsr(env.state().asr);
+    assert.deepEqual(view.rows, []);
+    assert.match(view.text.text, /không trả về model nào/);
+  }
+});
+
+test("without a worker every model reports that it cannot be checked", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  const down = { asr_models: ["auto", "whisper-large-v3", "pho-whisper-large", "qwen3-asr-1.7b"].map((id) => ({ id, model_name: null, ready: false, reason: "worker_unavailable", prepare_command: null })) };
+  await env.answer(env.is("GET", "/api/asr-models"), 200, down);
+  const view = selectAsr(env.state().asr);
+  assert.deepEqual(view.rows.map((row) => row.state), ["worker_unavailable", "worker_unavailable", "worker_unavailable"]);
+  assert.equal(view.rows.some((row) => row.isDefault), false);
 });

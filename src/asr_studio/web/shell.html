@@ -113,6 +113,20 @@
             </button>
           </div>
           <div class="sidebar-footer-meta">
+            <button
+              class="settings-button"
+              id="settings-open"
+              type="button"
+              aria-haspopup="dialog"
+              aria-controls="connections-dialog"
+              aria-label="Cài đặt"
+              title="Cài đặt"
+            >
+              <svg class="theme-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <path d="M15.94 7.90 L18.04 8.37 L18.04 11.63 L15.94 12.10 L15.69 12.71 L16.83 14.53 L14.53 16.83 L12.71 15.69 L12.10 15.94 L11.63 18.04 L8.37 18.04 L7.90 15.94 L7.29 15.69 L5.47 16.83 L3.17 14.53 L4.31 12.71 L4.06 12.10 L1.96 11.63 L1.96 8.37 L4.06 7.90 L4.31 7.29 L3.17 5.47 L5.47 3.17 L7.29 4.31 L7.90 4.06 L8.37 1.96 L11.63 1.96 L12.10 4.06 L12.71 4.31 L14.53 3.17 L16.83 5.47 L15.69 7.29Z" />
+                <circle cx="10" cy="10" r="2.4" />
+              </svg>
+            </button>
             <a
               class="github-link"
               href="https://github.com/nguyencanhtrung/asr-studio"
@@ -666,19 +680,21 @@
     >
       <div class="connections-shell">
         <header class="connections-header">
-          <h2 id="connections-title">Kết nối tạo notes</h2>
+          <h2 id="connections-title">Cài đặt</h2>
           <button class="icon-button" id="connections-close" type="button" aria-label="Đóng cài đặt kết nối">
             <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
           </button>
         </header>
         <div class="connections-body">
           <p class="connections-intro" id="connections-intro">
-            Kết nối riêng ChatGPT hoặc Google Antigravity qua OMP. Các tài khoản này tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.
+            Kết nối tài khoản tạo notes và xem model chép lời trên máy này. Các tài khoản tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.
           </p>
+
+          <h3 class="settings-group-title" id="settings-ai-title">AI provider</h3>
 
           <section class="connection-section" aria-labelledby="connection-section-title">
             <div class="connection-section-heading">
-              <h3 id="connection-section-title">Tài khoản</h3>
+              <h4 id="connection-section-title">Tài khoản</h4>
               <span class="connection-state-badge" id="connection-state-badge" data-state="loading">Đang kiểm tra</span>
             </div>
             <dl class="connection-ledger">
@@ -728,7 +744,7 @@
 
           <section class="connection-section connection-model-section" id="connection-model-section" aria-labelledby="connection-model-title" hidden>
             <div class="connection-section-heading">
-              <h3 id="connection-model-title">Mô hình ghi chú cuộc họp</h3>
+              <h4 id="connection-model-title">Mô hình ghi chú cuộc họp</h4>
             </div>
             <form id="connection-model-form">
               <label for="connection-model">Mô hình dùng cho ghi chú cuộc họp</label>
@@ -748,7 +764,7 @@
 
           <section class="connection-section connection-verification-section" aria-labelledby="connection-verification-title">
             <div class="connection-section-heading">
-              <h3 id="connection-verification-title">Kiểm tra bằng dữ liệu tổng hợp</h3>
+              <h4 id="connection-verification-title">Kiểm tra bằng dữ liệu tổng hợp</h4>
             </div>
             <p>
               Thao tác này gửi một yêu cầu nhỏ bằng dữ liệu tổng hợp qua gói ChatGPT của bạn. Yêu cầu không chứa nội dung cuộc họp và có thể được tính vào mức sử dụng gói.
@@ -761,7 +777,7 @@
           <section class="connection-provider-divider" id="antigravity-section" aria-labelledby="antigravity-title">
             <p class="connection-provider-kicker">OMP · GOOGLE</p>
             <div class="connection-section-heading">
-              <h3 id="antigravity-title" tabindex="-1">Google Antigravity</h3>
+              <h4 id="antigravity-title" tabindex="-1">Google Antigravity</h4>
               <span class="connection-state-badge" id="antigravity-badge" data-state="loading">Đang kiểm tra</span>
             </div>
             <p>
@@ -805,7 +821,7 @@
           </section>
 
           <section class="connection-section connection-model-section" id="antigravity-model-section" aria-labelledby="antigravity-model-title" hidden>
-            <div class="connection-section-heading"><h3 id="antigravity-model-title">Mô hình Antigravity</h3></div>
+            <div class="connection-section-heading"><h4 id="antigravity-model-title">Mô hình Antigravity</h4></div>
             <form id="antigravity-model-form">
               <label for="antigravity-model">Mô hình dùng cho ghi chú cuộc họp</label>
               <select id="antigravity-model" aria-describedby="antigravity-model-help" disabled><option value="">Đang tải mô hình khả dụng</option></select>
@@ -822,10 +838,18 @@
           </section>
 
           <section class="connection-section connection-verification-section" id="antigravity-verification-section" hidden>
-            <div class="connection-section-heading"><h3>Kiểm tra Antigravity bằng dữ liệu tổng hợp</h3></div>
+            <div class="connection-section-heading"><h4>Kiểm tra Antigravity bằng dữ liệu tổng hợp</h4></div>
             <p>Yêu cầu chỉ chứa chỉ dẫn tổng hợp cố định, không chứa transcript hoặc dữ liệu cuộc họp. OMP không tự gửi lại khi lỗi.</p>
             <p class="connection-verification-result" id="antigravity-verification-result" role="status" aria-live="polite"></p>
             <button class="secondary-button" id="antigravity-verify" type="button" disabled>Chạy kiểm tra model đã chọn</button>
+          </section>
+
+          <section class="settings-asr" id="asr-section" aria-labelledby="asr-title">
+            <h3 class="settings-group-title" id="asr-title" tabindex="-1">Các model chép lời</h3>
+            <p class="connection-help" id="asr-intro">Trạng thái model chép lời trên máy này. Mỗi lần chép lời có thể chọn model riêng; mặc định của hệ thống không đổi.</p>
+            <p class="asr-default" id="asr-default" hidden></p>
+            <p class="connection-message" id="asr-status" role="status" aria-live="polite"></p>
+            <ul class="asr-models" id="asr-models"></ul>
           </section>
         </div>
       </div>
