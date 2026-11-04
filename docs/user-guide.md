@@ -221,6 +221,16 @@ Each model needs valid `model.bin`, `config.json`, `tokenizer.json` and
 | `ASR_DEVICE`                                 | `auto` (default), `cpu` or `cuda`. |
 | `ASR_MODEL_PATH`, `ASR_COMPUTE_TYPE`       | Explicit overrides for special tests.    |
 
+### Check the ASR models
+
+**Settings → ASR models** lists Whisper large-v3, PhoWhisper-large and Qwen3-ASR-1.7B as the app
+sees them now. A badge marks the model the system default (**Automatic**) uses on this machine. When that model
+is outside this list, as on a CPU-only machine, a line above the list names it instead. Each row says **Ready**, **Not prepared**, **Needs an NVIDIA GPU** or **Not checked** (no
+worker is running). For a model that is not prepared, the row shows the command that prepares it
+and a **Copy** button. Run it in the app folder; it only downloads the model and reads no
+recording. The dialog reads the list each time it opens, so reopen it after the command finishes.
+Qwen3-ASR says so when the worker runs on CPU. Settings never starts a download.
+
 ### Choose a model for one run
 
 Next to the start button, **Transcription model for this run** lists each model and whether it is
@@ -397,9 +407,13 @@ retry. The app also continues pending deletions at startup.
 
 ## Connect ChatGPT
 
-The workspace header has two status buttons: **OpenAI** (ChatGPT) and **Google** (Antigravity).
+The sidebar has two status buttons: **OpenAI** (ChatGPT) and **Google** (Antigravity).
 Each shows **Connected**, **Not connected**, **Sign in again** or **Unavailable**, and opens the
-connection dialog.
+**Settings** dialog at that provider. The **Settings** gear next to the GitHub link (on a phone,
+the last button in the top bar) opens the same dialog at the top. It has two groups:
+**AI provider** (sign in, model, effort, check and disconnect for each provider) and
+**ASR models** (see [Check the ASR models](#check-the-asr-models)). Press **Esc** to close it; focus
+returns to the button that opened it.
 
 1. Open **OpenAI** and select **Continue with ChatGPT**.
 2. Select a model from your account list and save it.

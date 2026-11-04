@@ -248,14 +248,20 @@ textarea:focus-visible {
 }
 
 .sidebar-footer-meta {
-  display: flex;
+  display: grid;
   width: 100%;
-  flex-direction: column;
+  grid-template-columns: repeat(2, auto);
   align-items: center;
-  gap: 0.35rem;
+  justify-content: center;
+  gap: 0.35rem 0.5rem;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--hairline);
+}
+
+.version-link {
+  grid-column: 1 / -1;
+  justify-self: center;
 }
 
 .github-link {
@@ -1630,13 +1636,23 @@ textarea:focus-visible {
   }
 
   .recent-section,
-  .sidebar-footer-meta {
+  .github-link,
+  .version-link {
     display: none;
+  }
+
+  /* The gear joins the row after the provider logos; its box disappears so it is a child of the footer. */
+  .sidebar-footer-meta {
+    display: contents;
   }
 
   .sidebar-footer {
     position: static;
-    display: block;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
     width: auto;
     flex: 0 0 auto;
     min-height: 0;
@@ -2707,5 +2723,16 @@ textarea:focus-visible {
     grid-template-columns: minmax(64px, auto) minmax(0, 1fr);
     gap: 8px;
     padding: 10px;
+  }
+}
+
+/* Brand, theme, EN, two logos and the gear need the room of the wordmark; the brand keeps its accessible name. */
+@media (max-width: 359px) {
+  .brand-wordmark {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 }

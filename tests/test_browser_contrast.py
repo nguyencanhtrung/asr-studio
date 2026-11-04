@@ -41,6 +41,28 @@ SPECIMENS = """
 <div class="notes-revision-select-wrap"><select><option>Phiên bản 1</option></select></div>
 <div class="connection-model-section"><select><option>Model</option></select></div>
 <div class="notes-frame"><textarea>Viết notes</textarea></div>
+<section class="settings-asr">
+  <h3 class="settings-group-title" data-text>Các model chép lời</h3>
+  <p class="asr-default" data-text>Mặc định theo phần cứng của máy: whisper-large-v3.</p>
+  <ul class="asr-models">
+    <li class="asr-model" data-state="ready"><div class="asr-model-head">
+      <strong data-text>Whisper</strong>
+      <span class="asr-badge" data-kind="default" data-text>Mặc định</span>
+      <span class="asr-badge" data-kind="status" data-text>Sẵn sàng</span></div>
+      <p data-text>Đa ngôn ngữ.</p></li>
+    <li class="asr-model" data-state="not_prepared"><div class="asr-model-head">
+      <strong data-text>Qwen</strong>
+      <span class="asr-badge" data-kind="status" data-text>Chưa chuẩn bị</span></div>
+      <p class="asr-model-guidance" data-text>Chạy lệnh sau trong thư mục ứng dụng.</p>
+      <div class="asr-command"><label data-text>Lệnh chuẩn bị model</label>
+        <div class="asr-command-field"><input readonly value="docker compose run"><button
+          data-text>Sao chép</button></div>
+        <span class="asr-command-result" data-text>Đã sao chép lệnh.</span></div></li>
+    <li class="asr-model" data-state="gpu_required"><div class="asr-model-head">
+      <strong data-text>Qwen</strong>
+      <span class="asr-badge" data-kind="status" data-text>Cần GPU NVIDIA</span></div></li>
+  </ul>
+</section>
 """
 
 MEASURE = r"""() => {
