@@ -223,7 +223,7 @@ Each model needs valid `model.bin`, `config.json`, `tokenizer.json` and
 
 ### Check the ASR models
 
-**Settings → ASR models** lists Whisper large-v3, PhoWhisper-large and Qwen3-ASR-1.7B as the app
+**Settings → ASR Model** lists Whisper large-v3, PhoWhisper-large and Qwen3-ASR-1.7B as the app
 sees them now. A badge marks the model the system default (**Automatic**) uses on this machine. When that model
 is outside this list, as on a CPU-only machine, a line above the list names it instead. Each row says **Ready**, **Not prepared**, **Needs an NVIDIA GPU** or **Not checked** (no
 worker is running). For a model that is not prepared, the row shows the command that prepares it
@@ -410,9 +410,16 @@ retry. The app also continues pending deletions at startup.
 The sidebar has two status buttons: **OpenAI** (ChatGPT) and **Google** (Antigravity).
 Each shows **Connected**, **Not connected**, **Sign in again** or **Unavailable**, and opens the
 **Settings** dialog at that provider. The **Settings** gear next to the GitHub link (on a phone,
-the last button in the top bar) opens the same dialog at the top. It has two groups:
-**AI provider** (sign in, model, effort, check and disconnect for each provider) and
-**ASR models** (see [Check the ASR models](#check-the-asr-models)). Press **Esc** to close it; focus
+the last button in the top bar) opens the same dialog at **AI provider**. It has four sections,
+listed on the left and as a row on a phone:
+
+- **AI provider:** sign in, model, effort, check and disconnect for each provider.
+- **ASR Model:** see [Check the ASR models](#check-the-asr-models).
+- **Theme:** the language and display mode (system, light or dark) for this browser. Changing the
+  language reloads the page and returns to this section.
+- **About:** what the software does, its version, and the developer's name and website.
+
+Press **Esc** to close it; focus
 returns to the button that opened it.
 
 1. Open **OpenAI** and select **Continue with ChatGPT**.

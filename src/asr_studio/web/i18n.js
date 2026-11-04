@@ -2,8 +2,8 @@
 
 // UI language. Every call site keeps its Vietnamese text and asks t() for it; English comes from
 // the EN table below, keyed by that Vietnamese text. The language is fixed for the page's
-// lifetime: a [data-lang-toggle] button stores the other language and reloads, so no caller has
-// to re-render. Pages load this script before theme.js and every other script.
+// lifetime: a [data-lang-toggle] button or [data-lang-choice] radio stores the language and
+// reloads, so no caller has to re-render. Pages load this script before theme.js and every other script.
 const { t, UI_LOCALE } = (() => {
   // Migrate once per key, before theme and feature scripts read their preferences.
   // Remove copied keys so clearing a new preference cannot revive a stale value.
@@ -58,6 +58,23 @@ const { t, UI_LOCALE } = (() => {
     }
   }
 
+  // Without storage the choice cannot survive a reload, so the page stays as it is. The reloaded
+  // page reopens Settings at the section a choice came from (SETTINGS_SECTION_KEY in provider-core.js).
+  function switchTo(value, settingsSection) {
+    try {
+      window.localStorage.setItem(storageKey, value);
+    } catch {
+      return false;
+    }
+    try {
+      if (settingsSection) window.sessionStorage.setItem("asr-studio:settings-section", settingsSection);
+    } catch {
+      // The language still applies; only the return to Settings is lost.
+    }
+    window.location.reload();
+    return true;
+  }
+
   function installToggles() {
     const label = other === "en" ? "Switch to English" : "Chuyển sang tiếng Việt";
     for (const button of document.querySelectorAll("[data-lang-toggle]")) {
@@ -65,13 +82,16 @@ const { t, UI_LOCALE } = (() => {
       button.lang = other;
       button.setAttribute("aria-label", label);
       button.title = label;
-      button.addEventListener("click", () => {
-        try {
-          window.localStorage.setItem(storageKey, other);
-        } catch {
-          return; // ponytail: without storage the choice cannot survive the reload, so stay put.
-        }
-        window.location.reload();
+      button.addEventListener("click", () => switchTo(other));
+    }
+    const choices = document.querySelectorAll("[data-lang-choice]");
+    const showPageLanguage = () => {
+      for (const input of choices) input.checked = input.value === lang;
+    };
+    showPageLanguage();
+    for (const input of choices) {
+      input.addEventListener("change", () => {
+        if (!switchTo(input.value, "theme")) showPageLanguage();
       });
     }
   }
@@ -440,7 +460,6 @@ const { t, UI_LOCALE } = (() => {
       "Mức suy luận (effort)": "Reasoning effort",
       "Mức suy luận mới chưa được lưu.": "The new reasoning effort is not saved yet.",
       "Mức suy luận này không được mô hình đã chọn hỗ trợ.": "The selected model does not support this reasoning effort.",
-      "Mức suy nghĩ": "Thinking level",
       "{label} · {count} đoạn": "{label} · {count} segments",
       "Nghe lại nhóm nguồn {label}, {count} đoạn": "Replay source group {label}, {count} segments",
       "Nghe lại đoạn nguồn lúc {label}": "Replay the source segment at {label}",
@@ -830,8 +849,21 @@ const { t, UI_LOCALE } = (() => {
       "Đóng": "Close",
       "Cài đặt": "Settings",
       "AI provider": "AI provider",
-      "Các model chép lời": "ASR models",
-      "Kết nối tài khoản tạo notes và xem model chép lời trên máy này. Các tài khoản tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.": "Connect the accounts that write notes and check the transcription models on this machine. The accounts are separate from workspace access; you do not need to connect both.",
+      "Kết nối tài khoản tạo notes. Các tài khoản tách biệt với quyền truy cập không gian làm việc; bạn không cần kết nối cả hai.": "Connect the accounts that write notes. The accounts are separate from workspace access; you do not need to connect both.",
+      "Các mục cài đặt": "Settings sections",
+      "Giá trị mặc định của ASR Studio trên trình duyệt này.": "ASR Studio's defaults in this browser.",
+      "Ngôn ngữ": "Language",
+      "Đổi ngôn ngữ sẽ tải lại trang.": "Changing the language reloads the page.",
+      "Chế độ hiển thị": "Display mode",
+      "Theo hệ thống": "System",
+      "Sáng": "Light",
+      "Tối": "Dark",
+      "ASR Studio chép lời và ghi chú cuộc họp riêng tư, bằng tiếng Anh và tiếng Việt.": "ASR Studio transcribes meetings and writes notes privately, in English and Vietnamese.",
+      "Bản ghi được chép lời ngay trên máy của bạn. Chỉ transcript được gửi đến provider ghi chú bạn chọn, và mỗi ghi chú đều dẫn về đúng khoảnh khắc trong bản ghi.": "Recordings are transcribed on your own machine. Only the transcript goes to the notes provider you choose, and every note links back to the moment in the recording it came from.",
+      "Phiên bản": "Version",
+      "Mã nguồn": "Source code",
+      "Người phát triển": "Developer",
+      "Nguyễn Cảnh Trung": "Trung Nguyen",
       "Trạng thái model chép lời trên máy này. Mỗi lần chép lời có thể chọn model riêng; mặc định của hệ thống không đổi.": "Transcription models on this machine. Each run can pick its own model; the system default does not change.",
       "Chưa chuẩn bị": "Not prepared",
       "Cần GPU NVIDIA": "Needs an NVIDIA GPU",
@@ -845,7 +877,7 @@ const { t, UI_LOCALE } = (() => {
       "Sẵn sàng": "Ready",
       "Sao chép": "Copy",
       "Mặc định theo phần cứng của máy: {model}.": "Default follows this machine's hardware: {model}.",
-      "Đóng cài đặt kết nối": "Close connection settings",
+      "Đóng cài đặt": "Close settings",
       "Đóng hộp thoại": "Close dialog",
       "Đóng hộp thoại sau khi xác nhận không hủy yêu cầu xóa. Nếu dọn dẹp bị gián đoạn, cuộc họp sẽ còn được đánh dấu và có thể thử lại sau khi khắc phục lỗi lưu trữ.": "Closing the dialog after confirming does not cancel the deletion. If cleanup is interrupted, the meeting stays marked and can be retried after fixing the storage error.",
       "Đóng hộp thoại xác nhận xóa": "Close delete confirmation dialog",

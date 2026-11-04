@@ -105,6 +105,10 @@ def _screens(live, page, meeting_id):
     page.locator(".connection-launchers button").first.click()
     expect(page.locator("dialog[open]")).to_be_visible()
     yield "connections dialog"
+    for section in ("ASR Model", "Theme", "About"):
+        page.get_by_role("tab", name=section).click()
+        expect(page.get_by_role("heading", name=section, level=3)).to_be_visible()
+        yield f"settings {section}"
 
 
 def test_stylesheets_take_every_font_size_from_the_rem_scale():

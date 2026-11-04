@@ -34,6 +34,7 @@ const els = {
   modelStatus: document.querySelector("#antigravity-model-status"),
   modelSave: document.querySelector("#antigravity-model-save"),
   verificationSection: document.querySelector("#antigravity-verification-section"),
+  ledger: document.querySelector("#antigravity-ledger"),
   verificationResult: document.querySelector("#antigravity-verification-result"),
   verify: document.querySelector("#antigravity-verify"),
 };
