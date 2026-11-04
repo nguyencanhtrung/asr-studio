@@ -870,6 +870,9 @@ export function reduce(state, action) {
     case "history/meeting-change-received":
       if (state.view !== "meeting" || !state.meeting || state.meeting.id !== action.meetingId) return out(state);
       return requestMeeting(state, action.meetingId, at);
+    // Settings can change what this machine runs (a default, an install): the page reads it again.
+    case "history/settings-closed":
+      return state.view === "meeting" && state.meeting ? requestMeeting(state, state.meeting.id, at) : out(state);
     case "history/meeting-link-clicked": {
       const path = meetingPath(action.meetingId);
       const moved = at.pathname !== path ? { ...at, pathname: path, search: "", hash: "", tab: null } : at; // the address once pushed

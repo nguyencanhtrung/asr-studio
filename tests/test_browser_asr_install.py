@@ -423,3 +423,13 @@ def test_the_default_control_is_locked_while_no_worker_can_answer(live, signed_i
     _context, page = signed_in(viewport={"width": 1280, "height": 900})
     open_asr(page, live)
     expect(default_select(page)).to_be_disabled()
+
+
+def test_a_saved_default_that_cannot_be_read_is_reported(live, signed_in, installer):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    (live.settings.data_dir / "asr-default.json").write_text("garbage", encoding="utf-8")
+    open_asr(page, live)
+    expect(default_select(page)).to_have_value("auto")
+    expect(page.locator("#asr-default")).to_contain_text("Không đọc được")
+    default_select(page).select_option("whisper-large-v3")
+    expect(page.locator("#asr-default")).to_contain_text("Whisper large-v3")

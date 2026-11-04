@@ -1098,7 +1098,7 @@ function reduceAsr(state, action) {
       const installer = action.response.body?.installer;
       const defaultModel = typeof action.response.body?.default_model === "string" ? action.response.body.default_model : null;
       const hardwareModel = typeof action.response.body?.hardware_model === "string" ? action.response.body.hardware_model : null;
-      const next = { ...state, models, defaultModel: state.defaultPending === undefined ? defaultModel : state.defaultPending, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
+      const next = { ...state, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
         // A reply with no usable model must say so; an empty list would leave the section blank.
         status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
       return withPoll(next);
@@ -1122,7 +1122,7 @@ function reduceAsr(state, action) {
       const refused = action.type === "provider/asr-default-refused";
       const request = state.request + 1;
       const value = refused ? state.defaultModel : state.defaultPending;
-      return done({ ...state, request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request)]);
+      return done({ ...state, request, defaultModel: value, defaultPending: undefined, savedRev: (state.savedRev ?? 0) + (refused ? 0 : 1), defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request)]);
     }
     case "provider/asr-install-requested":
       return asrInstallCall(state, action, "POST", { state: "queued", sending: true });
@@ -1210,19 +1210,22 @@ function defaultControl(s, auto, models, usable) {
   ];
   const name = chosen && ASR_MODEL_TEXT[chosen]?.label;
   const broken = Boolean(chosen && auto && !auto.ready && s.defaultPending === undefined);
+  const damaged = Boolean(s.defaultDamaged && !chosen && usable);
   return {
     value: chosen ?? "auto",
     options,
     disabled: !usable,
     refusal: s.defaultRefusal ? DEFAULT_REFUSALS[s.defaultRefusal] ?? t("Chưa đổi được model mặc định. Hãy thử lại.") : null,
-    text: broken
+    text: damaged
+      ? t("Không đọc được model mặc định đã lưu, nên đang dùng theo phần cứng của máy. Hãy chọn lại.")
+      : broken
       ? t("Model mặc định {model} chưa chạy được trên máy này. Lần chép lời Tự động sẽ bị từ chối cho đến khi bạn cài lại hoặc chọn mặc định khác.", { model: name })
       : chosen
         ? t("Lần chép lời Tự động dùng {model}. Mỗi lần chạy vẫn chọn được model khác.", { model: name })
         : hardware
           ? t("Mặc định theo phần cứng của máy: {model}.", { model: hardware })
           : t("Mặc định theo phần cứng của máy."),
-    broken,
+    broken: broken || damaged,
   };
 }
 

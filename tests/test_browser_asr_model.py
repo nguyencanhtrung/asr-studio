@@ -395,3 +395,37 @@ def test_automatic_is_refused_with_guidance_when_the_chosen_default_is_gone(
     assert page.request.get(f"{live.url}/api/asr-models").json()["default_model"] == (
         "pho-whisper-large"
     )
+
+
+def test_the_open_meeting_reads_the_default_again_when_settings_closes(live, signed_in, worker):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    data_dir = live.settings.data_dir
+    object.__setattr__(
+        live.settings,
+        "asr_phowhisper_model_path",
+        _prepare_browser_asr_model(data_dir.parent / "pho-whisper-large"),
+    )
+    meeting_id = seed_meeting(data_dir, "Open meeting", "2026-10-17", duration_seconds=30.0)
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    note = page.locator("#transcription-model-help")
+    expect(note).to_have_text("Theo phần cứng của máy: whisper-large-v3.")
+
+    page.locator("#settings-open").click()
+    page.get_by_role("tab", name="ASR Model").click()
+    page.get_by_label("Model mặc định").select_option("pho-whisper-large")
+    expect(page.locator("#asr-default")).to_contain_text("PhoWhisper-large")
+    page.keyboard.press("Escape")
+
+    expect(note).to_have_text("Theo Cài đặt: pho-whisper-large.")
+
+
+def test_a_broken_default_tells_the_create_dialog_before_the_upload(live, signed_in, worker):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    data_dir = live.settings.data_dir
+    pho = _prepare_browser_asr_model(data_dir.parent / "pho-whisper-large")
+    object.__setattr__(live.settings, "asr_phowhisper_model_path", pho)
+    _choose_default(page, live, "pho-whisper-large")
+    shutil.rmtree(pho)
+    page.goto(f"{live.url}/")
+    page.locator("header [data-open-meeting-dialog], .header-create").first.click()
+    expect(page.locator("#create-asr-model-help")).to_contain_text("Mở Cài đặt")

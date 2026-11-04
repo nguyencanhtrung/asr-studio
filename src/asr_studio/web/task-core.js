@@ -325,8 +325,8 @@ function startFailed(state, error, auto) {
   } else if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
     message = t("{reason} Cuộc họp đã được lưu nhưng chưa chép lời. Ứng dụng không tự thử lại; bấm “Bắt đầu chép lời” khi máy sẵn sàng.", { reason: AUTO_START_REASONS[failure.code] });
   } else if (Object.hasOwn(MODEL_REFUSALS, failure.code)) {
-    // The shared text for this code names a notes provider, which has no place here.
-    message = MODEL_REFUSALS[failure.code];
+    // Automatic names no model of its own: the operator fixes this one in Settings.
+    message = t("Model mặc định chưa chạy được trên máy này. Mở Cài đặt → ASR Model để cài lại hoặc chọn mặc định khác.");
   }
   const base = definitive ? forget(state, meetingId) : out(state);
   // A request restored after a reload is the only record of its model: the selector must keep showing what was refused.

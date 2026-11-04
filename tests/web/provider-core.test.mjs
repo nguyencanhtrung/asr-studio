@@ -1352,6 +1352,11 @@ test("a refused choice goes back to what the server has and says why; a read in 
   assert.equal(chosen.asr.request, 6);
   const { state: stale } = reduce(chosen, { type: "provider/asr-loaded", meta: { id: 5 }, response: { body: { ...ASR, default_model: "whisper-large-v3" } } });
   assert.equal(stale.asr.defaultPending, null);
+  // A read after the click may still answer the old value; the refusal must fall back to the server's own.
+  const { state: polled } = reduce(chosen, { type: "provider/asr-loaded", meta: { id: 6 }, response: { body: { ...ASR, default_model: "whisper-large-v3" } } });
+  assert.equal(selectAsr(polled.asr).defaultControl.value, "auto");
+  const { state: backed } = reduce(polled, { type: "provider/asr-default-refused", meta: { mutation: polled.asr.defaultMutation }, error: { body: { detail: { code: "not_prepared" } } } });
+  assert.equal(backed.asr.defaultModel, "whisper-large-v3");
   const { state: refused } = reduce(chosen, { type: "provider/asr-default-refused", meta: { mutation: chosen.asr.defaultMutation }, error: { body: { detail: { code: "not_prepared" } } } });
   assert.equal(refused.asr.defaultModel, "whisper-large-v3");
   assert.equal(refused.asr.defaultRefusal, "not_prepared");

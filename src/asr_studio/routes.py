@@ -20,6 +20,7 @@ from asr_studio.antigravity import AntigravityError, AntigravityProvider
 from asr_studio.asr_models import (
     AUTO,
     CATALOG,
+    default_model_damaged,
     model_choices,
     model_path,
     read_default_model,
@@ -414,6 +415,7 @@ def install_routes(
             "asr_models": choices,
             "installer": installs.installer(),
             "default_model": read_default_model(settings),
+            "default_damaged": default_model_damaged(settings),
             "hardware_model": Path(hardware).name if hardware is not None else None,
         }
 
@@ -911,6 +913,7 @@ def install_routes(
             "meeting_id": payload["meeting_id"],
             "request_id": payload["request_id"],
             **resolve_run(settings, profile, asr_model),
+            "asr_choice": asr_model,
             "diarization_model_path": settings.diarization_model_path,
             "worker_ready": worker_ready and profile is not None,
         }

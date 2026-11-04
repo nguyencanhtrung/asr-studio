@@ -313,6 +313,9 @@ function selectAsrModel(state, disabled) {
   const warning = choices.some((choice) => choice.id !== "auto" && !choice.ready)
     ? t("Model chưa sẵn sàng không chọn được ở đây; trang cuộc họp có lệnh chuẩn bị.")
     : null;
+  const brokenDefault = value === "auto" && selected.chosen && !selected.ready
+    ? t("Model mặc định chưa chạy được trên máy này: cuộc họp vẫn được lưu nhưng chưa chép lời. Mở Cài đặt → ASR Model để sửa.")
+    : null;
   return {
     value,
     disabled,
@@ -322,7 +325,7 @@ function selectAsrModel(state, disabled) {
       ready: Boolean(choice.ready),
       disabled: choice.id !== "auto" && !choice.ready,
     })),
-    help: warning ? [note, " ", warning] : note,
+    help: brokenDefault ? [note, " ", brokenDefault] : warning ? [note, " ", warning] : note,
   };
 }
 

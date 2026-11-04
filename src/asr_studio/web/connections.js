@@ -146,6 +146,12 @@ function renderLauncher(d, s) {
 function renderAsr(asr) {
   const view = selectAsr(asr);
   setProp(asrEls.status, "textContent", tr(view.text));
+  // The meeting behind the dialog reads its model list again: closing Settings can beat this save.
+  const savedRev = String(asr.savedRev ?? 0);
+  if ((els.dialog.dataset.savedRev ?? "0") !== savedRev) {
+    els.dialog.dataset.savedRev = savedRev;
+    els.dialog.dispatchEvent(new Event("asr-default-saved"));
+  }
   const control = view.defaultControl;
   setProp(asrEls.control, "hidden", !control);
   setProp(asrEls.defaultText, "hidden", !control || control.disabled);

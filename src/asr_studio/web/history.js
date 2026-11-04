@@ -2780,6 +2780,9 @@ searchInput.addEventListener("keydown", (event) => {
 
 window.addEventListener("popstate", () => dispatch({ type: "history/popped" })); // for the same meeting this also paints the tab the address names
 window.addEventListener("hashchange", () => dispatch({ type: "history/hash-changed" }));
+for (const event of ["close", "asr-default-saved"]) {
+  $("#connections-dialog").addEventListener(event, () => dispatch({ type: "history/settings-closed" }));
+}
 
 $("#meeting-tabs").addEventListener("click", (event) => {
   const tab = event.target.closest("[data-meeting-tab]");

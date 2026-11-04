@@ -83,14 +83,27 @@ def engine_of(asr_model: str) -> str:
     return "whisper" if asr_model == AUTO else CATALOG[asr_model].engine
 
 
-def read_default_model(settings: Settings) -> str | None:
-    """The operator's chosen default. Missing or damaged means none: the hardware decides."""
+def _stored_default(settings: Settings) -> tuple[str | None, bool]:
+    """The operator's chosen default, and whether a setting is there that cannot be understood."""
     try:
         document = json.loads((settings.data_dir / DEFAULT_MODEL_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, False
     except (OSError, ValueError):
-        return None
-    chosen = document.get("asr_model") if isinstance(document, dict) else None
-    return chosen if isinstance(chosen, str) and chosen in CATALOG else None
+        return None, True
+    chosen = document.get("asr_model", "") if isinstance(document, dict) else ""
+    if chosen is None:
+        return None, False
+    return (chosen, False) if isinstance(chosen, str) and chosen in CATALOG else (None, True)
+
+
+def read_default_model(settings: Settings) -> str | None:
+    return _stored_default(settings)[0]
+
+
+def default_model_damaged(settings: Settings) -> bool:
+    """A setting that cannot be read counts as no choice, and Settings has to say so."""
+    return _stored_default(settings)[1]
 
 
 def write_default_model(settings: Settings, asr_model: str | None) -> None:
@@ -98,6 +111,8 @@ def write_default_model(settings: Settings, asr_model: str | None) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump({"asr_model": asr_model}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temp, settings.data_dir / DEFAULT_MODEL_FILE)
     except BaseException:
         Path(temp).unlink(missing_ok=True)

@@ -12,6 +12,7 @@ from seeding import prepare_diarization_model, seed_meeting
 from asr_studio.asr_models import (
     CATALOG,
     DEFAULT_MODEL_FILE,
+    default_model_damaged,
     model_choices,
     prepare_command,
     read_default_model,
@@ -184,6 +185,7 @@ def _accept(settings: Settings, meeting_id: str, request_id: str, asr_model: str
         request_id=request_id,
         diarization_model_path=settings.diarization_model_path,
         worker_ready=True,
+        asr_choice=asr_model,
         **resolve_run(settings, profile, asr_model),
     )
 
@@ -379,3 +381,50 @@ def test_an_automatic_run_is_refused_when_the_chosen_default_is_gone(tmp_path):
         _accept(settings, meeting_id, "request-default-2", "auto")
 
     assert (refused.value.status_code, refused.value.code) == (503, "model_unavailable")
+
+
+def test_a_retry_of_automatic_is_the_same_request_after_the_default_changed(tmp_path):
+    settings = _settings(tmp_path)
+    initialize(settings.data_dir)
+    prepare_diarization_model(settings.diarization_model_path)
+    _whisper_dir(settings.asr_phowhisper_model_path)
+    write_default_model(settings, "pho-whisper-large")
+    meeting_id = seed_meeting(settings.data_dir, "Default changed")
+    task = _accept(settings, meeting_id, "request-default-3", "auto")
+
+    write_default_model(settings, None)
+
+    assert _accept(settings, meeting_id, "request-default-3", "auto")["id"] == task["id"]
+    with pytest.raises(TaskError) as conflict:  # asking for something else is still a conflict
+        _accept(settings, meeting_id, "request-default-3", "whisper-large-v3")
+    assert conflict.value.code == "idempotency_conflict"
+
+
+@pytest.mark.parametrize(
+    ("content", "damaged"),
+    [
+        (None, False),
+        ('{"asr_model": null}', False),
+        ('{"asr_model": "pho-whisper-large"}', False),
+        ("not json", True),
+        ("[]", True),
+        ("{}", True),
+        ('{"asr_model": "a-model-from-a-newer-release"}', True),
+    ],
+)
+def test_a_setting_that_cannot_be_understood_is_reported(tmp_path, content, damaged):
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir(parents=True)
+    if content is not None:
+        (settings.data_dir / DEFAULT_MODEL_FILE).write_text(content, encoding="utf-8")
+    assert default_model_damaged(settings) is damaged
+
+
+def test_only_a_large_model_needs_its_preprocessor_file(tmp_path):
+    model = _whisper_dir(tmp_path / "copied-large-v3")
+    (model / "preprocessor_config.json").unlink()
+    config = json.loads((model / "config.json").read_text(encoding="utf-8"))
+    config["lang_ids"] = list(range(100))  # 128 mels: the default of 80 fails at encoding
+    (model / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ModelConfigurationError):
+        prepared_engine_directory("whisper", model)
