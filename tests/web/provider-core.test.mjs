@@ -1093,3 +1093,225 @@ test("without a worker every model reports that it cannot be checked", async () 
   assert.deepEqual(view.rows.map((row) => row.state), ["worker_unavailable", "worker_unavailable", "worker_unavailable"]);
   assert.equal(view.rows.some((row) => row.isDefault), false);
 });
+
+// ---- installing an ASR model from Settings ----
+
+const PHO = "pho-whisper-large";
+const GB = 10 ** 9;
+const model = (id, extra = {}) => ({ id, model_name: id, ready: false, reason: "not_prepared", prepare_command: `prepare ${id}`, required_bytes: 9 * GB, free_bytes: 100 * GB, install: { state: "idle" }, ...extra });
+const catalog = ({ pho = {}, qwen = {}, installer = { available: true, models_writable: true } } = {}) => ({
+  asr_models: [
+    { id: "auto", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+    { ...model("whisper-large-v3"), ready: true, reason: null, prepare_command: null, install: { state: "idle" } },
+    model(PHO, pho),
+    model("qwen3-asr-1.7b", { reason: "gpu_required", prepare_command: null, ...qwen }),
+  ],
+  installer,
+});
+const phoRow = (env) => selectAsr(env.state().asr).rows.find((row) => row.id === PHO);
+const catalogCalls = (env) => env.calls.filter((c) => c.method === "GET" && c.url === "/api/asr-models");
+
+async function openedWith(body) {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, body);
+  return env;
+}
+
+test("with an installer an unprepared model offers Cài đặt model with the space it needs, and no command", async () => {
+  const env = await openedWith(catalog());
+  const row = phoRow(env);
+  assert.equal(row.command, "");
+  assert.equal(row.install.kind, "offer");
+  assert.deepEqual(row.install.spaceLine, { text: "Cần {required} trống, còn {free}.", params: { required: { fmt: "bytes", value: 9 * GB }, free: { fmt: "bytes", value: 100 * GB } } });
+  assert.equal(row.install.blocked, false);
+  // A model that cannot run here gets no button, and a prepared one has no install block.
+  const rows = selectAsr(env.state().asr).rows;
+  assert.deepEqual(rows.map((r) => r.install?.kind ?? null), [null, "offer", null]);
+});
+
+test("without a usable installer the copy command stays, as it always was", async () => {
+  for (const installer of [{ available: false, models_writable: false }, { available: true, models_writable: false }, undefined]) {
+    const env = await openedWith({ ...catalog(), installer });
+    const row = phoRow(env);
+    assert.equal(row.install, null);
+    assert.equal(row.command, `prepare ${PHO}`);
+  }
+});
+
+test("less free space than the model needs blocks the button and says how much is missing", async () => {
+  const env = await openedWith(catalog({ pho: { free_bytes: 2 * GB } }));
+  const { install } = phoRow(env);
+  assert.equal(install.blocked, true);
+  assert.deepEqual(install.blockedMessage.params, { required: { fmt: "bytes", value: 9 * GB }, free: { fmt: "bytes", value: 2 * GB } });
+  const unknown = await openedWith(catalog({ pho: { free_bytes: null } }));
+  assert.equal(phoRow(unknown).install.blocked, false);
+  assert.equal(phoRow(unknown).install.spaceLine.text, "Cần {required} trống.");
+});
+
+test("Cài đặt model posts once, shows queued at once, then follows the job until the model is ready", async () => {
+  const env = await openedWith(catalog());
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  assert.equal(phoRow(env).state, "installing");
+  assert.equal(phoRow(env).install.phase.text, "Đang chờ cài đặt…");
+  assert.equal(env.pending(env.is("POST", `/api/asr-models/${PHO}/install`)).length, 1);
+  await env.answer(env.is("POST", `/api/asr-models/${PHO}/install`), 202, { install: { state: "queued" } });
+  assert.deepEqual(env.live(), [1000]); // reading again while the job is active
+
+  env.fire(1000);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 3 * GB, bytes_total: 6 * GB } } }));
+  let row = phoRow(env);
+  assert.equal(row.install.phase.text, "Đang tải model…");
+  assert.equal(row.progress.ratio, 0.5);
+  assert.deepEqual(row.progress.detail.params, { done: { fmt: "bytes", value: 3 * GB }, total: { fmt: "bytes", value: 6 * GB } });
+  assert.deepEqual(env.live(), [1000]);
+
+  env.fire(1000);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { install: { state: "running", phase: "converting", bytes_done: 6 * GB, bytes_total: 6 * GB } } }));
+  row = phoRow(env);
+  assert.match(row.install.phase.text, /chuyển đổi/);
+  assert.equal(row.progress.ratio, null); // an unknown share is not drawn as a number
+
+  env.fire(1000);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { ready: true, reason: null, prepare_command: null, install: { state: "idle" } } }));
+  row = phoRow(env);
+  assert.deepEqual([row.state, row.status.text, row.install, row.command], ["ready", "Sẵn sàng", null, ""]);
+  assert.deepEqual(env.live(), []); // nothing left to wait for: polling stops by itself
+});
+
+test("a double click makes one request on screen and Hủy asks to stop the job", async () => {
+  const env = await openedWith(catalog());
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  assert.equal(env.pending(env.is("POST", "/install")).length, 1); // the second click asked for nothing
+  await env.answer(env.is("POST", "/install"), 202, { install: { state: "running", phase: "downloading", bytes_done: 0, bytes_total: 6 * GB } });
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  assert.equal(phoRow(env).install.cancelDisabled, true);
+  assert.equal(phoRow(env).install.phase.text, "Đang hủy…");
+  await env.answer(env.is("DELETE", `/api/asr-models/${PHO}/install`), 202, { install: { state: "cancelling" } });
+  env.fire(1000);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog());
+  assert.equal(phoRow(env).install.kind, "offer"); // the partial download is gone and it can be started again
+  assert.deepEqual(env.live(), []);
+});
+
+test("Hủy waits until the server has the job, so a job cannot start after it looked cancelled", async () => {
+  const env = await openedWith(catalog());
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  assert.equal(phoRow(env).install.cancelDisabled, true);
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  assert.equal(env.pending(env.is("DELETE", "/install")).length, 0);
+  assert.equal(env.pending(env.is("POST", "/install")).length, 1); // the create is still on its way
+  await env.answer(env.is("POST", "/install"), 202, { install: { state: "queued" } });
+  assert.equal(phoRow(env).install.cancelDisabled, false);
+  assert.deepEqual(env.live(), [1000]); // the job is known: its progress is being read
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  assert.equal(env.pending(env.is("DELETE", "/install")).length, 1);
+});
+
+test("a late reply to a create cannot undo the cancel that came after it", async () => {
+  const env = await openedWith(catalog());
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  const create = env.pending(env.is("POST", "/install"))[0];
+  // The dialog reopens, reads the job the server already has, and the user cancels it.
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } }));
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  assert.equal(phoRow(env).install.phase.text, "Đang hủy…");
+  env.store.dispatch({ type: "provider/asr-install-sent", response: { status: 202, body: { install: { state: "queued" } } }, meta: { id: PHO, mutation: 1 } });
+  assert.ok(create);
+  assert.equal(phoRow(env).install.phase.text, "Đang hủy…");
+  env.store.dispatch({ type: "provider/asr-install-refused", error: { body: { detail: { code: "gpu_required" } } }, meta: { id: PHO, mutation: 1 } });
+  assert.equal(phoRow(env).install.refusal, null);
+});
+
+test("a reply of a catalog read made before the click cannot undo the click", async () => {
+  const env = await openedWith(catalog({ pho: { install: { state: "idle" } } }));
+  env.store.dispatch({ type: "provider/asr-poll" });
+  const staleId = env.state().asr.request; // the read made before the click
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  // The runner aborts that read; if its answer still arrives, the id drops it.
+  env.store.dispatch({ type: "provider/asr-loaded", meta: { id: staleId }, response: { body: catalog() } });
+  assert.equal(phoRow(env).install.kind, "progress");
+});
+
+test("a failed install says what went wrong in plain words and offers Thử lại", async () => {
+  const messages = {
+    network: /Mất kết nối/,
+    disk_full: /Ổ đĩa đầy/,
+    integrity: /không hợp lệ/,
+    target_not_empty: /đã có file khác/,
+    models_not_writable: /không ghi được/,
+    interrupted: /gián đoạn/,
+    insufficient_disk: /Không đủ dung lượng: cần \{required\}, còn \{free\}/,
+    unheard_of: /gián đoạn/,
+  };
+  for (const [error, pattern] of Object.entries(messages)) {
+    const failed = { state: "failed", error, required_bytes: 9 * GB, free_bytes: 1 * GB };
+    const env = await openedWith(catalog({ pho: { install: failed } }));
+    const { install } = phoRow(env);
+    assert.equal(install.kind, "failed");
+    assert.match(install.message.text, pattern);
+    assert.deepEqual(env.live(), []); // a failure is final: no polling
+  }
+  // Thử lại is the same request as the first one.
+  const env = await openedWith(catalog({ pho: { install: { state: "failed", error: "network" } } }));
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  assert.equal(env.pending(env.is("POST", "/install")).length, 1);
+  assert.equal(phoRow(env).install.kind, "progress");
+});
+
+test("a refused install shows why, then reads the catalog again for the truth", async () => {
+  const env = await openedWith(catalog());
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  await env.answer(env.is("POST", "/install"), 409, { detail: { code: "model_ready" } });
+  assert.match(catalogCalls(env).at(-1).url, /asr-models/);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { ready: true, reason: null, prepare_command: null } }));
+  assert.equal(phoRow(env).state, "ready");
+
+  const down = await openedWith(catalog());
+  down.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  await down.fail(down.is("POST", "/install"));
+  await down.answer(down.is("GET", "/api/asr-models"), 200, catalog());
+  assert.match(phoRow(down).install.refusal.text, /Không gửi được yêu cầu/);
+  const withNotice = selectAsr(down.state().asr).rows.find((row) => row.id === PHO);
+  assert.equal(withNotice.install.kind, "offer");
+});
+
+test("polling reads only while Settings is open, and closing it stops the timer", async () => {
+  const env = await openedWith(catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } }));
+  assert.deepEqual(env.live(), [1000]);
+  env.store.dispatch({ type: "provider/dialog-closed" });
+  assert.deepEqual(env.live(), []);
+  // A poll that was already due does nothing once the dialog is closed.
+  const before = catalogCalls(env).length;
+  env.store.dispatch({ type: "provider/asr-poll" });
+  assert.equal(catalogCalls(env).length, before);
+  // Opening again reads again, and resumes polling while the job is still going.
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } }));
+  assert.deepEqual(env.live(), [1000]);
+});
+
+test("an idle catalog does not poll, and a failed poll keeps the rows on screen", async () => {
+  const env = await openedWith(catalog());
+  assert.deepEqual(env.live(), []);
+  const busy = await openedWith(catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } }));
+  busy.fire(1000);
+  await busy.fail(busy.is("GET", "/api/asr-models"));
+  assert.equal(busy.state().asr.status, "ready");
+  assert.equal(phoRow(busy).install.kind, "progress");
+  assert.deepEqual(busy.live(), [1000]); // and it tries again
+});
+
+test("a job found running when Settings opens is shown at once, and stays shown if the installer stops", async () => {
+  const running = { state: "running", phase: "verifying", bytes_done: 6 * GB, bytes_total: 6 * GB };
+  const env = await openedWith(catalog({ pho: { install: running } }));
+  assert.match(phoRow(env).install.phase.text, /kiểm tra file/);
+  assert.equal(phoRow(env).state, "installing");
+  const stopped = await openedWith(catalog({ pho: { install: running }, installer: { available: false, models_writable: false } }));
+  assert.equal(phoRow(stopped).install, null); // no installer: back to the command, not a bar that never moves
+  assert.equal(phoRow(stopped).command, `prepare ${PHO}`);
+  assert.deepEqual(stopped.live(), []); // and nothing keeps reading for a service that is gone
+});

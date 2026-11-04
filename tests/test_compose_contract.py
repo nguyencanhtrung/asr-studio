@@ -62,6 +62,72 @@ def test_compose_separates_services_volumes_and_loopback_publish():
     assert worker["healthcheck"]
 
 
+def test_only_the_model_installer_has_the_network_and_a_writable_models_folder():
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    services = compose["services"]
+    installer = services["model-installer"]
+    app, worker = services["app"], services["worker"]
+
+    # app and worker stay offline and read-only on /models.
+    for service in (app, worker):
+        assert service["environment"]["HF_HUB_OFFLINE"] == "1"
+        assert service["environment"]["TRANSFORMERS_OFFLINE"] == "1"
+        assert [m for m in service["volumes"] if ":/models" in m] == [
+            "${ASR_MODEL_HOST_PATH:-./models}:/models:ro"
+        ]
+        assert "model-install:/var/lib/asr-studio/install" not in worker["volumes"]
+    assert "model-install:/var/lib/asr-studio/install" in app["volumes"]
+
+    # The installer is the only writer of /models and sees none of the application's records.
+    assert installer["image"] == app["image"]
+    assert [m for m in installer["volumes"] if ":/models" in m] == [
+        "${ASR_MODEL_HOST_PATH:-./models}:/models:rw"
+    ]
+    assert sorted(installer["volumes"]) == sorted(
+        ["model-install:/var/lib/asr-studio/install", "${ASR_MODEL_HOST_PATH:-./models}:/models:rw"]
+    )
+    environment = installer["environment"]
+    for name in ("ASR_DATA_DIR", "ASR_AUTH_DIR", "ASR_PROVIDER_DIR", "HF_TOKEN"):
+        assert name not in environment
+    assert environment["HF_HUB_OFFLINE"] == "0"
+    assert environment["TRANSFORMERS_OFFLINE"] == "0"
+    assert environment["HF_HOME"] == "/tmp/huggingface"
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+        assert name in environment
+    assert installer["command"] == ["python", "-m", "asr_studio.model_installer"]
+    assert installer["environment"]["HF_HUB_DISABLE_XET"] == "1"  # its cache would fill the tmpfs
+    assert installer["user"] == "${ASR_MODEL_UID:-1000}:${ASR_MODEL_GID:-1000}"
+    assert installer["read_only"] is True
+    assert installer["cap_drop"] == ["ALL"]
+    assert installer["security_opt"] == ["no-new-privileges:true"]
+    assert "ports" not in installer and "gpus" not in installer
+    assert "depends_on" not in installer
+    assert set(compose["volumes"]) == {"data", "auth", "provider", "model-install"}
+    # Nothing but the installer may name a writable /models.
+    writers = [
+        name
+        for name, service in services.items()
+        if any(m.endswith(":/models:rw") for m in service.get("volumes", []))
+    ]
+    assert writers == ["model-installer"]
+
+
+def test_start_script_hands_the_installer_the_models_folder_owner():
+    script = (ROOT / "scripts/start.sh").read_text(encoding="utf-8")
+
+    assert "ASR_MODEL_UID=${ASR_MODEL_UID:-$(id -u)}" in script
+    assert "ASR_MODEL_GID=${ASR_MODEL_GID:-$(id -g)}" in script
+    assert "export ASR_MODEL_UID ASR_MODEL_GID" in script
+    assert script.index("export ASR_MODEL_UID") < script.index("compose_base config")
+
+
+def test_install_volume_is_open_to_both_services_users():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "/var/lib/asr-studio/install" in dockerfile
+    assert "chmod 0777 /var/lib/asr-studio/install" in dockerfile
+
+
 def test_provider_volume_is_created_for_runtime_uid_and_default_server_suppresses_access_logs():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "/var/lib/asr-studio/provider" in dockerfile

@@ -4,11 +4,13 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import huggingface_hub
 import pytest
 
-from asr_studio import __version__, cli
+from asr_studio import __version__, cli, model_installer
+from asr_studio.asr_models import CATALOG
 from asr_studio.cli import main
 from asr_studio.diarization_runner import (
     DIARIZATION_ERROR_MESSAGES,
@@ -435,25 +437,58 @@ def test_model_prepare_downloads_the_automatically_selected_cpu_model(
     )
     downloaded = []
 
-    def download(*, repo_id, local_dir):
-        downloaded.append((repo_id, local_dir))
+    def download(*, repo_id, revision, local_dir):
+        downloaded.append((repo_id, revision, local_dir))
         _prepared_model(local_dir)
 
     monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
 
     assert main(["model", "prepare"]) == 0
-    assert downloaded == [("Systran/faster-whisper-small", target.resolve())]
+    assert downloaded == [("Systran/faster-whisper-small", None, target.resolve())]
     assert "ready" in capsys.readouterr().out
+
+
+def test_model_prepare_keeps_the_gpu_default_on_its_pinned_revision(tmp_path, monkeypatch):
+    target = tmp_path / "whisper-large-v3"
+    monkeypatch.setenv("ASR_DEVICE", "auto")
+    monkeypatch.setenv("ASR_GPU_MODEL_PATH", str(target))
+    monkeypatch.delenv("ASR_MODEL_PATH", raising=False)
+    monkeypatch.delenv("ASR_COMPUTE_TYPE", raising=False)
+    monkeypatch.setattr(cli.ctranslate2, "get_cuda_device_count", lambda: 1)
+    monkeypatch.setattr(
+        cli.ctranslate2, "get_supported_compute_types", lambda _device: {"float16", "int8"}
+    )
+    monkeypatch.setattr(cli.ctypes, "CDLL", lambda _name: object(), raising=False)
+    downloaded = []
+
+    def download(*, repo_id, revision, local_dir):
+        downloaded.append((repo_id, revision))
+        _prepared_model(local_dir)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
+
+    assert main(["model", "prepare"]) == 0
+    assert downloaded == [("Systran/faster-whisper-large-v3", CATALOG["whisper-large-v3"].revision)]
+
+
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    """The three catalog models need about 20 GB; these tests download nothing."""
+    monkeypatch.setattr(
+        model_installer.shutil, "disk_usage", lambda _path: SimpleNamespace(free=10**12)
+    )
 
 
 def test_prepare_converts_phowhisper_and_publishes_only_a_complete_model(
     tmp_path, monkeypatch, capsys
 ):
     target = tmp_path / "pho-whisper-large"
+    asr_model = "pho-whisper-large"
     monkeypatch.setenv("ASR_PHOWHISPER_MODEL_PATH", str(target))
     downloaded = []
 
-    def download(*, repo_id, local_dir):
+    def download(*, repo_id, revision, local_dir):
+        assert revision == CATALOG[asr_model].revision
         downloaded.append(repo_id)
         Path(local_dir).mkdir()
 
@@ -487,7 +522,7 @@ def test_prepare_of_an_optional_model_never_replaces_existing_files(tmp_path, mo
     monkeypatch.setattr(
         huggingface_hub,
         "snapshot_download",
-        lambda *, repo_id, local_dir: downloaded.append(repo_id),
+        lambda *, repo_id, revision, local_dir: downloaded.append(repo_id),
     )
 
     assert main(["model", "prepare", "--asr-model", "pho-whisper-large"]) == 1
@@ -502,10 +537,12 @@ def test_prepare_of_an_optional_model_never_replaces_existing_files(tmp_path, mo
 
 def test_prepare_downloads_qwen_without_touching_the_hardware_default(tmp_path, monkeypatch):
     target = tmp_path / "qwen3-asr-1.7b"
+    asr_model = "qwen3-asr-1.7b"
     monkeypatch.setenv("ASR_QWEN_MODEL_PATH", str(target))
     downloaded = []
 
-    def download(*, repo_id, local_dir):
+    def download(*, repo_id, revision, local_dir):
+        assert revision == CATALOG[asr_model].revision
         downloaded.append(repo_id)
         Path(local_dir).mkdir()
         (Path(local_dir) / "config.json").write_text(

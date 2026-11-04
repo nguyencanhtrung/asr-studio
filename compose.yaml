@@ -34,6 +34,7 @@ services:
       ASR_DATA_DIR: /var/lib/asr-studio/data
       ASR_AUTH_DIR: /var/lib/asr-studio/auth
       ASR_PROVIDER_DIR: /var/lib/asr-studio/provider
+      ASR_INSTALL_DIR: /var/lib/asr-studio/install
       ASR_PUBLIC_URL: ${ASR_PUBLIC_URL:-http://127.0.0.1:${ASR_PORT:-8765}}
       ASR_CHATGPT_CALLBACK_URL: ${ASR_CHATGPT_CALLBACK_URL:-}
       ASR_COOKIE_SECURE: ${ASR_COOKIE_SECURE:-false}
@@ -54,6 +55,7 @@ services:
       - data:/var/lib/asr-studio/data
       - auth:/var/lib/asr-studio/auth
       - provider:/var/lib/asr-studio/provider
+      - model-install:/var/lib/asr-studio/install
       - "${ASR_MODEL_HOST_PATH:-./models}:/models:ro"
     healthcheck:
       test: ["CMD", "python", "-m", "asr_studio.cli", "health"]
@@ -109,7 +111,46 @@ services:
       retries: 3
     stop_grace_period: 20s
 
+  # The only service with the network and a writable /models. It mounts neither data, auth nor
+  # provider, so it sees no recording, transcript or credential; app asks it for a model through
+  # the small model-install volume (ADR 0012).
+  model-installer:
+    image: ${ASR_IMAGE:-asr-studio:local}
+    command: ["python", "-m", "asr_studio.model_installer"]
+    init: true
+    restart: unless-stopped
+    read_only: true
+    # /models is a host directory: the installer writes it as the user that owns it.
+    user: "${ASR_MODEL_UID:-1000}:${ASR_MODEL_GID:-1000}"
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      ASR_INSTALL_DIR: /var/lib/asr-studio/install
+      ASR_GPU_MODEL_PATH: ${ASR_GPU_MODEL_PATH:-/models/whisper-large-v3}
+      ASR_PHOWHISPER_MODEL_PATH: ${ASR_PHOWHISPER_MODEL_PATH:-/models/pho-whisper-large}
+      ASR_QWEN_MODEL_PATH: ${ASR_QWEN_MODEL_PATH:-/models/qwen3-asr-1.7b}
+      HF_HOME: /tmp/huggingface
+      # Xet keeps a chunk cache under HF_HOME, and /tmp is memory: download over plain HTTP.
+      HF_HUB_DISABLE_XET: "1"
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
+      DO_NOT_TRACK: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+    volumes:
+      - model-install:/var/lib/asr-studio/install
+      - "${ASR_MODEL_HOST_PATH:-./models}:/models:rw"
+    stop_grace_period: 15s
+
 volumes:
   data:
   auth:
   provider:
+  model-install:

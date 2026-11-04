@@ -138,21 +138,49 @@ function renderLauncher(d, s) {
   setProp(button, "title", tr(launcher.title));
 }
 
-// One row per model. The list is rebuilt only when what it shows changed, so a focused copy button survives.
+// One row per model. The list is rebuilt only when what it shows changed, so a focused button survives.
+// Progress numbers and copy feedback change in place; a rebuild would drop the focus from Hủy every second.
 function renderAsr(asr) {
   const view = selectAsr(asr);
   setProp(asrEls.status, "textContent", tr(view.text));
   setProp(asrEls.defaultText, "hidden", !view.defaultText);
   setProp(asrEls.defaultText, "textContent", tr(view.defaultText));
-  const signature = JSON.stringify(view.rows.map(({ copy, ...row }) => row));
+  const signature = JSON.stringify(view.rows.map(({ copy, progress, ...row }) => ({ ...row, progressKind: progress ? (progress.ratio === null ? "indeterminate" : "bar") : null })));
   if (asrEls.list.dataset.rows !== signature) {
     asrEls.list.dataset.rows = signature;
+    // A click on an install button replaces it: remember whose it was, so the focus can follow.
+    const held = document.activeElement?.closest?.("#asr-models [data-action]");
+    if (held) asrEls.list.dataset.focusRow = held.closest("[data-model]")?.dataset.model ?? "";
     asrEls.list.replaceChildren(...view.rows.map(asrRow));
   }
-  // The copy feedback changes without a rebuild, so the focused button stays.
+  restoreAsrFocus();
   for (const row of view.rows) {
-    const result = asrEls.list.querySelector(`[data-model="${row.id}"] .asr-command-result`);
+    const item = asrEls.list.querySelector(`[data-model="${row.id}"]`);
+    const result = item.querySelector(".asr-command-result");
     if (result) setProp(result, "textContent", tr(row.copy));
+    const bar = item.querySelector(".asr-progress");
+    if (bar && row.progress) {
+      if (row.progress.ratio !== null) setProp(bar, "value", row.progress.ratio);
+      setProp(item.querySelector(".asr-progress-detail"), "textContent", tr(row.progress.detail));
+    }
+  }
+}
+
+// The focus went with the button that was replaced (Cài đặt model, Hủy, Thử lại). It goes to the button that
+// took its place as soon as one can take it, unless the user has moved on by then.
+// The row id waits in the list's own dataset: a view keeps no module state (ADR 0010).
+function restoreAsrFocus() {
+  const row = asrEls.list.dataset.focusRow;
+  if (!row) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && active.isConnected) {
+    asrEls.list.dataset.focusRow = "";
+    return;
+  }
+  const button = asrEls.list.querySelector(`[data-model="${row}"] button[data-action]:not(:disabled)`);
+  if (button) {
+    button.focus();
+    asrEls.list.dataset.focusRow = "";
   }
 }
 
@@ -177,8 +205,52 @@ function asrRow(row) {
     guidance.textContent = tr(row.guidance);
     item.append(guidance);
   }
+  if (row.install) item.append(asrInstall(row));
   if (row.command) item.append(asrCommand(row));
   return item;
+}
+
+function asrLine(className, text, role) {
+  const line = document.createElement("p");
+  line.className = className;
+  line.textContent = tr(text);
+  if (role) line.setAttribute("role", role);
+  return line;
+}
+
+function asrButton(id, action, label, kind, disabled = false) {
+  const button = document.createElement("button");
+  button.className = kind;
+  button.type = "button";
+  button.dataset.action = action;
+  // Hủy stays focusable while it waits: a disabled button would drop the keyboard focus to the page.
+  if (action === "cancel") button.setAttribute("aria-disabled", String(disabled));
+  else button.disabled = disabled;
+  button.textContent = label;
+  button.addEventListener("click", () => dispatch({ type: `provider/asr-${action}-requested`, id }));
+  return button;
+}
+
+// The install offer, the running job with its bar and Hủy, or the failure with Thử lại.
+function asrInstall({ install, progress, id }) {
+  const wrap = document.createElement("div");
+  wrap.className = "asr-install";
+  if (install.kind === "progress") {
+    wrap.append(asrLine("asr-install-phase", install.phase, "status"));
+    const bar = document.createElement("progress");
+    bar.className = "task-progress-bar asr-progress";
+    bar.max = 1;
+    if (progress.ratio !== null) bar.value = progress.ratio;
+    bar.setAttribute("aria-label", tr(install.phase));
+    const detail = asrLine("asr-progress-detail", progress.detail);
+    wrap.append(bar, detail, asrButton(id, "cancel", t("Hủy"), "secondary-button", install.cancelDisabled));
+  } else {
+    if (install.kind === "failed") wrap.append(asrLine("asr-install-error", install.message, "alert"));
+    if (install.kind === "offer") wrap.append(asrLine(install.blocked ? "asr-install-error" : "asr-install-space", install.blocked ? install.blockedMessage : install.spaceLine));
+    wrap.append(asrButton(id, "install", install.kind === "failed" ? t("Thử lại") : t("Cài đặt model"), "primary-button", install.blocked));
+  }
+  if (install.refusal) wrap.append(asrLine("asr-install-error", install.refusal, "alert"));
+  return wrap;
 }
 
 function asrBadge(kind, text) {
@@ -337,6 +409,8 @@ settingsTabs.addEventListener("keydown", (event) => {
 });
 
 els.close.addEventListener("click", () => els.dialog.close());
+// Esc, the close button and a click outside all end here: stop reading the install state.
+els.dialog.addEventListener("close", () => dispatch({ type: "provider/dialog-closed" }));
 els.dialog.addEventListener("click", (event) => {
   if (event.target === els.dialog) els.dialog.close();
 });

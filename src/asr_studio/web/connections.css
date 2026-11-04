@@ -717,6 +717,50 @@
   color: var(--warning);
 }
 
+.asr-model[data-state="installing"] .asr-badge[data-kind="status"] {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* The install block sits under the model's note: one line of space or phase, the bar, the action. */
+.asr-install .secondary-button[aria-disabled="true"],
+.asr-install .secondary-button[aria-disabled="true"]:hover {
+  border-color: var(--hairline);
+  background: var(--surface);
+  color: var(--ink-3);
+  cursor: not-allowed;
+}
+
+.asr-install {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.asr-install > p {
+  margin: 0;
+}
+
+.asr-install .asr-install-error {
+  color: var(--danger);
+}
+
+.asr-progress {
+  width: 100%;
+}
+
+.asr-progress-detail {
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.asr-progress-detail:empty {
+  display: none;
+}
+
 .asr-command {
   margin-top: 10px;
 }

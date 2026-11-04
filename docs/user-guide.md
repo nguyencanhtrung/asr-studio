@@ -26,17 +26,17 @@ rebinding.
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--source` (default) | Builds `ASR_IMAGE` from the checkout.                                                                                                                    |
 | `--pull`             | Pulls `ASR_IMAGE`. The image must have a version tag (`:v0.1.3`) or a digest (`@sha256:...`). The script rejects `local`, `latest` and `edge`. |
-| `--offline`          | Uses a local image and local models. It does not build, pull or download.                                                                                  |
+| `--offline`          | Uses a local image and local models. It does not build, pull or download, and it leaves the model installer stopped, so **Settings → ASR Model** shows the prepare command.                                                                                  |
 
-App and worker always use the same `ASR_IMAGE`. Before it starts the services, the script:
+App, worker and model installer always use the same `ASR_IMAGE`. Before it starts the services, the script:
 
 1. Compares the app version and schema version in the image with the checkout.
 2. Compares the image label `org.opencontainers.image.revision` with the checkout commit. A
    mismatch stops the script. An `unknown` revision gives only a warning. A checkout has a
    revision only when its directory is the root of a git repository.
-3. Downloads a missing ASR model (`--source` and `--pull` only). Only the `model prepare` step
-   can access the model hub.
-4. Waits until both services are healthy.
+3. Downloads a missing default ASR model (`--source` and `--pull` only). Only the `model prepare`
+   step and the `model-installer` service download from the model hub.
+4. Waits until the services are healthy.
 5. Checks that the worker runs and that both models are readable through the read-only mount.
 
 After these checks pass, an interactive terminal shows the access link and a QR code. In a pipe,
@@ -225,11 +225,26 @@ Each model needs valid `model.bin`, `config.json`, `tokenizer.json` and
 
 **Settings → ASR Model** lists Whisper large-v3, PhoWhisper-large and Qwen3-ASR-1.7B as the app
 sees them now. A badge marks the model the system default (**Automatic**) uses on this machine. When that model
-is outside this list, as on a CPU-only machine, a line above the list names it instead. Each row says **Ready**, **Not prepared**, **Needs an NVIDIA GPU** or **Not checked** (no
-worker is running). For a model that is not prepared, the row shows the command that prepares it
-and a **Copy** button. Run it in the app folder; it only downloads the model and reads no
-recording. The dialog reads the list each time it opens, so reopen it after the command finishes.
-Qwen3-ASR says so when the worker runs on CPU. Settings never starts a download.
+is outside this list, as on a CPU-only machine, a line above the list names it instead. Each row says **Ready**, **Not prepared**, **Installing**, **Needs an NVIDIA GPU** or **Not checked** (no
+worker is running). Qwen3-ASR says so when the worker runs on CPU, before anything is downloaded.
+
+For a model that is not prepared, the row shows how much free space it needs and how much is
+left, and **Install model**. The model downloads on this machine and no recording is sent
+anywhere. While it runs the row shows a progress bar with the bytes received, or the converting
+step for PhoWhisper (a few minutes, with no percentage). **Cancel** stops it and removes the
+partial download. When it finishes, the row says **Ready** and the model can be chosen for a
+new run at once, with no restart. You can install while a task is transcribing. If it fails,
+the row says why (no network, not enough space, a damaged download, a model folder that already
+holds other files) and **Try again** starts it over. Restarting the services in the middle ends
+the job as interrupted; start it again.
+
+Install needs the `model-installer` service, which `./scripts/start.sh` starts. It is the only
+service that downloads models and writes `./models`; it does not mount your recordings,
+transcripts or sign-in data. Behind a proxy, set `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in
+`.env`. It writes `./models` as the user that owns it, so set `ASR_MODEL_UID` and
+`ASR_MODEL_GID` if you start Compose without `start.sh`. Only the three models above can be
+installed; none needs a token. If the service is not running or cannot write `./models`, the row
+shows the command to copy, as below. The dialog reads progress only while it is open.
 
 ### Choose a model for one run
 
@@ -248,9 +263,9 @@ selector keeps your choice while the page stays open; a new page starts on **Aut
 These results come from a few real meetings without a reference transcript, so treat them as a
 starting point and compare on your own recordings.
 
-The two optional models are not downloaded at setup. An unprepared model cannot start a task, and
-the page shows this command for it. Run it in the application folder, then reload the page. It
-downloads model files only and sends no recording. The worker does not need a restart:
+The two optional models are not downloaded at setup. An unprepared model cannot start a task. Install it
+from Settings, or without the installer run this command in the application folder and reload the
+page. It downloads model files only and sends no recording. The worker does not need a restart:
 
 ```sh
 docker compose -f compose.yaml -f compose.model-prepare.yaml run --pull never --rm --no-deps \

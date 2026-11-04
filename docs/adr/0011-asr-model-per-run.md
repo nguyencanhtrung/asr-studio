@@ -8,7 +8,7 @@ Một model không thắng trên mọi đoạn của cùng một cuộc họp: �
 
 **Danh mục cố định, không phải đường dẫn tự do.** Client gửi `asr_model` là `auto` hoặc một ID trong `asr_models.py`; server mới biết đường dẫn, engine và compute type. `auto` giữ đúng hành vi cũ, là model worker chọn theo phần cứng lúc khởi động, không suy từ ngôn ngữ gợi ý. Dữ liệu chưa đủ để viết luật tự chọn, vì model thắng theo từng đoạn chứ không theo từng ngôn ngữ. Lựa chọn không ghi vào `worker.runtime.json`.
 
-**Model nào cũng phải chuẩn bị trước.** Readiness được kiểm tra khi đọc cuộc họp và lại kiểm tra khi nhận tác vụ. Server từ chối model chưa chuẩn bị bằng mã `model_unavailable`, còn trang hiện lệnh `model prepare --asr-model <id>`. Lệnh này là bước duy nhất dùng mạng, chỉ tải trọng số và không đọc bản ghi; runner vẫn chạy offline với `local_files_only`, không bật `trust_remote_code`.
+**Model nào cũng phải chuẩn bị trước.** Readiness được kiểm tra khi đọc cuộc họp và lại kiểm tra khi nhận tác vụ. Server từ chối model chưa chuẩn bị bằng mã `model_unavailable`, còn trang hiện lệnh `model prepare --asr-model <id>`. Lệnh này chỉ tải trọng số và không đọc bản ghi; [ADR 0012](0012-model-installer-network-boundary.md) thêm cách cài từ Cài đặt bằng một service riêng có mạng, còn `app` và `worker` vẫn offline; runner vẫn chạy offline với `local_files_only`, không bật `trust_remote_code`.
 
 **Ba cách biến âm thanh thành đoạn.**
 

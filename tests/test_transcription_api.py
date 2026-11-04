@@ -187,7 +187,12 @@ async def test_asr_models_route_requires_auth_and_matches_meeting_choices(tmp_pa
             meeting = await client.get(f"/api/meetings/{meeting_id}", headers=headers)
             assert catalog.status_code == 200
             assert meeting.status_code == 200
-            assert catalog.json() == {"asr_models": meeting.json()["transcription"]["asr_models"]}
+            # The settings catalog adds install state and sizes to what a meeting offers.
+            install_keys = {"install", "required_bytes", "free_bytes"}
+            assert [
+                {k: v for k, v in choice.items() if k not in install_keys}
+                for choice in catalog.json()["asr_models"]
+            ] == meeting.json()["transcription"]["asr_models"]
 
 
 async def test_task_route_persists_per_run_language_and_checks_idempotency(tmp_path, monkeypatch):

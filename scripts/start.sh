@@ -49,6 +49,11 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# The model installer writes /models, a host directory, as the user that owns it.
+ASR_MODEL_UID=${ASR_MODEL_UID:-$(id -u)}
+ASR_MODEL_GID=${ASR_MODEL_GID:-$(id -g)}
+export ASR_MODEL_UID ASR_MODEL_GID
+
 compose_base() {
     docker compose -f compose.yaml "$@"
 }
@@ -65,11 +70,9 @@ compose_runtime() {
 compose_environment=$(compose_base config --environment)
 compose_images=$(compose_base config --images)
 selected_image=$(printf '%s\n' "$compose_images" | sed -n '1p')
-second_image=$(printf '%s\n' "$compose_images" | sed -n '2p')
-extra_image=$(printf '%s\n' "$compose_images" | sed -n '3p')
-if [ -z "$selected_image" ] || [ "$selected_image" != "$second_image" ] || \
-    [ -n "$extra_image" ]; then
-    fail "Compose app and worker must resolve to the same single ASR_IMAGE."
+distinct_images=$(printf '%s\n' "$compose_images" | sort -u | grep -c . || true)
+if [ -z "$selected_image" ] || [ "$distinct_images" -ne 1 ]; then
+    fail "Compose app, worker and model-installer must resolve to the same single ASR_IMAGE."
 fi
 
 source_version=$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' src/asr_studio/__init__.py)
@@ -265,7 +268,13 @@ else
         worker python -m asr_studio.cli model prepare
 fi
 compose_runtime run --pull never --rm --no-deps worker python -m asr_studio.cli runtime check
-compose_runtime up --pull never --no-build --detach --wait \
+# Offline means no download: the one service that can make one stays stopped, even for a queued job.
+installer_scale=""
+if [ "$mode" = offline ]; then
+    installer_scale="--scale model-installer=0"
+fi
+# shellcheck disable=SC2086
+compose_runtime up --pull never --no-build --detach --wait $installer_scale \
     --wait-timeout "${ASR_STARTUP_TIMEOUT:-120}"
 compose_runtime exec -T app python -m asr_studio.cli installation check
 if [ -t 1 ]; then
