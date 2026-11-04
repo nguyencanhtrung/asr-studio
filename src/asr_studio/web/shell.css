@@ -73,7 +73,7 @@ textarea:focus-visible {
 .app-frame {
   display: grid;
   min-height: 100vh;
-  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-columns: 17rem minmax(0, 1fr);
   align-items: start;
 }
 
@@ -88,7 +88,7 @@ textarea:focus-visible {
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
-  padding: 22px 16px var(--sidebar-padding-bottom);
+  padding: 22px 16px 0;
   scroll-padding-bottom: calc(
     var(--sidebar-footer-height) + var(--sidebar-padding-bottom) + var(--sidebar-footer-clearance)
   );
@@ -135,7 +135,7 @@ textarea:focus-visible {
 
 .brand-wordmark {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 400;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -149,9 +149,9 @@ textarea:focus-visible {
 .upload-state-label {
   color: var(--teal);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
   font-weight: 650;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.08em;
 }
 
 .primary-button svg {
@@ -177,7 +177,7 @@ textarea:focus-visible {
   margin: 0;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 660;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -193,7 +193,7 @@ textarea:focus-visible {
   max-width: 170px;
   margin: 15px 10px;
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -206,7 +206,7 @@ textarea:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.45;
   text-decoration: none;
   text-overflow: ellipsis;
@@ -224,18 +224,18 @@ textarea:focus-visible {
   z-index: 1;
   display: flex;
   flex-shrink: 0;
-  min-height: var(--sidebar-footer-height);
+  min-height: calc(var(--sidebar-footer-height) + var(--sidebar-padding-bottom));
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
   margin-top: auto;
-  padding-top: 10px;
+  padding: 10px 0 var(--sidebar-padding-bottom);
   border-top: 1px solid var(--hairline);
   background: var(--surface-subtle);
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .github-link {
@@ -303,7 +303,7 @@ textarea:focus-visible {
   overflow: hidden;
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 27px;
+  font-size: var(--text-title-lg);
   font-weight: 500;
   letter-spacing: -0.035em;
   text-overflow: ellipsis;
@@ -334,7 +334,7 @@ textarea:focus-visible {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 680;
   transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
 }
@@ -453,7 +453,7 @@ textarea:focus-visible {
 .meeting-error h2 {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: clamp(24px, 3vw, 34px);
+  font-size: clamp(1.5rem, 3vw, 2.125rem);
   font-weight: 500;
   letter-spacing: -0.035em;
 }
@@ -462,7 +462,7 @@ textarea:focus-visible {
   max-width: 520px;
   margin: 12px 0 20px;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.75;
 }
 
@@ -477,7 +477,7 @@ textarea:focus-visible {
   gap: 8px;
   margin: 19px 0 0;
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .local-note-mark {
@@ -503,14 +503,14 @@ textarea:focus-visible {
 .principle-heading {
   margin: 0 0 8px;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 600;
 }
 
 .principle-intro > p:last-child {
   margin: 0;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.5;
 }
 
@@ -531,7 +531,7 @@ textarea:focus-visible {
   background: var(--accent-soft);
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-small);
   place-items: center;
 }
 
@@ -543,14 +543,14 @@ textarea:focus-visible {
 
 .principle-card h3 {
   margin: 0 0 4px;
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 680;
 }
 
 .principle-card p {
   margin: 0;
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.5;
 }
 
@@ -574,7 +574,7 @@ textarea:focus-visible {
 .meeting-loading {
   gap: 13px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .meeting-loading p {
@@ -599,20 +599,20 @@ textarea:focus-visible {
 }
 
 .meeting-error h2 {
-  font-size: 27px;
+  font-size: var(--text-title-lg);
 }
 
 .meeting-error > p {
   max-width: 500px;
   margin: 0;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--text-control);
   line-height: 1.65;
 }
 
 .text-link {
   color: var(--teal);
-  font-size: 12px;
+  font-size: var(--text-control);
   text-underline-offset: 4px;
 }
 
@@ -644,7 +644,7 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
   margin: 0;
   font-family: var(--font-serif);
-  font-size: clamp(26px, 3vw, 36px);
+  font-size: clamp(1.625rem, 3vw, 2.25rem);
   font-weight: 500;
   letter-spacing: -0.035em;
   line-height: 1.2;
@@ -671,7 +671,7 @@ textarea:focus-visible {
   margin-bottom: 7px;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .metadata-item dd {
@@ -679,7 +679,7 @@ textarea:focus-visible {
   margin: 0;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 580;
 }
 
@@ -704,7 +704,7 @@ textarea:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 580;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -758,7 +758,7 @@ textarea:focus-visible {
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 620;
   line-height: 1.4;
   text-align: left;
@@ -784,7 +784,7 @@ textarea:focus-visible {
 .meeting-tab-count {
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 400;
 }
 
@@ -826,7 +826,7 @@ textarea:focus-visible {
 
 .audio-heading h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-reading);
   font-weight: 650;
 }
 
@@ -839,7 +839,7 @@ textarea:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
   white-space: nowrap;
 }
 
@@ -879,14 +879,14 @@ textarea:focus-visible {
 .audio-hint {
   margin: 0;
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.5;
 }
 
 .meeting-language-reminder {
   margin: 17px 2px 0;
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -898,7 +898,7 @@ textarea:focus-visible {
   margin-top: auto;
   padding-top: 22px;
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .footnote-line {
@@ -944,7 +944,7 @@ textarea:focus-visible {
 .dialog-header h2 {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 26px;
+  font-size: var(--text-title-lg);
   font-weight: 500;
   letter-spacing: -0.03em;
 }
@@ -988,7 +988,7 @@ textarea:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -1022,7 +1022,7 @@ textarea:focus-visible {
 .field-group > label,
 .language-field legend {
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 640;
 }
 
@@ -1033,13 +1033,13 @@ textarea:focus-visible {
 .optional-mark {
   margin-left: 5px;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
   font-weight: 450;
 }
 
 .section-note {
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .file-drop {
@@ -1112,13 +1112,13 @@ textarea:focus-visible {
 
 .drop-copy strong {
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 640;
 }
 
 .drop-copy > span {
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
@@ -1127,7 +1127,7 @@ textarea:focus-visible {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   color: var(--accent);
-  font-size: 9px;
+  font-size: var(--text-control);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1154,7 +1154,7 @@ textarea:focus-visible {
   background: var(--accent-soft);
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   place-items: center;
 }
 
@@ -1169,7 +1169,7 @@ textarea:focus-visible {
 .selected-file-copy strong {
   overflow: hidden;
   color: var(--ink);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1178,7 +1178,7 @@ textarea:focus-visible {
 .selected-file-copy span {
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .text-button {
@@ -1188,7 +1188,7 @@ textarea:focus-visible {
   background: transparent;
   color: var(--teal);
   cursor: pointer;
-  font-size: 9px;
+  font-size: var(--text-control);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -1197,7 +1197,7 @@ textarea:focus-visible {
 .file-error {
   margin: 8px 1px 0;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
   line-height: 1.45;
 }
 
@@ -1230,7 +1230,7 @@ textarea:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--surface-subtle);
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--text-control);
 }
 
 .field-group input::placeholder {
@@ -1244,7 +1244,7 @@ textarea:focus-visible {
 .field-help {
   margin: -2px 0 0;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .field-row {
@@ -1275,7 +1275,7 @@ textarea:focus-visible {
   background: var(--surface-subtle);
   color: var(--ink-2);
   cursor: pointer;
-  font-size: 10px;
+  font-size: var(--text-label);
   transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
 }
 
@@ -1300,7 +1300,7 @@ textarea:focus-visible {
   gap: 8px;
   color: var(--ink);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 600;
 }
 
@@ -1329,7 +1329,7 @@ textarea:focus-visible {
   background: var(--surface-subtle);
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-control);
 }
 
 .create-asr-model select:focus-visible {
@@ -1401,20 +1401,20 @@ textarea:focus-visible {
 .upload-state-label {
   margin: 0 0 4px;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .workflow-state {
   margin: 0;
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.45;
 }
 
 .state-label {
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
   letter-spacing: 0.08em;
   text-align: right;
 }
@@ -1431,13 +1431,13 @@ textarea:focus-visible {
   justify-content: space-between;
   margin-bottom: 6px;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .progress-heading span:last-child {
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 #upload-progress {
@@ -1471,7 +1471,7 @@ textarea:focus-visible {
 .create-guidance {
   margin: 8px 0 0;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
   line-height: 1.45;
 }
 
@@ -1494,7 +1494,7 @@ textarea:focus-visible {
   border-radius: var(--radius-md);
   background: var(--danger-soft);
   color: var(--danger);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.55;
 }
 
@@ -1518,7 +1518,7 @@ textarea:focus-visible {
 
 @media (max-width: 980px) {
   .app-frame {
-    grid-template-columns: 208px minmax(0, 1fr);
+    grid-template-columns: 14rem minmax(0, 1fr);
   }
 
   /* The wordmark and theme toggle must fit the narrower sidebar, which now scrolls and clips. */
@@ -1619,7 +1619,7 @@ textarea:focus-visible {
 
   .workspace-header h1 {
     max-width: 46vw;
-    font-size: 22px;
+    font-size: var(--text-title);
   }
 
   .header-actions {
@@ -1638,7 +1638,7 @@ textarea:focus-visible {
 
   .header-create {
     padding: 0 9px;
-    font-size: 10px;
+    font-size: var(--text-control);
   }
 
   .header-create svg {
@@ -1652,7 +1652,7 @@ textarea:focus-visible {
 
   .welcome-copy {
     max-width: 440px;
-    font-size: 12px;
+    font-size: var(--text-control);
   }
 
   .language-principle {
@@ -1694,7 +1694,7 @@ textarea:focus-visible {
   .meeting-tab {
     flex: 1 1 0;
     padding: 8px 10px;
-    font-size: 12px;
+    font-size: var(--text-control);
   }
 
   .audio-panel {
@@ -1740,12 +1740,12 @@ textarea:focus-visible {
   }
 
   .dialog-header h2 {
-    font-size: 23px;
+    font-size: var(--text-title);
   }
 
   .dialog-promise {
     margin: 0 17px;
-    font-size: 10px;
+    font-size: var(--text-label);
   }
 
   .dialog-content {
@@ -1782,21 +1782,21 @@ textarea:focus-visible {
   }
 
   .drop-copy strong {
-    font-size: 10px;
+    font-size: var(--text-label);
   }
 
   .drop-copy > span {
-    font-size: 9px;
+    font-size: var(--text-label);
   }
 }
 
 @media (max-width: 380px) {
   .brand-wordmark {
-    font-size: 11px;
+    font-size: var(--text-small);
   }
 
   .welcome-stage h2 {
-    font-size: 24px;
+    font-size: var(--text-title);
   }
 
   .audio-heading {
@@ -1836,7 +1836,7 @@ textarea:focus-visible {
 .transcription-heading h3,
 .generation-heading h4 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-reading);
   font-weight: 650;
 }
 
@@ -1852,7 +1852,7 @@ textarea:focus-visible {
   align-items: flex-start;
   gap: 3px;
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .transcription-language-control select {
@@ -1863,7 +1863,7 @@ textarea:focus-visible {
   background: var(--surface-subtle);
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-control);
 }
 
 .transcription-language-control select:focus-visible {
@@ -1880,7 +1880,7 @@ textarea:focus-visible {
 .transcription-model-guidance {
   margin: 12px 0 0;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .transcription-model-guidance p {
@@ -1909,7 +1909,7 @@ textarea:focus-visible {
   margin-bottom: 5px;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .runtime-profile dd {
@@ -1917,7 +1917,7 @@ textarea:focus-visible {
   margin: 0;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 620;
 }
 
@@ -1938,7 +1938,7 @@ textarea:focus-visible {
   padding: 6px 0;
   color: var(--ink-2);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--text-control);
 }
 
 .processing-details > .runtime-profile {
@@ -1957,7 +1957,7 @@ textarea:focus-visible {
   margin: 0 0 6px;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .task-progress-stage {
@@ -2054,7 +2054,7 @@ textarea:focus-visible {
 .transcript-empty {
   margin: 13px 0 0;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -2083,7 +2083,7 @@ textarea:focus-visible {
 .task-diagnostic-command-wrap > label {
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .task-diagnostic-details dd {
@@ -2093,7 +2093,7 @@ textarea:focus-visible {
 .task-diagnostic-details code {
   color: var(--danger);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-control);
   user-select: all;
 }
 
@@ -2116,7 +2116,7 @@ textarea:focus-visible {
   background: var(--surface-subtle);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-control);
   user-select: all;
 }
 
@@ -2128,7 +2128,7 @@ textarea:focus-visible {
   background: var(--accent-soft);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-control);
   cursor: pointer;
 }
 
@@ -2140,7 +2140,7 @@ textarea:focus-visible {
   min-height: 1em;
   margin: 4px 0 0;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .transcription-status.is-checking-worker {
@@ -2168,7 +2168,7 @@ textarea:focus-visible {
   margin-bottom: 5px;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .task-measurements dd {
@@ -2176,7 +2176,7 @@ textarea:focus-visible {
   margin: 0;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2194,7 +2194,7 @@ textarea:focus-visible {
   margin: 0;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
   text-align: right;
 }
 
@@ -2204,7 +2204,7 @@ textarea:focus-visible {
   gap: 9px;
   margin-top: 12px;
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .generation-navigation select,
@@ -2218,7 +2218,7 @@ textarea:focus-visible {
   background: var(--surface-subtle);
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-control);
 }
 
 .generation-navigation select:focus-visible,
@@ -2232,7 +2232,7 @@ textarea:focus-visible {
 .generation-mode {
   margin: 9px 0 0;
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .generation-mode.is-readonly {
@@ -2250,7 +2250,7 @@ textarea:focus-visible {
 .speaker-catalog h5 {
   margin: 0 0 9px;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 600;
   scroll-margin-top: var(--player-gap); /* "Đặt tên trước" in the notes tab focuses it */
 }
@@ -2272,6 +2272,17 @@ textarea:focus-visible {
   gap: 7px;
 }
 
+@media (max-width: 30rem) {
+  .speaker-name-form {
+    grid-template-columns: auto auto;
+    justify-content: start;
+  }
+
+  .speaker-name-form label {
+    grid-column: 1 / -1;
+  }
+}
+
 .speaker-name-form .speaker-clear-name,
 .speaker-name-form .speaker-form-status {
   grid-column: 1 / -1;
@@ -2284,7 +2295,7 @@ textarea:focus-visible {
   gap: 5px;
   min-width: 0;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .speaker-name-form input,
@@ -2300,12 +2311,13 @@ textarea:focus-visible {
 
 .speaker-add-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   margin-top: 5px;
 }
 
 .speaker-add-controls input {
-  flex: 1;
+  flex: 1 1 12rem;
 }
 
 .speaker-form-status,
@@ -2313,7 +2325,7 @@ textarea:focus-visible {
   min-height: 1em;
   margin: 5px 0 0;
   color: var(--ink-2);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .speaker-form-status.is-error,
@@ -2324,13 +2336,13 @@ textarea:focus-visible {
 .transcript-reload-latest {
   min-height: 30px;
   padding: 5px 8px;
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .transcript-reload-status,
 .transcript-draft-copy-status {
   color: var(--ink-2);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .transcript-draft-review {
@@ -2363,13 +2375,13 @@ textarea:focus-visible {
 .transcript-draft-generation h5 {
   margin: 0;
   color: var(--warning);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .transcript-draft-context {
   margin: 3px 0 0;
   color: var(--ink-2);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .transcript-draft-recovery .transcript-draft-review {
@@ -2383,7 +2395,7 @@ textarea:focus-visible {
 .transcript-draft-review p {
   margin: 0;
   color: var(--warning);
-  font-size: 9px;
+  font-size: var(--text-label);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2438,7 +2450,7 @@ textarea:focus-visible {
   border-radius: var(--radius-lg);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .segment-timestamp {
@@ -2450,7 +2462,7 @@ textarea:focus-visible {
   color: var(--teal);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-control);
   font-variant-numeric: tabular-nums;
   text-underline-offset: 3px;
 }
@@ -2461,14 +2473,17 @@ textarea:focus-visible {
 
 .segment-speaker-control {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .segment-speaker-select {
-  max-width: 150px;
+  min-width: 0;
+  max-width: min(100%, 150px);
   min-height: 28px;
   padding: 3px 22px 3px 7px;
   border: 1px solid var(--control-border);
@@ -2490,13 +2505,13 @@ textarea:focus-visible {
 .segment-original-speaker {
   grid-column: 2;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .segment-speaker {
   align-self: center;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 600;
 }
 
@@ -2504,8 +2519,8 @@ textarea:focus-visible {
   grid-column: 2;
   margin: 0;
   color: var(--ink);
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: var(--text-reading);
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2526,8 +2541,8 @@ textarea:focus-visible {
   background: var(--surface-subtle);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
-  line-height: 1.65;
+  font-size: var(--text-reading);
+  line-height: 1.6;
   resize: vertical;
   overflow-wrap: anywhere;
 }
@@ -2542,7 +2557,7 @@ textarea:focus-visible {
 .segment-readonly-label {
   grid-column: 2;
   color: var(--ink-3);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .segment-review-cue {
@@ -2553,14 +2568,14 @@ textarea:focus-visible {
   border-radius: var(--radius-lg);
   background: var(--warning-soft);
   color: var(--amber);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .segment-model-measures {
   grid-column: 2;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
   line-height: 1.55;
 }
 

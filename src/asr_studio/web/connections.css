@@ -75,7 +75,7 @@
 
 .connections-header h2 {
   margin: 0;
-  font-size: 24px;
+  font-size: var(--text-title);
   font-weight: 500;
   letter-spacing: -0.035em;
 }
@@ -90,7 +90,7 @@
 .connection-section > p {
   margin: 0;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-control);
   line-height: 1.7;
 }
 
@@ -113,7 +113,7 @@
 
 .connection-section-heading h3 {
   margin: 0;
-  font-size: 17px;
+  font-size: var(--text-subtitle);
   font-weight: 560;
   line-height: 1.3;
 }
@@ -126,7 +126,7 @@
   background: var(--surface-subtle);
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
@@ -163,21 +163,21 @@
 
 .connection-ledger dt {
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .connection-ledger dd {
   min-width: 0;
   margin: 0;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-control);
   overflow-wrap: anywhere;
 }
 
 .connection-message {
   margin: 11px 0 0;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -195,7 +195,7 @@
   border-radius: var(--radius-sm);
   background: var(--danger-soft);
   color: var(--danger);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.55;
 }
 
@@ -229,7 +229,7 @@
 .connection-pending-actions p {
   margin: 0;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -252,7 +252,7 @@
 .connection-disconnect-confirm p {
   margin: 0;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.65;
 }
 
@@ -279,7 +279,7 @@
 
 .connection-model-section label {
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-weight: 600;
 }
 
@@ -291,7 +291,7 @@
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .connection-model-section select:disabled {
@@ -303,7 +303,7 @@
 .connection-verification-result {
   margin: 0;
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.65;
 }
 
@@ -339,15 +339,15 @@
 .connection-provider-divider > p {
   margin: 0 0 14px;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.65;
 }
 
 .connection-provider-kicker {
   font-family: var(--font-mono);
-  font-size: 9px !important;
+  font-size: var(--text-label) !important;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
 }
 
 .antigravity-login {
@@ -361,7 +361,7 @@
 .antigravity-login > p {
   margin: 0 0 8px;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -369,7 +369,7 @@
   display: inline-block;
   margin-bottom: 10px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 650;
   text-underline-offset: 3px;
 }
@@ -383,7 +383,7 @@
 .connection-usage-link {
   display: inline-block;
   margin-left: 12px;
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 @media (max-width: 680px) {
@@ -437,7 +437,7 @@
   }
 
   .connections-header h2 {
-    font-size: 23px;
+    font-size: var(--text-title);
   }
 
   .connections-body {

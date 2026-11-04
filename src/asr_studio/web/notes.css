@@ -17,7 +17,7 @@
   margin: 0;
   color: var(--ink);
   font-family: var(--font-serif);
-  font-size: 18px;
+  font-size: var(--text-heading);
   font-weight: 560;
   line-height: 1.3;
 }
@@ -26,7 +26,7 @@
   max-width: 62ch;
   margin: 0;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-control);
   line-height: 1.65;
 }
 
@@ -47,7 +47,7 @@
 }
 
 .notes-heading-row h3 {
-  font-size: 18px;
+  font-size: var(--text-heading);
   line-height: 1.3;
 }
 
@@ -58,7 +58,7 @@
 .notes-revision-meta,
 .notes-source-status {
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.65;
 }
 
@@ -95,13 +95,13 @@
 
 .notes-run-actions > .text-button {
   min-height: 40px;
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .notes-speaker-reminder {
   margin: 10px 0 0;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.65;
 }
 
@@ -133,7 +133,7 @@
 
 .notes-output-language-control label {
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 620;
 }
 
@@ -145,14 +145,14 @@
   background: var(--surface-subtle);
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-control);
 }
 
 .notes-run-plan,
 .notes-preference-status {
   margin: 10px 0 0;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.5;
 }
 
@@ -182,7 +182,7 @@
 
 .notes-lock-status {
   color: var(--warning);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -194,7 +194,7 @@
   border-radius: var(--radius-sm);
   background: var(--danger-soft);
   color: var(--danger);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
@@ -228,7 +228,7 @@
   margin-bottom: 4px;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-label);
 }
 
 .notes-source-metadata dd {
@@ -236,7 +236,7 @@
   margin: 0;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-variant-numeric: tabular-nums;
 }
 
@@ -262,7 +262,7 @@
   align-items: baseline;
   gap: 9px;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 /* The mark only repeats the state text beside it, so it never carries the state alone. */
@@ -319,7 +319,7 @@
 
 .notes-step-state {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 400;
 }
 
@@ -331,7 +331,7 @@
   border-top: 1px solid var(--hairline);
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-variant-numeric: tabular-nums;
 }
 
@@ -359,14 +359,14 @@
 
 .notes-revision-select-wrap {
   display: grid;
-  flex: 0 1 340px;
+  flex: 0 1 28rem;
   min-width: 0;
   gap: 5px;
 }
 
 .notes-revision-select-wrap label {
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
   font-weight: 620;
 }
 
@@ -380,7 +380,7 @@
   background: var(--surface-subtle);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-control);
 }
 
 .notes-revision-select-wrap select:focus-visible,
@@ -415,7 +415,7 @@
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 680;
 }
 
@@ -476,7 +476,7 @@
   min-width: 0;
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   overflow-wrap: anywhere;
 }
 
@@ -494,7 +494,7 @@
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: var(--warning-soft);
   color: var(--warning);
-  font-size: 12px;
+  font-size: var(--text-control);
   font-weight: 620;
 }
 
@@ -509,7 +509,7 @@
   background: transparent;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.65;
   overflow-wrap: anywhere;
   tab-size: 2;
@@ -517,21 +517,21 @@
 
 .notes-draft-status {
   margin-top: 8px;
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .notes-action-status {
   min-height: 1em;
   margin: 4px 0 0;
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 .notes-markdown-preview {
   min-height: 420px;
   padding: 16px 18px;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-reading);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -551,15 +551,15 @@
 }
 
 .notes-markdown-preview h4 {
-  font-size: 17px;
+  font-size: var(--text-subtitle);
 }
 
 .notes-markdown-preview h5 {
-  font-size: 15px;
+  font-size: var(--text-reading);
 }
 
 .notes-markdown-preview h6 {
-  font-size: 14px;
+  font-size: var(--text-reading);
 }
 
 .notes-markdown-preview p {
@@ -606,7 +606,7 @@ a.notes-citation-chip {
   border-radius: var(--radius-lg);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-small);
   font-variant-numeric: tabular-nums;
   line-height: 1.3;
   text-decoration: none;
@@ -654,14 +654,14 @@ a.notes-citation-chip:focus-visible {
 
 .notes-source-view h4 {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-reading);
   scroll-margin-top: var(--player-gap);
 }
 
 .notes-source-view header p {
   margin: 4px 0 0;
   color: var(--ink-2);
-  font-size: 10px;
+  font-size: var(--text-label);
   line-height: 1.55;
 }
 
@@ -675,7 +675,7 @@ a.notes-citation-chip:focus-visible {
   border-left: 1px solid var(--accent);
   background: var(--surface-subtle);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-control);
   line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -690,13 +690,13 @@ a.notes-citation-chip:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--warning-soft);
   color: var(--warning);
-  font-size: 11px;
+  font-size: var(--text-small);
   line-height: 1.6;
 }
 
 .notes-link-warning code {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-label);
   overflow-wrap: anywhere;
 }
 
@@ -713,7 +713,7 @@ a.notes-citation-chip:focus-visible {
 }
 
 .notes-source-status {
-  font-size: 10px;
+  font-size: var(--text-label);
 }
 
 @media (max-width: 760px) {

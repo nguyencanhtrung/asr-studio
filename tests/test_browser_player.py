@@ -358,6 +358,7 @@ def test_keyboard_focus_is_not_left_under_the_player_bar(live, signed_in, viewpo
     page = open_meeting(live, signed_in, viewport=viewport)
     segment(page, 5).locator(".segment-edit-button").click()
     editor = segment(page, 5).locator(".segment-text-editor")
+    editor.fill("Short.")  # a browser reveals only the caret's line: keep it the first line
     place(editor, 20)  # the editor sits under the bar, the next control just below it
     bar = rect(page.locator(".player-bar"))
     assert rect(editor)["top"] < bar["bottom"]

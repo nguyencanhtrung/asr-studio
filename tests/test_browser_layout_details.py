@@ -226,7 +226,7 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                     metrics["keyboardOrder"] = keyboard_order
 
                 if width >= 1024:
-                    assert metrics["sidebar"]["width"] == 236
+                    assert metrics["sidebar"]["width"] == 272
                     assert metrics["versionVisible"]
                     assert metrics["sidebarOverflowY"] == "auto"
                     assert metrics["sidebarScrollRange"] > 0
@@ -257,7 +257,7 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
             finally:
                 context.close()
 
-    # The narrower desktop rail stays 208px without adding another screenshot pass.
+    # The narrower desktop rail stays 224px without adding another screenshot pass.
     context, page = signed_in(
         color_scheme="light",
         viewport={"width": 900, "height": 700},
@@ -266,7 +266,7 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
     try:
         page.goto(f"{live.url}/", wait_until="networkidle")
         narrow_metrics = _layout_rectangles(page)
-        assert narrow_metrics["sidebar"]["width"] == 208
+        assert narrow_metrics["sidebar"]["width"] == 224
         evidence["rail_width_900"] = narrow_metrics["sidebar"]["width"]
     finally:
         context.close()
