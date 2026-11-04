@@ -349,7 +349,7 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     language = page.locator("#transcription-language")
     expect(language).to_have_value("en")
-    expect(language).to_have_accessible_name("Ngôn ngữ gợi ý lần chạy")
+    expect(language).to_have_accessible_name("Ngôn ngữ gợi ý")
     language.select_option("vi")
     # An unrelated meeting render must not replace the user's choice with the previous
     # generation's language before the rerun request is sent.

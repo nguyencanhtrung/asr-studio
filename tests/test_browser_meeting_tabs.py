@@ -915,11 +915,11 @@ def test_the_status_strip_follows_a_run_that_ends(live, signed_in):
     expect(page.locator("#status-notes")).to_have_attribute("data-state", "problem")
 
 
-# ---- AC 9: at 680 px and below the tablist sits right under the header; provider buttons stay ----
+# ---- AC 9: phone tablist stays under the header; provider launchers stay ----
 
 
 @pytest.mark.parametrize("viewport", [PHONE, NARROW, MINIMUM], ids=["390", "360", "320"])
-def test_on_a_phone_the_tablist_is_right_under_the_header_and_the_provider_buttons_stay(
+def test_on_a_phone_the_tablist_is_right_under_the_header_and_the_provider_launchers_stay(
     live, signed_in, viewport
 ):
     _context, page = signed_in(viewport=viewport)
@@ -945,7 +945,8 @@ def test_on_a_phone_the_tablist_is_right_under_the_header_and_the_provider_butto
         geometry
     )  # the buttons stay above the meeting
 
-    launchers = page.locator(".connection-launcher")
+    expect(page.locator(".workspace-header .connection-launchers")).to_have_count(0)
+    launchers = page.locator(".sidebar-footer .connection-launcher")
     expect(launchers).to_have_count(2)
     expect(launchers.nth(0)).to_contain_text("OpenAI")
     expect(launchers.nth(1)).to_contain_text("Google")

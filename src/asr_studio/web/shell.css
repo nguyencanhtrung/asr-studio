@@ -18,7 +18,8 @@
   --player-clearance: 8px;
   --player-gap: 12px;
   --sidebar-padding-bottom: 18px;
-  --sidebar-footer-height: 55px;
+  /* Launcher row plus the GitHub/version block inside the sticky footer. */
+  --sidebar-footer-height: 9rem;
   --sidebar-footer-clearance: 8px;
 }
 
@@ -99,9 +100,18 @@ textarea:focus-visible {
 
 .sidebar-masthead {
   display: flex;
+  width: 100%;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.sidebar-masthead-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
 }
 
 .brand {
@@ -231,11 +241,21 @@ textarea:focus-visible {
   gap: 0.35rem;
   margin-top: auto;
   padding: 10px 0 var(--sidebar-padding-bottom);
-  border-top: 1px solid var(--hairline);
   background: var(--surface-subtle);
   color: var(--ink-3);
   font-family: var(--font-mono);
   font-size: var(--text-label);
+}
+
+.sidebar-footer-meta {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
 }
 
 .github-link {
@@ -279,23 +299,24 @@ textarea:focus-visible {
 
 .workspace-header {
   display: flex;
+  width: 100%;
   min-height: 64px;
   align-items: center;
   justify-content: space-between;
+  align-self: center;
   gap: 20px;
   padding-bottom: 17px;
   border-bottom: 1px solid var(--hairline);
 }
 
-/* Keep the visual order identical to the DOM order: actions lead, provider status follows. */
+/* The meeting page reads in a 1030px column; home and calendar run full width, so the header does too. */
+.workspace:has(#meeting-view:not([hidden])) .workspace-header {
+  max-width: 1030px;
+}
+
 .workspace-header > .header-actions {
   order: 0;
   margin-left: auto;
-}
-
-.workspace-header > .connection-launchers {
-  order: 1;
-  margin-left: 8px;
 }
 
 .workspace-header h1 {
@@ -315,12 +336,6 @@ textarea:focus-visible {
   flex-shrink: 0;
   align-items: center;
   gap: 11px;
-}
-
-/* The rail masthead has no room beside the theme toggle, so the language switch leads the header actions. */
-.header-actions .lang-toggle {
-  width: 40px;
-  height: 40px;
 }
 
 .primary-button,
@@ -622,7 +637,7 @@ textarea:focus-visible {
   flex: 1;
   flex-direction: column;
   align-self: center;
-  justify-content: center;
+  justify-content: flex-start;
   width: 100%;
   padding: 46px 0 30px;
 }
@@ -1518,21 +1533,41 @@ textarea:focus-visible {
 
 @media (max-width: 980px) {
   .app-frame {
-    grid-template-columns: 14rem minmax(0, 1fr);
+    grid-template-columns: 15rem minmax(0, 1fr);
   }
 
-  /* The wordmark and theme toggle must fit the narrower sidebar, which now scrolls and clips. */
   .brand {
+    gap: 6px;
     padding: 0;
+  }
+
+  .brand-mark {
+    width: 32px;
+    height: 32px;
+  }
+
+  .brand-wordmark {
+    font-size: var(--text-control);
+    letter-spacing: 0.02em;
+  }
+
+  .sidebar-masthead {
+    gap: 2px;
+  }
+
+  .sidebar-masthead-controls {
+    gap: 4px;
+  }
+
+  .sidebar-masthead .theme-toggle,
+  .sidebar-masthead .lang-toggle {
+    width: 2rem;
+    height: 2rem;
   }
 
   .workspace {
     padding-right: 25px;
     padding-left: 25px;
-  }
-
-  .workspace-header > .connection-launchers {
-    margin-left: 0;
   }
 
   .language-principle {
@@ -1543,18 +1578,7 @@ textarea:focus-visible {
   }
 }
 
-/* The 208px rail: tighten the masthead so the theme toggle clears a classic scrollbar. */
-@media (min-width: 681px) and (max-width: 980px) {
-  .brand {
-    gap: 8px;
-  }
-
-  .sidebar-masthead {
-    gap: 4px;
-  }
-}
-
-@media (max-width: 760px) {
+@media (max-width: 800px) {
   .language-principle {
     grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
   }
@@ -1576,12 +1600,13 @@ textarea:focus-visible {
 
   .sidebar {
     position: static;
+    display: flex;
     height: auto;
-    flex-direction: row;
+    flex-flow: row wrap;
     align-items: center;
     overflow-y: visible;
     scroll-padding-bottom: 0;
-    gap: 15px;
+    gap: 8px;
     padding: 10px 14px;
     border-right: 0;
     border-bottom: 1px solid var(--hairline);
@@ -1592,9 +1617,11 @@ textarea:focus-visible {
     padding: 0;
   }
 
+  /* Brand, wordmark, theme, EN, OpenAI, Google share one row; a row that cannot fit wraps. */
   .sidebar-masthead {
     min-width: 0;
-    flex: 1;
+    width: auto;
+    flex: 1 1 auto;
   }
 
   .brand-mark {
@@ -1603,8 +1630,19 @@ textarea:focus-visible {
   }
 
   .recent-section,
-  .sidebar-footer {
+  .sidebar-footer-meta {
     display: none;
+  }
+
+  .sidebar-footer {
+    position: static;
+    display: block;
+    width: auto;
+    flex: 0 0 auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    background: transparent;
   }
 
   .workspace {
@@ -1833,6 +1871,10 @@ textarea:focus-visible {
   gap: 14px;
 }
 
+.transcription-heading {
+  align-items: flex-start;
+}
+
 .transcription-heading h3,
 .generation-heading h4 {
   margin: 0;
@@ -1841,21 +1883,34 @@ textarea:focus-visible {
 }
 
 .transcription-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  grid-template-rows: repeat(3, auto);
+  align-items: start;
+  justify-content: initial;
+  column-gap: 14px;
+  row-gap: 0;
 }
 
 .transcription-language-control {
-  display: flex;
-  min-width: 148px;
+  display: grid;
+  min-width: 0;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
   color: var(--ink-2);
   font-size: var(--text-label);
 }
 
+.transcription-language-control label {
+  grid-row: 1;
+  margin-bottom: 7px;
+}
+
 .transcription-language-control select {
+  width: 100%;
+  grid-row: 2;
   min-height: 34px;
   padding: 6px 9px;
   border: 1px solid var(--control-border);
@@ -1872,9 +1927,20 @@ textarea:focus-visible {
 }
 
 .transcription-language-control .field-help {
+  grid-row: 3;
   max-width: 210px;
   margin: 0;
   line-height: 1.35;
+}
+
+.transcription-actions > button {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: start;
+}
+
+.transcription-actions:has(#transcription-model-control:not([hidden])) > button {
+  grid-column: 3;
 }
 
 .transcription-model-guidance {
@@ -1886,6 +1952,13 @@ textarea:focus-visible {
 .transcription-model-guidance p {
   margin: 0;
   line-height: 1.45;
+}
+
+@media (max-width: 1100px) {
+  .transcription-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .runtime-profile {
@@ -2336,7 +2409,7 @@ textarea:focus-visible {
 .transcript-reload-latest {
   min-height: 30px;
   padding: 5px 8px;
-  font-size: var(--text-label);
+  font-size: var(--text-control);
 }
 
 .transcript-reload-status,
@@ -2395,7 +2468,7 @@ textarea:focus-visible {
 .transcript-draft-review p {
   margin: 0;
   color: var(--warning);
-  font-size: var(--text-label);
+  font-size: var(--text-reading);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2580,16 +2653,26 @@ textarea:focus-visible {
 }
 
 @media (max-width: 760px) {
-  .transcription-heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .transcription-actions {
+    display: flex;
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
     justify-content: flex-start;
   }
 
   .transcription-language-control {
+    display: flex;
+    width: 100%;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .transcription-language-control label {
+    margin-bottom: 4px;
+  }
+
+  .transcription-actions > button {
     width: 100%;
   }
 

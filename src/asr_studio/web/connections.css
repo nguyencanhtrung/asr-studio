@@ -1,16 +1,23 @@
 .connection-launchers {
-  display: flex;
+  display: grid;
+  width: 100%;
   min-width: 0;
-  flex-shrink: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin-left: auto;
 }
 
 .connection-launcher {
+  width: 100%;
   min-width: 0;
   flex-wrap: wrap;
   gap: 2px 8px;
+  font-family: var(--font-sans);
+  font-weight: 680;
   white-space: nowrap;
+}
+
+.connection-launcher-logo {
+  display: none;
 }
 
 .connection-launcher-dot {
@@ -383,7 +390,7 @@
 .connection-usage-link {
   display: inline-block;
   margin-left: 12px;
-  font-size: var(--text-label);
+  font-size: var(--text-control);
 }
 
 @media (max-width: 680px) {
@@ -398,24 +405,35 @@
     gap: 8px;
   }
 
-  .connection-launcher {
-    gap: 2px 6px;
-    padding-right: 9px;
-    padding-left: 9px;
-  }
-}
-
-/* Both provider statuses stay readable: they move to a row of their own below the title. */
-@media (max-width: 980px) {
-  .workspace-header {
-    flex-wrap: wrap;
-    row-gap: 12px;
-  }
-
+  /* A logo button with the status LED on its top-right corner; aria-label stays the name. */
   .connection-launchers {
-    order: 1;
-    flex: 1 0 100%;
-    margin-left: 0;
+    display: flex;
+    width: auto;
+    gap: 6px;
+  }
+
+  .connection-launcher {
+    position: relative;
+    width: 2.25rem;
+    height: 2.25rem;
+    min-height: 0;
+    padding: 0;
+  }
+
+  .connection-launcher-logo {
+    display: block;
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .connection-launcher-name {
+    display: none;
+  }
+
+  .connection-launcher-dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
   }
 }
 

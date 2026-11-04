@@ -704,7 +704,7 @@
 .segment-details {
   grid-column: 2;
   color: var(--ink-2);
-  font-size: var(--text-small);
+  font-size: var(--text-control);
 }
 
 .segment-details summary {

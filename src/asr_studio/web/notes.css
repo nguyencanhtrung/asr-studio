@@ -606,7 +606,7 @@ a.notes-citation-chip {
   border-radius: var(--radius-lg);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: var(--text-small);
+  font-size: var(--text-control);
   font-variant-numeric: tabular-nums;
   line-height: 1.3;
   text-decoration: none;
@@ -675,7 +675,7 @@ a.notes-citation-chip:focus-visible {
   border-left: 1px solid var(--accent);
   background: var(--surface-subtle);
   color: var(--ink);
-  font-size: var(--text-control);
+  font-size: var(--text-reading);
   line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

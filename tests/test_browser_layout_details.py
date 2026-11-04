@@ -45,17 +45,22 @@ def _layout_rectangles(page):
           const version = document.querySelector(".version-link");
           const actions = document.querySelector(".header-actions");
           const launchers = document.querySelector(".connection-launchers");
+          const header = document.querySelector(".workspace-header");
+          const workspace = document.querySelector(".workspace");
           const root = document.documentElement;
           const grid = getComputedStyle(document.querySelector(".app-frame")).gridTemplateColumns;
+          const workspaceStyle = getComputedStyle(workspace);
+          const workspaceBox = workspace.getBoundingClientRect();
           return {
             viewport: { width: innerWidth, height: innerHeight },
             theme: root.dataset.theme,
             wordmark: document.querySelector(".brand-wordmark").innerText,
             brandName: document.querySelector(".brand").getAttribute("aria-label"),
             formErrorTabIndex: document.querySelector("#form-error").getAttribute("tabindex"),
-            domOrder: Boolean(actions.compareDocumentPosition(launchers)
+            domOrder: Boolean(launchers.compareDocumentPosition(actions)
               & Node.DOCUMENT_POSITION_FOLLOWING),
             actions: rect(actions),
+            header: rect(header),
             launchers: rect(launchers),
             sidebar: rect(sidebar),
             footer: rect(footer),
@@ -68,6 +73,8 @@ def _layout_rectangles(page):
             })(),
             sidebarOverflowY: getComputedStyle(sidebar).overflowY,
             sidebarScrollRange: sidebar.scrollHeight - sidebar.clientHeight,
+            launchersInFooter: footer.contains(launchers),
+            workspaceContentRight: workspaceBox.right - parseFloat(workspaceStyle.paddingRight),
             positiveTabIndexCount: [...document.querySelectorAll("[tabindex]")]
               .filter((element) => element.tabIndex > 0).length,
             gridColumns: grid,
@@ -196,8 +203,10 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                 assert metrics["wordmark"] == "ASR Studio"
                 assert metrics["formErrorTabIndex"] == "-1"
                 assert metrics["positiveTabIndexCount"] == 0
+                assert metrics["launchersInFooter"]
+                assert metrics["header"]["right"] <= metrics["workspaceContentRight"] + 0.5
                 if width == 360:
-                    assert metrics["actions"]["bottom"] <= metrics["launchers"]["top"] + 0.5
+                    assert metrics["launchers"]["bottom"] <= metrics["actions"]["top"] + 0.5
                     page.locator(".theme-toggle").focus()
                     keyboard_order = []
                     for _ in range(5):
@@ -205,23 +214,22 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                         keyboard_order.append(_focus_identity(page))
                     assert keyboard_order == [
                         ".lang-toggle",
-                        "#open-calendar",
-                        ".header-create",
                         "#launcher-chatgpt",
                         "#launcher-antigravity",
+                        "#open-calendar",
+                        ".header-create",
                     ]
                     metrics["keyboardOrder"] = keyboard_order
                 else:
-                    assert metrics["actions"]["right"] <= metrics["launchers"]["left"] + 0.5
-                    page.locator(".lang-toggle").focus()
+                    page.locator("#launcher-chatgpt").focus()
                     keyboard_order = []
                     for _ in range(3):
                         page.keyboard.press("Tab")
                         keyboard_order.append(_focus_identity(page))
                     assert keyboard_order == [
-                        ".header-create",
-                        "#launcher-chatgpt",
                         "#launcher-antigravity",
+                        "github-link",
+                        "version-link",
                     ]
                     metrics["keyboardOrder"] = keyboard_order
 
@@ -257,7 +265,7 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
             finally:
                 context.close()
 
-    # The narrower desktop rail stays 224px without adding another screenshot pass.
+    # The narrower desktop rail stays 240px without adding another screenshot pass.
     context, page = signed_in(
         color_scheme="light",
         viewport={"width": 900, "height": 700},
@@ -266,7 +274,7 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
     try:
         page.goto(f"{live.url}/", wait_until="networkidle")
         narrow_metrics = _layout_rectangles(page)
-        assert narrow_metrics["sidebar"]["width"] == 224
+        assert narrow_metrics["sidebar"]["width"] == 240
         evidence["rail_width_900"] = narrow_metrics["sidebar"]["width"]
     finally:
         context.close()

@@ -368,6 +368,29 @@ def test_keyboard_focus_is_not_left_under_the_player_bar(live, signed_in, viewpo
     assert rect(editor)["top"] >= bar["bottom"]
 
 
+CARET_LINE_TOP = """element => {
+  const style = getComputedStyle(element);
+  const lines = element.value.split("\\n").length;
+  const lineHeight = parseFloat(style.lineHeight);
+  return element.getBoundingClientRect().top + parseFloat(style.borderTopWidth)
+    + parseFloat(style.paddingTop) + (lines - 1) * lineHeight - element.scrollTop;
+}"""
+
+
+def test_keyboard_focus_keeps_the_caret_line_of_a_wrapped_value_below_the_bar(live, signed_in):
+    page = open_meeting(live, signed_in, viewport=PHONE)
+    segment(page, 5).locator(".segment-edit-button").click()
+    editor = segment(page, 5).locator(".segment-text-editor")
+    editor.fill("\n".join(f"Line {number}." for number in range(1, 9)))  # the caret ends on line 8
+    place(editor, 20)  # the editor's top sits under the bar, the next control just below it
+    bar = rect(page.locator(".player-bar"))
+    assert rect(editor)["top"] < bar["bottom"]
+    segment(page, 5).locator("button[type=submit]").focus()
+    page.keyboard.press("Shift+Tab")
+    assert page.evaluate("document.activeElement.className") == "segment-text-editor"
+    assert editor.evaluate(CARET_LINE_TOP) >= bar["bottom"]
+
+
 # ---- AC: a changed active segment is scrolled into view while playing ----
 
 

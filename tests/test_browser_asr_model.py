@@ -113,7 +113,7 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     )
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model chép lời lần chạy")
+    selector = page.get_by_label("Model ASR")
     expect(selector).to_have_value("auto")
     expect(selector.locator("option")).to_have_text(
         [
@@ -175,7 +175,7 @@ def test_an_unprepared_model_cannot_start_and_says_how_to_prepare_it(live, signe
         live.settings.data_dir, "Unprepared model", "2026-10-17", duration_seconds=30.0
     )
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model chép lời lần chạy")
+    selector = page.get_by_label("Model ASR")
     start = page.get_by_role("button", name="Bắt đầu chép lời")
     guidance = page.locator("#transcription-model-guidance")
     expect(start).to_be_enabled()
@@ -231,7 +231,7 @@ def test_an_interrupted_run_invites_a_retry_only_with_a_usable_model(live, signe
     assert finish_interrupted_task(data_dir, task["id"], owner_id=owner_id, elapsed_seconds=1)
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model chép lời lần chạy")
+    selector = page.get_by_label("Model ASR")
     status = page.locator("#transcription-status")
     expect(status).to_contain_text(INVITES_RETRY)
 
@@ -268,7 +268,7 @@ def test_only_a_transcript_without_confidence_scores_qualifies_its_review_count(
     expect(meta).not_to_contain_text(NO_CONFIDENCE)
 
     # The same warning where the model is chosen, before any count exists.
-    page.get_by_label("Model chép lời lần chạy").select_option("qwen3-asr-1.7b")
+    page.get_by_label("Model ASR").select_option("qwen3-asr-1.7b")
     expect(page.locator("#transcription-model-help")).to_contain_text(
         "đừng so số này với model khác"
     )
@@ -280,7 +280,7 @@ def test_renaming_the_meeting_keeps_the_selector_and_its_guard(live, signed_in, 
         live.settings.data_dir, "Before rename", "2026-10-17", duration_seconds=30.0
     )
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model chép lời lần chạy")
+    selector = page.get_by_label("Model ASR")
     start = page.get_by_role("button", name="Bắt đầu chép lời")
     selector.select_option("pho-whisper-large")
     expect(start).to_be_disabled()
@@ -309,7 +309,7 @@ def test_a_model_removed_after_the_page_loaded_is_refused_and_the_page_recovers(
     object.__setattr__(live.settings, "asr_phowhisper_model_path", prepared)
     meeting_id = seed_meeting(data_dir, "Stale list", "2026-10-17", duration_seconds=30.0)
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model chép lời lần chạy")
+    selector = page.get_by_label("Model ASR")
     start = page.get_by_role("button", name="Bắt đầu chép lời")
     selector.select_option("pho-whisper-large")
     expect(start).to_be_enabled()

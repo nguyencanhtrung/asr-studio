@@ -614,19 +614,18 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
 
 
 def assert_launcher_statuses_whole(page, width):
-    """At this phone width both launchers show their dot and name in full, with no overflow."""
+    """At this phone width both launchers are logo buttons with a status LED, with no overflow."""
     page.set_viewport_size({"width": width, "height": 780})
     for launcher in ("#launcher-chatgpt", "#launcher-antigravity"):
         button = page.locator(launcher)
+        expect(button.locator(".connection-launcher-logo")).to_be_visible()
         expect(button.locator(".connection-launcher-dot")).to_be_visible()
-        name = button.locator(".connection-launcher-name")
-        expect(name).to_be_visible()
-        assert name.evaluate("element => element.scrollWidth <= element.clientWidth")
-        box, text = button.bounding_box(), name.bounding_box()
+        expect(button.locator(".connection-launcher-name")).to_be_hidden()
+        box, dot = button.bounding_box(), button.locator(".connection-launcher-dot").bounding_box()
         assert box and box["x"] >= 0 and box["x"] + box["width"] <= width
-        assert text
-        assert box["x"] <= text["x"] and text["x"] + text["width"] <= box["x"] + box["width"]
-        assert box["y"] <= text["y"] and text["y"] + text["height"] <= box["y"] + box["height"]
+        assert dot
+        assert box["x"] <= dot["x"] and dot["x"] + dot["width"] <= box["x"] + box["width"]
+        assert box["y"] <= dot["y"] and dot["y"] + dot["height"] <= box["y"] + box["height"]
     assert (
         page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
         == 0
