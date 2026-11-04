@@ -492,6 +492,7 @@ const { t, UI_LOCALE } = (() => {
       "Model đã chọn chưa được chuẩn bị. Tải lại trang để xem cách chuẩn bị, hoặc chọn model khác.": "The selected model is not prepared. Reload the page to see how to prepare it, or choose another model.",
       "Model đã chọn chỉ chạy trên GPU NVIDIA. Hãy chọn model khác.": "The selected model runs only on an NVIDIA GPU. Choose another model.",
       "Đa ngôn ngữ, tự phát hiện ngôn ngữ. Đôi khi lặp lại câu.": "Multilingual with language detection. Sometimes repeats sentences.",
+      "Nhẹ, chạy được trên máy chỉ có CPU. Độ chính xác thấp hơn Whisper large-v3.": "Light, and runs on a CPU-only machine. Less accurate than Whisper large-v3.",
       "Tối ưu cho tiếng Việt. Không dành cho English hoặc nội dung trộn nhiều thuật ngữ kỹ thuật.": "Optimized for Vietnamese. Not meant for English or content that mixes in many technical terms.",
       "Đa ngôn ngữ, chỉ chạy trên GPU. Không có điểm tin cậy: “cần kiểm tra” chỉ bắt đoạn lặp và vấn đề người nói, nên đừng so số này với model khác.": "Multilingual, GPU only. It has no confidence score: “to review” only catches repetition and speaker issues, so do not compare that count with other models.",
       "“cần kiểm tra” không xét độ tin cậy của chữ": "“to review” ignores text confidence",

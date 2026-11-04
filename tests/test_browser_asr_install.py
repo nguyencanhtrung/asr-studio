@@ -98,13 +98,13 @@ def status(row):
 
 
 def pho_row(page):
-    return asr_rows(page).nth(1)
+    return asr_rows(page).filter(has_text="PhoWhisper")
 
 
 def open_asr(page, live):
     page.goto(f"{live.url}/")
     open_section(page, "ASR Model")
-    expect(asr_rows(page)).to_have_count(3)
+    expect(asr_rows(page)).to_have_count(4)
 
 
 def staging(installer):
@@ -122,7 +122,9 @@ def test_install_from_settings_shows_real_progress_then_ready_without_a_restart(
     expect(row).to_contain_text("Cần 8,8 GiB trống")  # the space it needs, before any download
     expect(row.get_by_label("Lệnh chuẩn bị model")).to_have_count(0)
     # Qwen needs a GPU and this worker has one: it offers the same install, with its own size.
-    expect(asr_rows(page).nth(2).get_by_role("button", name="Cài đặt model")).to_be_enabled()
+    expect(
+        asr_rows(page).filter(has_text="Qwen3-ASR").get_by_role("button", name="Cài đặt model")
+    ).to_be_enabled()
 
     row.get_by_role("button", name="Cài đặt model").click()
 
@@ -217,7 +219,7 @@ def test_qwen_names_the_gpu_requirement_before_any_download_on_a_cpu_machine(
 ):
     _context, page = signed_in(viewport={"width": 1280, "height": 900})
     open_asr(page, live)
-    qwen = asr_rows(page).nth(2)
+    qwen = asr_rows(page).filter(has_text="Qwen3-ASR")
 
     expect(status(qwen)).to_have_text("Cần GPU NVIDIA")
     expect(qwen.get_by_role("button")).to_have_count(0)
@@ -251,12 +253,14 @@ def test_the_install_block_fits_a_phone_and_keeps_the_type_floor(live, signed_in
     assert overflow(page) == 0
     dialog = page.locator(".connections-body")
     assert dialog.evaluate("e => e.scrollWidth <= e.clientWidth")
-    sizes = row.locator(".asr-install").evaluate(
-        "e => [e, ...e.querySelectorAll('*')].map(n => parseFloat(getComputedStyle(n).fontSize))"
+    # Each poll rebuilds the row: read it in one tick from the document, not through a held node.
+    sizes = page.evaluate(
+        "[...document.querySelectorAll('.asr-install, .asr-install *')]"
+        ".map(n => parseFloat(getComputedStyle(n).fontSize))"
     )
-    assert min(sizes) >= 12
+    assert sizes and min(sizes) >= 12
     button = row.get_by_role("button", name="Hủy")
-    assert button.evaluate("e => parseFloat(getComputedStyle(e).fontSize)") == 14
+    expect(button).to_have_css("font-size", "14px")
     box = button.bounding_box()
     assert box["height"] >= 40 and box["x"] + box["width"] <= width
     installer.gate.write_text("go", encoding="utf-8")
@@ -304,3 +308,29 @@ def test_the_install_text_is_in_english_when_the_page_is(live, signed_in, instal
     expect(row).to_contain_text("Downloading the model…")
     row.get_by_role("button", name="Cancel").click()
     expect(row.get_by_role("button", name="Install model")).to_be_enabled(timeout=15_000)
+
+
+def test_the_cpu_default_is_named_and_badged_on_a_cpu_machine(live, signed_in, cpu_installer):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    open_asr(page, live)
+    small = asr_rows(page).filter(has_text="Whisper small")
+    large = asr_rows(page).nth(0)  # the small model's note names it too
+
+    expect(page.locator("#asr-default")).to_contain_text("whisper-small")
+    expect(small.locator('.asr-badge[data-kind="default"]')).to_have_text("Mặc định")
+    expect(status(small)).to_have_text("Sẵn sàng")
+    expect(large.locator('.asr-badge[data-kind="default"]')).to_have_count(0)
+    expect(large.get_by_role("button", name="Cài đặt model")).to_be_enabled()
+
+
+def test_a_gpu_machine_can_install_the_small_model_and_it_is_not_the_default(
+    live, signed_in, installer
+):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    open_asr(page, live)
+    small = asr_rows(page).filter(has_text="Whisper small")
+
+    expect(small.locator('.asr-badge[data-kind="default"]')).to_have_count(0)
+    installer.mode = "ok"
+    small.get_by_role("button", name="Cài đặt model").click()
+    expect(status(small)).to_have_text("Sẵn sàng", timeout=15000)

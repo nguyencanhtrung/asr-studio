@@ -192,7 +192,7 @@ Token rotation changes only the auth state. `docker compose down` keeps the volu
 | ----------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Runtime     | Docker, `faster-whisper` 1.2.1, `pyannote.audio` 4.0.7, locked in `uv.lock`                        | The operator installs Docker. A GPU needs the NVIDIA driver and Container Toolkit. |
 | ASR GPU     | [Systran faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3), MIT, public    | `model prepare` can download it. No gated terms.                                 |
-| ASR CPU     | [Systran faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small), MIT, public          | `model prepare` can download it. No gated terms.                                 |
+| ASR CPU     | [Systran faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small), MIT, public          | `model prepare` can download it, on a GPU machine with `--asr-model whisper-small`. No gated terms. |
 | ASR, optional | [vinai/PhoWhisper-large](https://huggingface.co/vinai/PhoWhisper-large), BSD-3-Clause, public | `model prepare --asr-model` downloads and converts it. No gated terms. |
 | ASR, optional | [Qwen/Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf), Apache-2.0, public, GPU only | `model prepare --asr-model` downloads it. No gated terms. |
 | Diarization | [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1), CC-BY-4.0, gated | The operator accepts the conditions and downloads it. The app does not.            |
@@ -223,10 +223,11 @@ Each model needs valid `model.bin`, `config.json`, `tokenizer.json` and
 
 ### Check the ASR models
 
-**Settings → ASR Model** lists Whisper large-v3, PhoWhisper-large and Qwen3-ASR-1.7B as the app
-sees them now. A badge marks the model the system default (**Automatic**) uses on this machine. When that model
-is outside this list, as on a CPU-only machine, a line above the list names it instead. Each row says **Ready**, **Not prepared**, **Installing**, **Needs an NVIDIA GPU** or **Not checked** (no
-worker is running). Qwen3-ASR says so when the worker runs on CPU, before anything is downloaded.
+**Settings → ASR Model** lists Whisper large-v3, Whisper small, PhoWhisper-large and Qwen3-ASR-1.7B as
+the app sees them now. A line above the list and a **Default** badge name the model **Automatic** uses on
+this machine: Whisper large-v3 on a GPU, Whisper small on a CPU-only machine. Each row says **Ready**,
+**Not prepared**, **Installing**, **Needs an NVIDIA GPU** or **Not checked** (no worker is running).
+Qwen3-ASR says so when the worker runs on CPU, before anything is downloaded.
 
 For a model that is not prepared, the row shows how much free space it needs and how much is
 left, and **Install model**. The model downloads on this machine and no recording is sent
@@ -242,7 +243,7 @@ Install needs the `model-installer` service, which `./scripts/start.sh` starts. 
 service that downloads models and writes `./models`; it does not mount your recordings,
 transcripts or sign-in data. Behind a proxy, set `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in
 `.env`. It writes `./models` as the user that owns it, so set `ASR_MODEL_UID` and
-`ASR_MODEL_GID` if you start Compose without `start.sh`. Only the three models above can be
+`ASR_MODEL_GID` if you start Compose without `start.sh`. Only the four models above can be
 installed; none needs a token. If the service is not running or cannot write `./models`, the row
 shows the command to copy, as below. The dialog reads progress only while it is open.
 
@@ -256,7 +257,8 @@ selector keeps your choice while the page stays open; a new page starts on **Aut
 | Choice           | Use it for                                 | Limits                                                                |
 | ---------------- | ------------------------------------------ | --------------------------------------------------------------------- |
 | Automatic        | The default chosen for this hardware.      | `whisper-large-v3` on GPU, `whisper-small` on CPU.                    |
-| Whisper large-v3 | Multilingual meetings with language detection. | Slowest of the three, and the most likely to repeat sentences. |
+| Whisper large-v3 | Multilingual meetings with language detection. | Slowest of the large models, and the most likely to repeat sentences. |
+| Whisper small    | A CPU-only machine.                        | Lower accuracy than Whisper large-v3. |
 | PhoWhisper-large | Meetings in Vietnamese.                    | Not for English or content that mixes in many technical terms. Segments are longer, so speaker labels are coarser. |
 | Qwen3-ASR-1.7B   | Mixed Vietnamese and English, and speed.   | GPU only, about 8.5 GB of VRAM on a 75-minute meeting. No confidence score: **Listen again** only catches repetition and speaker issues, so its count does not compare with other models. |
 

@@ -87,6 +87,7 @@ class Rig:
             auth_dir=tmp_path / "auth",
             install_dir=tmp_path / "install",
             asr_gpu_model_path=self.models / "whisper-large-v3",
+            asr_cpu_model_path=self.models / "whisper-small",
             asr_phowhisper_model_path=self.models / PHO,
             asr_qwen_model_path=self.models / QWEN,
         )

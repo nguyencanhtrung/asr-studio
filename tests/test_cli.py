@@ -444,7 +444,9 @@ def test_model_prepare_downloads_the_automatically_selected_cpu_model(
     monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
 
     assert main(["model", "prepare"]) == 0
-    assert downloaded == [("Systran/faster-whisper-small", None, target.resolve())]
+    assert downloaded == [
+        ("Systran/faster-whisper-small", CATALOG["whisper-small"].revision, target.resolve())
+    ]
     assert "ready" in capsys.readouterr().out
 
 

@@ -41,6 +41,14 @@ CATALOG = {
             3_090_839_273,
         ),
         AsrModel(
+            "whisper-small",
+            "Systran/faster-whisper-small",
+            "whisper",
+            "asr_cpu_model_path",
+            "536b0662742c02347bc0e980a01041f333bce120",
+            486_215_847,
+        ),
+        AsrModel(
             "pho-whisper-large",
             "vinai/PhoWhisper-large",
             "whisper_vi",

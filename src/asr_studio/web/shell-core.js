@@ -15,6 +15,7 @@ const t = (text, params) => (params ? { text, params } : { text });
 export const ASR_MODEL_TEXT = {
   auto: { label: t("Tự động") },
   "whisper-large-v3": { label: "Whisper large-v3", note: t("Đa ngôn ngữ, tự phát hiện ngôn ngữ. Đôi khi lặp lại câu.") },
+  "whisper-small": { label: "Whisper small", note: t("Nhẹ, chạy được trên máy chỉ có CPU. Độ chính xác thấp hơn Whisper large-v3.") },
   "pho-whisper-large": { label: "PhoWhisper-large", note: t("Tối ưu cho tiếng Việt. Không dành cho English hoặc nội dung trộn nhiều thuật ngữ kỹ thuật.") },
   "qwen3-asr-1.7b": { label: "Qwen3-ASR-1.7B", note: t("Đa ngôn ngữ, chỉ chạy trên GPU. Không có điểm tin cậy: “cần kiểm tra” chỉ bắt đoạn lặp và vấn đề người nói, nên đừng so số này với model khác.") },
 };

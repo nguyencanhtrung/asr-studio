@@ -141,7 +141,7 @@ def prepare_model(settings: Settings) -> int:
     try:
         from huggingface_hub import snapshot_download
 
-        # The GPU default is in the catalog and stays on its pinned revision; whisper-small is not.
+        # Both hardware defaults are in the catalog and stay on their pinned revisions.
         revision = next(
             (model.revision for model in CATALOG.values() if model.repository == repository), None
         )
