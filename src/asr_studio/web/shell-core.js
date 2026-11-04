@@ -12,6 +12,12 @@ export const AUTO_TRANSCRIBE_KEY = "asr-studio:auto-transcribe";
 export const AUTO_TRANSCRIBE_HANDOFF_PREFIX = "asr-studio:auto-transcribe:";
 
 const t = (text, params) => (params ? { text, params } : { text });
+export const ASR_MODEL_TEXT = {
+  auto: { label: t("Tự động") },
+  "whisper-large-v3": { label: "Whisper large-v3", note: t("Đa ngôn ngữ, tự phát hiện ngôn ngữ. Đôi khi lặp lại câu.") },
+  "pho-whisper-large": { label: "PhoWhisper-large", note: t("Tối ưu cho tiếng Việt. Không dành cho English hoặc nội dung trộn nhiều thuật ngữ kỹ thuật.") },
+  "qwen3-asr-1.7b": { label: "Qwen3-ASR-1.7B", note: t("Đa ngôn ngữ, chỉ chạy trên GPU. Không có điểm tin cậy: “cần kiểm tra” chỉ bắt đoạn lặp và vấn đề người nói, nên đừng so số này với model khác.") },
+};
 export const bytes = (value) => ({ fmt: "bytes", value });
 export const decimal = (value) => ({ fmt: "decimal", value });
 
@@ -196,6 +202,15 @@ function normalizePolicy(payload) {
   };
 }
 
+function normalizeAsrModels(payload) {
+  if (!payload || !Array.isArray(payload.asr_models)) return null;
+  return payload.asr_models.filter((choice) => (
+    choice
+    && typeof choice === "object"
+    && Object.hasOwn(ASR_MODEL_TEXT, choice.id)
+  ));
+}
+
 function fileExtension(filename) {
   const finalDot = filename.lastIndexOf(".");
   return finalDot >= 0 ? filename.slice(finalDot).toLowerCase() : "";
@@ -242,10 +257,12 @@ export const initialState = {
   policy: null,
   policyFailed: false,
   policyRequest: 0, // id of the latest policy fetch; other replies are stale
+  asrModels: null,
+  asrModelsRequest: 0, // id of the latest model catalog fetch; other replies are stale
   file: null,
   fileError: null,
   fileRefused: false,
-  form: { title: "", date: "", language: "", autoTranscribe: true },
+  form: { title: "", date: "", language: "", autoTranscribe: true, asrModel: "auto" },
   autoTitle: "",
   uploadId: null,
   sendFile: null, // what the upload sends: the file itself, or the audio the browser extracted from it
@@ -279,6 +296,34 @@ export const isActive = (state) => state.starting || isBusy(state);
 const retryingUncertain = (state) => state.createUncertain && Boolean(state.createRetryPayload);
 const canCancel = (state) => CANCELLABLE_PHASES.includes(state.phase) || state.validationUncertain;
 const validFile = (state) => Boolean(state.policy && state.file && !state.fileError && !state.fileRefused);
+const modelChoices = (state) => state.asrModels || [];
+
+function selectAsrModel(state, disabled) {
+  if (!state.form.autoTranscribe) return null;
+  const choices = modelChoices(state);
+  if (!choices.length || !choices.some((choice) => choice.id === "auto")) return null;
+  const value = choices.some((choice) => choice.id === state.form.asrModel) ? state.form.asrModel : "auto";
+  const selected = choices.find((choice) => choice.id === value);
+  const note = value === "auto"
+    ? selected.model_name
+      ? t("Theo phần cứng của máy: {model}.", { model: selected.model_name })
+      : t("Theo phần cứng của máy.")
+    : ASR_MODEL_TEXT[value].note;
+  const warning = choices.some((choice) => choice.id !== "auto" && !choice.ready)
+    ? t("Model chưa sẵn sàng không chọn được ở đây; trang cuộc họp có lệnh chuẩn bị.")
+    : null;
+  return {
+    value,
+    disabled,
+    options: choices.map((choice) => ({
+      id: choice.id,
+      label: ASR_MODEL_TEXT[choice.id].label,
+      ready: Boolean(choice.ready),
+      disabled: choice.id !== "auto" && !choice.ready,
+    })),
+    help: warning ? [note, " ", warning] : note,
+  };
+}
 
 // A valid file and form are enough: the one button uploads and checks first when needed.
 export const canSubmit = (state) =>
@@ -324,6 +369,7 @@ export function selectView(state) {
     limits: limits(state),
     guidance: guidance(state),
     accept: state.policy ? state.policy.extensions.join(",") : "",
+    asrModel: selectAsrModel(state, locked),
     fileInputDisabled: locked || !state.policy,
     changeFileDisabled: locked,
     fieldsDisabled: locked,
@@ -388,6 +434,7 @@ function fresh(state, patch) {
     pendingCleanup: state.pendingCleanup,
     runId: state.runId + 1,
     policyRequest: state.policyRequest + 1,
+    asrModelsRequest: state.asrModelsRequest + 1,
     createRequest: state.createRequest,
     ...patch,
   };
@@ -936,6 +983,7 @@ function closeDialog(state) {
   if (!state.cancelling && canCancel(state)) return cancelUpload(state);
   const effects = [
     { type: "cancel", key: "shell/policy" },
+    { type: "cancel", key: "shell/asr-models" },
     { type: "cancel", key: "shell/upload-checking-clock" },
     { type: "cancel", key: "shell/upload-validation-state" },
     { type: "cancel", key: "shell/upload-validation-poll" },
@@ -949,7 +997,7 @@ function dialogClosed(state) {
   if (!state.open) return same(state);
   // A save in flight finishes and navigates; only the open flag follows the dialog.
   if (state.phase === "creating") return set(state, { open: false });
-  const effects = ["policy", "extract", "upload-create", "upload", "upload-state", "upload-retry", "upload-complete", "upload-validation-state", "upload-validation-poll", "upload-checking-clock"].map((name) => ({ type: "cancel", key: `shell/${name}` }));
+  const effects = ["policy", "asr-models", "extract", "upload-create", "upload", "upload-state", "upload-retry", "upload-complete", "upload-validation-state", "upload-validation-poll", "upload-checking-clock"].map((name) => ({ type: "cancel", key: `shell/${name}` }));
   const leftover = state.createUncertain || state.validationUncertain ? null : state.uploadId;
   if (leftover) effects.push(cleanupEffect(leftover, "close"));
   const pendingCleanup = leftover ? withItem(state.pendingCleanup, leftover) : state.pendingCleanup;
@@ -972,15 +1020,26 @@ export function reduce(state, action) {
       });
       return {
         state: next,
-        effects: [{
-          type: "fetch",
-          key: "shell/policy",
-          url: "/api/uploads/policy",
-          init: jsonRequest("GET"),
-          ok: "shell/policy-loaded",
-          error: "shell/policy-load-failed",
-          meta: { id: next.policyRequest },
-        }],
+        effects: [
+          {
+            type: "fetch",
+            key: "shell/policy",
+            url: "/api/uploads/policy",
+            init: jsonRequest("GET"),
+            ok: "shell/policy-loaded",
+            error: "shell/policy-load-failed",
+            meta: { id: next.policyRequest },
+          },
+          {
+            type: "fetch",
+            key: "shell/asr-models",
+            url: "/api/asr-models",
+            init: jsonRequest("GET"),
+            ok: "shell/asr-models-loaded",
+            error: "shell/asr-models-load-failed",
+            meta: { id: next.asrModelsRequest },
+          },
+        ],
       };
     }
     case "shell/policy-loaded": {
@@ -992,6 +1051,9 @@ export function reduce(state, action) {
     case "shell/policy-load-failed":
       if (!state.open || action.meta.id !== state.policyRequest) return same(state);
       return policyFailed(state, failureOf(action.error, t("Không tải được chính sách file.")).message);
+    case "shell/asr-models-loaded":
+      if (!state.open || action.meta.id !== state.asrModelsRequest) return same(state);
+      return set(state, { asrModels: normalizeAsrModels(action.response.body) });
     case "shell/dialog-close-requested":
       return closeDialog(state);
     case "shell/dialog-closed":
@@ -1022,6 +1084,12 @@ export function reduce(state, action) {
       return set(state, { form: { ...state.form, autoTranscribe: action.value } }, [
         { type: "storage", key: AUTO_TRANSCRIBE_KEY, area: "local", op: "write", value: action.value ? "1" : "0" },
       ]);
+    case "shell/asr-model-chosen": {
+      if (action.model === "auto") return set(state, { form: { ...state.form, asrModel: "auto" } });
+      const choice = modelChoices(state).find((entry) => entry.id === action.model);
+      if (!choice || !choice.ready) return same(state);
+      return set(state, { form: { ...state.form, asrModel: action.model } });
+    }
     case "shell/submit-requested":
       if (!canSubmit(state)) return same(state);
       return state.serverReady ? startCreate(state) : startUpload(state);
@@ -1309,7 +1377,7 @@ export function reduce(state, action) {
         effects: [
           { type: "storage", key: LAST_LANGUAGE_KEY, area: "local", op: "write", value: action.meta.payload.language_hint },
           ...(state.form.autoTranscribe
-            ? [{ type: "storage", key: `${AUTO_TRANSCRIBE_HANDOFF_PREFIX}${meeting.id}`, area: "session", op: "write", value: "1" }]
+            ? [{ type: "storage", key: `${AUTO_TRANSCRIBE_HANDOFF_PREFIX}${meeting.id}`, area: "session", op: "write", value: state.form.asrModel }]
             : []),
           { type: "navigate", key: "shell/navigate", url: `/meetings/${encodeURIComponent(meeting.id)}` },
         ],

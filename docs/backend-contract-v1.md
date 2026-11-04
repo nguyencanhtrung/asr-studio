@@ -75,6 +75,7 @@ Chọn HTTP JSON cho thao tác và polling trạng thái khi có tác vụ; chu 
 | `POST /api/access/session` | Đổi token local hợp lệ lấy cookie; loại token khỏi URL theo ADR 0002 |
 | `GET /api/meetings` và `GET /api/meetings/{id}` | Lịch sử, lịch ngày/chưa đặt ngày, metadata và các kết quả hiện có |
 | `POST /api/uploads`, `GET /api/uploads/{id}`, `PUT /api/uploads/{id}/content`, hoàn tất upload | Tạo vùng tạm bằng ID backend cấp, nhận file theo từng phần byte rồi kiểm tra; chưa hoàn tất không tạo recording ready |
+| `GET /api/asr-models` | Danh mục bốn lựa chọn ASR cho một lượt chạy, kèm readiness theo worker và phần cứng hiện tại |
 | `POST /api/meetings` và `PATCH /api/meetings/{id}` | Tạo meeting từ upload hợp lệ; sửa title/ngày với expected metadata version. Đổi ngày phải kiểm tra khóa nguồn và làm notes cần cập nhật |
 | `GET /api/meetings/{id}/audio` | Phát/tua audio được cấp quyền, không lộ đường dẫn filesystem |
 | `GET /api/meetings/{id}/generations` và `GET /api/generations/{id}` | Chọn current generation hoặc đọc lịch sử; trạng thái readonly do backend trả và kiểm tra khi ghi |
@@ -137,6 +138,13 @@ Client dùng giá trị này làm kích thước phần, nhưng mỗi request v�
 nhận. Sau lỗi mạng hoặc phản hồi `upload_busy`/`upload_interrupted`, client đọc lại trạng thái và
 thử lại phần hiện tại tối đa sáu lần với cùng backoff; lỗi tạm thời của GET trạng thái dùng cùng
 lịch và giới hạn.
+
+`GET /api/asr-models` yêu cầu session đã xác thực và trả `{asr_models: [...]}`. Mỗi phần tử có
+`id`, `model_name`, `ready`, `reason` và `prepare_command`; `id` là `auto`, `whisper-large-v3`,
+`pho-whisper-large` hoặc `qwen3-asr-1.7b`. `auto` vẫn có trong danh sách khi worker chưa sẵn
+sàng, nhưng readiness khi đó là `false`; client vẫn cho chọn để giữ hành vi tự chọn hiện tại.
+Backend chỉ đọc runtime profile khi worker khỏe, cùng quy tắc với dữ liệu runtime trong
+`GET /api/meetings/{id}`. Lỗi model catalog không làm hỏng việc tạo meeting.
 
 Client disconnect trong lúc ghi là một kết quả dự kiến: server drain thao tác ghi/fsync/commit
 đang sở hữu, trả 204 khi xử lý trực tiếp và giữ offset bền vững; cancellation thật sự vẫn được

@@ -331,7 +331,9 @@ Mỗi pha thêm vào tài liệu này bảng state và chuyển trạng thái c�
 
 Core `shell-core.js` (`initialState`, `reduce`, `selectView`), view `shell.js`. Văn bản trong core là `{text, params}`, view dịch bằng `t()`.
 
-**Id chống response cũ** (trong state): `policyRequest` (tải chính sách), `runId` (một lượt upload: tạo slot, truyền, kiểm tra), `createRequest` (lưu cuộc họp). State upload còn có `uploadOffset` (byte đã commit), `uploadRetries` (số lần thử lại phần hiện tại), `uploadStateRetries` (số lần thử lại GET trạng thái sau lỗi), `validationStateRetries` (số lần GET trạng thái validation bị lỗi tạm thời), `validationUncertain` (chưa xác nhận được trạng thái nhưng giữ upload) và `completionRecovery` (đang phục hồi sau phản hồi complete mơ hồ). Chính sách chuẩn hóa thành `chunkBytes`, mặc định 64 MiB. Mỗi effect `fetch`/`upload` mang id trong `meta`; action có id khác bị bỏ. Mở và đóng dialog tăng `policyRequest` và `runId`.
+**Id chống response cũ** (trong state): `policyRequest` (tải chính sách), `asrModelsRequest` (tải danh mục model), `runId` (một lượt upload: tạo slot, truyền, kiểm tra), `createRequest` (lưu cuộc họp). `asrModels` là `null` tới khi danh mục tải thành công; lỗi vẫn giữ `null` để ẩn control model mà không chặn tạo meeting. State upload còn có `uploadOffset` (byte đã commit), `uploadRetries` (số lần thử lại phần hiện tại), `uploadStateRetries` (số lần thử lại GET trạng thái sau lỗi), `validationStateRetries` (số lần GET trạng thái validation bị lỗi tạm thời), `validationUncertain` (chưa xác nhận được trạng thái nhưng giữ upload) và `completionRecovery` (đang phục hồi sau phản hồi complete mơ hồ). Chính sách chuẩn hóa thành `chunkBytes`, mặc định 64 MiB. Mỗi effect `fetch`/`upload` mang id trong `meta`; action có id khác bị bỏ. Mở và đóng dialog tăng `policyRequest`, `asrModelsRequest` và `runId`.
+
+Khi checkbox **Chép lời ngay sau khi tạo** bật, dưới checkbox hiện select **Model chép lời** với bốn lựa chọn và nhãn readiness. `auto` luôn chọn được, còn model chưa sẵn sàng bị disable; dòng trợ giúp nêu ghi chú model và cảnh báo rằng lệnh chuẩn bị nằm trên trang cuộc họp. Khi checkbox tắt, control bị ẩn; lựa chọn chỉ thuộc lượt mở dialog hiện tại và không ghi vào `localStorage`.
 
 **Trạng thái `phase`** (nhãn hiện ở `#state-label`, `data-state` của dialog):
 
@@ -354,10 +356,12 @@ Cờ bổ sung: `checkingSince` (mốc `action.now` đầu tiên khi server ki�
 
 | Từ | Sự kiện | Tới | Effect |
 | --- | --- | --- | --- |
-| đóng | `dialog-opened` (đọc storage) | `idle`, chờ chính sách | `fetch shell/policy` |
+| đóng | `dialog-opened` (đọc storage) | `idle`, chờ chính sách và danh mục model | `fetch shell/policy`, `fetch shell/asr-models` |
 | mở | `policy-loaded` hợp lệ / sai định dạng | `idle` / `error` | |
+| mở | `asr-models-loaded` hợp lệ | giữ phase, hiện control nếu checkbox bật | |
 | mở | `policy-load-failed` | `error`, `policyFailed` | |
-| mở | `policy-*` với id cũ | không đổi | |
+| mở | `policy-*` hoặc `asr-models-*` với id cũ | không đổi | |
+| mở | `asr-models-load-failed` | giữ `asrModels = null`, ẩn control; tạo meeting vẫn được | |
 | không bận | `file-selected` hợp lệ | `selected` | `fetch` DELETE upload cũ và các upload chờ dọn |
 | không bận | `file-selected` sai đuôi, quá lớn, chưa có chính sách | `error` | như trên |
 | đang bận hoặc tạo không rõ | `file-selected` | không đổi | |
@@ -398,7 +402,7 @@ Cờ bổ sung: `checkingSince` (mốc `action.now` đầu tiên khi server ki�
 | không bận | `multiple-files-dropped` | `error` (lỗi file) | |
 | bất kỳ | kết quả lượt cũ (`runId` khác) | không đổi | |
 | `ready`, tạo lại | `submit-requested` | `creating` | `fetch shell/create` |
-| `creating` | `meeting-created` | `saved` | `storage` ngôn ngữ; `storage` cờ chép lời (nếu bật); `navigate` |
+| `creating` | `meeting-created` | `saved` | `storage` ngôn ngữ; `storage` cờ chép lời (nếu bật, value là `form.asrModel`); `navigate` |
 | `creating` | `meeting-create-failed` 4xx | `error`, `createAttemptFailed`, giữ `serverReady` | |
 | `creating` | `meeting-create-failed` 4xx `upload_not_ready` | `error`, `retryable` | |
 | `creating` | lỗi mạng hoặc 5xx hoặc thiếu mã cuộc họp | `error`, `createUncertain` | |
@@ -407,6 +411,8 @@ Cờ bổ sung: `checkingSince` (mốc `action.now` đầu tiên khi server ki�
 | `creating`, `starting` | `dialog-close-requested` | không đổi | |
 | khác | `dialog-close-requested` | đóng, state về ban đầu | DELETE upload (trừ khi tạo không rõ) |
 | bất kỳ | `auto-transcribe-toggled` | không đổi phase | `storage` cờ chép lời |
+| checkbox bật, danh mục đã tải | `asr-model-chosen` model ready hoặc `auto` | đổi `form.asrModel` | |
+| checkbox tắt | `asr-model-chosen` | không có control; state giữ lựa chọn cho lần bật lại | |
 
 **Tách audio khỏi video (#117).** Với `.mp4`, `.mov`, `.webm`, trước khi tạo slot upload, `audio-extract.js` đọc file theo luồng và copy gói audio sang file audio-only, không giải mã hay mã hóa lại; mỗi tên file audio giữ phần tên và đổi đuôi. Thư viện là Mediabunny 1.61.6 (MPL-2.0), vendor nguyên bản ở `web/vendor/mediabunny/`, nạp bằng `import()` cùng origin khi gặp video đầu tiên; CSP không đổi (`script-src 'self'`, không `wasm-unsafe-eval`). Hiệu ứng `extract` chạy qua `deps.extract(file, {signal, onProgress})` của runner (core vẫn thuần, test bằng bản giả). Quyết định theo container:
 
@@ -692,9 +698,13 @@ Core `task-core.js` (`initialState`, `reduce`, các selector `selectTask`, `sele
 
 **Đối tượng task nằm trong cuộc họp** (`meeting.transcription.task` của `history-core`). Bốn action mang câu trả lời về task do **cả hai lát** xử lý: `task/poll-loaded`, `task/start-succeeded`, `task/cancel-succeeded` (history-core đặt task vào cuộc họp đang xem, tạo object mới, không sửa tại chỗ) và `task/refresh-loaded` (history-core cài bản cuộc họp mới như `history/meeting-fetched` rồi để thanh bên theo query). Cuộc họp mang task mới là object mới mỗi lượt poll (mang khóa nguồn notes đã báo, vì `notes.js` đọc lại khóa từ object cuộc họp lạ), nên "Tải lại bản mới nhất" so phiên bản cuộc họp bằng `installRev`, không bằng object; phép so object trong lưu sửa transcript (`appliedToRefreshedState`) còn lại tới 4c, nay đúng cả khi chỉ có lượt poll (chỉ vẽ lại thừa, không thấy được). Vì `combine` chỉ đưa cho lát phần state của nó, view đóng dấu mọi action (cả kết quả `fetch` và `schedule`) bằng `shown` = {`id`, `language`, `task`, `generation` (đã có transcript), `generationLanguage`, `blocked` (khóa nguồn notes chưa biết hoặc đang giữ)} của cuộc họp mà lát history đang giữ (cả ở trang chủ hoặc khi cuộc họp khác đang tải), đọc lúc action được tạo, như `at`. History-core không phát được action, nên view đổi hai bộ đếm của nó thành action: `left.rev` đổi thì gửi `task/meeting-left`, `readyRev` đổi thì gửi `task/meeting-ready {requestId, stored, autoStart}`. Giá trị core không tự đọc đi vào qua action: `requestId` mới (`crypto.randomUUID`), `stored` (chuỗi sessionStorage của request chờ), `autoStart` (khóa chuyển giao của hộp tạo còn đó), `hidden` (`document.hidden`).
 
+`autoStart` là giá trị thô từ khóa chuyển giao của hộp tạo: `auto` hoặc ID model đã chọn; giá trị cũ `1` và `true` cũng được chuẩn hóa thành `auto`. Đây là lựa chọn cho một lượt chạy, không phải preference lâu dài.
+
 **State** (`state.task`): `hidden`; `poll` {`meetingId`, `taskId`, `phase`: `waiting` hoặc `fetching`} hoặc `null`; `pending` {`meetingId`, `requestId`, `languageHint`, `asrModel`} (request gửi chưa rõ kết quả, cũng ghi ở sessionStorage); `asrModel` {`meetingId`, `selection`} (đặt bởi `task/model-chosen`; model chọn cho lần chạy tới, trang mới trở về `auto`; danh sách là `shown.asrModels` lấy từ `transcription.asr_models`; `selectTask().model` tắt nút bắt đầu khi model `not_prepared` hoặc `gpu_required`, còn worker chưa sẵn sàng thì để server từ chối như cũ. Server từ chối trước khi tạo task (`model_unavailable`, `model_requires_gpu`, `worker_unavailable`, `processing_unavailable`, `diarization_model_unavailable`) là câu trả lời dứt khoát dù mã 503: `pending` bị xóa và bộ chọn mở lại); `language` {`meetingId`, `selection`} (lựa chọn của người dùng); `start` {`meetingId`, `requestId`, `auto`, `refreshing`} hoặc `null` (một yêu cầu bắt đầu đang bay; dùng chung cho mọi cuộc họp như cờ cũ); `cancelling` (id task có yêu cầu hủy đang bay); `error` {`meetingId`, `message`}; `notice` {`meetingId`, `kind`: `poll-lost`, `refresh-lost`, `session-ended`}; `copy` {`taskId`, `how`}; `autoDone` (cuộc họp đã nhận khóa tự chạy); `rev` (phần task cần vẽ lại). `notes.js` vẫn nhận `transcriptionRequestInFlight` trong tin `channel/meeting-context` và `currentContext()`, đọc từ `selectRequestBusy` (`start !== null`).
 
 **Key effect và id chống response cũ**: `task/poll-timer` (`schedule`), `task/poll` (`fetch`, meta `meetingId`, `taskId`), `task/start` (meta `meetingId`, `requestId`), `task/cancel/<taskId>`, `task/refresh/poll` và `task/refresh/start` (meta `meetingId`, `origin`), `task/copy`, `task/copy-fallback`; `storage` dùng khóa sessionStorage `asr-studio:transcription-request:<meetingId>` (JSON `{requestId, languageHint, asrModel}`) và `asr-studio:auto-transcribe:<meetingId>` (khóa chuyển giao). Yêu cầu bắt đầu, hủy và đọc lại cuộc họp **không** bị hủy khi rời cuộc họp (server đã nhận): chỉ poll và timer của nó bị hủy. Câu trả lời tới sau được đối chiếu bằng meta với `poll`, `start`, `cancelling` và `shown.id`.
+
+Khi có `autoStart` tới hạn, task-core chỉ áp dụng ID model còn hợp lệ; ID đã bị gỡ được coi là `auto` cho request tự chạy ban đầu. Nếu meeting page từ chối model đã chọn sau khi model bị gỡ, màn hình giữ lựa chọn và hướng dẫn chuẩn bị, không tự retry.
 
 **Poll**
 

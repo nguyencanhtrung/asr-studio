@@ -464,10 +464,12 @@ def test_cancel_keeps_the_form_and_retry_reruns_the_whole_flow(live, signed_in, 
     expect(dialog).to_have_attribute("data-state", "uploading", timeout=10_000)
 
     expect(page.locator("#auto-transcribe")).to_be_disabled()
+    expect(page.locator("#create-asr-model")).to_be_disabled()
 
     dialog.get_by_role("button", name="Hủy tải lên").click()
     expect(dialog).to_have_attribute("data-state", "aborted")
     expect(page.locator("#auto-transcribe")).to_be_enabled()
+    expect(page.locator("#create-asr-model")).to_be_enabled()
     expect(page.locator("#meeting-name")).to_have_value("Retro quý 4")
     expect(page.locator("#meeting-date-input")).to_have_value("2026-10-15")
     expect(page.locator('input[name="language_hint"][value="vi"]')).to_be_checked()
@@ -674,6 +676,266 @@ def test_auto_transcribe_checkbox_defaults_on_and_is_remembered(live, signed_in)
     page.locator("#close-dialog").click()
     _open_dialog(page)
     expect(checkbox).to_be_checked()
+
+
+def test_create_dialog_model_selector_shows_readiness_and_resets_per_run(live, signed_in):
+    _context, page = signed_in()
+    choices = [
+        {
+            "id": "auto",
+            "model_name": "whisper-large-v3",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+        {
+            "id": "whisper-large-v3",
+            "model_name": "whisper-large-v3",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+        {
+            "id": "pho-whisper-large",
+            "model_name": "pho-whisper-large",
+            "ready": False,
+            "reason": "not_prepared",
+            "prepare_command": "docker compose run prepare",
+        },
+        {
+            "id": "qwen3-asr-1.7b",
+            "model_name": "qwen3-asr-1.7b",
+            "ready": False,
+            "reason": "gpu_required",
+            "prepare_command": None,
+        },
+    ]
+    page.route(
+        "**/api/asr-models",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"asr_models": choices}),
+        ),
+    )
+
+    dialog = _open_dialog(page)
+    selector = page.locator("#create-asr-model")
+    expect(dialog.get_by_label("Model chép lời")).to_be_visible()
+    expect(selector.locator("option")).to_have_count(4)
+    expect(selector.locator('option[value="auto"]')).to_be_enabled()
+    expect(selector.locator('option[value="pho-whisper-large"]')).to_be_disabled()
+    expect(selector.locator('option[value="qwen3-asr-1.7b"]')).to_be_disabled()
+    expect(page.locator("#create-asr-model-help")).to_contain_text("Model chưa sẵn sàng")
+
+    page.locator("#auto-transcribe").uncheck()
+    expect(page.locator("#create-asr-model-control")).to_be_hidden()
+    page.locator("#auto-transcribe").check()
+    expect(page.locator("#create-asr-model-control")).to_be_visible()
+    selector.select_option("whisper-large-v3")
+    page.locator("#close-dialog").click()
+    _open_dialog(page)
+    expect(selector).to_have_value("auto")
+    assert (
+        page.evaluate("() => Object.keys(localStorage).some(key => key.includes('asr_model'))")
+        is False
+    )
+
+
+def test_ready_create_model_is_sent_once_and_handoff_is_consumed(live, signed_in, media_tools):
+    _context, page = signed_in()
+    choices = [
+        {
+            "id": "auto",
+            "model_name": "whisper-large-v3",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+        {
+            "id": "whisper-large-v3",
+            "model_name": "whisper-large-v3",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+        {
+            "id": "pho-whisper-large",
+            "model_name": "pho-whisper-large",
+            "ready": False,
+            "reason": "not_prepared",
+            "prepare_command": None,
+        },
+        {
+            "id": "qwen3-asr-1.7b",
+            "model_name": "qwen3-asr-1.7b",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+    ]
+    page.route(
+        "**/api/asr-models",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps({"asr_models": choices})
+        ),
+    )
+    task_requests = []
+
+    def accept_task(route):
+        if route.request.method != "POST":
+            route.fallback()
+            return
+        body = route.request.post_data_json
+        task_requests.append(body)
+        route.fulfill(
+            status=202,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "id": "a" * 32,
+                    "request_id": body["request_id"],
+                    "status": "accepted",
+                    "language_hint": body["language_hint"],
+                    "asr_model": body["asr_model"],
+                    "stage": "queued",
+                    "worker_state": "healthy",
+                }
+            ),
+        )
+
+    page.route("**/api/tasks", accept_task)
+    dialog = _open_dialog(page)
+    page.locator("#recording-file").set_input_files(_recording("Named model.wav", real=True))
+    page.locator('input[name="language_hint"][value="en"]').check()
+    page.locator("#create-asr-model").select_option("qwen3-asr-1.7b")
+    with page.expect_response("**/api/tasks", timeout=15_000):
+        dialog.get_by_role("button", name="Tạo cuộc họp").click()
+    meeting_id = _meeting_id(page)
+    assert len(task_requests) == 1
+    assert task_requests[0]["asr_model"] == "qwen3-asr-1.7b"
+    assert page.evaluate(f"sessionStorage.getItem('{HANDOFF_KEY}{meeting_id}')") is None
+
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_timeout(1_000)
+    assert len(task_requests) == 1
+
+
+def test_failed_model_catalog_hides_control_but_creation_still_works(live, signed_in, media_tools):
+    _context, page = signed_in()
+    page.route(
+        "**/api/asr-models",
+        lambda route: route.fulfill(status=500, content_type="application/json", body="{}"),
+    )
+    dialog = _open_dialog(page)
+    expect(page.locator("#create-asr-model-control")).to_be_hidden()
+    page.locator("#recording-file").set_input_files(
+        _recording("Catalog unavailable.wav", real=True)
+    )
+    page.locator('input[name="language_hint"][value="en"]').check()
+    page.locator("#auto-transcribe").uncheck()
+    dialog.get_by_role("button", name="Tạo cuộc họp").click()
+    _meeting_id(page)
+
+
+def test_removed_model_refusal_keeps_selection_guidance_and_does_not_retry(
+    live, ready_worker, signed_in, media_tools
+):
+    _context, page = signed_in()
+    dialog_choices = [
+        {
+            "id": "auto",
+            "model_name": "whisper-large-v3",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+        {
+            "id": "whisper-large-v3",
+            "model_name": "whisper-large-v3",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+        {
+            "id": "pho-whisper-large",
+            "model_name": "pho-whisper-large",
+            "ready": True,
+            "reason": None,
+            "prepare_command": None,
+        },
+        {
+            "id": "qwen3-asr-1.7b",
+            "model_name": "qwen3-asr-1.7b",
+            "ready": False,
+            "reason": "gpu_required",
+            "prepare_command": None,
+        },
+    ]
+    meeting_choices = [
+        {
+            **choice,
+            "ready": choice["id"] == "auto",
+            "reason": None if choice["id"] == "auto" else "not_prepared",
+            "prepare_command": (
+                "docker compose run --rm worker model prepare --asr-model pho-whisper-large"
+            )
+            if choice["id"] == "pho-whisper-large"
+            else None,
+        }
+        for choice in dialog_choices
+    ]
+    page.route(
+        "**/api/asr-models",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"asr_models": dialog_choices}),
+        ),
+    )
+
+    def replace_meeting_models(route):
+        if route.request.method != "GET":
+            route.fallback()
+            return
+        response = route.fetch()
+        body = response.json()
+        body["transcription"]["asr_models"] = meeting_choices
+        route.fulfill(response=response, json=body)
+
+    page.route("**/api/meetings/*", replace_meeting_models)
+    task_posts = []
+
+    def refuse_removed_model(route):
+        if route.request.method != "POST":
+            route.fallback()
+            return
+        task_posts.append(route.request.post_data_json)
+        route.fulfill(
+            status=503,
+            content_type="application/json",
+            body=json.dumps({"detail": {"code": "model_unavailable", "message": "removed"}}),
+        )
+
+    page.route("**/api/tasks", refuse_removed_model)
+    dialog = _open_dialog(page)
+    page.locator("#recording-file").set_input_files(_recording("Removed model.wav", real=True))
+    page.locator('input[name="language_hint"][value="en"]').check()
+    page.locator("#create-asr-model").select_option("pho-whisper-large")
+    dialog.get_by_role("button", name="Tạo cuộc họp").click()
+    _meeting_id(page)
+
+    expect(page.locator("#transcription-error")).to_contain_text("Model đã chọn chưa được chuẩn bị")
+    expect(page.locator("#transcription-model")).to_have_value("pho-whisper-large")
+    expect(page.locator("#transcription-model-guidance")).to_be_visible()
+    expect(page.locator("#transcription-model-guidance-text")).to_contain_text(
+        "Model này chưa được chuẩn bị"
+    )
+    expect(page.locator("#transcription-model-command")).to_have_value(
+        "docker compose run --rm worker model prepare --asr-model pho-whisper-large"
+    )
+    page.wait_for_timeout(1_000)
+    assert len(task_posts) == 1
 
 
 def test_checkbox_on_starts_transcription_exactly_once(live, ready_worker, signed_in, media_tools):
@@ -926,10 +1188,21 @@ def test_create_dialog_fits_360px_and_stays_legible_in_both_themes(live, signed_
     )
     assert page.locator(".dialog-content").evaluate("el => el.scrollWidth - el.clientWidth") == 0
     frame = dialog.bounding_box()
-    for selector in (".auto-transcribe-option", "#auto-transcribe-help", "#state-label"):
+    for selector in (
+        ".auto-transcribe-option",
+        "#auto-transcribe-help",
+        "#create-asr-model-control",
+        "#create-asr-model-help",
+        "#state-label",
+    ):
         box = page.locator(selector).bounding_box()
         assert box["x"] >= frame["x"] and box["x"] + box["width"] <= frame["x"] + frame["width"]
-    for selector in (".auto-transcribe-option", "#auto-transcribe-help", "#state-label"):
+    for selector in (
+        ".auto-transcribe-option",
+        "#auto-transcribe-help",
+        "#create-asr-model-help",
+        "#state-label",
+    ):
         assert _contrast(page, selector) >= 4.5, selector
 
 
@@ -952,7 +1225,11 @@ def test_new_dialog_controls_show_a_keyboard_focus_ring(live, signed_in, scheme)
         )
 
     assert ring(checkbox)["style"] == "solid" and ring(checkbox)["width"] >= 2
+    model = dialog.locator("#create-asr-model")
     create = dialog.get_by_role("button", name="Tạo cuộc họp")
+    page.keyboard.press("Tab")
+    expect(model).to_be_focused()
+    assert ring(model)["style"] == "solid" and ring(model)["width"] >= 2
     page.keyboard.press("Tab")
     expect(create).to_be_focused()
     assert ring(create)["style"] == "solid" and ring(create)["width"] >= 2

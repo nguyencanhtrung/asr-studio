@@ -347,7 +347,7 @@ function meetingReady(meeting) {
     type: "task/meeting-ready",
     requestId: newRequestId(),
     stored: readStored(requestStorageKey(meeting.id)),
-    autoStart: readStored(autoStartStorageKey(meeting.id)) !== null,
+    autoStart: readStored(autoStartStorageKey(meeting.id)),
   });
 }
 

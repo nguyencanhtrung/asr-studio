@@ -95,7 +95,7 @@ function setup(path = "/meetings/m1") {
     if (seen.left.rev !== was.left.rev) send("task/meeting-left");
     if (seen.readyRev !== was.readyRev) {
       const id = seen.meeting.id;
-      send("task/meeting-ready", { requestId: `new-${nextId += 1}`, stored: stored.get(requestStorageKey(id)) ?? null, autoStart: stored.has(autoStartStorageKey(id)) });
+      send("task/meeting-ready", { requestId: `new-${nextId += 1}`, stored: stored.get(requestStorageKey(id)) ?? null, autoStart: stored.get(autoStartStorageKey(id)) ?? null });
     }
   });
   const open = (match) => (r) => !r.done && !r.signal.aborted && match(r);
@@ -813,6 +813,7 @@ test("the create dialog's hand-off starts the transcription once and is consumed
   assert.equal(env.stored.has(autoStartStorageKey("m1")), false);
   assert.equal(env.sent("/api/tasks").length, 1);
   assert.equal(env.sent("/api/tasks")[0].body.request_id, "new-1");
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "auto");
 
   await env.fail((r) => r.url === "/api/tasks");
   // The meeting loads again with the hand-off still readable: the reducer starts nothing a second time.
@@ -821,6 +822,13 @@ test("the create dialog's hand-off starts the transcription once and is consumed
   await env.answer(GET_MEETING("m1"), 200, meeting("m1"));
   assert.equal(env.sent("/api/tasks").length, 1);
   assert.equal(env.stored.has(autoStartStorageKey("m1")), false);
+});
+
+test("a named create-dialog hand-off selects that model for the automatic start", async () => {
+  const env = await opened(withChoices(), { stored: { [autoStartStorageKey("m1")]: "qwen3-asr-1.7b" } });
+  assert.equal(env.stored.has(autoStartStorageKey("m1")), false);
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "qwen3-asr-1.7b");
+  assert.equal(env.view().model.value, "qwen3-asr-1.7b");
 });
 
 test("the hand-off does not start a meeting that already has a task or a transcript, and is still consumed", async () => {

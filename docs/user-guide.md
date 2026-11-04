@@ -321,10 +321,13 @@ This happens on any web page, not only in this workspace. Select the file and cl
 or drag the file onto the upload area. Closing the picker without a file leaves **New meeting**
 open.
 
-**Transcribe after create** is on by default. The browser remembers your last choice. When it is
-on, the meeting page sends one transcription request. Reload or Back does not send it again. If
-the machine is busy or the worker is not ready, the page shows the reason and a
-**Start transcription** button. It does not retry.
+**Transcribe after create** is on by default. The browser remembers that checkbox choice. When it
+is on, the dialog also shows **Transcription model** after the model catalog loads: **Automatic**
+is always available, while a model that is not ready is shown but cannot be selected. The model
+choice is for this one meeting only and is not saved as a preference. The meeting page sends one
+transcription request. Reload or Back does not send it again. If the machine is busy, the worker
+is not ready, or the selected model was removed, the page shows the reason and a **Start
+transcription** button with the preparation guidance. It does not retry.
 
 ### Transcription
 

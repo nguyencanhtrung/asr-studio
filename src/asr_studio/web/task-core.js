@@ -13,7 +13,7 @@
 // User-visible text is data: t(text, params) here only keeps the Vietnamese source string, and the view translates it.
 
 import { ACTIVE_TASK_STATES, LANGUAGES, failureOf } from "./history-core.js";
-import { AUTO_TRANSCRIBE_HANDOFF_PREFIX, errorMessageForCode, isWorkspaceAuthenticationFailure } from "./shell-core.js";
+import { ASR_MODEL_TEXT, AUTO_TRANSCRIBE_HANDOFF_PREFIX, errorMessageForCode, isWorkspaceAuthenticationFailure } from "./shell-core.js";
 
 const t = (text, params) => (params ? { text, params } : { text });
 
@@ -65,13 +65,6 @@ const MODEL_REFUSALS = {
 
 const LANGUAGE_HINTS = new Set(Object.keys(LANGUAGES));
 
-// The choices of the model selector. The server owns which exist and whether each is ready.
-const ASR_MODEL_TEXT = {
-  auto: { label: t("Tự động") },
-  "whisper-large-v3": { label: "Whisper large-v3", note: t("Đa ngôn ngữ, tự phát hiện ngôn ngữ. Đôi khi lặp lại câu.") },
-  "pho-whisper-large": { label: "PhoWhisper-large", note: t("Tối ưu cho tiếng Việt. Không dành cho English hoặc nội dung trộn nhiều thuật ngữ kỹ thuật.") },
-  "qwen3-asr-1.7b": { label: "Qwen3-ASR-1.7B", note: t("Đa ngôn ngữ, chỉ chạy trên GPU. Không có điểm tin cậy: “cần kiểm tra” chỉ bắt đoạn lặp và vấn đề người nói, nên đừng so số này với model khác.") },
-};
 const ASR_MODEL_GUIDANCE = {
   not_prepared: t("Model này chưa được chuẩn bị trên máy. Chạy lệnh sau trong thư mục ứng dụng (chỉ tải model, không gửi bản ghi), rồi tải lại trang."),
   gpu_required: t("Model này chỉ chạy trên GPU NVIDIA, còn worker đang chạy CPU. Hãy chọn model khác."),
@@ -325,7 +318,11 @@ function startFailed(state, error, auto) {
     ? t("Bấm lại để gửi một yêu cầu mới.")
     : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   let message = [failure.message, " ", guidance];
-  if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
+  const selectedModel = state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto";
+  if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
+    // A named model has its own preparation/GPU guidance, including for an automatic handoff.
+    message = MODEL_REFUSALS[failure.code];
+  } else if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
     message = t("{reason} Cuộc họp đã được lưu nhưng chưa chép lời. Ứng dụng không tự thử lại; bấm “Bắt đầu chép lời” khi máy sẵn sàng.", { reason: AUTO_START_REASONS[failure.code] });
   } else if (Object.hasOwn(MODEL_REFUSALS, failure.code)) {
     // The shared text for this code names a notes provider, which has no place here.
@@ -464,7 +461,9 @@ export function reduce(state, action) {
         const handoff = { type: "storage", key: autoStartStorageKey(shown.id), area: "session", op: "remove" };
         const taken = then(result, (s) => out({ ...s, autoDone: shown.id }, [handoff]));
         const due = state.autoDone !== shown.id && !task && !shown.generation;
-        result = due ? then(taken, (s) => startRequest(s, shown, action.requestId, true)) : taken;
+        result = due
+          ? then(taken, (s) => startRequest({ ...s, asrModel: { meetingId: shown.id, selection: validModel(action.autoStart) || "auto" } }, shown, action.requestId, true))
+          : taken;
       }
       // The language control repaints when a pending request came back, and the status line when a notice or copy line went away.
       const changed = (s) => s.pending !== state.pending || s.notice !== state.notice || s.copy !== state.copy;

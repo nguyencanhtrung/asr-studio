@@ -376,6 +376,16 @@ def install_routes(
             },
         }
 
+    async def healthy_runtime_profile():
+        if not worker_is_healthy(settings.data_dir):
+            return None
+        return await run_in_threadpool(read_runtime_profile, settings.data_dir)
+
+    @app.get("/api/asr-models")
+    async def list_asr_models() -> dict[str, Any]:
+        profile = await healthy_runtime_profile()
+        return {"asr_models": await run_in_threadpool(model_choices, settings, profile)}
+
     @app.get("/api/providers")
     async def list_providers() -> dict[str, Any]:
         def load_providers() -> dict[str, Any]:
@@ -753,11 +763,7 @@ def install_routes(
 
     async def with_runtime(meeting: dict[str, object]) -> dict[str, object]:
         """What this machine can run now: the page replaces its meeting with these answers."""
-        profile = (
-            await run_in_threadpool(read_runtime_profile, settings.data_dir)
-            if worker_is_healthy(settings.data_dir)
-            else None
-        )
+        profile = await healthy_runtime_profile()
         transcription = meeting["transcription"]
         assert isinstance(transcription, dict)
         transcription["runtime"] = profile.public_summary() if profile is not None else None
