@@ -26,7 +26,7 @@ rebinding.
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--source` (default) | Builds `ASR_IMAGE` from the checkout.                                                                                                                    |
 | `--pull`             | Pulls `ASR_IMAGE`. The image must have a version tag (`:v0.1.3`) or a digest (`@sha256:...`). The script rejects `local`, `latest` and `edge`. |
-| `--offline`          | Uses a local image and local models. It does not build, pull or download, and it leaves the model installer stopped, so **Settings → ASR Model** shows the prepare command.                                                                                  |
+| `--offline`          | Uses a local image and local models. It does not build, pull or download, it leaves the model installer stopped and it does not block the [network](#network-access), so **Settings → ASR Model** shows the prepare command.                                                                                  |
 
 App, worker and model installer always use the same `ASR_IMAGE`. Before it starts the services, the script:
 
@@ -70,7 +70,7 @@ error. It does not fall back to the CPU.
 
 ### Install a release
 
-The commands below install the ASR Studio release `v0.2.0`. For a real installation, use the tag,
+The commands below install the ASR Studio release `v0.2.1`. For a real installation, use the tag,
 commit or digest from the release notes. Do not overwrite old tags.
 
 `v0.1.3` predates the rename: its published image remains under `asr-en-vi` and
@@ -86,11 +86,11 @@ Community-1 only after you accept its conditions (see
 Build from source:
 
 ```sh
-git clone --branch v0.2.0 --depth 1 https://github.com/nguyencanhtrung/asr-studio.git
+git clone --branch v0.2.1 --depth 1 https://github.com/nguyencanhtrung/asr-studio.git
 cd asr-studio
 export COMPOSE_PROJECT_NAME=asr-source-v1
 export ASR_MODEL_HOST_PATH="$PWD/models"
-export ASR_IMAGE=asr-studio:v0.2.0
+export ASR_IMAGE=asr-studio:v0.2.1
 ./scripts/start.sh --source
 ```
 
@@ -100,12 +100,12 @@ Pull the public image (same checkout):
 export COMPOSE_PROJECT_NAME=asr-pull-v1
 export ASR_PORT=8766
 export ASR_MODEL_HOST_PATH="$PWD/models"
-export ASR_IMAGE=ghcr.io/nguyencanhtrung/asr-studio:v0.2.0
+export ASR_IMAGE=ghcr.io/nguyencanhtrung/asr-studio:v0.2.1
 ./scripts/start.sh --pull
 ```
 
 A different project name gives separate data, token and provider volumes. Port 8766 prevents a
-conflict with the source installation. The local tag `asr-studio:v0.2.0` shows that the image
+conflict with the source installation. The local tag `asr-studio:v0.2.1` shows that the image
 comes from source, not from GHCR. To fix an exact artifact, set `ASR_IMAGE` to the published
 digest (`ghcr.io/nguyencanhtrung/asr-studio@sha256:...`).
 
@@ -174,6 +174,22 @@ Restart and recreate keep the volumes. A new Compose project makes a new token.
 | `ASR_MAX_UPLOAD_BYTES`      | Upload limit. Default 4 GiB.                                            |
 | `ASR_UPLOAD_CHUNK_BYTES`    | Maximum browser upload request size. Default 64 MiB.                   |
 | `ASR_MAX_RECORDING_SECONDS` | Duration limit. Default 4 hours.                                        |
+
+### Network access
+
+All services share the default Docker network, and each one can reach the internet. Nothing on it
+is published except the app's port on the host's loopback address.
+
+| Service | Why it needs the network | Holds |
+| --- | --- | --- |
+| `app` | Sign-in with a notes provider. | Recordings, transcripts, sign-in data. |
+| `worker` | Notes run in its child process and call the provider. ASR and diarization do not use the network. | Recordings, transcripts, provider sign-in. |
+| `model-installer` | Downloads catalog models at pinned revisions. | Only `/models` and its job files. |
+
+`HF_HUB_OFFLINE=1` on `app` and `worker` stops the model hub libraries. It does not block the
+network, and neither does `--offline`, which only skips builds, pulls and downloads and leaves the
+model installer stopped. To cut the network, do it on the host, for example with a firewall rule.
+Notes then fail with a clear error, and transcription keeps working.
 
 ### Access token
 
@@ -287,7 +303,7 @@ for Qwen. For an offline machine, copy a prepared directory to
 `./models/pho-whisper-large` or `./models/qwen3-asr-1.7b`.
 
 The image contains CUDA 12.8 and cuDNN 9. At runtime, the worker opens models from local paths
-only, in offline mode, with telemetry off. Audio does not leave the machine. The collapsed
+only, in the model hub's offline mode, with telemetry off. Audio does not leave the machine. The collapsed
 **Processing details** section of the Transcript block shows the backend, compute type and default
 model. Each transcript generation shows the model, backend and compute type of the run that made it.
 
@@ -313,7 +329,7 @@ git clone https://hf.co/pyannote/speaker-diarization-community-1 \
 - Use the Hugging Face token only for the download on the host. Do not put the token or the
   model ID in `.env` or Compose.
 
-The worker uses a local path, offline mode, `token=False` and telemetry off. ASR and diarization
+The worker uses a local path, the model hub's offline mode, `token=False` and telemetry off. ASR and diarization
 run in two child processes, one after the other. Each process exits before the next phase starts,
 which releases model memory.
 
