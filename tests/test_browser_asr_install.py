@@ -263,8 +263,15 @@ def test_the_install_block_fits_a_phone_and_keeps_the_type_floor(live, signed_in
     assert sizes and min(sizes) >= 12
     button = row.get_by_role("button", name="Hủy")
     expect(button).to_have_css("font-size", "14px")
-    box = button.bounding_box()
-    assert box["height"] >= 40 and box["x"] + box["width"] <= width
+    box = page.evaluate(
+        """() => {
+          const cancel = [...document.querySelectorAll(".asr-install button")]
+            .find((item) => item.textContent.trim() === "Hủy");
+          const { height, right } = cancel.getBoundingClientRect();
+          return { height, right };
+        }"""
+    )
+    assert box["height"] >= 40 and box["right"] <= width
     installer.gate.write_text("go", encoding="utf-8")
 
 
