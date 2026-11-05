@@ -34,7 +34,7 @@ def test_compose_separates_services_volumes_and_loopback_publish():
     )
     assert "ASR_MODEL_PATH" not in app["environment"]
     assert worker["environment"]["ASR_DEVICE"] == "${ASR_DEVICE:-auto}"
-    assert worker["environment"]["ASR_GPU_MODEL_PATH"].endswith("whisper-large-v3}")
+    assert worker["environment"]["ASR_GPU_MODEL_PATH"].endswith("qwen3-asr-1.7b}")
     assert worker["environment"]["ASR_CPU_MODEL_PATH"].endswith("whisper-small}")
     assert worker["environment"]["ASR_DIARIZATION_MODEL_PATH"].endswith(
         "speaker-diarization-community-1}"
@@ -227,7 +227,7 @@ def test_example_environment_selects_hardware_profiles_automatically():
     example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
     assert "ASR_DEVICE=auto" in example.splitlines()
-    assert "ASR_GPU_MODEL_PATH=/models/whisper-large-v3" in example.splitlines()
+    assert "ASR_GPU_MODEL_PATH=/models/qwen3-asr-1.7b" in example.splitlines()
     assert "ASR_CPU_MODEL_PATH=/models/whisper-small" in example.splitlines()
     assert "ASR_GPU_COMPUTE_TYPE=float16" in example.splitlines()
     assert "ASR_CPU_COMPUTE_TYPE=int8" in example.splitlines()

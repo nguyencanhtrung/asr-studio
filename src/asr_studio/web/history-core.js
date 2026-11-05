@@ -1,6 +1,6 @@
 // Pure core of the meeting navigation and library: state, reducer, selectors and the date helpers the old
 // history.js held. No DOM, fetch, timer, storage, clock, randomness or page address: node --test loads this
-// file directly. Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design-v1.md §11.8.
+// file directly. Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design.md §11.8.
 //
 // Scope (phase 4a of #118): the meeting list and search, the two calendars, the views (home, calendar,
 // loading, error, meeting), loading one meeting, the Notes | Transcript tabs, the notes summary and source

@@ -49,7 +49,7 @@ Q12 sau khảo sát đã chọn hỗ trợ **ChatGPT và OMP + Google Antigravit
 - Cấu hình cô lập thật sự, không auto-compaction làm mất nguồn, không gọi model phụ/fallback ngoài lựa chọn.
 - Khả năng chạy end-to-end của tài khoản người dùng. Chưa có benchmark hoặc cam kết miễn phí.
 
-Q16 đã chọn thử direct Sign in with ChatGPT cho nhánh ChatGPT. Với Antigravity, không coi wrapper `agy` là phương án tránh hạn chế: FAQ hiện nói bọc CLI trong ứng dụng bên thứ ba không được hỗ trợ trên gói cá nhân. [FAQ chính thức](https://www.antigravity.google/docs/faq/). Các quyết định được ghi trong [thiết kế backend](backend-design-v1.md).
+Q16 đã chọn thử direct Sign in with ChatGPT cho nhánh ChatGPT. Với Antigravity, không coi wrapper `agy` là phương án tránh hạn chế: FAQ hiện nói bọc CLI trong ứng dụng bên thứ ba không được hỗ trợ trên gói cá nhân. [FAQ chính thức](https://www.antigravity.google/docs/faq/). Các quyết định được ghi trong [thiết kế backend](backend-design.md).
 
 ## Làm rõ adapter ChatGPT sau Q15
 

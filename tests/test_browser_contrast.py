@@ -54,7 +54,7 @@ SPECIMENS = """
 </div>
 <section>
   <h3 class="settings-group-title" data-text>ASR Model</h3>
-  <p class="asr-default" data-text>Mặc định theo phần cứng của máy: whisper-large-v3.</p>
+  <p class="asr-default" data-text>Mặc định theo phần cứng của máy: qwen3-asr-1.7b.</p>
   <ul class="asr-models">
     <li class="asr-model" data-state="ready"><div class="asr-model-head">
       <strong data-text>Whisper</strong>

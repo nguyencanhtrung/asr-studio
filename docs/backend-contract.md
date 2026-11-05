@@ -1,6 +1,6 @@
 # Backend contract v1 — bản thiết kế kỹ thuật
 
-Tài liệu cụ thể hóa Q1–Q27 đã thống nhất trong [backend design](backend-design-v1.md), hoàn tất tổng hợp ngày 2026-10-16. Đây là bản thiết kế trước triển khai, không phải mô tả API/database đang tồn tại. Tên bảng, endpoint và các giá trị cấu hình bên dưới là lựa chọn kỹ thuật ban đầu; các hành vi sản phẩm đã chốt là ràng buộc khi triển khai. [Spec](specification-v1.md) là nguồn yêu cầu nghiệm thu.
+Tài liệu cụ thể hóa Q1–Q27 đã thống nhất trong [backend design](backend-design.md), hoàn tất tổng hợp ngày 2026-10-16. Đây là bản thiết kế trước triển khai, không phải mô tả API/database đang tồn tại. Tên bảng, endpoint và các giá trị cấu hình bên dưới là lựa chọn kỹ thuật ban đầu; các hành vi sản phẩm đã chốt là ràng buộc khi triển khai. [Spec](specification.md) là nguồn yêu cầu nghiệm thu.
 
 ## 1. Ranh giới và luồng dữ liệu
 
@@ -147,6 +147,11 @@ sàng, nhưng readiness khi đó là `false`; client vẫn cho chọn để gi�
 Backend chỉ đọc runtime profile khi worker khỏe, cùng quy tắc với dữ liệu runtime trong
 `GET /api/meetings/{id}`. Lỗi model catalog không làm hỏng việc tạo meeting.
 
+Khi không có model mặc định do người vận hành chọn, `auto` dùng `qwen3-asr-1.7b` với `bfloat16`
+trên GPU và `whisper-small` với `int8` trên CPU. Một lựa chọn explicit vẫn dùng đúng engine của
+model đó; đường dẫn Whisper large-v3 cũ không bị diễn giải thành Qwen. Task đã lưu `asr_model: auto`
+vẫn được chạy theo đường dẫn model đã lưu.
+
 Phản hồi của endpoint Cài đặt thêm, ngoài các trường trên: ở mỗi model khác `auto`,
 `install` (`{state}` với `state` là `idle`, `queued`, `running`, `cancelling` hoặc `failed`; khi
 `running` có `phase` là `downloading`, `converting` hoặc `verifying` cùng `bytes_done`/`bytes_total`
@@ -225,7 +230,7 @@ Upload và kết quả file có trạng thái bền để nhận biết file ch�
 
 Xem [bằng chứng và đánh đổi theo tag](release/privacy-v0.1.0.md),
 [các thay đổi notes](release/notes-v0.1.0.md) và
-[chỉ mục thay đổi](architecture-changes-v1.md). Số đo lịch sử giữ nguyên điều kiện
+[chỉ mục thay đổi](architecture-changes.md). Số đo lịch sử giữ nguyên điều kiện
 và revision gốc; không phải phép đo lại artifact 0.1.0.
 
 

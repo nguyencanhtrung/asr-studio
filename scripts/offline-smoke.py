@@ -48,13 +48,16 @@ MAX_STDERR_DIAGNOSTIC_CHARS = 1200
 OFFLINE_NOTES_STATUS_TEXT = "tạm thời không khả dụng"
 OFFLINE_NOTES_TIMEOUT_MS = 120_000
 MIN_AUDIO_SECONDS = 2
-ASR_MODEL_NAME = "whisper-large-v3"
+ASR_MODEL_NAME = "qwen3-asr-1.7b"
 DIARIZATION_MODEL_NAME = "speaker-diarization-community-1"
 ASR_REQUIRED_FILES = (
-    "model.bin",
     "config.json",
+    "generation_config.json",
+    "model.safetensors",
     "tokenizer.json",
-    "preprocessor_config.json",
+    "tokenizer_config.json",
+    "processor_config.json",
+    "chat_template.jinja",
 )
 DIARIZATION_REQUIRED_FILES = (
     "config.yaml",
@@ -270,32 +273,20 @@ def _check_model_files(directory: Path, required: tuple[str, ...], label: str) -
 
 def _check_asr_model_configuration(directory: Path) -> None:
     try:
-        tokenizer = json.loads((directory / "tokenizer.json").read_text(encoding="utf-8"))
         model = json.loads((directory / "config.json").read_text(encoding="utf-8"))
-        preprocessor = json.loads(
-            (directory / "preprocessor_config.json").read_text(encoding="utf-8")
-        )
+        processor = json.loads((directory / "processor_config.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         raise SmokeFailure(
             "Prepared ASR model configuration is invalid; no download was attempted."
         ) from None
-    if not isinstance(tokenizer, dict) or not isinstance(tokenizer.get("model"), dict):
-        raise SmokeFailure("Prepared ASR tokenizer is invalid; no download was attempted.")
-    if not isinstance(model, dict) or any(
-        key not in model for key in ("lang_ids", "suppress_ids", "suppress_ids_begin")
-    ):
-        raise SmokeFailure("Prepared ASR model config is incomplete; no download was attempted.")
-    if not isinstance(preprocessor, dict):
+    if not isinstance(model, dict) or model.get("model_type") != "qwen3_asr":
+        raise SmokeFailure("Prepared ASR model is not Qwen3-ASR; no download was attempted.")
+    feature_extractor = processor.get("feature_extractor") if isinstance(processor, dict) else None
+    if not isinstance(feature_extractor, dict):
         raise SmokeFailure(
-            "Prepared ASR preprocessor config is invalid; no download was attempted."
+            "Prepared ASR processor config is incomplete; no download was attempted."
         )
-    for key in ("feature_size", "sampling_rate", "hop_length", "n_fft", "chunk_length"):
-        value = preprocessor.get(key)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            raise SmokeFailure(
-                "Prepared ASR preprocessor config is incomplete; no download was attempted."
-            )
-    if preprocessor["sampling_rate"] != 16000:
+    if feature_extractor.get("sampling_rate") != 16000:
         raise SmokeFailure("Prepared ASR model must use 16 kHz audio; no download was attempted.")
 
 
@@ -347,7 +338,7 @@ def validate_inputs(options: SmokeOptions) -> tuple[Path, Path, int, str]:
     asr_dir = models / ASR_MODEL_NAME
     diarization_dir = models / DIARIZATION_MODEL_NAME
     if not asr_dir.is_dir() or not diarization_dir.is_dir():
-        raise SmokeFailure("Stage both whisper-large-v3 and Community-1 under --models first.")
+        raise SmokeFailure("Stage both qwen3-asr-1.7b and Community-1 under --models first.")
     _check_model_files(asr_dir, ASR_REQUIRED_FILES, "ASR")
     _check_model_files(diarization_dir, DIARIZATION_REQUIRED_FILES, "Community-1")
     _check_asr_model_configuration(asr_dir)

@@ -41,7 +41,7 @@ services:
       ASR_MAX_UPLOAD_BYTES: ${ASR_MAX_UPLOAD_BYTES:-4294967296}
       ASR_UPLOAD_CHUNK_BYTES: ${ASR_UPLOAD_CHUNK_BYTES:-67108864}
       ASR_MAX_RECORDING_SECONDS: ${ASR_MAX_RECORDING_SECONDS:-14400}
-      ASR_GPU_MODEL_PATH: ${ASR_GPU_MODEL_PATH:-/models/whisper-large-v3}
+      ASR_GPU_MODEL_PATH: ${ASR_GPU_MODEL_PATH:-/models/qwen3-asr-1.7b}
       ASR_CPU_MODEL_PATH: ${ASR_CPU_MODEL_PATH:-/models/whisper-small}
       ASR_PHOWHISPER_MODEL_PATH: ${ASR_PHOWHISPER_MODEL_PATH:-/models/pho-whisper-large}
       ASR_QWEN_MODEL_PATH: ${ASR_QWEN_MODEL_PATH:-/models/qwen3-asr-1.7b}
@@ -84,7 +84,7 @@ services:
       ASR_DEVICE: ${ASR_DEVICE:-auto}
       ASR_MODEL_PATH: ${ASR_MODEL_PATH:-}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-}
-      ASR_GPU_MODEL_PATH: ${ASR_GPU_MODEL_PATH:-/models/whisper-large-v3}
+      ASR_GPU_MODEL_PATH: ${ASR_GPU_MODEL_PATH:-/models/qwen3-asr-1.7b}
       ASR_CPU_MODEL_PATH: ${ASR_CPU_MODEL_PATH:-/models/whisper-small}
       ASR_PHOWHISPER_MODEL_PATH: ${ASR_PHOWHISPER_MODEL_PATH:-/models/pho-whisper-large}
       ASR_QWEN_MODEL_PATH: ${ASR_QWEN_MODEL_PATH:-/models/qwen3-asr-1.7b}
@@ -132,7 +132,7 @@ services:
       - ALL
     environment:
       ASR_INSTALL_DIR: /var/lib/asr-studio/install
-      ASR_GPU_MODEL_PATH: ${ASR_GPU_MODEL_PATH:-/models/whisper-large-v3}
+      ASR_GPU_MODEL_PATH: ${ASR_GPU_MODEL_PATH:-/models/qwen3-asr-1.7b}
       ASR_CPU_MODEL_PATH: ${ASR_CPU_MODEL_PATH:-/models/whisper-small}
       ASR_PHOWHISPER_MODEL_PATH: ${ASR_PHOWHISPER_MODEL_PATH:-/models/pho-whisper-large}
       ASR_QWEN_MODEL_PATH: ${ASR_QWEN_MODEL_PATH:-/models/qwen3-asr-1.7b}

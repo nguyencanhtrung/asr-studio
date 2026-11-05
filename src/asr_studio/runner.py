@@ -339,6 +339,7 @@ def transcribe_file(
         multilingual=True,
         beam_size=5,
         vad_filter=False,
+        condition_on_previous_text=False,
     )
     segment_count = 0
     for segment in segments:

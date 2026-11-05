@@ -203,7 +203,7 @@ cập nhật tài liệu này.
 
 Xem [bằng chứng và đánh đổi theo tag](release/performance-v0.1.0.md),
 [các thay đổi notes](release/notes-v0.1.0.md) và
-[chỉ mục thay đổi](architecture-changes-v1.md). Số đo lịch sử giữ nguyên điều kiện
+[chỉ mục thay đổi](architecture-changes.md). Số đo lịch sử giữ nguyên điều kiện
 và revision gốc; không phải phép đo lại artifact 0.1.0.
 
 ## Mốc bổ sung: Mốc AC-13 (#16 → #99 → #104)
@@ -218,4 +218,4 @@ AC-13: bản ghi 2 giờ có transcript và notes sẵn để duyệt trong tố
 | #99 / PR #103 | `4a88ec8` (có #71, #72, #74) | mẫu ghép 2 giờ | transcript sẵn 626,5 s (10,4 phút); notes lỗi ở lượt 29 sau 1.463,5 s; tác vụ notes kết thúc lỗi ở 2.090,2 s (34,8 phút) | fail |
 | #104 / PR #109 | `b78711d` | mẫu ghép 2 giờ, số đo ghép | **651,7 s transcript (lần chạy timed) + 0,2 s + 81,3 s notes = 733,2 s (12,2 phút)**; một lần chạy timed trên candidate trước là 723,3 s | đạt về thời gian, nhưng số đo 733,2 s là composed, không phải một lần chạy liên tục |
 
-Nguồn: mục tương ứng của từng PR ở mục 3; `docs/acceptance-report-v1.md` mục 6.1, 6.5 và 6.6. #74 (PR #91) không nhằm giảm thời gian và đã có trong image đo của #99. Bước chậm nhất chuyển từ diarization (#16) sang notes (#99), rồi notes còn 67,2–116,5 s ở các lượt single-pass final. #104 có mốc thời gian composed dưới 30 phút; chất lượng AC-5 còn theo dõi ở #107 và phương án nguồn dài ở #108.
+Nguồn: mục tương ứng của từng PR ở mục 3; `docs/acceptance-report.md` mục 6.1, 6.5 và 6.6. #74 (PR #91) không nhằm giảm thời gian và đã có trong image đo của #99. Bước chậm nhất chuyển từ diarization (#16) sang notes (#99), rồi notes còn 67,2–116,5 s ở các lượt single-pass final. #104 có mốc thời gian composed dưới 30 phút; chất lượng AC-5 còn theo dõi ở #107 và phương án nguồn dài ở #108.

@@ -26,7 +26,7 @@ font, base image và model giữ điều khoản riêng; xem [hồ sơ thành ph
 
 ## Nghiệm thu và giới hạn đã biết
 
-[Báo cáo #16](../../../acceptance-report-v1.md) ghi 31/49 AC và 10/16 FE đạt trọn trên
+[Báo cáo #16](../../../acceptance-report.md) ghi 31/49 AC và 10/16 FE đạt trọn trên
 candidate lịch sử `151f3e4`, không phải chứng nhận candidate hiện tại. Lần đo lại
 #99 tại `4a88ec8` có transcript mẫu ghép hai giờ sau 10,4 phút, nhưng notes lỗi
 `provider_output_too_large`; chưa có mốc transcript và notes cùng sẵn, chưa chứng
@@ -109,4 +109,4 @@ Việc mở liên quan tới các thay đổi trên. Khi PR của một việc t
 | #73 | Notes không tự chạy sau transcript: quyết định đặc tả cho cách đo AC-13 | người vận hành phải bấm "Tạo notes"; công cụ đo bấm sau 0,2–1,1 s, người thật không có giới hạn | Kiến trúc | quyết định đổi mốc đo AC-13 |
 | #97 | RSS đỉnh của diarization tăng bậc hai ở clustering | 4,93 GiB ở 4 giờ (mẫu tổng hợp) so với 4 GiB; mô hình 1,98 + 0,35·d + 0,105·d² GiB (d tính bằng giờ), vượt 4 GiB ở khoảng 3 giờ | Hiệu năng | từ #71 |
 
-Nguồn: chính các issue #104, #110, #101, #102, #73, #97; #101 và #102 khớp `docs/acceptance-report-v1.md` mục 6.5. #101 và #102 chặn #17 (release).
+Nguồn: chính các issue #104, #110, #101, #102, #73, #97; #101 và #102 khớp `docs/acceptance-report.md` mục 6.5. #101 và #102 chặn #17 (release).

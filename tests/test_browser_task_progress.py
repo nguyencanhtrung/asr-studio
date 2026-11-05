@@ -387,9 +387,7 @@ def test_runtime_details_sit_in_a_closed_disclosure(live, signed_in):
     assert lock_fd is not None
     write_runtime_profile(
         live.settings.data_dir,
-        RuntimeProfile(
-            device="cuda", compute_type="float16", model_path="/models/whisper-large-v3"
-        ),
+        RuntimeProfile(device="cuda", compute_type="float16", model_path="/models/qwen3-asr-1.7b"),
     )
     write_heartbeat(live.settings.data_dir, "idle")
     try:
@@ -406,8 +404,8 @@ def test_runtime_details_sit_in_a_closed_disclosure(live, signed_in):
         expect(details).to_have_attribute("open", "")
         expect(page.get_by_text("Compute backend")).to_be_visible()
         expect(page.get_by_text("Model mặc định theo phần cứng")).to_be_visible()
-        expect(page.locator("#runtime-backend")).to_have_text("GPU · CUDA · float16")
-        expect(page.locator("#runtime-model")).to_have_text("whisper-large-v3")
+        expect(page.locator("#runtime-backend")).to_have_text("GPU · CUDA · bfloat16")
+        expect(page.locator("#runtime-model")).to_have_text("qwen3-asr-1.7b")
     finally:
         os.close(lock_fd)
 

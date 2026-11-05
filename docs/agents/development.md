@@ -100,7 +100,7 @@ read-only review runs add `PYTHONDONTWRITEBYTECODE=1` and `-p no:cacheprovider`.
   handoff, so a test that passes with the bug present is caught before review.
 - Frontend parity scenarios assert `document.activeElement` and the status line after
   each failed request as well as after success.
-- Counts quoted in `docs/architecture-changes-v1.md` (lines, occurrences) come from a
+- Counts quoted in `docs/architecture-changes.md` (lines, occurrences) come from a
   command run on the final candidate; put the command next to the figure.
 
 ## Git hooks

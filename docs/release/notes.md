@@ -1,7 +1,7 @@
 # Former v1 release draft
 
-This path previously contained an unpublished v0.1.0 draft.
-The [original draft](archive/v0.1.0/notes-v1.md) remains available for historical reference.
+The former path `notes-v1.md` contained an unpublished v0.1.0 draft.
+The [original draft](archive/v0.1.0/notes.md) remains available for historical reference.
 Its incomplete publication checks do not describe current release status.
 Published versions and assets appear on [GitHub Releases](https://github.com/nguyencanhtrung/asr-en-vi/releases).
 

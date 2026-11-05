@@ -243,16 +243,18 @@ def prepare_models(settings: Settings) -> None:
     """A synthetic GPU machine with its default model: the other rows offer their install."""
     model = settings.asr_gpu_model_path
     model.mkdir(parents=True)
-    (model / "model.bin").write_bytes(b"synthetic")
-    (model / "tokenizer.json").write_text('{"model": {"type": "BPE"}}', encoding="utf-8")
-    (model / "config.json").write_text(
-        '{"lang_ids": [], "suppress_ids": [], "suppress_ids_begin": []}', encoding="utf-8"
+    (model / "config.json").write_text('{"model_type": "qwen3_asr"}', encoding="utf-8")
+    (model / "processor_config.json").write_text(
+        '{"feature_extractor": {"sampling_rate": 16000}}', encoding="utf-8"
     )
-    (model / "preprocessor_config.json").write_text(
-        '{"feature_size": 128, "sampling_rate": 16000, "hop_length": 160, "n_fft": 400, '
-        '"chunk_length": 30}',
-        encoding="utf-8",
-    )
+    for filename in (
+        "generation_config.json",
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "chat_template.jinja",
+    ):
+        (model / filename).write_bytes(b"synthetic")
     write_runtime_profile(settings.data_dir, RuntimeProfile("cuda", "float16", model))
     # The seeded transcript came from this default.
     with sqlite3.connect(database_path(settings.data_dir)) as connection:
@@ -420,7 +422,7 @@ def main() -> int:
             auth_dir=temporary_root / "auth",
             install_dir=temporary_root / "install",
             public_url=f"http://127.0.0.1:{port}",
-            asr_gpu_model_path=temporary_root / "models/whisper-large-v3",
+            asr_gpu_model_path=temporary_root / "models/qwen3-asr-1.7b",
             asr_cpu_model_path=temporary_root / "models/whisper-small",
             asr_phowhisper_model_path=temporary_root / "models/pho-whisper-large",
             asr_qwen_model_path=temporary_root / "models/qwen3-asr-1.7b",

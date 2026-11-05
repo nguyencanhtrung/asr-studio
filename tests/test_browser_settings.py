@@ -10,7 +10,7 @@ from notes_helpers import seed_completed_transcript
 from playwright.sync_api import expect
 from test_browser_connections import browser_runtime as browser_runtime  # noqa: F401
 from test_browser_connections import signed_in_page
-from test_browser_history import _prepare_browser_asr_model
+from test_browser_history import _prepare_browser_asr_model, _prepare_browser_qwen_model
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 from test_browser_notes_provider import (
@@ -34,11 +34,14 @@ VIETNAMESE = re.compile(r"[À-ỹ]")
 def start_worker(live, device):
     """A healthy worker on this device whose default model is prepared, as the server sees it."""
     data_dir = live.settings.data_dir
-    large = data_dir.parent / "whisper-large-v3"
+    qwen = data_dir.parent / "qwen3-asr-1.7b"
     small = data_dir.parent / "whisper-small"
-    object.__setattr__(live.settings, "asr_gpu_model_path", large)
+    object.__setattr__(live.settings, "asr_gpu_model_path", qwen)
     object.__setattr__(live.settings, "asr_cpu_model_path", small)
-    default_model = _prepare_browser_asr_model(large if device == "cuda" else small)
+    object.__setattr__(live.settings, "asr_qwen_model_path", qwen)
+    default_model = (
+        _prepare_browser_qwen_model(qwen) if device == "cuda" else _prepare_browser_asr_model(small)
+    )
     lock = acquire_worker_lock(data_dir)
     assert lock is not None
     write_runtime_profile(data_dir, RuntimeProfile(device, "float16", default_model))
@@ -257,7 +260,7 @@ def test_asr_section_shows_real_readiness_and_a_copyable_prepare_command(
     )
     page.goto(f"{live.url}/")
     catalog = page.request.get(f"{live.url}/api/asr-models").json()["asr_models"]
-    qwen = next(model for model in catalog if model["id"] == "qwen3-asr-1.7b")
+    large_model = next(model for model in catalog if model["id"] == "whisper-large-v3")
 
     open_section(page, "ASR Model")
     expect(asr_rows(page)).to_have_count(4)
@@ -265,25 +268,23 @@ def test_asr_section_shows_real_readiness_and_a_copyable_prepare_command(
     assert names == ["Whisper large-v3", "Whisper small", "PhoWhisper-large", "Qwen3-ASR-1.7B"]
     whisper, small, pho, qwen_row = asr_rows(page).all()
     expect(small.locator('.asr-badge[data-kind="default"]')).to_have_count(0)
-    expect(page.locator("#asr-default")).to_contain_text("whisper-large-v3")
-    expect(whisper.locator('.asr-badge[data-kind="default"]')).to_have_text("Mặc định")
+    expect(page.locator("#asr-default")).to_contain_text("qwen3-asr-1.7b")
+    expect(qwen_row.locator('.asr-badge[data-kind="default"]')).to_have_text("Mặc định")
     expect(pho.locator('.asr-badge[data-kind="default"]')).to_have_count(0)
-    expect(whisper.locator('.asr-badge[data-kind="status"]')).to_have_text("Sẵn sàng")
+    expect(whisper.locator('.asr-badge[data-kind="status"]')).to_have_text("Chưa chuẩn bị")
     expect(pho.locator('.asr-badge[data-kind="status"]')).to_have_text("Sẵn sàng")
-    expect(whisper.locator("input")).to_have_count(0)
-
-    expect(qwen_row.locator('.asr-badge[data-kind="status"]')).to_have_text("Chưa chuẩn bị")
-    expect(qwen_row).to_contain_text("chưa được chuẩn bị")
-    command = qwen_row.get_by_label("Lệnh chuẩn bị model")
-    assert command.input_value() == qwen["prepare_command"]
-    assert "--asr-model qwen3-asr-1.7b" in qwen["prepare_command"]
-    # The model name is at the end of the command: all of it shows, none is scrolled away.
+    command = whisper.get_by_label("Lệnh chuẩn bị model")
+    expect(command).to_be_visible()
+    assert command.input_value() == large_model["prepare_command"]
+    assert "--asr-model whisper-large-v3" in large_model["prepare_command"]
     assert command.evaluate(
         "e => e.scrollHeight <= e.clientHeight && e.scrollWidth <= e.clientWidth"
     )
-    qwen_row.get_by_role("button", name="Sao chép").click()
-    expect(qwen_row.locator(".asr-command-result")).to_have_text("Đã sao chép lệnh.")
-    assert page.evaluate("navigator.clipboard.readText()") == qwen["prepare_command"]
+    whisper.get_by_role("button", name="Sao chép").click()
+    expect(whisper.locator(".asr-command-result")).to_have_text("Đã sao chép lệnh.")
+    assert page.evaluate("navigator.clipboard.readText()") == large_model["prepare_command"]
+
+    expect(qwen_row.locator('.asr-badge[data-kind="status"]')).to_have_text("Sẵn sàng")
 
 
 def test_asr_copy_refused_selects_the_command_and_says_so(live, signed_in, gpu_worker):
@@ -295,17 +296,17 @@ def test_asr_copy_refused_selects_the_command_and_says_so(live, signed_in, gpu_w
     page.goto(f"{live.url}/")
     open_section(page, "ASR Model")
     expect(asr_rows(page)).to_have_count(4)
-    qwen_row = asr_rows(page).nth(3)
-    qwen_row.get_by_role("button", name="Sao chép").click()
-    expect(qwen_row.locator(".asr-command-result")).to_have_text(
+    large_row = asr_rows(page).nth(0)
+    large_row.get_by_role("button", name="Sao chép").click()
+    expect(large_row.locator(".asr-command-result")).to_have_text(
         "Không sao chép được. Lệnh đã được chọn; nhấn Ctrl+C."
     )
-    assert page.evaluate("document.activeElement.id") == "asr-command-qwen3-asr-1.7b"
+    assert page.evaluate("document.activeElement.id") == "asr-command-whisper-large-v3"
     selected = page.evaluate(
         "document.activeElement.value.slice("
         "document.activeElement.selectionStart, document.activeElement.selectionEnd)"
     )
-    assert selected == page.locator("#asr-command-qwen3-asr-1\\.7b").input_value()
+    assert selected == page.locator("#asr-command-whisper-large-v3").input_value()
 
 
 @pytest.mark.parametrize("models", [[], [None, 5, {"id": "evil"}]], ids=["empty", "unusable"])
@@ -413,8 +414,8 @@ def test_settings_is_complete_in_english(live, signed_in, gpu_worker):
     expect(page.locator("#settings-panel-about")).to_contain_text("Trung Nguyen")
     page.get_by_role("tab", name="ASR Model").click()
     expect(asr_rows(page)).to_have_count(4)
-    expect(asr_rows(page).nth(3)).to_contain_text("Not prepared")
-    expect(asr_rows(page).nth(0).locator('.asr-badge[data-kind="default"]')).to_have_text("Default")
+    expect(asr_rows(page).nth(0)).to_contain_text("Not prepared")
+    expect(asr_rows(page).nth(3).locator('.asr-badge[data-kind="default"]')).to_have_text("Default")
     text = page.locator("#connections-dialog").inner_text()
     assert VIETNAMESE.findall(text) == [], text
     context.close()
@@ -758,8 +759,8 @@ def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_work
         assert overflow(page) <= 0, name
     # The prepare command takes the full width with Copy under it, styled like other buttons.
     page.get_by_role("tab", name="ASR Model").click()
-    qwen = asr_rows(page).nth(3)
-    command, copy = qwen.locator("textarea"), qwen.get_by_role("button", name="Sao chép")
+    large = asr_rows(page).nth(0)
+    command, copy = large.locator("textarea"), large.get_by_role("button", name="Sao chép")
     assert command.evaluate(
         "e => e.scrollHeight <= e.clientHeight && e.scrollWidth <= e.clientWidth"
     )

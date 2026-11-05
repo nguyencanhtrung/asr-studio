@@ -249,7 +249,7 @@ elif docker run --pull=never --rm --gpus all --network none --entrypoint python 
     -c 'import ctranslate2; raise SystemExit(0 if ctranslate2.get_cuda_device_count() else 1)' \
     >/dev/null 2>&1; then
     gpu_compose_file="compose.gpu.yaml"
-    echo "Detected NVIDIA GPU; selecting CUDA and whisper-large-v3."
+    echo "Detected NVIDIA GPU; selecting CUDA and qwen3-asr-1.7b."
 elif [ "$requested_device" = cuda ] || \
     { command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; }; then
     echo "NVIDIA GPU requested or detected, but Docker cannot expose it." >&2

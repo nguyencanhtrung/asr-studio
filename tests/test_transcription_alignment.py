@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from asr_studio.alignment import align_segments_to_speakers
+from asr_studio.tasks import _REVIEW_REASONS
 
 FIXTURE = Path(__file__).parent / "fixtures" / "en-vi-code-switch.json"
 
@@ -63,3 +66,66 @@ def test_partial_exclusive_coverage_is_reviewed_as_low_speaker_dominance():
         10.0,
         "Keep this interval intact.",
     )
+
+
+@pytest.mark.parametrize(
+    ("texts", "expected"),
+    [
+        (["Hello, world!", "hello world"], [[], []]),
+        (
+            ["Hello, world!", "hello world", " HELLO—WORLD "],
+            [["repeated_segment"]] * 3,
+        ),
+    ],
+)
+def test_repeated_segment_reason_requires_three_adjacent_normalized_texts(texts, expected):
+    segments = [
+        {
+            "id": f"{index + 1:032x}",
+            "start_seconds": float(index),
+            "end_seconds": float(index + 1),
+            "text": text,
+        }
+        for index, text in enumerate(texts)
+    ]
+    turns = [
+        {
+            "start_seconds": float(index),
+            "end_seconds": float(index + 1),
+            "speaker_id": "SPEAKER_00",
+        }
+        for index in range(len(segments))
+    ]
+
+    result = align_segments_to_speakers(segments, turns, turns)
+
+    assert [segment["review_reasons"] for segment in result["segments"]] == expected
+
+
+def test_repeated_segment_reason_marks_a_mixed_speaker_chain_independently():
+    segments = [
+        {
+            "id": f"{index + 1:032x}",
+            "start_seconds": float(index),
+            "end_seconds": float(index + 1),
+            "text": text,
+        }
+        for index, text in enumerate(("Same.", "same", " S A M E "))
+    ]
+    turns = [
+        {
+            "start_seconds": float(index),
+            "end_seconds": float(index + 1),
+            "speaker_id": f"SPEAKER_0{index % 2}",
+        }
+        for index in range(3)
+    ]
+
+    result = align_segments_to_speakers(segments, turns, turns)
+
+    assert "repeated_segment" in _REVIEW_REASONS
+    assert [segment["review_reasons"] for segment in result["segments"]] == [
+        ["repeated_segment"],
+        ["repeated_segment"],
+        ["repeated_segment"],
+    ]

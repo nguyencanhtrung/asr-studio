@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
@@ -96,6 +97,34 @@ def _asr_uncertain(segment: dict[str, Any]) -> bool:
     )
 
 
+def _normalized_segment_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return "".join(
+        character.casefold()
+        for character in value
+        if not character.isspace() and not unicodedata.category(character).startswith("P")
+    )
+
+
+def _repeated_segment_indices(segments: Sequence[dict[str, Any]]) -> set[int]:
+    normalized = [_normalized_segment_text(segment.get("text")) for segment in segments]
+    repeated: set[int] = set()
+    run_start = 0
+    for index in range(1, len(normalized) + 1):
+        same_run = (
+            index < len(normalized)
+            and normalized[index]
+            and normalized[index] == normalized[index - 1]
+        )
+        if same_run:
+            continue
+        if normalized[index - 1] and index - run_start >= 3:
+            repeated.update(range(run_start, index))
+        run_start = index
+    return repeated
+
+
 def align_segments_to_speakers(
     segments: Sequence[dict[str, Any]],
     regular_turns: Sequence[dict[str, Any]],
@@ -131,7 +160,8 @@ def align_segments_to_speakers(
     aligned: list[dict[str, object]] = []
     regular_cursor = _TurnCursor(regular)
     exclusive_cursor = _TurnCursor(exclusive)
-    for segment in segments:
+    repeated_indices = _repeated_segment_indices(segments)
+    for index, segment in enumerate(segments):
         start = segment.get("start_seconds")
         end = segment.get("end_seconds")
         if (
@@ -188,6 +218,8 @@ def align_segments_to_speakers(
         review_reasons: list[str] = []
         if _asr_uncertain(segment):
             review_reasons.append("asr_uncertain")
+        if index in repeated_indices:
+            review_reasons.append("repeated_segment")
         if has_overlap:
             review_reasons.append("overlap")
         if multiple_speakers:

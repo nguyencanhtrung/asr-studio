@@ -62,7 +62,7 @@ The script detects the backend with the runtime image:
 
 | Host                         | Device | Compute type | Model                              |
 | ---------------------------- | ------ | ------------ | ---------------------------------- |
-| NVIDIA GPU visible to Docker | CUDA   | `float16`  | `whisper-large-v3`               |
+| NVIDIA GPU visible to Docker | CUDA   | `bfloat16` | `qwen3-asr-1.7b`                |
 | No GPU                       | CPU    | `int8`     | `whisper-small` (lower accuracy) |
 
 If the host has a GPU but Docker cannot access it, setup stops with an NVIDIA Container Toolkit
@@ -207,8 +207,9 @@ Token rotation changes only the auth state. `docker compose down` keeps the volu
 | Component   | Source                                                                                                   | Network or approval                                                                |
 | ----------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Runtime     | Docker, `faster-whisper` 1.2.1, `pyannote.audio` 4.0.7, locked in `uv.lock`                        | The operator installs Docker. A GPU needs the NVIDIA driver and Container Toolkit. |
-| ASR GPU     | [Systran faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3), MIT, public    | `model prepare` can download it. No gated terms.                                 |
+| ASR GPU     | [Qwen/Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf), Apache-2.0, public, GPU only | `model prepare` downloads it as the GPU hardware default. No gated terms. |
 | ASR CPU     | [Systran faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small), MIT, public          | `model prepare` can download it, on a GPU machine with `--asr-model whisper-small`. No gated terms. |
+| ASR, optional | [Systran faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3), MIT, public | `model prepare --asr-model whisper-large-v3` downloads it. No gated terms. |
 | ASR, optional | [vinai/PhoWhisper-large](https://huggingface.co/vinai/PhoWhisper-large), BSD-3-Clause, public | `model prepare --asr-model` downloads and converts it. No gated terms. |
 | ASR, optional | [Qwen/Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf), Apache-2.0, public, GPU only | `model prepare --asr-model` downloads it. No gated terms. |
 | Diarization | [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1), CC-BY-4.0, gated | The operator accepts the conditions and downloads it. The app does not.            |
@@ -222,11 +223,14 @@ Models go to `./models`. To prepare them manually for offline setup:
 
 ```sh
 mkdir -p ./models
+cp -a /path/to/prepared-qwen3-asr-1.7b ./models/qwen3-asr-1.7b
 cp -a /path/to/prepared-whisper-model ./models/whisper-large-v3
 cp -a /path/to/prepared-whisper-small ./models/whisper-small
 ```
 
-Each model needs valid `model.bin`, `config.json`, `tokenizer.json` and
+Qwen3-ASR needs valid `config.json`, `generation_config.json`, `model.safetensors`,
+`tokenizer.json`, `tokenizer_config.json`, `processor_config.json` and `chat_template.jinja`.
+Whisper models need valid `model.bin`, `config.json`, `tokenizer.json` and, where supplied,
 `preprocessor_config.json`.
 
 | Setting                                        | Purpose                                  |
@@ -245,7 +249,7 @@ or **Not checked** (no worker is running). Qwen3-ASR has no install button on a 
 it cannot run there; the others can.
 
 **Default model** above the list decides what **Automatic** uses, and a **Default** badge marks that
-model. **Automatic for this hardware** is Whisper large-v3 on a GPU and Whisper small on a CPU-only
+model. **Automatic for this hardware** is Qwen3-ASR-1.7B on a GPU and Whisper small on a CPU-only
 machine. You can pick any model that is ready here. The choice applies to new runs, survives a restart,
 and is stored in `asr-default.json` in the data directory. Choosing a model for one run does not change
 it. If the chosen model stops being usable, Settings says so and Automatic runs are refused rather than
@@ -278,13 +282,26 @@ selector keeps your choice while the page stays open; a new page starts on **Aut
 
 | Choice           | Use it for                                 | Limits                                                                |
 | ---------------- | ------------------------------------------ | --------------------------------------------------------------------- |
-| Automatic        | The default model from Settings.           | Unless you chose one: `whisper-large-v3` on GPU, `whisper-small` on CPU. |
+| Automatic        | The default model from Settings.           | Unless you chose one: `qwen3-asr-1.7b` on GPU, `whisper-small` on CPU. |
 | Whisper large-v3 | Multilingual meetings with language detection. | Slowest of the large models and the most likely to repeat sentences. On Vietnamese it can return text that is not in the audio ([#168](https://github.com/nguyencanhtrung/asr-studio/issues/168)). |
 | Whisper small    | A CPU-only machine.                        | Lower accuracy than PhoWhisper-large on Vietnamese and Qwen3-ASR-1.7B overall. |
 | PhoWhisper-large | Meetings in Vietnamese.                    | Not for English or content that mixes in many technical terms. Segments are longer, so speaker labels are coarser. |
-| Qwen3-ASR-1.7B   | Mixed Vietnamese and English, and speed.   | GPU only, about 8.5 GB of VRAM on a 75-minute meeting. No confidence score: **Listen again** only catches repetition and speaker issues, so its count does not compare with other models. |
+| Qwen3-ASR-1.7B   | Mixed Vietnamese and English, and speed.   | GPU only, 8336 MiB peak VRAM in the app with batch 4. It has no confidence score, so `asr_uncertain` does not fire for Qwen; **Listen again** catches repetition and speaker issues instead. |
 
 A [short measurement](release/performance-v0.2.1.md) on public datasets backs these notes, with its limits.
+
+Running the same recording twice may not give the same transcript. On a 10-minute excerpt run three
+times, Qwen3-ASR-1.7B and Whisper large-v3 gave identical text and PhoWhisper-large gave three
+different texts. On a full meeting, Whisper large-v3 can still differ between runs: three runs of one
+67-minute meeting gave 553, 601 and 611 segments. Before this release, Whisper large-v3 gave three different texts
+on the same excerpt, and turning sampling off made it stable, so the likely source is the decoder's
+sampling when it retries a segment. That attribution is an inference from the contrast.
+
+An existing installation keeps large-v3 if its existing `.env` still has
+`ASR_GPU_MODEL_PATH=/models/whisper-large-v3`; `.env.example` is not applied automatically. To move
+to Qwen, change that line to `/models/qwen3-asr-1.7b` and prepare the model, or choose Qwen as the
+default in Settings. The Qwen artifact is about 4.1 GB to stage when making that move.
+See the [model comparison](model-candidates.md#đo-trên-bản-ghi-thật-11-2026) and [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168) for the measured decision.
 
 These results come from a few real meetings without a reference transcript, so treat them as a
 starting point and compare on your own recordings.

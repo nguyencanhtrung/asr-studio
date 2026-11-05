@@ -14,18 +14,28 @@ from pathlib import Path
 import ctranslate2
 
 from asr_studio.config import Settings
-from asr_studio.runner import ModelConfigurationError, prepared_model_directory
+from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 
 CUDA_LIBRARIES = ("libcublas.so.12", "libcudnn.so.9")
 RUNTIME_PROFILE_NAME = "worker.runtime.json"
 MODEL_REPOSITORIES = {
-    "cuda": "Systran/faster-whisper-large-v3",
+    "cuda": "Qwen/Qwen3-ASR-1.7B-hf",
     "cpu": "Systran/faster-whisper-small",
 }
 
 
 class RuntimeConfigurationError(RuntimeError):
     """The selected local compute profile cannot run safely."""
+
+
+def engine_for_path(settings: Settings, model_path: Path) -> str:
+    """Use Qwen only for the configured Qwen catalog path; custom paths stay Whisper."""
+    try:
+        configured = Path(settings.asr_qwen_model_path).expanduser().resolve(strict=False)
+        selected = Path(model_path).expanduser().resolve(strict=False)
+    except OSError:
+        return "whisper"
+    return "qwen" if selected == configured or selected.name == "qwen3-asr-1.7b" else "whisper"
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +115,9 @@ def select_runtime(
 
     if require_model:
         try:
-            model_path = prepared_model_directory(model_path)
+            model_path = prepared_engine_directory(
+                engine_for_path(settings, model_path), model_path
+            )
         except ModelConfigurationError as error:
             raise RuntimeConfigurationError(
                 f"Local ASR model is not prepared at {model_path}: {error}"

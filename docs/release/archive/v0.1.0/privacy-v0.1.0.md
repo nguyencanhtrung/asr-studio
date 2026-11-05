@@ -62,8 +62,8 @@ Quyền riêng tư
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` mục 3 (đoạn runtime chạy bằng tiến trình riêng: thêm quy tắc môi trường tắt telemetry).
-- `docs/acceptance-report-v1.md` mục 5.1, dòng AC-10 (đo lại khi #75 xong).
+- `docs/backend-contract.md` mục 3 (đoạn runtime chạy bằng tiến trình riêng: thêm quy tắc môi trường tắt telemetry).
+- `docs/acceptance-report.md` mục 5.1, dòng AC-10 (đo lại khi #75 xong).
 - Release notes (#17): giới hạn đã biết của AC-10.
 
 

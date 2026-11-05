@@ -473,6 +473,42 @@ def test_model_prepare_keeps_the_gpu_default_on_its_pinned_revision(tmp_path, mo
     assert downloaded == [("Systran/faster-whisper-large-v3", CATALOG["whisper-large-v3"].revision)]
 
 
+def test_model_prepare_downloads_the_qwen_gpu_hardware_default(tmp_path, monkeypatch):
+    target = tmp_path / "qwen3-asr-1.7b"
+    monkeypatch.setenv("ASR_DEVICE", "auto")
+    monkeypatch.setenv("ASR_GPU_MODEL_PATH", str(target))
+    monkeypatch.setenv("ASR_QWEN_MODEL_PATH", str(target))
+    monkeypatch.delenv("ASR_MODEL_PATH", raising=False)
+    monkeypatch.delenv("ASR_COMPUTE_TYPE", raising=False)
+    monkeypatch.setattr(cli.ctranslate2, "get_cuda_device_count", lambda: 1)
+    monkeypatch.setattr(
+        cli.ctranslate2, "get_supported_compute_types", lambda _device: {"float16", "int8"}
+    )
+    monkeypatch.setattr(cli.ctypes, "CDLL", lambda _name: object(), raising=False)
+    downloaded = []
+
+    def download(*, repo_id, revision, local_dir):
+        downloaded.append((repo_id, revision))
+        Path(local_dir).mkdir()
+        (Path(local_dir) / "config.json").write_text(
+            '{"model_type": "qwen3_asr"}', encoding="utf-8"
+        )
+        for name in (
+            "model.safetensors",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "generation_config.json",
+            "processor_config.json",
+        ):
+            (Path(local_dir) / name).write_text("{}", encoding="utf-8")
+        (Path(local_dir) / "chat_template.jinja").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", download)
+
+    assert main(["model", "prepare"]) == 0
+    assert downloaded == [("Qwen/Qwen3-ASR-1.7B-hf", CATALOG["qwen3-asr-1.7b"].revision)]
+
+
 @pytest.fixture(autouse=True)
 def roomy_disk(monkeypatch):
     """The three catalog models need about 20 GB; these tests download nothing."""

@@ -1,16 +1,16 @@
 # Ứng viên model cho backend v1
 
-> Trạng thái: người dùng đã đồng ý bộ thử nghiệm Q7 rồi **hoãn Qwen theo Q12**, chuyển notes sang ChatGPT hoặc OMP + Google Antigravity. Chưa benchmark hoặc chốt cấu hình phát hành. Đọc nguồn ngày 2026-10-15. Phạm vi, phần cứng và tiêu chí nghiệm thu theo [spec v1](specification-v1.md), đặc biệt AC-01–06, AC-10 và AC-13–14.
+> Trạng thái: Qwen3-ASR-1.7B là default ASR trên GPU theo #168; Whisper small là default trên CPU. Whisper large-v3 và PhoWhisper-large vẫn là lựa chọn explicit. Qwen làm notes local vẫn **hoãn theo Q12**; notes dùng ChatGPT hoặc OMP + Google Antigravity. Đọc nguồn ngày 2026-10-15. Phạm vi, phần cứng và tiêu chí nghiệm thu theo [spec v1](specification.md), đặc biệt AC-01–06, AC-10 và AC-13–14.
 
 ## Bộ model đã chốt để thử trước
 
-Chọn **Whisper large-v3 để chuyển âm thanh thành transcript** và **pyannote Community-1 để phân biệt người nói** chạy local. Tạo notes (English hoặc Tiếng Việt) qua **ChatGPT** hoặc **OMP + Google Antigravity**, ưu tiên khảo sát Gemini ở nhánh Antigravity; Q27 cho người dùng chọn model phù hợp từ catalog của kết nối. Model ID cụ thể còn cần kiểm chứng. Qwen3-14B Q4_K_M từng được chọn thử nhưng không còn thuộc pipeline v1 đã chọn, nhằm dành VRAM cho xử lý âm thanh. Kết quả trên bản ghi của nhóm mới quyết định cấu hình phát hành.
+Chọn **Qwen3-ASR-1.7B trên GPU**, **Whisper small trên CPU** và **pyannote Community-1 để phân biệt người nói** chạy local. Whisper large-v3 và PhoWhisper-large vẫn có trong catalog để chọn theo từng lần chạy. Tạo notes (English hoặc Tiếng Việt) qua **ChatGPT** hoặc **OMP + Google Antigravity**, ưu tiên khảo sát Gemini ở nhánh Antigravity; Q27 cho người dùng chọn model phù hợp từ catalog của kết nối. Qwen3-14B Q4_K_M từng được chọn thử nhưng không còn thuộc pipeline notes local.
 
 | Vai trò | Model / tài nguyên | Runtime đề xuất và căn cứ |
 | --- | --- | --- |
 | Âm thanh → văn bản | `openai/whisper-large-v3` | `faster-whisper` dùng CTranslate2; hỗ trợ FP16, INT8 và timestamp theo đoạn. Model đa ngôn ngữ, có chế độ chép lời giữ ngôn ngữ nguồn. [Model card](https://huggingface.co/openai/whisper-large-v3), [runtime](https://github.com/SYSTRAN/faster-whisper) |
 | Ai nói, lúc nào | `pyannote/speaker-diarization-community-1` | `pyannote.audio`; trả đoạn thời gian theo nhãn người nói, có đầu ra exclusive giúp ghép với transcript. Chạy local được sau tải model. [Model card](https://huggingface.co/pyannote/speaker-diarization-community-1) |
-| Transcript → notes | Model được tài khoản ChatGPT hoặc Antigravity cho phép dùng; nhánh Antigravity ưu tiên khảo sát Gemini | Cloud qua adapter đã chọn; không nạp LLM local. Xem [subscription](subscription-notes-options-v1.md), [harness](harness-notes-v1.md) và ràng buộc provider tại [ADR 0007](adr/0007-cloud-notes-providers.md) |
+| Transcript → notes | Model được tài khoản ChatGPT hoặc Antigravity cho phép dùng; nhánh Antigravity ưu tiên khảo sát Gemini | Cloud qua adapter đã chọn; không nạp LLM local. Xem [subscription](subscription-notes-options.md), [harness](harness-notes.md) và ràng buộc provider tại [ADR 0007](adr/0007-cloud-notes-providers.md) |
 
 `faster-whisper`, `llama.cpp` và `vLLM` là phần mềm chạy model. WhisperX là bộ ghép ASR, căn chỉnh thời gian và diarization; không phải một model thay thế Whisper. V1 chỉ cần timestamp theo đoạn, nên chưa cần buộc thêm model căn chỉnh từng từ. [WhisperX](https://github.com/m-bain/whisperX)
 
@@ -32,8 +32,8 @@ Phép đo phục vụ #28, chạy trên GPU 16 GB, trong network namespace rỗn
 
 | Model và cấu hình | RTF | VRAM đỉnh (MiB) | Đoạn trên 2 cuộc họp | % từ trong cụm lặp | Đoạn trùng liền kề |
 | --- | --- | --- | --- | --- | --- |
-| Whisper large-v3, cấu hình app | 0,075 đến 0,076 | 5554 | 1717 | 4,2 và 5,7 | 117 và 57 |
-| Whisper large-v3, `vad_filter` và không nối ngữ cảnh | 0,025 đến 0,029 | 5362 | 1172 | 1,1 và 1,5 | 0 và 0 |
+| Whisper large-v3, cấu hình app (default GPU cũ) | 0,075 đến 0,076 | 5554 | 1717 | 4,2 và 5,7 | 117 và 57 |
+| Whisper large-v3, `vad_filter` và không nối ngữ cảnh (thử nghiệm, app không bật `vad_filter`) | 0,025 đến 0,029 | 5362 | 1172 | 1,1 và 1,5 | 0 và 0 |
 | PhoWhisper-large, VAD im lặng 1,5 s (`whisper_vi`) | 0,032 đến 0,036 | 5362 | 480 | 2,5 và 2,3 | 0 và 0 |
 | Qwen3-ASR-1.7B (`qwen`), batch 8 | 0,008 đến 0,009 | 12456 | 1597 | 3,1 và 2,4 | 2 và 1 |
 | Zipformer-30M-6000h, CPU | 0,006 | 0 | 1597 | không so | không so |
@@ -44,9 +44,9 @@ Phép đo phục vụ #28, chạy trên GPU 16 GB, trong network namespace rỗn
 - **PhoWhisper-large**: tiếng Việt tự nhiên; trên English thì dịch sang tiếng Việt hoặc phiên âm, và có tự chế câu trên đoạn ngắn hoặc nhiễu. Ngưỡng `_asr_uncertain` không bắt được các câu này. Tăng khoảng lặng VAD từ 0,5 lên 1,5 s giảm số đoạn dày chữ bất thường (hơn 30 ký tự mỗi giây) từ 38 xuống 9.
 - **Zipformer**: chính xác trên từ và tên tiếng Việt và dẫn đầu N-WER trên [bảng xếp hạng tiếng Việt](https://vietaudio-team-vietnamese-asr-leaderboard.hf.space/), nhưng toàn chữ hoa, không dấu câu, English sai, và giấy phép CC-BY-NC-ND. Chưa đưa vào danh mục.
 - **Parakeet CTC Vietnamese**: vỡ âm tiết, English sai, dependency NeMo nặng. Loại.
-- **Whisper large-v3**: `vad_filter=True` với `condition_on_previous_text=False` giảm lặp mạnh và nhanh gấp khoảng 2,6 lần, nhưng có đoạn mất tiếng Việt ngay sau khi đổi ngôn ngữ. Chưa đổi mặc định; để #80 quyết định.
+- **Whisper large-v3**: `vad_filter=True` với `condition_on_previous_text=False` giảm lặp mạnh và nhanh gấp khoảng 2,6 lần, nhưng có đoạn mất tiếng Việt ngay sau khi đổi ngôn ngữ. App không dùng cấu hình này: large-v3 chọn được chỉ tắt nối ngữ cảnh, không bật `vad_filter`. Default GPU đã chuyển sang Qwen theo #168.
 
-Giải thích cột: RTF là thời gian xử lý chia độ dài âm thanh, nhỏ hơn là nhanh hơn. Cột có hai giá trị theo thứ tự cuộc họp 67 và 75 phút. Số đoạn khác nhau vì cách chia đoạn khác nhau. App chạy Qwen với batch 4: VRAM đỉnh 8312 MiB trên cuộc họp 75 phút, RTF khoảng 0,016 (72 giây phần ASR).
+Giải thích cột: RTF là thời gian xử lý chia độ dài âm thanh, nhỏ hơn là nhanh hơn. Cột có hai giá trị theo thứ tự cuộc họp 67 và 75 phút. Số đoạn khác nhau vì cách chia đoạn khác nhau. App chạy Qwen với batch 4: VRAM đỉnh 8312 MiB trên cuộc họp 75 phút, RTF khoảng 0,016 (72 giây phần ASR); phép đo product/private khác ghi nhận 8336 MiB. Qwen không có confidence tương thích Whisper.
 
 Việc chọn model theo từng lần chạy: [ADR 0011](adr/0011-asr-model-per-run.md).
 

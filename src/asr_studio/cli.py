@@ -32,11 +32,12 @@ from asr_studio.model_install import InstallError
 from asr_studio.model_installer import download_model, install_model
 from asr_studio.runner import (
     ModelConfigurationError,
-    prepared_model_directory,
+    prepared_engine_directory,
 )
 from asr_studio.runtime import (
     MODEL_REPOSITORIES,
     RuntimeConfigurationError,
+    engine_for_path,
     read_runtime_profile,
     select_runtime,
 )
@@ -130,13 +131,17 @@ def prepare_model(settings: Settings) -> int:
     if profile is None:
         return 1
     try:
-        prepared_model_directory(profile.model_path)
+        prepared_engine_directory(engine_for_path(settings, profile.model_path), profile.model_path)
         print("Local ASR model is ready.")
         return 0
     except ModelConfigurationError:
         pass
 
+    engine = engine_for_path(settings, profile.model_path)
     repository = MODEL_REPOSITORIES[profile.device]
+    if profile.device == "cuda" and engine == "whisper":
+        # Keep an explicit legacy ASR_GPU_MODEL_PATH usable as Whisper large-v3.
+        repository = CATALOG["whisper-large-v3"].repository
     print("Preparing local ASR model...")
     try:
         from huggingface_hub import snapshot_download
@@ -146,7 +151,7 @@ def prepare_model(settings: Settings) -> int:
             (model.revision for model in CATALOG.values() if model.repository == repository), None
         )
         snapshot_download(repo_id=repository, revision=revision, local_dir=profile.model_path)
-        prepared_model_directory(profile.model_path)
+        prepared_engine_directory(engine_for_path(settings, profile.model_path), profile.model_path)
     except (OSError, RuntimeError, ValueError, ModelConfigurationError):
         print("model_preparation_failed: model_preparation", file=sys.stderr)
         return 1
@@ -212,7 +217,7 @@ def check_installation(settings: Settings) -> int:
         print("Installation incomplete: the app cannot read the worker model.", file=sys.stderr)
         return 1
     try:
-        prepared_model_directory(profile.model_path)
+        prepared_engine_directory(engine_for_path(settings, profile.model_path), profile.model_path)
         prepared_diarization_directory(settings.diarization_model_path)
     except (ModelConfigurationError, DiarizationConfigurationError, OSError):
         print("Installation incomplete: the app cannot read the mounted models.", file=sys.stderr)

@@ -52,7 +52,7 @@ ASR Studio biến bản ghi cuộc họp tiếng Anh hoặc tiếng Việt thàn
 ## Evidence on Hand
 
 - Product terminology: `CONTEXT.md`.
-- Product and workflow constraints: `docs/specification-v1.md`, `docs/backend-design-v1.md` and `docs/backend-contract-v1.md`.
+- Product and workflow constraints: `docs/specification.md`, `docs/backend-design.md` and `docs/backend-contract.md`.
 - Existing implemented surfaces and states: `src/asr_studio/web/`.
 - Existing real-browser behavior coverage: `tests/test_browser_access.py`, `tests/test_browser_workspace.py` and `tests/test_browser_history.py`.
 - The repository contains no customer claims, testimonials or marketing proof; future UI must not fabricate them.

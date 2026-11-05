@@ -37,6 +37,21 @@ def _prepared_model(path):
     return path
 
 
+def _prepared_qwen(path):
+    path.mkdir(parents=True)
+    (path / "config.json").write_text('{"model_type": "qwen3_asr"}', encoding="utf-8")
+    for filename in (
+        "generation_config.json",
+        "model.safetensors",
+        "processor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ):
+        (path / filename).write_text("{}", encoding="utf-8")
+    (path / "chat_template.jinja").write_text("", encoding="utf-8")
+    return path
+
+
 def _settings(tmp_path, **overrides):
     values = {
         "data_dir": tmp_path / "data",
@@ -47,6 +62,24 @@ def _settings(tmp_path, **overrides):
     }
     values.update(overrides)
     return Settings(**values)
+
+
+def test_auto_runtime_accepts_qwen_hardware_default_layout(tmp_path):
+    qwen = _prepared_qwen(tmp_path / "qwen3-asr-1.7b")
+    settings = _settings(
+        tmp_path,
+        asr_gpu_model_path=qwen,
+        asr_qwen_model_path=qwen,
+    )
+
+    profile = select_runtime(
+        settings,
+        get_cuda_device_count=lambda: 1,
+        load_library=lambda _name: object(),
+        get_supported_compute_types=lambda _device: {"float16", "float32"},
+    )
+
+    assert profile.model_name == "qwen3-asr-1.7b"
 
 
 def test_auto_runtime_prefers_gpu_large_model_and_float16(tmp_path):

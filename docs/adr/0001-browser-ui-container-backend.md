@@ -6,7 +6,7 @@ status: accepted
 
 > Phần không dùng AI cloud và yêu cầu toàn bộ pipeline offline dưới đây đã được thay bởi [ADR 0007](0007-cloud-notes-providers.md): ASR/diarization và lưu trữ vẫn local, tạo notes dùng ChatGPT hoặc OMP + Google Antigravity do người dùng chọn. Các quyết định web, Docker và localhost tiếp tục có hiệu lực.
 
-Chọn UI trên trình duyệt và backend tự vận hành trong Docker Compose để tách thiết bị tương tác khỏi máy xử lý, đồng thời giúp cài mới trên máy Linux có NVIDIA GPU và cấu hình tương thích. Một người vận hành dùng hệ thống; model, logic và dữ liệu nằm trên máy do người đó quản lý, cho phép trao đổi bản ghi và kết quả với trình duyệt được cấp quyền bằng token. Phạm vi v1 là dễ cài mới bằng build từ source hoặc pull image đã build từ registry, không gồm migration hoặc chuyển dữ liệu từ bản cài cũ sang máy khác; xem [specification v1](../specification-v1.md).
+Chọn UI trên trình duyệt và backend tự vận hành trong Docker Compose để tách thiết bị tương tác khỏi máy xử lý, đồng thời giúp cài mới trên máy Linux có NVIDIA GPU và cấu hình tương thích. Một người vận hành dùng hệ thống; model, logic và dữ liệu nằm trên máy do người đó quản lý, cho phép trao đổi bản ghi và kết quả với trình duyệt được cấp quyền bằng token. Phạm vi v1 là dễ cài mới bằng build từ source hoặc pull image đã build từ registry, không gồm migration hoặc chuyển dữ liệu từ bản cài cũ sang máy khác; xem [specification v1](../specification.md).
 
 ## Hệ quả
 
@@ -26,4 +26,4 @@ Source và image dự kiến được công khai để người khác có thể 
 
 ## Lựa chọn triển khai
 
-Các hành vi về token, phục hồi tác vụ, upload, giới hạn một tác vụ, cài đặt qua terminal và trình duyệt nghiệm thu đã được chốt. [ADR 0004](0004-app-worker-sqlite.md) sau đó chọn số service và SQLite cùng file âm thanh local; [thiết kế backend](../backend-design-v1.md) tiếp tục chốt Python/FastAPI và bộ model thử nghiệm. Framework frontend, cấu hình model phát hành và chi tiết registry còn được làm rõ trong phạm vi specification.
+Các hành vi về token, phục hồi tác vụ, upload, giới hạn một tác vụ, cài đặt qua terminal và trình duyệt nghiệm thu đã được chốt. [ADR 0004](0004-app-worker-sqlite.md) sau đó chọn số service và SQLite cùng file âm thanh local; [thiết kế backend](../backend-design.md) tiếp tục chốt Python/FastAPI và bộ model thử nghiệm. Framework frontend, cấu hình model phát hành và chi tiết registry còn được làm rõ trong phạm vi specification.

@@ -48,7 +48,6 @@ def _run_installer(live, tmp_path):
     models.mkdir()
     settings = live.settings
     object.__setattr__(settings, "asr_phowhisper_model_path", models / PHO)
-    object.__setattr__(settings, "asr_qwen_model_path", models / QWEN)
     script = tmp_path / "child.py"
     script.write_text(CHILD, encoding="utf-8")
     source = _whisper_dir(tmp_path / "source")
@@ -125,10 +124,8 @@ def test_install_from_settings_shows_real_progress_then_ready_without_a_restart(
     expect(row.get_by_role("button", name="Cài đặt model")).to_be_enabled()
     expect(row).to_contain_text("Cần 8,8 GiB trống")  # the space it needs, before any download
     expect(row.get_by_label("Lệnh chuẩn bị model")).to_have_count(0)
-    # Qwen needs a GPU and this worker has one: it offers the same install, with its own size.
-    expect(
-        asr_rows(page).filter(has_text="Qwen3-ASR").get_by_role("button", name="Cài đặt model")
-    ).to_be_enabled()
+    qwen = asr_rows(page).filter(has_text="Qwen3-ASR")
+    expect(status(qwen)).to_have_text("Sẵn sàng")
 
     row.get_by_role("button", name="Cài đặt model").click()
 
@@ -359,25 +356,23 @@ def test_choose_a_default_in_settings_and_it_survives_a_reload(live, signed_in, 
     _context, page = signed_in(viewport={"width": 1280, "height": 900})
     _prepare_browser_asr_model(live.settings.asr_phowhisper_model_path)
     open_asr(page, live)
-    pho, large = pho_row(page), asr_rows(page).nth(0)
+    pho, qwen = pho_row(page), asr_rows(page).nth(3)
     select = default_select(page)
     expect(select).to_have_value("auto")
-    expect(badge(large)).to_have_text("Mặc định")
-    # Not installed and GPU-only rows cannot be picked; this GPU rig has neither Qwen nor small.
-    expect(select.locator('option[value="qwen3-asr-1.7b"]')).to_be_disabled()
+    expect(badge(qwen)).to_have_text("Mặc định")
 
     select.select_option("pho-whisper-large")
 
     expect(badge(pho)).to_have_text("Mặc định")
-    expect(badge(large)).to_have_count(0)
+    expect(badge(qwen)).to_have_count(0)
     expect(page.locator("#asr-default")).to_contain_text("PhoWhisper-large")
     open_asr(page, live)
     expect(default_select(page)).to_have_value("pho-whisper-large")
     expect(badge(pho_row(page))).to_have_text("Mặc định")
 
     default_select(page).select_option("auto")
-    expect(badge(asr_rows(page).nth(0))).to_have_text("Mặc định")
-    expect(page.locator("#asr-default")).to_contain_text("whisper-large-v3")
+    expect(badge(asr_rows(page).nth(3))).to_have_text("Mặc định")
+    expect(page.locator("#asr-default")).to_contain_text("qwen3-asr-1.7b")
 
 
 def test_a_default_that_stopped_working_says_so(live, signed_in, installer):
@@ -436,6 +431,7 @@ def test_the_default_control_is_locked_while_no_worker_can_answer(live, signed_i
 
 def test_a_saved_default_that_cannot_be_read_is_reported(live, signed_in, installer):
     _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    _prepare_browser_asr_model(live.settings.data_dir.parent / "whisper-large-v3")
     (live.settings.data_dir / "asr-default.json").write_text("garbage", encoding="utf-8")
     open_asr(page, live)
     expect(default_select(page)).to_have_value("auto")
