@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from asr_studio.runtime import MODEL_REPOSITORIES, RuntimeProfile
 from asr_studio.storage import initialize
 from asr_studio.tasks import (
     TaskError,
+    _payload_hash,
     accept_transcription_task,
     claim_next_task,
     publish_complete_generation,
@@ -418,6 +420,38 @@ def test_a_setting_that_cannot_be_understood_is_reported(tmp_path, content, dama
     if content is not None:
         (settings.data_dir / DEFAULT_MODEL_FILE).write_text(content, encoding="utf-8")
     assert default_model_damaged(settings) is damaged
+
+
+def test_lang_ids_of_the_wrong_type_is_an_incomplete_model_not_a_crash(tmp_path):
+    model = _whisper_dir(tmp_path / "odd-config")
+    (model / "preprocessor_config.json").unlink()
+    config = json.loads((model / "config.json").read_text(encoding="utf-8"))
+    config["lang_ids"] = 5
+    (model / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ModelConfigurationError):
+        prepared_engine_directory("whisper", model)
+
+
+def test_a_retry_from_before_the_upgrade_is_still_the_same_request(tmp_path):
+    settings = _settings(tmp_path)
+    initialize(settings.data_dir)
+    prepare_diarization_model(settings.diarization_model_path)
+    meeting_id = seed_meeting(settings.data_dir, "Before upgrade")
+    task = _accept(settings, meeting_id, "request-old-1", "auto")
+    connection = sqlite3.connect(settings.data_dir / "app.sqlite3")
+    with connection:  # the hash an older version wrote: it says nothing about the model
+        connection.execute(
+            "UPDATE tasks SET request_hash = ? WHERE id = ?",
+            (_payload_hash(meeting_id=meeting_id, language_hint=task["language_hint"]), task["id"]),
+        )
+    connection.close()
+    _whisper_dir(settings.asr_phowhisper_model_path)
+    write_default_model(settings, "pho-whisper-large")
+
+    assert _accept(settings, meeting_id, "request-old-1", "auto")["id"] == task["id"]
+    with pytest.raises(TaskError) as conflict:
+        _accept(settings, meeting_id, "request-old-1", "pho-whisper-large")
+    assert conflict.value.code == "idempotency_conflict"
 
 
 def test_only_a_large_model_needs_its_preprocessor_file(tmp_path):

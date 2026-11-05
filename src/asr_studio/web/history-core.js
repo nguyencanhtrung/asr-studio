@@ -870,9 +870,17 @@ export function reduce(state, action) {
     case "history/meeting-change-received":
       if (state.view !== "meeting" || !state.meeting || state.meeting.id !== action.meetingId) return out(state);
       return requestMeeting(state, action.meetingId, at);
-    // Settings can change what this machine runs (a default, an install): the page reads it again.
-    case "history/settings-closed":
-      return state.view === "meeting" && state.meeting ? requestMeeting(state, state.meeting.id, at) : out(state);
+    // Settings can change what this machine runs (a default, an install): the open meeting reads it again.
+    // A failed read changes nothing on screen: the meeting and its drafts stay.
+    case "history/asr-settings-changed": {
+      if (state.view !== "meeting" || !state.meeting) return out(state);
+      const meetingId = state.meeting.id;
+      return out(state, [request("history/asr-settings-read", `/api/meetings/${encodeURIComponent(meetingId)}`, "GET", undefined, "asr-settings-read", "asr-settings-read-failed", { meetingId })]);
+    }
+    case "history/asr-settings-read":
+      return out(refreshedMeeting(state, action));
+    case "history/asr-settings-read-failed":
+      return out(state);
     case "history/meeting-link-clicked": {
       const path = meetingPath(action.meetingId);
       const moved = at.pathname !== path ? { ...at, pathname: path, search: "", hash: "", tab: null } : at; // the address once pushed

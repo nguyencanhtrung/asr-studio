@@ -1,7 +1,7 @@
 // View of the connections dialog and the header buttons: reads store state, renders the DOM, dispatches actions.
 // All state and rules live in provider-core.js (contract: docs/adr/0010-frontend-reducer-core.md). This module
 // also creates the one store both providers share; antigravity.js imports it and renders the Google section.
-import { providerChoice } from "./channel.js";
+import { asrSettings, providerChoice } from "./channel.js";
 import { createRunner, createStore } from "./store.js";
 import { setAttr, setProp, tr } from "./shell.js";
 import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, initialState, reduce, selectAsr, selectLauncher, selectView } from "./provider-core.js";
@@ -146,12 +146,6 @@ function renderLauncher(d, s) {
 function renderAsr(asr) {
   const view = selectAsr(asr);
   setProp(asrEls.status, "textContent", tr(view.text));
-  // The meeting behind the dialog reads its model list again: closing Settings can beat this save.
-  const savedRev = String(asr.savedRev ?? 0);
-  if ((els.dialog.dataset.savedRev ?? "0") !== savedRev) {
-    els.dialog.dataset.savedRev = savedRev;
-    els.dialog.dispatchEvent(new Event("asr-default-saved"));
-  }
   const control = view.defaultControl;
   setProp(asrEls.control, "hidden", !control);
   setProp(asrEls.defaultText, "hidden", !control || control.disabled);
@@ -353,6 +347,7 @@ const base = createRunner({
   open: (url, target) => window.open(url, target),
   calls: {
     "provider.choice-changed": () => providerChoice.dispatch({ type: "channel/provider-choice-changed" }),
+    "asr.settings-changed": () => asrSettings.dispatch({ type: "channel/asr-settings-changed" }),
     "clipboard.write": (text) => {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       return navigator.clipboard.writeText(text);

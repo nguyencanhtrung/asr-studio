@@ -1055,6 +1055,8 @@ function reduceLauncher(state, action) {
 // step (queued, cancelling) that keeps a click from looking ignored.
 const GET = { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" };
 const asrFetch = (request) => ({ type: "fetch", key: "provider/asr-models", url: "/api/asr-models", init: GET, ok: "provider/asr-loaded", error: "provider/asr-failed", meta: { id: request } });
+// The meeting behind the dialog reads its model list again. Closing can beat a save, so a save says so too.
+const ASR_SETTINGS_CHANGED = { type: "call", key: "provider/asr-settings-changed", name: "asr.settings-changed", args: [] };
 const ASR_POLL = { type: "schedule", key: "provider/asr-poll", delay: 1000, action: { type: "provider/asr-poll" } };
 const JOB_ACTIVE = ["queued", "running", "cancelling"];
 const jobActive = (choice) => JOB_ACTIVE.includes(choice.install?.state);
@@ -1084,7 +1086,7 @@ function reduceAsr(state, action) {
       return done({ ...state, status: "loading", request, copy: null, notice: null, defaultRefusal: null, open: true }, [asrFetch(request)]);
     }
     case "provider/dialog-closed":
-      return done({ ...state, open: false }, [{ type: "cancel", key: "provider/asr-poll" }]);
+      return done({ ...state, open: false }, [{ type: "cancel", key: "provider/asr-poll" }, ASR_SETTINGS_CHANGED]);
     case "provider/asr-poll": {
       if (!state.open) return done(state);
       const request = state.request + 1;
@@ -1122,7 +1124,7 @@ function reduceAsr(state, action) {
       const refused = action.type === "provider/asr-default-refused";
       const request = state.request + 1;
       const value = refused ? state.defaultModel : state.defaultPending;
-      return done({ ...state, request, defaultModel: value, defaultPending: undefined, savedRev: (state.savedRev ?? 0) + (refused ? 0 : 1), defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request)]);
+      return done({ ...state, request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request), ...(refused ? [] : [ASR_SETTINGS_CHANGED])]);
     }
     case "provider/asr-install-requested":
       return asrInstallCall(state, action, "POST", { state: "queued", sending: true });

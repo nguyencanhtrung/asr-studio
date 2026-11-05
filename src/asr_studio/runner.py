@@ -83,7 +83,8 @@ def prepared_model_directory(path: Path) -> Path:
         raise ModelConfigurationError("The local model configuration is incomplete.")
     if preprocessor_config is None:
         # Whisper large-v3 has 100 languages and 128 mels: without this file it dies at encoding.
-        if len(model_config["lang_ids"]) >= 100:
+        languages = model_config["lang_ids"]
+        if not isinstance(languages, list | dict) or len(languages) >= 100:
             raise ModelConfigurationError("The local model directory is incomplete.")
         return resolved
     if not isinstance(preprocessor_config, dict):

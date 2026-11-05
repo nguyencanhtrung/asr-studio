@@ -245,7 +245,10 @@ def accept_transcription_task(
             if (
                 existing["language_hint"] != normalized_language_hint
                 or existing["request_hash"] not in {request_hash, *legacy_request_hashes}
-                or (existing["request_hash"] != request_hash and existing["asr_model"] != asr_model)
+                or (
+                    existing["request_hash"] != request_hash
+                    and existing["asr_model"] != (asr_choice or asr_model)
+                )
             ):
                 raise TaskError(
                     409,

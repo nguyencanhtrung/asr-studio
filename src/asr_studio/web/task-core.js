@@ -318,7 +318,7 @@ function startFailed(state, error, auto) {
     ? t("Bấm lại để gửi một yêu cầu mới.")
     : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   let message = [failure.message, " ", guidance];
-  const selectedModel = state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto";
+  const selectedModel = pendingFor(state, meetingId)?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
   if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
     // A named model has its own preparation/GPU guidance, including for an automatic handoff.
     message = MODEL_REFUSALS[failure.code];

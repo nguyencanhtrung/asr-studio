@@ -73,6 +73,7 @@ function setup() {
     open,
     calls: {
       "provider.choice-changed": () => events.push("provider.choice-changed"),
+      "asr.settings-changed": () => {},
       "clipboard.write": async (text) => {
         if (clipboard.refuse) throw new Error("denied");
         clipboard.written.push(text);
@@ -1363,4 +1364,14 @@ test("a refused choice goes back to what the server has and says why; a read in 
   const { state: newer } = reduce(chosen, { type: "provider/asr-default-chosen", value: "whisper-large-v3" });
   const { state: late } = reduce(newer, { type: "provider/asr-default-saved", meta: { mutation: chosen.asr.defaultMutation } });
   assert.equal(late.asr.defaultPending, "whisper-large-v3");
+});
+
+test("the page behind Settings hears of a saved default and of Settings closing, not of a refusal", () => {
+  const named = (result) => result.effects.filter((e) => e.name === "asr.settings-changed").length;
+  const base = { ...initialState, asr: { ...initialState.asr, status: "ready", models: ASR.asr_models, open: true } };
+  assert.equal(named(reduce(base, { type: "provider/dialog-closed" })), 1);
+  const { state: chosen } = reduce(base, { type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+  const meta = { mutation: chosen.asr.defaultMutation };
+  assert.equal(named(reduce(chosen, { type: "provider/asr-default-saved", meta })), 1);
+  assert.equal(named(reduce(chosen, { type: "provider/asr-default-refused", meta, error: { body: { detail: { code: "not_prepared" } } } })), 0);
 });

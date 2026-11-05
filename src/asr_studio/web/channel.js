@@ -1,4 +1,5 @@
-// The one channel between stores: what history.js and connections.js announce to notes.js.
+// The one channel between stores: what history.js and connections.js announce to notes.js, and what
+// connections.js announces to history.js.
 // Contract: docs/adr/0010-frontend-reducer-core.md. Subscribers run inside dispatch, in publish order.
 import { createStore } from "./store.js";
 
@@ -20,4 +21,10 @@ export const providerChoice = createStore({
 export const meetingChanges = createStore({
   initialState: null,
   reduce: (state, action) => (action.type === "channel/meeting-changed" ? { state: action.detail } : { state }),
+});
+
+// state = how many times Settings may have changed what this machine runs (a default saved, Settings closed).
+export const asrSettings = createStore({
+  initialState: 0,
+  reduce: (state, action) => (action.type === "channel/asr-settings-changed" ? { state: state + 1 } : { state }),
 });

@@ -7,7 +7,7 @@
 // Contract: docs/adr/0010-frontend-reducer-core.md; state tables: docs/frontend-design-v1.md §11.8 to §11.11.
 // Announces the open meeting on the channel (channel.js) and offers notes.js its commands (meetingHistory).
 import { combine, createRunner, createStore } from "./store.js";
-import { meetingChanges, meetingContext } from "./channel.js";
+import { asrSettings, meetingChanges, meetingContext } from "./channel.js";
 import { formatMeetingDate, meetingIdFromPath, sameOriginAudioSource, setProp, tr } from "./shell.js";
 import {
   ACTIVE_TASK_STATES,
@@ -2780,9 +2780,7 @@ searchInput.addEventListener("keydown", (event) => {
 
 window.addEventListener("popstate", () => dispatch({ type: "history/popped" })); // for the same meeting this also paints the tab the address names
 window.addEventListener("hashchange", () => dispatch({ type: "history/hash-changed" }));
-for (const event of ["close", "asr-default-saved"]) {
-  $("#connections-dialog").addEventListener(event, () => dispatch({ type: "history/settings-closed" }));
-}
+asrSettings.subscribe(() => dispatch({ type: "history/asr-settings-changed" }));
 
 $("#meeting-tabs").addEventListener("click", (event) => {
   const tab = event.target.closest("[data-meeting-tab]");
