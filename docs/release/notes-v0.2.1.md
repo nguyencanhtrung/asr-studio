@@ -24,11 +24,12 @@ See the [user guide](../user-guide.md#install-a-release).
 - `model-installer` runs all the time, with internet access and write access to `/models`. It has no published port and no access to recordings, transcripts or credentials. `--offline` leaves it stopped.
 - All containers can reach the internet, including `worker`, which holds recordings. `--offline` does not block this. See [Network access](../user-guide.md#network-access).
 - If the default model for this hardware is missing, the worker does not start and Settings offers no install for it. `./scripts/start.sh` prepares it first.
-- Whisper small is visibly less accurate on Vietnamese. This release makes no new ASR quality, diarization accuracy or latency claim.
+- Whisper large-v3, the default on a GPU, can return text that is not in the audio on Vietnamese. In one measurement, 11 of 27 short utterances returned such a line. The cause is not known, and the settings match v0.2.0. For Vietnamese, choose PhoWhisper-large or Qwen3-ASR-1.7B as the default in Settings. [#168](https://github.com/nguyencanhtrung/asr-studio/issues/168)
+- This release makes no general ASR quality or latency claim. See [the measurement](performance-v0.2.1.md) for what was measured and its limits. Diarization accuracy was not measured.
 - Not tested: Safari, and an integrity failure on a real download (automated tests only).
 
 ## Measurements
 
-New measurements: automated tests, browser scenarios and real installs and transcriptions recorded in the release evidence.
+New measurements: [short ASR measurement](performance-v0.2.1.md) of quality, speed and memory for all four models; automated tests, browser scenarios and real installs and transcriptions recorded in the release evidence.
 Reused benchmark evidence: none.
-Omitted measurements: model quality and timing benchmarks, including for Whisper small, PhoWhisper-large and Qwen3-ASR-1.7B.
+Omitted measurements: the full acceptance dataset, long recordings, diarization accuracy and notes quality.

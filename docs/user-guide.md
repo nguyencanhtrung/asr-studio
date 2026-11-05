@@ -279,10 +279,12 @@ selector keeps your choice while the page stays open; a new page starts on **Aut
 | Choice           | Use it for                                 | Limits                                                                |
 | ---------------- | ------------------------------------------ | --------------------------------------------------------------------- |
 | Automatic        | The default model from Settings.           | Unless you chose one: `whisper-large-v3` on GPU, `whisper-small` on CPU. |
-| Whisper large-v3 | Multilingual meetings with language detection. | Slowest of the large models, and the most likely to repeat sentences. |
-| Whisper small    | A CPU-only machine.                        | Lower accuracy than Whisper large-v3. |
+| Whisper large-v3 | Multilingual meetings with language detection. | Slowest of the large models and the most likely to repeat sentences. On Vietnamese it can return text that is not in the audio ([#168](https://github.com/nguyencanhtrung/asr-studio/issues/168)). |
+| Whisper small    | A CPU-only machine.                        | Lower accuracy than PhoWhisper-large on Vietnamese and Qwen3-ASR-1.7B overall. |
 | PhoWhisper-large | Meetings in Vietnamese.                    | Not for English or content that mixes in many technical terms. Segments are longer, so speaker labels are coarser. |
 | Qwen3-ASR-1.7B   | Mixed Vietnamese and English, and speed.   | GPU only, about 8.5 GB of VRAM on a 75-minute meeting. No confidence score: **Listen again** only catches repetition and speaker issues, so its count does not compare with other models. |
+
+A [short measurement](release/performance-v0.2.1.md) on public datasets backs these notes, with its limits.
 
 These results come from a few real meetings without a reference transcript, so treat them as a
 starting point and compare on your own recordings.

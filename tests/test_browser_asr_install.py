@@ -100,7 +100,9 @@ def status(row):
 
 
 def pho_row(page):
-    return asr_rows(page).filter(has_text="PhoWhisper")
+    return page.locator(
+        f'#asr-models > li[data-model="{PHO}"]'
+    )  # other rows name it in their notes
 
 
 def open_asr(page, live):
