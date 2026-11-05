@@ -19,7 +19,7 @@ Notes của bản ghi dài được tạo qua nhiều lượt gọi provider (Ch
 | Bản ghi A (75 phút) | 8 | 13 | 10.711 byte | 10.700 | 571,3 s |
 | Bản ghi B (67 phút) | 10 | 16 | 10.703 byte | 10.700 | 638,8 s |
 
-Nguồn: issue #72; `docs/acceptance-report-v1.md` mục 6.1 và 6.3.
+Nguồn: issue #72; `docs/acceptance-report.md` mục 6.1 và 6.3.
 
 - Cả ba lỗi ở lượt reduce cấp 2 đầu tiên (HTTP 200, lần thử `primary`). Nguồn không cần reduce cấp 2 (bản ghi C, 56 phút, 6 chunk) thành công sau 320,8 s.
 - `request_document` chỉ sửa lỗi validation; lỗi vượt trần ném ở transport trước khi tới validation. Trần reduce là 10.700 byte (`MAX_PROMPT_BYTES // 3 // 100 * 100`), trần câu trả lời chunk là 8000.
@@ -45,7 +45,7 @@ Bản ghi A (75 phút, 8 chunk), ChatGPT `gpt-5.6-sol` medium, đầu ra English
 | Thời gian | 571,3 s tới lúc lỗi | 798,5 s tới khi hoàn tất |
 | Lượt gọi / lượt phục hồi | 13 / 0 | 16 / 1 |
 
-Nguồn: PR #94 (AC-5 và Evidence); `docs/acceptance-report-v1.md` mục 2.6. Sau sửa, lượt reduce thứ 13 trả 10.702 byte (vượt 10.700) và được gọi lại ở lượt 14. Hai thời gian không so trực tiếp được vì "trước" dừng ở lúc lỗi.
+Nguồn: PR #94 (AC-5 và Evidence); `docs/acceptance-report.md` mục 2.6. Sau sửa, lượt reduce thứ 13 trả 10.702 byte (vượt 10.700) và được gọi lại ở lượt 14. Hai thời gian không so trực tiếp được vì "trước" dừng ở lúc lỗi.
 
 #### Đánh đổi và phương án đã loại
 
@@ -70,9 +70,9 @@ Notes
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` mục 5 (đoạn lượt gọi có đầu ra vượt trần; đã mô tả cơ chế, cập nhật khi #102 đổi hành vi).
-- `docs/backend-design-v1.md` mục 4 và 8 (Q17, Q18: giới hạn lượt gọi lại của notes; thêm quan hệ giữa lượt sửa Q18 và lượt phục hồi).
-- `docs/acceptance-report-v1.md` mục 8.3 (AC-39).
+- `docs/backend-contract.md` mục 5 (đoạn lượt gọi có đầu ra vượt trần; đã mô tả cơ chế, cập nhật khi #102 đổi hành vi).
+- `docs/backend-design.md` mục 4 và 8 (Q17, Q18: giới hạn lượt gọi lại của notes; thêm quan hệ giữa lượt sửa Q18 và lượt phục hồi).
+- `docs/acceptance-report.md` mục 8.3 (AC-39).
 
 
 ### #104 / PR #109 — Notes một lượt theo context thật của model
@@ -139,9 +139,9 @@ Notes; Hiệu năng
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` mục 5 (ngân sách, single-pass, citation và phục hồi).
-- `docs/backend-design-v1.md` mục 4 và 8 (Q17–Q18, model/provider và đánh đổi chia/hợp nhất).
-- `docs/acceptance-report-v1.md` mục 6.6 và hàng AC-13 (mốc đo #104); release notes (#17) cho giới hạn đã biết.
+- `docs/backend-contract.md` mục 5 (ngân sách, single-pass, citation và phục hồi).
+- `docs/backend-design.md` mục 4 và 8 (Q17–Q18, model/provider và đánh đổi chia/hợp nhất).
+- `docs/acceptance-report.md` mục 6.6 và hàng AC-13 (mốc đo #104); release notes (#17) cho giới hạn đã biết.
 
 
 ### #100 / PR #111 — Notes văn phong telegraph, mỗi ý một mục
@@ -199,7 +199,7 @@ Notes
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` mục 5 (prompt version).
-- `docs/backend-design-v1.md` (quy tắc prompt notes).
-- `docs/acceptance-report-v1.md` (số liệu chất lượng).
+- `docs/backend-contract.md` mục 5 (prompt version).
+- `docs/backend-design.md` (quy tắc prompt notes).
+- `docs/acceptance-report.md` (số liệu chất lượng).
 - Release notes (#17).

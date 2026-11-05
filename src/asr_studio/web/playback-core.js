@@ -2,7 +2,7 @@
 // whether the list follows them, the user's manual scrolling that pauses the follow, the row a notes source names
 // and the seek to a notes source that may have to wait for the meeting's audio. No DOM, fetch, timer, storage,
 // clock, <audio> or randomness: node --test loads this file directly. Contract:
-// docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design-v1.md §11.11.
+// docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design.md §11.11.
 //
 // The slice `playback` shares the page store with `history`, `task` and `transcript`. What only the page knows enters
 // through actions: the clock (`now`, from performance.now()), the audio facts (`time`, `paused`, `ended`, `ready`

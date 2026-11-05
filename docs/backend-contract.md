@@ -1,6 +1,6 @@
 # Backend contract v1 — bản thiết kế kỹ thuật
 
-Tài liệu cụ thể hóa Q1–Q27 đã thống nhất trong [backend design](backend-design-v1.md), hoàn tất tổng hợp ngày 2026-10-16. Đây là bản thiết kế trước triển khai, không phải mô tả API/database đang tồn tại. Tên bảng, endpoint và các giá trị cấu hình bên dưới là lựa chọn kỹ thuật ban đầu; các hành vi sản phẩm đã chốt là ràng buộc khi triển khai. [Spec](specification-v1.md) là nguồn yêu cầu nghiệm thu.
+Tài liệu cụ thể hóa Q1–Q27 đã thống nhất trong [backend design](backend-design.md), hoàn tất tổng hợp ngày 2026-10-16. Đây là bản thiết kế trước triển khai, không phải mô tả API/database đang tồn tại. Tên bảng, endpoint và các giá trị cấu hình bên dưới là lựa chọn kỹ thuật ban đầu; các hành vi sản phẩm đã chốt là ràng buộc khi triển khai. [Spec](specification.md) là nguồn yêu cầu nghiệm thu.
 
 ## 1. Ranh giới và luồng dữ liệu
 
@@ -230,7 +230,7 @@ Upload và kết quả file có trạng thái bền để nhận biết file ch�
 
 Xem [bằng chứng và đánh đổi theo tag](release/privacy-v0.1.0.md),
 [các thay đổi notes](release/notes-v0.1.0.md) và
-[chỉ mục thay đổi](architecture-changes-v1.md). Số đo lịch sử giữ nguyên điều kiện
+[chỉ mục thay đổi](architecture-changes.md). Số đo lịch sử giữ nguyên điều kiện
 và revision gốc; không phải phép đo lại artifact 0.1.0.
 
 

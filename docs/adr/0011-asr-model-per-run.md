@@ -4,7 +4,7 @@ status: accepted
 
 # Chọn model ASR theo từng lần xử lý bản ghi
 
-Một model không thắng trên mọi đoạn của cùng một cuộc họp: đo trên bản ghi thật, PhoWhisper giữ câu tiếng Việt tự nhiên hơn, Qwen3-ASR xử lý English và câu trộn tốt hơn, Whisper large-v3 giữ thuật ngữ tốt nhưng lặp câu nhiều nhất. Vì vậy người vận hành chọn model cho từng lần xử lý, mỗi lần tạo một thế hệ transcript riêng để đối chiếu ([ADR 0006](0006-transcript-generations.md)), thay vì đổi cấu hình toàn hệ thống. Số đo nằm ở [khảo sát model](../model-candidates-v1.md#đo-trên-bản-ghi-thật-11-2026).
+Một model không thắng trên mọi đoạn của cùng một cuộc họp: đo trên bản ghi thật, PhoWhisper giữ câu tiếng Việt tự nhiên hơn, Qwen3-ASR xử lý English và câu trộn tốt hơn, Whisper large-v3 giữ thuật ngữ tốt nhưng lặp câu nhiều nhất. Vì vậy người vận hành chọn model cho từng lần xử lý, mỗi lần tạo một thế hệ transcript riêng để đối chiếu ([ADR 0006](0006-transcript-generations.md)), thay vì đổi cấu hình toàn hệ thống. Số đo nằm ở [khảo sát model](../model-candidates.md#đo-trên-bản-ghi-thật-11-2026).
 
 ## Mặc định theo phần cứng cho #168
 
@@ -33,7 +33,7 @@ Qwen là lựa chọn GPU tổng quát theo cân bằng này, không phải vì 
 | Đỉnh VRAM product đã đo | 5554 MiB với cấu hình Whisper app | 8336 MiB, batch 4 |
 | Tín hiệu `asr_uncertain` | Các ngưỡng Whisper | Không kích hoạt từ Qwen; không có confidence tương đương |
 
-Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [số đo ứng viên model](../model-candidates-v1.md#đo-trên-bản-ghi-thật-11-2026). Đánh đổi là GPU cần model Qwen khoảng 4,1 GB và đỉnh VRAM 8336 MiB; Whisper large-v3 vẫn giữ làm lựa chọn explicit để bảo toàn đối chiếu và tương thích task cũ.
+Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [số đo ứng viên model](../model-candidates.md#đo-trên-bản-ghi-thật-11-2026). Đánh đổi là GPU cần model Qwen khoảng 4,1 GB và đỉnh VRAM 8336 MiB; Whisper large-v3 vẫn giữ làm lựa chọn explicit để bảo toàn đối chiếu và tương thích task cũ.
 
 **Đo lại qua đường âm thanh của sản phẩm (AAC 160 kbit/s).** Một lần cho Qwen, hai lần cho large-v3 `no_context`, kết quả hai lần giống nhau:
 

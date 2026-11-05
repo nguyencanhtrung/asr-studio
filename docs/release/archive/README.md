@@ -9,7 +9,7 @@ Their issue status and publication status can differ from current status.
 | Report | Original record |
 | --- | --- |
 | Release dossier | [README](v0.1.0/README.md) |
-| Unpublished draft | [Release draft](v0.1.0/notes-v1.md) |
+| Unpublished draft | [Release draft](v0.1.0/notes.md) |
 | Timing and memory | [Performance](v0.1.0/performance-v0.1.0.md) |
 | Notes pipeline | [Notes](v0.1.0/notes-v0.1.0.md) |
 | Telemetry and logs | [Privacy](v0.1.0/privacy-v0.1.0.md) |
