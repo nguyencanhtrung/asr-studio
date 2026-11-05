@@ -44,7 +44,7 @@ Frontend (`src/asr_studio/web/`) là JS thuần dùng biến global, mỗi modul
 
 - React/framework hoặc TypeScript/bundler: loại vì thêm build step và dependency; có thể đề xuất sau bằng ADR riêng.
 - Giữ bộ đếm `*Seq`: loại vì quy tắc nằm rải rác và không test được độc lập.
-- Dùng event bus chung thay cho action: loại vì không có state trung tâm để kiểm tra. Kênh `channel.js` không phải bus chung: hai store có tên, mỗi cái một loại tin, mỗi tin có người báo và người nhận cố định (mục Quy tắc).
+- Dùng event bus chung thay cho action: loại vì không có state trung tâm để kiểm tra. Kênh `channel.js` không phải bus chung: các store có tên, mỗi cái một loại tin, mỗi tin có người báo và người nhận cố định (mục Quy tắc).
 - Một store cho cả trang (gộp notes, provider và history vào một `combine`): loại trong pha 5 vì mỗi view đã có store và runner riêng với phụ thuộc khác nhau; kênh nhỏ giữ ranh giới đó.
 - Một core cho nhiều provider (pha 2): reducer `reduceProvider` nhận mô tả provider là dữ liệu thuần; khác biệt nằm ở trường của mô tả (kiểu đăng nhập, độ trễ poll, hỗ trợ effort, bảng lỗi), không nhân đôi luồng. Hai provider dùng chung một store qua `combine`.
 - Chi phí: viết thêm reducer và bảng chuyển trạng thái cho mỗi tính năng; chuyển từng pha để mỗi PR đủ nhỏ.

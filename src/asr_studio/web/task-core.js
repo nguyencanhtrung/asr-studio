@@ -318,15 +318,15 @@ function startFailed(state, error, auto) {
     ? t("Bấm lại để gửi một yêu cầu mới.")
     : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   let message = [failure.message, " ", guidance];
-  const selectedModel = state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto";
+  const selectedModel = pendingFor(state, meetingId)?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
   if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
     // A named model has its own preparation/GPU guidance, including for an automatic handoff.
     message = MODEL_REFUSALS[failure.code];
   } else if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
     message = t("{reason} Cuộc họp đã được lưu nhưng chưa chép lời. Ứng dụng không tự thử lại; bấm “Bắt đầu chép lời” khi máy sẵn sàng.", { reason: AUTO_START_REASONS[failure.code] });
   } else if (Object.hasOwn(MODEL_REFUSALS, failure.code)) {
-    // The shared text for this code names a notes provider, which has no place here.
-    message = MODEL_REFUSALS[failure.code];
+    // Automatic names no model of its own: the operator fixes this one in Settings.
+    message = t("Model mặc định chưa chạy được trên máy này. Mở Cài đặt → ASR Model để cài lại hoặc chọn mặc định khác.");
   }
   const base = definitive ? forget(state, meetingId) : out(state);
   // A request restored after a reload is the only record of its model: the selector must keep showing what was refused.
@@ -558,7 +558,7 @@ function selectModel(state, shown, disabled) {
   const note = value !== "auto"
     ? ASR_MODEL_TEXT[value].note
     : choice && choice.model_name
-      ? t("Theo phần cứng của máy: {model}.", { model: choice.model_name })
+      ? (choice.chosen ? t("Theo Cài đặt: {model}.", { model: choice.model_name }) : t("Theo phần cứng của máy: {model}.", { model: choice.model_name }))
       : t("Theo phần cứng của máy.");
   const reason = choice ? choice.reason : null;
   return {

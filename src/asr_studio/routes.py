@@ -20,10 +20,13 @@ from asr_studio.antigravity import AntigravityError, AntigravityProvider
 from asr_studio.asr_models import (
     AUTO,
     CATALOG,
+    default_model_damaged,
     model_choices,
     model_path,
+    read_default_model,
     resolve_run,
     selectable_models,
+    write_default_model,
 )
 from asr_studio.auth import AuthStateError, create_session_cookie, token_matches
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
@@ -407,7 +410,14 @@ def install_routes(
             choice["install"] = installs.job(model.id)
             choice["required_bytes"] = model.required_bytes
             choice["free_bytes"] = free_bytes(model.id)
-        return {"asr_models": choices, "installer": installs.installer()}
+        hardware = profile.model_path if profile is not None else None
+        return {
+            "asr_models": choices,
+            "installer": installs.installer(),
+            "default_model": read_default_model(settings),
+            "default_damaged": default_model_damaged(settings),
+            "hardware_model": Path(hardware).name if hardware is not None else None,
+        }
 
     @app.get("/api/asr-models")
     async def list_asr_models() -> dict[str, Any]:
@@ -416,6 +426,23 @@ def install_routes(
 
     def refuse(status_code: int, code: str, message: str) -> HTTPException:
         return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+    @app.put("/api/asr-models/default")
+    async def choose_default_asr_model(request: Request) -> dict[str, Any]:
+        payload = await _json_object(request, required={"asr_model"})
+        chosen = payload["asr_model"]
+        if chosen is not None and (not isinstance(chosen, str) or chosen not in CATALOG):
+            raise refuse(400, "invalid_asr_model", "Choose an ASR model from the list.")
+        profile = await healthy_runtime_profile()
+        if profile is None:
+            raise refuse(503, "worker_unavailable", "The transcription worker is not ready.")
+        if chosen is not None:
+            choices = await run_in_threadpool(model_choices, settings, profile)
+            choice = next(item for item in choices if item["id"] == chosen)
+            if not choice["ready"]:
+                raise refuse(409, str(choice["reason"]), "This model cannot run here yet.")
+        await run_in_threadpool(write_default_model, settings, chosen)
+        return {"default_model": chosen}
 
     @app.post("/api/asr-models/{asr_model}/install", status_code=202)
     async def install_asr_model(asr_model: str) -> dict[str, Any]:
@@ -886,6 +913,7 @@ def install_routes(
             "meeting_id": payload["meeting_id"],
             "request_id": payload["request_id"],
             **resolve_run(settings, profile, asr_model),
+            "asr_choice": asr_model,
             "diarization_model_path": settings.diarization_model_path,
             "worker_ready": worker_ready and profile is not None,
         }

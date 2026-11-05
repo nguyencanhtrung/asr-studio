@@ -460,7 +460,7 @@ Mục của Cài đặt (`launcher.section`: `ai`, `asr`, `theme`, `about`): `di
 | Từ | Sự kiện | Tới | Effect |
 | --- | --- | --- | --- |
 | đóng | `dialog-opened` | `open`, `status = loading`, xóa `notice` và `copy` | `fetch provider/asr-models` |
-| mở | `dialog-closed` | `open = false` | `cancel provider/asr-poll` |
+| mở | `dialog-closed` | `open = false` | `cancel provider/asr-poll`, `call asr.settings-changed` |
 | mở, có job | `asr-poll` (hẹn 1 s) | tăng `request` | `fetch provider/asr-models` |
 | đóng | `asr-poll` | không đổi | |
 | tải | `asr-loaded` đúng `request` | đặt `models`, `installer`, `status` | `schedule provider/asr-poll` nếu còn job; không thì không hẹn nữa |
@@ -471,6 +471,9 @@ Mục của Cài đặt (`launcher.section`: `ai`, `asr`, `theme`, `about`): `di
 | model có job | `asr-cancel-requested` | model `cancelling`, tăng `request` | `fetch provider/asr-install/<id>` DELETE |
 | bất kỳ | `asr-install-sent` | model nhận `install` của máy chủ | `schedule provider/asr-poll` nếu còn job |
 | bất kỳ | `asr-install-refused` | `notice = {id, code}`, tăng `request` | `fetch provider/asr-models` (đọc lại sự thật) |
+| bất kỳ | `asr-default-chosen` | `defaultPending` là giá trị mới, xóa `defaultRefusal`, tăng `request` và `defaultMutation` | `fetch provider/asr-default` PUT |
+| chờ đúng `defaultMutation` | `asr-default-saved` | `defaultModel` nhận giá trị chờ, tăng `request` | `fetch provider/asr-models`, `call asr.settings-changed` |
+| chờ đúng `defaultMutation` | `asr-default-refused` | giữ `defaultModel` của máy chủ, `defaultRefusal = code`, tăng `request` | `fetch provider/asr-models` |
 
 Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không dựng lại dòng, để nút Hủy giữ focus; khi bấm làm nút bị thay, focus đi theo tới nút thay thế đầu tiên bấm được (kể cả sau một bước trung gian bị tắt), trừ khi người dùng đã chuyển focus đi nơi khác.
 

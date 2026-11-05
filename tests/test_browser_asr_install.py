@@ -7,6 +7,7 @@ download child is a script, so a test decides when bytes arrive and when the job
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 import threading
 import time
@@ -16,6 +17,7 @@ import pytest
 from playwright.sync_api import expect
 from seeding import seed_meeting
 from test_asr_models import _whisper_dir
+from test_browser_history import _prepare_browser_asr_model
 from test_browser_history import live as live  # noqa: F401
 from test_browser_history import signed_in as signed_in  # noqa: F401
 from test_browser_settings import asr_rows, open_section, overflow
@@ -334,3 +336,100 @@ def test_a_gpu_machine_can_install_the_small_model_and_it_is_not_the_default(
     installer.mode = "ok"
     small.get_by_role("button", name="Cài đặt model").click()
     expect(status(small)).to_have_text("Sẵn sàng", timeout=15000)
+
+
+def default_select(page):
+    return page.get_by_label("Model mặc định")
+
+
+def badge(row):
+    return row.locator('.asr-badge[data-kind="default"]')
+
+
+def test_choose_a_default_in_settings_and_it_survives_a_reload(live, signed_in, installer):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    _prepare_browser_asr_model(live.settings.asr_phowhisper_model_path)
+    open_asr(page, live)
+    pho, large = pho_row(page), asr_rows(page).nth(0)
+    select = default_select(page)
+    expect(select).to_have_value("auto")
+    expect(badge(large)).to_have_text("Mặc định")
+    # Not installed and GPU-only rows cannot be picked; this GPU rig has neither Qwen nor small.
+    expect(select.locator('option[value="qwen3-asr-1.7b"]')).to_be_disabled()
+
+    select.select_option("pho-whisper-large")
+
+    expect(badge(pho)).to_have_text("Mặc định")
+    expect(badge(large)).to_have_count(0)
+    expect(page.locator("#asr-default")).to_contain_text("PhoWhisper-large")
+    open_asr(page, live)
+    expect(default_select(page)).to_have_value("pho-whisper-large")
+    expect(badge(pho_row(page))).to_have_text("Mặc định")
+
+    default_select(page).select_option("auto")
+    expect(badge(asr_rows(page).nth(0))).to_have_text("Mặc định")
+    expect(page.locator("#asr-default")).to_contain_text("whisper-large-v3")
+
+
+def test_a_default_that_stopped_working_says_so(live, signed_in, installer):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    model = _prepare_browser_asr_model(live.settings.asr_phowhisper_model_path)
+    open_asr(page, live)
+    default_select(page).select_option("pho-whisper-large")
+    expect(badge(pho_row(page))).to_have_text("Mặc định")
+
+    shutil.rmtree(model)
+    open_asr(page, live)
+
+    expect(default_select(page)).to_have_value("pho-whisper-large")
+    expect(page.locator("#asr-default")).to_contain_text("sẽ bị từ chối")
+
+
+def test_a_refused_default_goes_back_and_says_why(live, signed_in, installer):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    model = _prepare_browser_asr_model(live.settings.asr_phowhisper_model_path)
+    open_asr(page, live)
+    shutil.rmtree(model)  # ready when the page read it, gone when it is chosen
+
+    default_select(page).select_option("pho-whisper-large")
+
+    expect(page.locator("#asr-default-refusal")).to_contain_text("chưa được cài")
+    expect(default_select(page)).to_have_value("auto")
+
+
+@pytest.mark.parametrize("width", [320, 390], ids=["320", "390"])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_the_default_control_fits_a_phone_and_reads_in_english(
+    live, signed_in, installer, width, scheme
+):
+    _context, page = signed_in(viewport={"width": width, "height": 640}, color_scheme=scheme)
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    page.goto(f"{live.url}/")
+    page.get_by_role("button", name="Settings", exact=True).first.click()
+    page.get_by_role("tab", name="ASR Model").click()
+    select = page.get_by_label("Default model")
+
+    expect(select).to_be_visible()
+    expect(select.locator('option[value="auto"]')).to_contain_text("Automatic for this hardware")
+    assert overflow(page) == 0
+    box = select.bounding_box()
+    assert box["height"] >= 40 and box["x"] + box["width"] <= width
+    select.focus()
+    page.keyboard.press("ArrowDown")  # a native select: the keyboard picks it
+    expect(select).to_be_focused()
+
+
+def test_the_default_control_is_locked_while_no_worker_can_answer(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    open_asr(page, live)
+    expect(default_select(page)).to_be_disabled()
+
+
+def test_a_saved_default_that_cannot_be_read_is_reported(live, signed_in, installer):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    (live.settings.data_dir / "asr-default.json").write_text("garbage", encoding="utf-8")
+    open_asr(page, live)
+    expect(default_select(page)).to_have_value("auto")
+    expect(page.locator("#asr-default")).to_contain_text("Không đọc được")
+    default_select(page).select_option("whisper-large-v3")
+    expect(page.locator("#asr-default")).to_contain_text("Whisper large-v3")

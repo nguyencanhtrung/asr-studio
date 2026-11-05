@@ -648,3 +648,46 @@ async def test_an_install_the_machine_cannot_do_is_refused_and_nothing_is_queued
         assert (
             await api.client.delete(f"/api/asr-models/{model}/install", headers=api.headers)
         ).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_the_default_model_api_only_takes_a_model_that_can_run_here(api):
+    rig = api.rig
+
+    async def put(value):
+        return await api.client.put(
+            "/api/asr-models/default", json={"asr_model": value}, headers=api.headers
+        )
+
+    async def read():
+        return (await api.client.get("/api/asr-models", headers=api.headers)).json()
+
+    assert (await read())["default_model"] is None
+    assert (await put("nope")).status_code == 400
+    assert (await put(1)).status_code == 400
+    refused = await put(PHO)
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "not_prepared")
+    assert (await read())["default_model"] is None
+
+    _whisper_dir(rig.settings.asr_phowhisper_model_path)
+    assert (await put(PHO)).json() == {"default_model": PHO}
+    body = await read()
+    auto = next(item for item in body["asr_models"] if item["id"] == "auto")
+    assert (body["default_model"], auto["model_name"], auto["chosen"]) == (PHO, PHO, True)
+    assert body["hardware_model"] == "whisper-large-v3"
+
+    assert (await put(None)).json() == {"default_model": None}
+    assert (await read())["default_model"] is None
+
+    api.profile["value"] = RuntimeProfile("cpu", "int8", rig.settings.asr_gpu_model_path)
+    assert (await put(QWEN)).json()["detail"]["code"] == "gpu_required"
+
+    api.profile["value"] = None
+    refused = await put(PHO)
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (503, "worker_unavailable")
+
+
+@pytest.mark.anyio
+async def test_the_default_model_route_needs_the_same_origin(api):
+    url = "/api/asr-models/default"
+    assert (await api.client.put(url, json={"asr_model": None})).status_code == 403

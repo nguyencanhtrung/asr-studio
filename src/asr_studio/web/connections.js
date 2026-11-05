@@ -1,7 +1,7 @@
 // View of the connections dialog and the header buttons: reads store state, renders the DOM, dispatches actions.
 // All state and rules live in provider-core.js (contract: docs/adr/0010-frontend-reducer-core.md). This module
 // also creates the one store both providers share; antigravity.js imports it and renders the Google section.
-import { providerChoice } from "./channel.js";
+import { asrSettings, providerChoice } from "./channel.js";
 import { createRunner, createStore } from "./store.js";
 import { setAttr, setProp, tr } from "./shell.js";
 import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, initialState, reduce, selectAsr, selectLauncher, selectView } from "./provider-core.js";
@@ -18,6 +18,9 @@ const asrEls = {
   status: document.querySelector("#asr-status"),
   defaultText: document.querySelector("#asr-default"),
   list: document.querySelector("#asr-models"),
+  control: document.querySelector("#asr-default-control"),
+  select: document.querySelector("#asr-default-select"),
+  refusal: document.querySelector("#asr-default-refusal"),
 };
 
 const els = {
@@ -143,8 +146,17 @@ function renderLauncher(d, s) {
 function renderAsr(asr) {
   const view = selectAsr(asr);
   setProp(asrEls.status, "textContent", tr(view.text));
-  setProp(asrEls.defaultText, "hidden", !view.defaultText);
-  setProp(asrEls.defaultText, "textContent", tr(view.defaultText));
+  const control = view.defaultControl;
+  setProp(asrEls.control, "hidden", !control);
+  setProp(asrEls.defaultText, "hidden", !control || control.disabled);
+  if (control) {
+    renderOptions(asrEls.select, control.options, control.value);
+    setProp(asrEls.select, "disabled", control.disabled);
+    setProp(asrEls.defaultText, "textContent", tr(control.text));
+    asrEls.defaultText.classList.toggle("is-broken", control.broken);
+    setProp(asrEls.refusal, "hidden", !control.refusal);
+    setProp(asrEls.refusal, "textContent", tr(control.refusal));
+  }
   const signature = JSON.stringify(view.rows.map(({ copy, progress, ...row }) => ({ ...row, progressKind: progress ? (progress.ratio === null ? "indeterminate" : "bar") : null })));
   if (asrEls.list.dataset.rows !== signature) {
     asrEls.list.dataset.rows = signature;
@@ -335,6 +347,7 @@ const base = createRunner({
   open: (url, target) => window.open(url, target),
   calls: {
     "provider.choice-changed": () => providerChoice.dispatch({ type: "channel/provider-choice-changed" }),
+    "asr.settings-changed": () => asrSettings.dispatch({ type: "channel/asr-settings-changed" }),
     "clipboard.write": (text) => {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       return navigator.clipboard.writeText(text);
@@ -414,6 +427,8 @@ els.dialog.addEventListener("close", () => dispatch({ type: "provider/dialog-clo
 els.dialog.addEventListener("click", (event) => {
   if (event.target === els.dialog) els.dialog.close();
 });
+
+asrEls.select.addEventListener("change", () => dispatch({ type: "provider/asr-default-chosen", value: asrEls.select.value }));
 
 const chatgpt = (action) => dispatch({ ...action, provider: CHATGPT.id });
 els.signIn.addEventListener("click", () => chatgpt({ type: "provider/login-requested" }));

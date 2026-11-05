@@ -224,10 +224,16 @@ Each model needs valid `model.bin`, `config.json`, `tokenizer.json` and
 ### Check the ASR models
 
 **Settings → ASR Model** lists Whisper large-v3, Whisper small, PhoWhisper-large and Qwen3-ASR-1.7B as
-the app sees them now. A line above the list and a **Default** badge name the model **Automatic** uses on
-this machine: Whisper large-v3 on a GPU, Whisper small on a CPU-only machine. Each row says **Ready**,
-**Not prepared**, **Installing**, **Needs an NVIDIA GPU** or **Not checked** (no worker is running).
-Qwen3-ASR says so when the worker runs on CPU, before anything is downloaded.
+the app sees them now. Each row says **Ready**, **Not prepared**, **Installing**, **Needs an NVIDIA GPU**
+or **Not checked** (no worker is running). Qwen3-ASR has no install button on a CPU-only machine because
+it cannot run there; the others can.
+
+**Default model** above the list decides what **Automatic** uses, and a **Default** badge marks that
+model. **Automatic for this hardware** is Whisper large-v3 on a GPU and Whisper small on a CPU-only
+machine. You can pick any model that is ready here. The choice applies to new runs, survives a restart,
+and is stored in `asr-default.json` in the data directory. Choosing a model for one run does not change
+it. If the chosen model stops being usable, Settings says so and Automatic runs are refused rather than
+silently using another model; install it again or choose another default.
 
 For a model that is not prepared, the row shows how much free space it needs and how much is
 left, and **Install model**. The model downloads on this machine and no recording is sent
@@ -256,7 +262,7 @@ selector keeps your choice while the page stays open; a new page starts on **Aut
 
 | Choice           | Use it for                                 | Limits                                                                |
 | ---------------- | ------------------------------------------ | --------------------------------------------------------------------- |
-| Automatic        | The default chosen for this hardware.      | `whisper-large-v3` on GPU, `whisper-small` on CPU.                    |
+| Automatic        | The default model from Settings.           | Unless you chose one: `whisper-large-v3` on GPU, `whisper-small` on CPU. |
 | Whisper large-v3 | Multilingual meetings with language detection. | Slowest of the large models, and the most likely to repeat sentences. |
 | Whisper small    | A CPU-only machine.                        | Lower accuracy than Whisper large-v3. |
 | PhoWhisper-large | Meetings in Vietnamese.                    | Not for English or content that mixes in many technical terms. Segments are longer, so speaker labels are coarser. |

@@ -19,18 +19,26 @@ provider you choose, and every note links back to the moment in the recording it
 
 </div>
 
+<details>
+<summary><strong>Giao diện tiếng Việt</strong></summary>
+<br>
+<p align="center">
+  <img src="docs/assets/readme/meeting-notes-vi.png" alt="Meeting notes bằng giao diện tiếng Việt, có mốc thời gian dẫn nguồn" width="900">
+</p>
+</details>
+
 ## Screenshot provenance
 
-The two README screenshots are reproducible synthetic examples, not acceptance evidence. Regenerate
-them with:
+The README screenshots are reproducible synthetic examples in the dark theme, in English and
+Vietnamese, not acceptance evidence. Regenerate them with:
 
 ```sh
 uv run python scripts/capture-readme.py
 ```
 
 The script reads only the repository [synthetic fixture](tests/fixtures/readme-demo.json), starts a
-fresh temporary local app, uses a stub notes provider, captures at 1440 × 1000, and rejects
-non-loopback browser requests. It does not read recordings, credentials or provider sessions, run
+fresh temporary local app, uses a stub notes provider and a stubbed connected account, captures at
+a width of 1440, and rejects non-loopback browser requests. It does not read recordings, credentials or provider sessions, run
 ASR/inference, or use a user's browser.
 
 ## Renaming an existing checkout
@@ -80,6 +88,21 @@ on the CPU otherwise.
 <p align="center">
   <img src="docs/assets/readme/transcript.png" alt="Transcript with named speakers and mixed English and Vietnamese" width="900">
 </p>
+
+<p align="center">
+  <img src="docs/assets/readme/settings-asr.png" alt="Settings, ASR Model section: choose the default model and install models" width="640">
+</p>
+
+<details>
+<summary><strong>Giao diện tiếng Việt</strong></summary>
+<br>
+<p align="center">
+  <img src="docs/assets/readme/transcript-vi.png" alt="Transcript bằng giao diện tiếng Việt, có tên người nói" width="900">
+</p>
+<p align="center">
+  <img src="docs/assets/readme/settings-asr-vi.png" alt="Cài đặt, mục ASR Model: chọn model mặc định và cài model" width="640">
+</p>
+</details>
 
 ## Prerequisites
 

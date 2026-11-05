@@ -100,8 +100,11 @@ def _payload_hash(
     *,
     meeting_id: str,
     language_hint: str | None = None,
+    asr_choice: str | None = None,
 ) -> str:
     payload: dict[str, str] = {"meeting_id": meeting_id}
+    if asr_choice is not None:
+        payload["asr_choice"] = asr_choice
     if language_hint is not None:
         payload["language_hint"] = language_hint
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -190,8 +193,13 @@ def accept_transcription_task(
     compute_type: str,
     worker_ready: bool,
     asr_model: str = AUTO,
+    asr_choice: str | None = None,
 ) -> dict[str, object]:
-    """Accept one request atomically, returning the original row for HTTP retries."""
+    """Accept one request atomically, returning the original row for HTTP retries.
+
+    `asr_choice` is what the client asked for, before Automatic became a model. A retry is the same
+    request when it asks for the same thing, even if the default changed in between.
+    """
     if not isinstance(meeting_id, str) or not meeting_id:
         raise TaskError(400, "invalid_meeting_id", "Provide a meeting_id.")
     normalized_request_id = _request_id(request_id)
@@ -223,16 +231,24 @@ def accept_transcription_task(
         request_hash = _payload_hash(
             meeting_id=meeting_id,
             language_hint=normalized_language_hint,
+            asr_choice=asr_choice or asr_model,
         )
-        legacy_request_hash = _payload_hash(meeting_id=meeting_id)
+        # Rows from before the choice was hashed say nothing about it: compare their model instead.
+        legacy_request_hashes = {
+            _payload_hash(meeting_id=meeting_id, language_hint=normalized_language_hint),
+            _payload_hash(meeting_id=meeting_id),
+        }
         existing = connection.execute(
             "SELECT * FROM tasks WHERE request_id = ?", (normalized_request_id,)
         ).fetchone()
         if existing is not None:
             if (
                 existing["language_hint"] != normalized_language_hint
-                or existing["asr_model"] != asr_model
-                or existing["request_hash"] not in {request_hash, legacy_request_hash}
+                or existing["request_hash"] not in {request_hash, *legacy_request_hashes}
+                or (
+                    existing["request_hash"] != request_hash
+                    and existing["asr_model"] != (asr_choice or asr_model)
+                )
             ):
                 raise TaskError(
                     409,

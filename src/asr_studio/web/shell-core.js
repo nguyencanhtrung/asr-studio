@@ -307,11 +307,14 @@ function selectAsrModel(state, disabled) {
   const selected = choices.find((choice) => choice.id === value);
   const note = value === "auto"
     ? selected.model_name
-      ? t("Theo phần cứng của máy: {model}.", { model: selected.model_name })
+      ? (selected.chosen ? t("Theo Cài đặt: {model}.", { model: selected.model_name }) : t("Theo phần cứng của máy: {model}.", { model: selected.model_name }))
       : t("Theo phần cứng của máy.")
     : ASR_MODEL_TEXT[value].note;
   const warning = choices.some((choice) => choice.id !== "auto" && !choice.ready)
     ? t("Model chưa sẵn sàng không chọn được ở đây; trang cuộc họp có lệnh chuẩn bị.")
+    : null;
+  const brokenDefault = value === "auto" && selected.chosen && !selected.ready && selected.reason !== "worker_unavailable"
+    ? t("Model mặc định chưa chạy được trên máy này: cuộc họp vẫn được lưu nhưng chưa chép lời. Mở Cài đặt → ASR Model để sửa.")
     : null;
   return {
     value,
@@ -322,7 +325,7 @@ function selectAsrModel(state, disabled) {
       ready: Boolean(choice.ready),
       disabled: choice.id !== "auto" && !choice.ready,
     })),
-    help: warning ? [note, " ", warning] : note,
+    help: brokenDefault ? [note, " ", brokenDefault] : warning ? [note, " ", warning] : note,
   };
 }
 

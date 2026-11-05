@@ -64,8 +64,7 @@ def prepared_model_directory(path: Path) -> Path:
     try:
         tokenizer_config = json.loads((resolved / "tokenizer.json").read_text(encoding="utf-8"))
         model_config = json.loads((resolved / "config.json").read_text(encoding="utf-8"))
-        # Optional: whisper-small ships none, and faster-whisper then uses its own defaults.
-        # ponytail: a large model missing this file fails at load, not here; pinned ones have it.
+        # Optional: Whisper small ships none, and faster-whisper then uses 80 mels (see below).
         preprocessor_path = resolved / "preprocessor_config.json"
         preprocessor_config = (
             json.loads(preprocessor_path.read_text(encoding="utf-8"))
@@ -83,6 +82,10 @@ def prepared_model_directory(path: Path) -> Path:
     ):
         raise ModelConfigurationError("The local model configuration is incomplete.")
     if preprocessor_config is None:
+        # Whisper large-v3 has 100 languages and 128 mels: without this file it dies at encoding.
+        languages = model_config["lang_ids"]
+        if not isinstance(languages, list | dict) or len(languages) >= 100:
+            raise ModelConfigurationError("The local model directory is incomplete.")
         return resolved
     if not isinstance(preprocessor_config, dict):
         raise ModelConfigurationError("The local model preprocessor configuration is invalid.")

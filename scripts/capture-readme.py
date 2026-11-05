@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture the public README screenshots from a local synthetic fixture.
+"""Capture the public README screenshots, dark theme, in English and Vietnamese.
 
 The command starts a fresh in-process app on an ephemeral loopback port, seeds only the
 checked-in fixture into a temporary SQLite data directory, and uses a stub notes provider.
@@ -33,14 +33,25 @@ sys.path.insert(0, str(TESTS))
 
 from notes_helpers import seed_cited_notes, seed_completed_transcript  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
+from test_browser_notes_provider import mock_providers  # noqa: E402
 
 from asr_studio.app import create_app  # noqa: E402
 from asr_studio.auth import AuthStore  # noqa: E402
 from asr_studio.config import Settings  # noqa: E402
+from asr_studio.model_install import InstallStore  # noqa: E402
+from asr_studio.runtime import RuntimeProfile, write_runtime_profile  # noqa: E402
 from asr_studio.storage import database_path  # noqa: E402
+from asr_studio.worker import acquire_worker_lock, write_heartbeat  # noqa: E402
 
 VIEWPORT = {"width": 1440, "height": 1000}
 FIXED_NOW = "2026-10-21T10:00:00+00:00"
+LANGUAGES = (("en", ""), ("vi", "-vi"))  # interface language, and the file name's suffix
+
+
+PAGES = (
+    ("#notes", "meeting-notes", "#notes-saved-work"),
+    ("#transcript", "transcript", "#transcript-segments > li"),
+)
 
 
 class LocalServer:
@@ -228,6 +239,34 @@ def seed_fixture(data_dir: Path, fixture: dict[str, Any]) -> str:
     return meeting_id
 
 
+def prepare_models(settings: Settings) -> None:
+    """A synthetic GPU machine with its default model: the other rows offer their install."""
+    model = settings.asr_gpu_model_path
+    model.mkdir(parents=True)
+    (model / "model.bin").write_bytes(b"synthetic")
+    (model / "tokenizer.json").write_text('{"model": {"type": "BPE"}}', encoding="utf-8")
+    (model / "config.json").write_text(
+        '{"lang_ids": [], "suppress_ids": [], "suppress_ids_begin": []}', encoding="utf-8"
+    )
+    (model / "preprocessor_config.json").write_text(
+        '{"feature_size": 128, "sampling_rate": 16000, "hop_length": 160, "n_fft": 400, '
+        '"chunk_length": 30}',
+        encoding="utf-8",
+    )
+    write_runtime_profile(settings.data_dir, RuntimeProfile("cuda", "float16", model))
+    # The seeded transcript came from this default.
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        for table in ("transcript_generations", "tasks"):
+            connection.execute(f"UPDATE {table} SET model_name = ?", (model.name,))
+    assert acquire_worker_lock(settings.data_dir) is not None
+
+
+def keep_alive(settings: Settings) -> None:
+    """No worker or installer runs here: the page should still show them as they normally are."""
+    write_heartbeat(settings.data_dir, "idle")
+    InstallStore(settings.install_dir).beat(models_writable=True)
+
+
 def available_port() -> int:
     probe = socket.socket()
     probe.bind(("127.0.0.1", 0))
@@ -245,6 +284,7 @@ def public_path(path: Path, *, kind: str) -> str:
 
 def capture(server: LocalServer, meeting_id: str, output_dir: Path) -> list[str]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    filenames: list[str] = []
     requested_urls: list[str] = []
     rejected_urls: list[str] = []
     allowed_origin = urlsplit(server.url)
@@ -265,34 +305,74 @@ def capture(server: LocalServer, meeting_id: str, output_dir: Path) -> list[str]
     launch_options = {"executable_path": executable} if executable else {}
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, **launch_options)
-        context = browser.new_context(
-            viewport=VIEWPORT,
-            color_scheme="light",
-            reduced_motion="reduce",
-        )
-        page = context.new_page()
-        page.clock.set_fixed_time(FIXED_NOW)
-        page.route("**/*", handle_route)
-        page.goto(server.access_link, wait_until="domcontentloaded")
-        page.wait_for_url(f"{server.url}/", timeout=10_000)
+        for language, suffix in LANGUAGES:
+            context = browser.new_context(
+                viewport=VIEWPORT,
+                color_scheme="dark",
+                reduced_motion="reduce",
+            )
+            context.add_init_script(
+                f"localStorage.setItem('asr-studio:lang', '{language}');"
+                "localStorage.setItem('asr-studio:theme', 'dark');"
+            )
+            page = context.new_page()
+            page.clock.set_fixed_time(FIXED_NOW)
+            page.route("**/*", handle_route)
+            page.goto(server.access_link, wait_until="domcontentloaded")
+            page.wait_for_url(f"{server.url}/", timeout=10_000)
+            # A connected provider, stubbed in the browser: no account or network is involved.
+            mock_providers(page, server)
+            saved = page.request.put(
+                f"{server.url}/api/notes-preferences",
+                data={"provider": "chatgpt", "model": "gpt-6.1-sol", "reasoning_effort": "high"},
+                headers={"Origin": server.url},
+            )
+            if not saved.ok:
+                raise RuntimeError("synthetic notes preference was refused")
 
-        captures = (
-            ("#notes", "meeting-notes.png", "#notes-saved-work"),
-            ("#transcript", "transcript.png", "#transcript-segments > li"),
-        )
-        for fragment, filename, required_selector in captures:
-            page.goto(
-                f"{server.url}/meetings/{meeting_id}{fragment}",
-                wait_until="domcontentloaded",
+            for fragment, stem, required_selector in PAGES:
+                keep_alive(server.settings)
+                page.goto(
+                    f"{server.url}/meetings/{meeting_id}{fragment}",
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_selector(required_selector, timeout=10_000)
+                page.evaluate("document.fonts.ready")
+                filename = f"{stem}{suffix}.png"
+                # As tall as the page, so the sidebar reaches the bottom of the picture.
+                height = page.evaluate("document.documentElement.scrollHeight")
+                page.set_viewport_size({"width": VIEWPORT["width"], "height": height})
+                page.wait_for_timeout(200)
+                page.screenshot(path=str(output_dir / filename), animations="disabled")
+                page.set_viewport_size(VIEWPORT)
+                filenames.append(filename)
+
+            keep_alive(server.settings)
+            page.set_viewport_size({"width": VIEWPORT["width"], "height": 1500})  # every row fits
+            page.locator("#settings-open").click()
+            page.locator("#settings-tab-asr").click()
+            page.wait_for_selector("#asr-models button[data-action]", timeout=10_000)
+            # The dialog scrolls at any height; the picture shows every row instead.
+            page.evaluate(
+                """() => {
+                  const dialog = document.querySelector("#connections-dialog");
+                  let node = document.querySelector("#settings-panel-asr");
+                  while (node && node !== dialog.parentElement) {
+                    node.style.height = "fit-content";
+                    node.style.maxHeight = "none";
+                    node.style.overflow = "visible";
+                    node = node.parentElement;
+                  }
+                }"""
             )
-            page.wait_for_selector(required_selector, timeout=10_000)
+            page.mouse.move(0, 0)  # no row looks hovered
             page.evaluate("document.fonts.ready")
-            page.screenshot(
-                path=str(output_dir / filename),
-                full_page=True,
-                animations="disabled",
+            filename = f"settings-asr{suffix}.png"
+            page.locator("#connections-dialog").screenshot(
+                path=str(output_dir / filename), animations="disabled"
             )
-        context.close()
+            filenames.append(filename)
+            context.close()
         browser.close()
 
     non_local = sorted(
@@ -309,7 +389,7 @@ def capture(server: LocalServer, meeting_id: str, output_dir: Path) -> list[str]
             f"{len(rejected_urls)} non-matching-origin requests and observed "
             f"{len(non_local)} non-local continued requests"
         )
-    return [filename for _, filename, _ in captures]
+    return filenames
 
 
 def parse_args() -> argparse.Namespace:
@@ -338,9 +418,15 @@ def main() -> int:
         settings = Settings(
             data_dir=temporary_root / "data",
             auth_dir=temporary_root / "auth",
+            install_dir=temporary_root / "install",
             public_url=f"http://127.0.0.1:{port}",
+            asr_gpu_model_path=temporary_root / "models/whisper-large-v3",
+            asr_cpu_model_path=temporary_root / "models/whisper-small",
+            asr_phowhisper_model_path=temporary_root / "models/pho-whisper-large",
+            asr_qwen_model_path=temporary_root / "models/qwen3-asr-1.7b",
         )
         meeting_id = seed_fixture(settings.data_dir, fixture)
+        prepare_models(settings)
         server = LocalServer(settings)
         server.start()
         try:

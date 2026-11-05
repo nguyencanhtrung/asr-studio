@@ -1275,3 +1275,25 @@ test("a conflict where only the date was edited takes the title from the server"
   assert.equal(s.editor.title, "Theirs");
   assert.equal(s.editor.original.title, "Theirs");
 });
+
+test("Settings changing rereads the open meeting, and a failed read leaves it on screen", () => {
+  let result = step(bootedState(), { type: "history/meeting-requested", meetingId: "m1" });
+  const loaded = effectOf(result, "history/meeting").meta;
+  let s = step(result.state, { type: "history/meeting-loaded", meta: loaded, response: { status: 200, body: meeting("m1") } }).state;
+  assert.equal(s.view, "meeting");
+
+  result = step(s, { type: "history/asr-settings-changed" });
+  const read = effectOf(result, "history/asr-settings-read");
+  assert.equal(read.url, "/api/meetings/m1");
+  assert.equal(result.state.loadId, s.loadId); // not a page load: it cannot replace the meeting with an error
+
+  const failed = step(result.state, { type: "history/asr-settings-read-failed", meta: read.meta, error: { message: "x" } }).state;
+  assert.equal(failed.view, "meeting");
+  assert.equal(failed.meeting.id, "m1");
+
+  const fresh = meeting("m1", { transcription: { ...meeting("m1").transcription, asr_models: [{ id: "auto", chosen: true }] } });
+  s = step(result.state, { type: "history/asr-settings-read", meta: read.meta, response: { status: 200, body: fresh } }).state;
+  assert.deepEqual(s.meeting.transcription.asr_models, [{ id: "auto", chosen: true }]);
+
+  assert.deepEqual(step(bootedState(), { type: "history/asr-settings-changed" }).effects, []); // no meeting open
+});

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +13,7 @@ from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.runtime import RuntimeProfile
 
 AUTO = "auto"
+DEFAULT_MODEL_FILE = "asr-default.json"  # a file, not a table: rolling back needs no migration
 _QWEN_COMPUTE_TYPE = "bfloat16"  # Transformers, not CTranslate2: fixed by what the model ships
 
 
@@ -79,6 +83,42 @@ def engine_of(asr_model: str) -> str:
     return "whisper" if asr_model == AUTO else CATALOG[asr_model].engine
 
 
+def _stored_default(settings: Settings) -> tuple[str | None, bool]:
+    """The operator's chosen default, and whether a setting is there that cannot be understood."""
+    try:
+        document = json.loads((settings.data_dir / DEFAULT_MODEL_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, False
+    except (OSError, ValueError):
+        return None, True
+    chosen = document.get("asr_model", "") if isinstance(document, dict) else ""
+    if chosen is None:
+        return None, False
+    return (chosen, False) if isinstance(chosen, str) and chosen in CATALOG else (None, True)
+
+
+def read_default_model(settings: Settings) -> str | None:
+    return _stored_default(settings)[0]
+
+
+def default_model_damaged(settings: Settings) -> bool:
+    """A setting that cannot be read counts as no choice, and Settings has to say so."""
+    return _stored_default(settings)[1]
+
+
+def write_default_model(settings: Settings, asr_model: str | None) -> None:
+    descriptor, temp = tempfile.mkstemp(dir=settings.data_dir, prefix=f".{DEFAULT_MODEL_FILE}.")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"asr_model": asr_model}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, settings.data_dir / DEFAULT_MODEL_FILE)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
 def model_path(settings: Settings, asr_model: str) -> Path:
     return getattr(settings, CATALOG[asr_model].path_setting)
 
@@ -86,7 +126,9 @@ def model_path(settings: Settings, asr_model: str) -> Path:
 def resolve_run(
     settings: Settings, profile: RuntimeProfile | None, asr_model: str
 ) -> dict[str, object]:
-    """The model files and runtime one run uses; auto stays the worker's hardware default."""
+    """The model files and runtime one run uses; auto is the chosen default, else the hardware's."""
+    if asr_model == AUTO:
+        asr_model = read_default_model(settings) or AUTO
     if profile is None:
         path = settings.asr_gpu_model_path if asr_model == AUTO else model_path(settings, asr_model)
         return {
@@ -120,8 +162,9 @@ def prepare_command(asr_model: str, device: str) -> str:
 def model_choices(settings: Settings, profile: RuntimeProfile | None) -> list[dict[str, object]]:
     """Readiness of every choice, as the app container sees the shared read-only /models mount."""
     choices: list[dict[str, object]] = []
-    for asr_model in selectable_models():
-        path = Path(resolve_run(settings, profile, asr_model)["model_path"])
+    for choice in selectable_models():
+        run = resolve_run(settings, profile, choice)
+        path, asr_model = Path(run["model_path"]), str(run["asr_model"])  # auto may name a model
         reason: str | None = None
         if profile is None:
             reason = "worker_unavailable"
@@ -134,7 +177,8 @@ def model_choices(settings: Settings, profile: RuntimeProfile | None) -> list[di
                 reason = "not_prepared"
         choices.append(
             {
-                "id": asr_model,
+                "id": choice,
+                "chosen": choice == AUTO and asr_model != AUTO,  # auto follows the operator
                 # Without a worker the hardware default is unknown: do not guess a GPU model.
                 "model_name": path.name if profile is not None else None,
                 "ready": reason is None,
