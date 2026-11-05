@@ -292,7 +292,8 @@ A [short measurement](release/performance-v0.2.1.md) on public datasets backs th
 
 Running the same recording twice may not give the same transcript. On a 10-minute excerpt run three
 times, Qwen3-ASR-1.7B and Whisper large-v3 gave identical text and PhoWhisper-large gave three
-different texts. On a full meeting, Whisper large-v3 can still differ between runs: three runs of one
+different texts. Whisper small on a CPU gave identical text in three runs, but this was not measured
+on a full meeting or a GPU. On a full meeting, Whisper large-v3 can still differ between runs: three runs of one
 67-minute meeting gave 553, 601 and 611 segments. Before this release, Whisper large-v3 gave three different texts
 on the same excerpt, and turning sampling off made it stable, so the likely source is the decoder's
 sampling when it retries a segment. That attribution is an inference from the contrast.
@@ -351,6 +352,32 @@ git clone https://hf.co/pyannote/speaker-diarization-community-1 \
 The worker uses a local path, the model hub's offline mode, `token=False` and telemetry off. ASR and diarization
 run in two child processes, one after the other. Each process exits before the next phase starts,
 which releases model memory.
+
+### Speaker label limits
+
+Expect more labels than people, and check labels at important moments. On three acceptance meetings
+with about 6 people each, Qwen3-ASR-1.7B with Community-1 gave 7, 8 and 10 labels. Labels with fewer
+than 16 segments held 2.8%, 2.2% and 5.1% of speech time. The original acceptance review found 6
+wrong labels in 42 checked passages on Whisper large-v3. An automatic comparison on Qwen found 7 in
+42, but it is a different score and does not replace that review.
+
+The defaults stay, because no tested change was safe. One pass per meeting and setting:
+
+| Change | Labels | Wrong labels of 42 | Clusters that may hold two people |
+| --- | ---: | ---: | ---: |
+| Default, threshold 0.60 | 7 / 8 / 10 | 7 | 0 / 0 / 2 |
+| Threshold 0.50 | 6 / 7 / 8 | 9 | 0 / 1 / 1 |
+| Threshold 0.70 | 5 / 6 / 10 | 8 | 1 / 0 / 2 |
+| Threshold 0.80 | 6 / 6 / 9 | 7 | 1 / 0 / 1 |
+
+- A threshold of 0.80 gives the fewest short labels but does not reduce wrong labels. The last
+  column is a cautious warning from the annotations, not proof of a wrong merge.
+- Merging every short label into another raised wrong labels to 9 of 42. A similarity limit of 0.70
+  or more merged nothing.
+- Splitting segments at speaker turns left wrong labels at 7 of 42 and raised segment counts about
+  fourfold, from 855, 742 and 642 to 3488, 2982 and 2452.
+
+The cause of the wrong labels is not known. The app has no setting for the number of speakers.
 
 ## Meetings and transcripts
 

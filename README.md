@@ -133,7 +133,9 @@ diarization. Diarization alone peaks at about 4228 MiB of VRAM.
 
 Minimum VRAM is the next common card size above the measured peak. It is an estimate: every run
 used one 16 GB RTX 5080, and no smaller card was tested. VRAM peaks come from meetings of up to 75
-minutes, except Whisper small, which was measured on 3-minute clips. CPU memory is the container
+minutes, except Whisper small, which was measured on 3-minute clips. Some repeat runs in a
+comparison script reported about 12100 MiB, likely from loading a model again in one process. The
+app starts a new process for each run, and that case was not measured in the app. CPU memory is the container
 peak on clips under one minute, so a full meeting can need more, and system memory on a GPU run was
 not measured. On a CPU, Whisper small takes about 0.4 minutes per minute of audio, and the large
 models 0.6 to 1.5.
