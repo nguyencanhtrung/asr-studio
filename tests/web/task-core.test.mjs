@@ -597,7 +597,7 @@ test("an answer to a cancel that was never sent is ignored", () => {
 // ---- the model chosen for one run ----
 
 const CHOICES = [
-  { id: "auto", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+  { id: "auto", model_name: "qwen3-asr-1.7b", ready: true, reason: null, prepare_command: null },
   { id: "whisper-large-v3", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
   { id: "pho-whisper-large", model_name: "pho-whisper-large", ready: false, reason: "not_prepared", prepare_command: "docker compose run prepare" },
   { id: "qwen3-asr-1.7b", model_name: "qwen3-asr-1.7b", ready: true, reason: null, prepare_command: null },
@@ -608,7 +608,7 @@ test("the selector starts on Tự động and names what the hardware default is
   const env = await opened(withChoices());
   const { model } = env.view();
   assert.equal(model.value, "auto");
-  assert.equal(text(model.note), "Theo phần cứng của máy: whisper-large-v3.");
+  assert.equal(text(model.note), "Theo phần cứng của máy: qwen3-asr-1.7b.");
   assert.deepEqual(model.options.map((option) => [option.id, option.ready]), CHOICES.map((choice) => [choice.id, choice.ready]));
   assert.equal(model.blocked, false);
 });

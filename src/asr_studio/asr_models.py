@@ -10,7 +10,7 @@ from pathlib import Path
 
 from asr_studio.config import Settings
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
-from asr_studio.runtime import RuntimeProfile
+from asr_studio.runtime import RuntimeProfile, engine_for_path
 
 AUTO = "auto"
 DEFAULT_MODEL_FILE = "asr-default.json"  # a file, not a table: rolling back needs no migration
@@ -79,8 +79,15 @@ def selectable_models() -> tuple[str, ...]:
     return (AUTO, *CATALOG)
 
 
-def engine_of(asr_model: str) -> str:
-    return "whisper" if asr_model == AUTO else CATALOG[asr_model].engine
+def engine_of(asr_model: str, model_path: Path | None = None) -> str:
+    if asr_model != AUTO:
+        return CATALOG[asr_model].engine
+    if model_path is not None:
+        model_name = Path(model_path).expanduser().name
+        for model in CATALOG.values():
+            if model_name == model.id:
+                return model.engine
+    return "whisper"
 
 
 def _stored_default(settings: Settings) -> tuple[str | None, bool]:
@@ -120,6 +127,10 @@ def write_default_model(settings: Settings, asr_model: str | None) -> None:
 
 
 def model_path(settings: Settings, asr_model: str) -> Path:
+    if asr_model == "whisper-large-v3":
+        gpu_path = Path(settings.asr_gpu_model_path).expanduser().resolve(strict=False)
+        if engine_for_path(settings, gpu_path) == "qwen":
+            return gpu_path.parent / asr_model
     return getattr(settings, CATALOG[asr_model].path_setting)
 
 
@@ -137,14 +148,24 @@ def resolve_run(
             "device": "auto",
             "compute_type": "default",
         }
+    path = profile.model_path if asr_model == AUTO else model_path(settings, asr_model)
+    if asr_model == AUTO and engine_for_path(settings, path) == "qwen":
+        asr_model = "qwen3-asr-1.7b"
+    engine = engine_of(asr_model, path)
     return {
         "asr_model": asr_model,
-        "model_path": profile.model_path if asr_model == AUTO else model_path(settings, asr_model),
+        "model_path": path,
         "device": profile.device,
-        "compute_type": (
-            _QWEN_COMPUTE_TYPE if engine_of(asr_model) == "qwen" else profile.compute_type
-        ),
+        "compute_type": _QWEN_COMPUTE_TYPE if engine == "qwen" else profile.compute_type,
     }
+
+
+def runtime_summary(settings: Settings, profile: RuntimeProfile) -> dict[str, str]:
+    """The hardware default as it runs: the profile's compute type is for Whisper models."""
+    summary = profile.public_summary()
+    if engine_for_path(settings, profile.model_path) == "qwen":
+        summary["compute_type"] = _QWEN_COMPUTE_TYPE
+    return summary
 
 
 def prepare_command(asr_model: str, device: str) -> str:
@@ -162,9 +183,12 @@ def prepare_command(asr_model: str, device: str) -> str:
 def model_choices(settings: Settings, profile: RuntimeProfile | None) -> list[dict[str, object]]:
     """Readiness of every choice, as the app container sees the shared read-only /models mount."""
     choices: list[dict[str, object]] = []
+    operator_default = read_default_model(settings)
     for choice in selectable_models():
         run = resolve_run(settings, profile, choice)
         path, asr_model = Path(run["model_path"]), str(run["asr_model"])  # auto may name a model
+        # A named command installs at the catalog path: elsewhere, prepare the hardware default.
+        named = asr_model != AUTO and Path(model_path(settings, asr_model)) == path
         reason: str | None = None
         if profile is None:
             reason = "worker_unavailable"
@@ -178,13 +202,15 @@ def model_choices(settings: Settings, profile: RuntimeProfile | None) -> list[di
         choices.append(
             {
                 "id": choice,
-                "chosen": choice == AUTO and asr_model != AUTO,  # auto follows the operator
+                "chosen": choice == AUTO and operator_default is not None,
                 # Without a worker the hardware default is unknown: do not guess a GPU model.
                 "model_name": path.name if profile is not None else None,
                 "ready": reason is None,
                 "reason": reason,
                 "prepare_command": (
-                    prepare_command(asr_model, profile.device) if reason == "not_prepared" else None
+                    prepare_command(asr_model if named else AUTO, profile.device)
+                    if reason == "not_prepared"
+                    else None
                 ),
             }
         )

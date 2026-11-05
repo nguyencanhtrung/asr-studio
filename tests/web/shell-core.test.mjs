@@ -24,7 +24,7 @@ const reply = (status, body) => ({ ok: status < 400, status, text: async () => J
 const POLICY = { supported_extensions: ["wav", ".mp3", "mp4"], max_bytes: 1000, max_duration_seconds: 7200, chunk_bytes: 1000 };
 const ASR_MODELS = {
   asr_models: [
-    { id: "auto", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
+    { id: "auto", model_name: "qwen3-asr-1.7b", ready: true, reason: null, prepare_command: null },
     { id: "whisper-large-v3", model_name: "whisper-large-v3", ready: true, reason: null, prepare_command: null },
     { id: "pho-whisper-large", model_name: "pho-whisper-large", ready: false, reason: "not_prepared", prepare_command: "docker compose run prepare" },
     { id: "qwen3-asr-1.7b", model_name: "qwen3-asr-1.7b", ready: true, reason: null, prepare_command: null },

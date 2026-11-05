@@ -10,7 +10,7 @@ import uuid
 import pytest
 from playwright.sync_api import expect
 from seeding import prepare_diarization_model, seed_meeting
-from test_browser_history import _prepare_browser_asr_model
+from test_browser_history import _prepare_browser_asr_model, _prepare_browser_qwen_model
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 
@@ -35,7 +35,8 @@ NO_CONFIDENCE = "“cần kiểm tra” không xét độ tin cậy của chữ"
 def worker(live):
     """A healthy GPU worker whose default model is prepared, seen by the running server."""
     data_dir = live.settings.data_dir
-    default_model = _prepare_browser_asr_model(data_dir.parent / "whisper-large-v3")
+    default_model = _prepare_browser_qwen_model(data_dir.parent / "qwen3-asr-1.7b")
+    _prepare_browser_asr_model(data_dir.parent / "whisper-large-v3")
     # The server keeps this settings object and reads the model paths on each request.
     object.__setattr__(live.settings, "asr_gpu_model_path", default_model)
     object.__setattr__(
@@ -43,6 +44,7 @@ def worker(live):
         "diarization_model_path",
         prepare_diarization_model(data_dir.parent / "diarization-model"),
     )
+    object.__setattr__(live.settings, "asr_qwen_model_path", default_model)
     lock = acquire_worker_lock(data_dir)
     assert lock is not None
     write_runtime_profile(data_dir, RuntimeProfile("cuda", "float16", default_model))
@@ -123,11 +125,11 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
             "Whisper large-v3 · sẵn sàng",
             "Whisper small · chưa sẵn sàng",
             "PhoWhisper-large · sẵn sàng",
-            "Qwen3-ASR-1.7B · chưa sẵn sàng",
+            "Qwen3-ASR-1.7B · sẵn sàng",
         ]
     )
     expect(page.locator("#transcription-model-help")).to_have_text(
-        "Theo phần cứng của máy: whisper-large-v3."
+        "Theo phần cứng của máy: qwen3-asr-1.7b."
     )
 
     page.get_by_role("button", name="Bắt đầu chép lời").click()
@@ -136,7 +138,7 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     first_generation = finish_run(live, "Bản chép lời đầu tiên.")
     meta = page.locator("#generation-meta")
     expect(page.locator("#generation-title")).to_have_text("Transcript #1", timeout=8_000)
-    expect(meta).to_contain_text("whisper-large-v3 · GPU · CUDA · float16")
+    expect(meta).to_contain_text("qwen3-asr-1.7b · GPU · CUDA · bfloat16")
 
     selector.select_option("pho-whisper-large")
     expect(page.locator("#transcription-model-help")).to_contain_text("Tối ưu cho tiếng Việt")
@@ -153,13 +155,13 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     generations = page.locator("#generation-selector")
     expect(generations.locator("option")).to_have_text(
         [
-            "Transcript #1 · whisper-large-v3 · lịch sử",
+            "Transcript #1 · qwen3-asr-1.7b · lịch sử",
             "Transcript #2 · pho-whisper-large · hiện tại",
         ]
     )
     generations.select_option(first_generation)
     expect(page.locator("#generation-title")).to_have_text("Transcript #1")
-    expect(meta).to_contain_text("whisper-large-v3 · GPU · CUDA · float16")
+    expect(meta).to_contain_text("qwen3-asr-1.7b · GPU · CUDA · bfloat16")
     expect(page.locator(".segment-text")).to_have_text("Bản chép lời đầu tiên.")
     expect(page.locator("#generation-mode")).to_have_text("Bản lịch sử · Chỉ đọc.")
     generations.select_option(second_generation)
@@ -299,7 +301,7 @@ def test_renaming_the_meeting_keeps_the_selector_and_its_guard(live, signed_in, 
     expect(start).to_be_disabled()
     expect(page.locator("#transcription-model-guidance")).to_be_visible()
     expect(page.locator("#runtime-backend")).to_have_text(
-        "GPU · CUDA · float16", use_inner_text=False
+        "GPU · CUDA · bfloat16", use_inner_text=False
     )
 
 
@@ -408,7 +410,7 @@ def test_the_open_meeting_reads_the_default_again_when_settings_closes(live, sig
     meeting_id = seed_meeting(data_dir, "Open meeting", "2026-10-17", duration_seconds=30.0)
     page.goto(f"{live.url}/meetings/{meeting_id}")
     note = page.locator("#transcription-model-help")
-    expect(note).to_have_text("Theo phần cứng của máy: whisper-large-v3.")
+    expect(note).to_have_text("Theo phần cứng của máy: qwen3-asr-1.7b.")
 
     page.locator("#settings-open").click()
     page.get_by_role("tab", name="ASR Model").click()

@@ -258,6 +258,7 @@ const { t, UI_LOCALE } = (() => {
       "Dọn dẹp chưa hoàn tất. Yêu cầu đã được lưu để thử lại khi khởi động; khắc phục lỗi lưu trữ rồi thử lại.": "Cleanup is not complete. The request is saved to retry at startup; fix the storage error, then try again.",
       "Dữ liệu và phiên truy cập được lưu riêng trên bản cài này.": "Data and access sessions are stored only on this install.",
       "Dữ liệu đã thay đổi hoặc đang được sử dụng. Hãy tải lại rồi thử lại.": "The data changed or is in use. Reload, then try again.",
+      "Đoạn bị lặp": "Repeated segment",
       "File chưa sẵn sàng; không có cuộc họp nào được tạo.": "The file is not ready; no meeting was created.",
       "File chưa đạt giới hạn đã công bố.": "The file does not meet the published limits.",
       "File không còn sẵn sàng.": "The file is no longer ready.",

@@ -66,13 +66,19 @@ on the CPU otherwise.
 
 ## Features
 
-- **Local transcription.** Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper), with
-  Whisper large-v3 on a GPU or Whisper small on a CPU. Language is detected for each segment, so
-  meetings that mix English and Vietnamese are transcribed as spoken.
+- **Local transcription.** Uses Qwen3-ASR-1.7B on a GPU and
+  [faster-whisper](https://github.com/SYSTRAN/faster-whisper) Whisper small on a CPU by default.
+  Whisper large-v3, PhoWhisper-large and Qwen3-ASR-1.7B remain available choices. Language is
+  detected for each segment, so meetings that mix English and Vietnamese are transcribed as spoken.
+- **ASR model choice.** Choose a model for one run or as the default in Settings, and install models
+  from there. Each run keeps its own transcript version, so you can compare models on one recording.
+  See [Hardware by ASR model](#hardware-by-asr-model).
 - **Speaker diarization.** Uses
   [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1). Speakers
   get default names that you can change, and segments with overlapping speech or low confidence are
   flagged for review.
+- **Repeated text flags.** Three or more identical segments in a row are flagged for review on every
+  model, whoever the speaker is.
 - **Editable transcripts.** You can correct the text and speaker of each segment. Running a
   transcription again creates a new version and keeps the previous one.
 - **AI meeting notes.** Notes are generated in English or Vietnamese through ChatGPT or Google
@@ -113,6 +119,25 @@ on the CPU otherwise.
 - Optional: an NVIDIA GPU with the NVIDIA driver and NVIDIA Container Toolkit
 - Optional, for notes: a ChatGPT account, or OMP with Google Antigravity
 
+### Hardware by ASR model
+
+The app runs one model at a time, so the GPU needs room for the larger of the ASR model and
+diarization. Diarization alone peaks at about 4228 MiB of VRAM.
+
+| Model | Runs on | Minimum VRAM (estimate) | Peak VRAM measured | Disk | CPU memory measured |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Qwen3-ASR-1.7B (GPU default) | GPU only | 10 GB | 8336 MiB | 4.1 GB | Refused on CPU |
+| Whisper large-v3 | GPU or CPU | 6 GB | 5554 MiB | 3.1 GB | 2824 to 4784 MiB |
+| PhoWhisper-large | GPU or CPU | 6 GB | 5518 MiB | 3.1 GB, 9.5 GB free to install | 2538 to 2842 MiB |
+| Whisper small (CPU default) | CPU or GPU | 6 GB | 4228 MiB, from diarization | 0.5 GB | 1767 to 2374 MiB |
+
+Minimum VRAM is the next common card size above the measured peak. It is an estimate: every run
+used one 16 GB RTX 5080, and no smaller card was tested. VRAM peaks come from meetings of up to 75
+minutes, except Whisper small, which was measured on 3-minute clips. CPU memory is the container
+peak on clips under one minute, so a full meeting can need more, and system memory on a GPU run was
+not measured. On a CPU, Whisper small takes about 0.4 minutes per minute of audio, and the large
+models 0.6 to 1.5.
+
 ## Quickstart
 
 ```sh
@@ -126,8 +151,8 @@ git clone https://hf.co/pyannote/speaker-diarization-community-1 \
 ./scripts/start.sh
 ```
 
-`start.sh` downloads any missing Whisper model, builds the image and starts the `app` and `worker`
-services, plus a `model-installer` that adds the PhoWhisper and Qwen3-ASR models from
+`start.sh` downloads any missing default ASR model, builds the image and starts the `app` and `worker`
+services, plus a `model-installer` that adds the other ASR models from
 **Settings → ASR Model** (the only service that downloads models and writes `./models`; it sees no recordings). On an interactive terminal it prints an access link and a QR code. When stdout is a
 pipe, redirect or CI log, access details are withheld; run `docker compose exec -T app python -m
 asr_studio.cli access show` explicitly when you want to display them. Open that exact link (the

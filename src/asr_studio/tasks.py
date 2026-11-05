@@ -32,6 +32,7 @@ _REVIEW_REASONS = frozenset(
         "multiple_speakers",
         "low_speaker_dominance",
         "unidentified_speaker",
+        "repeated_segment",
     }
 )
 _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._:-]{8,128}\Z")
@@ -270,7 +271,7 @@ def accept_transcription_task(
             )
         if not worker_ready:
             raise TaskError(503, "worker_unavailable", "The transcription worker is unavailable.")
-        engine = engine_of(asr_model)
+        engine = engine_of(asr_model, Path(normalized_model_path))
         if engine == "qwen" and device != "cuda":
             raise TaskError(
                 503,

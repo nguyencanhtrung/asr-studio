@@ -575,24 +575,11 @@ def _write_prepared_models(root: Path) -> None:
     for relative in offline_smoke.ASR_REQUIRED_FILES:
         path = asr / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        if relative == "tokenizer.json":
-            path.write_text(json.dumps({"model": {"type": "BPE"}}), encoding="utf-8")
-        elif relative == "config.json":
+        if relative == "config.json":
+            path.write_text(json.dumps({"model_type": "qwen3_asr"}), encoding="utf-8")
+        elif relative == "processor_config.json":
             path.write_text(
-                json.dumps({"lang_ids": {}, "suppress_ids": [], "suppress_ids_begin": []}),
-                encoding="utf-8",
-            )
-        elif relative == "preprocessor_config.json":
-            path.write_text(
-                json.dumps(
-                    {
-                        "feature_size": 80,
-                        "sampling_rate": 16000,
-                        "hop_length": 160,
-                        "n_fft": 400,
-                        "chunk_length": 30,
-                    }
-                ),
+                json.dumps({"feature_extractor": {"sampling_rate": 16000}}),
                 encoding="utf-8",
             )
         else:

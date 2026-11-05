@@ -75,13 +75,13 @@ Lý do lựa chọn được ghi tại [ADR 0005](adr/0005-markdown-notes.md).
 | Điều phối tác vụ | Một slot SQLite, claim nguyên tử, ownership khi công bố kết quả; thiết kế hủy/phục hồi trong contract | Kiểm chứng restart, tiến trình con, kết quả đến muộn và deadline; không giải phóng chỉ vì heartbeat hết hạn |
 | Dữ liệu và chỉnh sửa | Nguồn notes bất biến; kiểm tra phiên bản khi ghi; sửa tên/ngày họp và speaker từng đoạn ở thế hệ hiện tại | Hiện thực schema/API và kiểm tra xung đột, khóa ngày/gán speaker, bảo toàn dữ liệu lịch sử |
 | Bằng chứng trong notes | Cấu trúc trung gian có ID nguồn; một lượt sửa tối đa; snapshot; cho lưu Markdown chỉnh tay với cảnh báo link hỏng | Hoàn thiện schema/renderer, kiểm tra liên kết đúng snapshot và kiểm chứng ý nghĩa trên mẫu |
-| Pipeline model | ASR/diarization local; notes cloud chia/hợp nhất khi cần; hoãn Qwen | Đo chất lượng, bộ nhớ, thời gian, token budget và chọn model/cấu hình phát hành |
+| Pipeline model | ASR/diarization local; Qwen3-ASR-1.7B là mặc định GPU, Whisper small là mặc định CPU; notes cloud chia/hợp nhất khi cần | Đo chất lượng, bộ nhớ, thời gian, token budget và tiếp tục đối chiếu cấu hình phát hành |
 | Kết nối tạo notes | Direct SIWC/OMP RPC; lưu phiên; chọn provider/model, nhớ lựa chọn; không tự gửi lại inference lỗi mạng hoặc đổi provider/model | Callback Docker, hủy auth, timeout, quyền tài khoản và khả năng tắt retry của SDK/harness cần kiểm chứng |
 | Nhập và xóa dữ liệu | Upload không resume; giữ âm thanh; không xóa cuộc họp đang chạy | Định dạng/giới hạn dựa trên mẫu, chuẩn âm thanh lưu, file tạm và dọn dữ liệu sau lỗi |
 | Truy cập | Token/cookie theo ADR 0002; API và ranh giới quyền trong contract | Kiểm chứng bootstrap/cookie, đổi token, CSRF và quyền đọc audio/snapshot/export |
 | Nghiệm thu | Các AC trong spec vẫn áp dụng | Bộ mẫu, kiểm thử failure/restart và báo cáo hiệu năng/chất lượng |
 
-Người dùng đã chốt bộ thử nghiệm tại Q7 rồi điều chỉnh phần tạo notes tại Q12 trong [khảo sát model](model-candidates-v1.md); cấu hình phát hành và khả năng đạt nghiệm thu chưa được xác nhận. Không suy ra mục tiêu xử lý bản ghi hai giờ trong 30 phút đã đạt từ tài liệu model hoặc từ thiết kế này.
+Người dùng đã chốt bộ thử nghiệm tại Q7 rồi điều chỉnh phần tạo notes tại Q12 trong [khảo sát model](model-candidates-v1.md). Theo [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), default phần cứng hiện là Qwen3-ASR-1.7B trên GPU và Whisper small trên CPU; cấu hình này không tự khẳng định các mục tiêu nghiệm thu chất lượng/hiệu năng. Không suy ra mục tiêu xử lý bản ghi hai giờ trong 30 phút đã đạt từ tài liệu model hoặc từ thiết kế này.
 
 ## 6. Vòng 2 — các quyết định đã chốt
 
@@ -89,7 +89,7 @@ Người dùng đồng ý các đề xuất Q7–Q11. Với Q7, phạm vi đồn
 
 | Câu hỏi | Quyết định | Đánh đổi hoặc nhánh phụ thuộc tiếp theo |
 | --- | --- | --- |
-| Q7 — Bộ model thử nghiệm | Whisper large-v3 qua faster-whisper; pyannote Community-1. Qwen3-14B Q4_K_M từng được chọn thử nhưng **đã hoãn theo Q12**; tạo notes dùng cloud | ASR/diarization chạy lần lượt và giải phóng GPU giữa các model. Lựa chọn phát hành phụ thuộc phép đo trên ba nhóm ngôn ngữ và bản ghi hai giờ |
+| Q7 — Bộ model thử nghiệm | Whisper large-v3 qua faster-whisper; pyannote Community-1. Qwen3-14B Q4_K_M từng được chọn thử nhưng **đã hoãn theo Q12**; tạo notes dùng cloud | Đây là quyết định lịch sử của bộ thử nghiệm; default GPU sau đó chuyển sang Qwen3-ASR-1.7B theo #168. ASR/diarization chạy lần lượt và giải phóng GPU giữa các model |
 | Q8 — Stack backend | Python cho phần ứng dụng/điều phối; FastAPI phục vụ HTTP API; worker là tiến trình riêng gọi runtime model | Dùng chung ngôn ngữ và kiểu dữ liệu; tiếp tục thiết kế API và module. [FastAPI](https://fastapi.tiangolo.com/features/) hỗ trợ OpenAPI và validation qua Pydantic |
 | Q9 — Giao việc giữa hai service | Trạng thái và quyền nhận tác vụ nằm trong SQLite; app ghi nhận một tác vụ khi rảnh, worker nhận bằng giao dịch nguyên tử và cập nhật tiến độ | Hai service cùng phụ thuộc schema DB; phải thiết kế ownership, phát hiện worker ngắt và giải phóng tài nguyên trước khi nhận việc mới. Không nhận tác vụ thứ hai để chờ |
 | Q10 — Chạy lại khi đã có transcript được sửa | Lưu kết quả chạy lại thành một thế hệ transcript mới, giữ nguồn cũ và liên kết của các bản notes cũ | Tốn thêm dung lượng văn bản; Q19/Q21 sau đó chốt snapshot và cách xem thế hệ cũ. Không trộn segment hoặc speaker của hai lần xử lý |

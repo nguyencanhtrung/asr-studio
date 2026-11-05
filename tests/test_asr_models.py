@@ -15,9 +15,11 @@ from asr_studio.asr_models import (
     DEFAULT_MODEL_FILE,
     default_model_damaged,
     model_choices,
+    model_path,
     prepare_command,
     read_default_model,
     resolve_run,
+    runtime_summary,
     write_default_model,
 )
 from asr_studio.config import Settings
@@ -177,6 +179,96 @@ def test_auto_stays_the_hardware_default_and_a_choice_changes_only_its_own_run(t
     # Transformers runs Qwen in its own dtype, and the transcript must say so.
     assert resolve_run(settings, profile, "qwen3-asr-1.7b")["compute_type"] == "bfloat16"
     assert profile.model_path == tmp_path / "configured-default"
+
+
+def test_qwen_hardware_auto_uses_qwen_engine_and_bfloat16(tmp_path):
+    base = _settings(tmp_path)
+    qwen = _qwen_dir(tmp_path / "qwen-default")
+    settings = Settings(
+        data_dir=base.data_dir,
+        auth_dir=base.auth_dir,
+        asr_gpu_model_path=qwen,
+        asr_cpu_model_path=base.asr_cpu_model_path,
+        asr_phowhisper_model_path=base.asr_phowhisper_model_path,
+        asr_qwen_model_path=qwen,
+        diarization_model_path=base.diarization_model_path,
+    )
+    profile = RuntimeProfile("cuda", "float16", qwen)
+
+    run = resolve_run(settings, profile, "auto")
+
+    assert run["asr_model"] == "qwen3-asr-1.7b"
+    assert run["model_path"] == qwen
+    assert run["compute_type"] == "bfloat16"
+
+
+def test_named_whisper_large_uses_a_sibling_path_when_qwen_is_the_gpu_default(tmp_path):
+    qwen = tmp_path / "qwen3-asr-1.7b"
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        asr_gpu_model_path=qwen,
+        asr_qwen_model_path=qwen,
+    )
+
+    assert model_path(settings, "whisper-large-v3") == tmp_path / "whisper-large-v3"
+
+
+def test_named_whisper_large_stays_apart_from_a_default_qwen_with_a_custom_qwen_path(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        asr_gpu_model_path=tmp_path / "qwen3-asr-1.7b",
+        asr_qwen_model_path=tmp_path / "custom-qwen",
+    )
+
+    assert model_path(settings, "whisper-large-v3") == tmp_path / "whisper-large-v3"
+
+
+def test_runtime_summary_names_the_compute_type_the_default_runs_with(tmp_path):
+    settings = _settings(tmp_path)
+    qwen = RuntimeProfile("cuda", "float16", tmp_path / "qwen3-asr-1.7b")
+    large = RuntimeProfile("cuda", "float16", tmp_path / "whisper-large-v3")
+
+    assert runtime_summary(settings, qwen)["compute_type"] == "bfloat16"
+    assert runtime_summary(settings, large)["compute_type"] == "float16"
+
+
+def test_missing_qwen_hardware_default_keeps_the_prepare_route(tmp_path):
+    base = _settings(tmp_path)
+    qwen = tmp_path / "qwen-default"
+    settings = Settings(
+        data_dir=base.data_dir,
+        auth_dir=base.auth_dir,
+        asr_gpu_model_path=qwen,
+        asr_cpu_model_path=base.asr_cpu_model_path,
+        asr_phowhisper_model_path=base.asr_phowhisper_model_path,
+        asr_qwen_model_path=qwen,
+        diarization_model_path=base.diarization_model_path,
+    )
+    profile = RuntimeProfile("cuda", "float16", qwen)
+
+    auto = next(choice for choice in model_choices(settings, profile) if choice["id"] == "auto")
+
+    assert (auto["ready"], auto["reason"]) == (False, "not_prepared")
+    assert auto["prepare_command"].endswith("--asr-model qwen3-asr-1.7b")
+
+
+def test_hardware_qwen_outside_the_catalog_path_prepares_the_hardware_default(tmp_path):
+    base = _settings(tmp_path)
+    hardware = tmp_path / "hardware" / "qwen3-asr-1.7b"
+    settings = Settings(
+        data_dir=base.data_dir,
+        auth_dir=base.auth_dir,
+        asr_gpu_model_path=hardware,
+        asr_qwen_model_path=tmp_path / "catalog" / "qwen3-asr-1.7b",
+    )
+    profile = RuntimeProfile("cuda", "float16", hardware)
+
+    auto = next(choice for choice in model_choices(settings, profile) if choice["id"] == "auto")
+
+    assert (auto["ready"], auto["reason"]) == (False, "not_prepared")
+    assert auto["prepare_command"] == prepare_command("auto", "cuda")
 
 
 def _accept(settings: Settings, meeting_id: str, request_id: str, asr_model: str, *, device="cuda"):

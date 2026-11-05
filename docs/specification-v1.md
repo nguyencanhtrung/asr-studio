@@ -4,7 +4,7 @@
 
 Thiết kế giao diện A dark theme đã được duyệt theo prototype và ghi thành chuẩn triển khai tại [Frontend design v1](frontend-design-v1.md).
 
-Các quyết định backend Q1–Q27 đã thống nhất tại [Backend design v1](backend-design-v1.md), được cụ thể hóa thành schema/API và vòng đời tác vụ trong [Backend contract v1](backend-contract-v1.md). Đã chọn Python/FastAPI, hai service `app`/`worker` giao việc qua SQLite và file âm thanh local. ASR/phân biệt người nói chạy local; tạo notes dùng ChatGPT hoặc OMP + Google Antigravity theo [ADR 0007](adr/0007-cloud-notes-providers.md). Triển khai, benchmark và cấu hình phát hành chưa hoàn tất.
+Các quyết định backend Q1–Q27 đã thống nhất tại [Backend design v1](backend-design-v1.md), được cụ thể hóa thành schema/API và vòng đời tác vụ trong [Backend contract v1](backend-contract-v1.md). Đã chọn Python/FastAPI, hai service `app`/`worker` giao việc qua SQLite và file âm thanh local. ASR/phân biệt người nói chạy local; Qwen3-ASR-1.7B là mặc định GPU, Whisper small là mặc định CPU; tạo notes dùng ChatGPT hoặc OMP + Google Antigravity theo [ADR 0007](adr/0007-cloud-notes-providers.md). Benchmark và khả năng đạt toàn bộ nghiệm thu vẫn cần kiểm chứng.
 
 Ứng dụng dùng qua trình duyệt, với backend ASR và logic được đóng gói trong Docker Compose trên máy do người dùng quản lý, để biến bản ghi cuộc họp của một nhóm nội bộ cố định thành meeting notes bằng tiếng Anh hoặc tiếng Việt theo lựa chọn. Người dùng nhập bản ghi, chọn ngôn ngữ chính và nhà cung cấp tạo notes, xử lý, nghe lại và sửa bản nháp, sau đó copy hoặc xuất notes.
 
@@ -30,7 +30,7 @@ Các yêu cầu sản phẩm dưới đây tổng hợp những quyết định 
 | Trình duyệt nghiệm thu | Chrome và Firefox bản ổn định tại thời điểm kiểm thử, trên laptop/desktop; chưa tối ưu điện thoại/tablet trong v1 |
 | Truy cập | V1 chỉ localhost trên máy chạy backend; token bắt buộc, dùng lại nhiều lần, không tự hết hạn; khi khởi chạy cung cấp QR và link có thể bấm/copy |
 | Phạm vi dữ liệu | Âm thanh, ASR/phân biệt người nói và lưu trữ trên máy tự quản; gửi transcript và thông tin nguồn cần thiết tới nhà cung cấp tạo notes do người dùng chọn; dữ liệu đã lưu vẫn duyệt/sửa/xuất được khi ngắt Internet |
-| Tạo notes | Chọn ChatGPT hoặc Google Antigravity qua OMP cho mỗi lần chạy; kết nối tài khoản bên được chọn từ UI; hoãn Qwen local |
+| Tạo notes | Chọn ChatGPT hoặc Google Antigravity qua OMP cho mỗi lần chạy; kết nối tài khoản bên được chọn từ UI; hoãn Qwen local cho bước tạo notes |
 | Cài đặt trên máy khác | Cài mới với kho dữ liệu mới; migration và chuyển dữ liệu từ bản cài khác nằm ngoài v1 |
 | Phân phối | Source và image dự kiến công khai; chính sách cho phép dùng, sửa và chia sẻ phi thương mại; sử dụng phục vụ kinh doanh cần được chủ sở hữu cho phép riêng |
 
@@ -262,7 +262,7 @@ Khảo sát môi trường hiện tại ghi nhận Ubuntu 24.04.4, Ryzen 9 9950X
 
 [PDF nghiên cứu ban đầu](ASR-initial-deep-research-vi.pdf) là tài liệu tham khảo về giải pháp. Các tên PhoWhisper, WhisperX, pyannote, Qwen2.5 32B và vLLM là ứng viên, không phải các thành phần đã được chốt bắt buộc.
 
-Trong phiên thiết kế backend, người dùng chọn Whisper large-v3 qua faster-whisper và pyannote Community-1 làm bộ thử nghiệm local, chạy lần lượt và giải phóng GPU giữa các model. Qwen3-14B từng được chọn thử nhưng đã hoãn theo Q12 để tập trung VRAM cho ASR/phân biệt người nói. Tạo notes dùng ChatGPT hoặc model qua OMP + Antigravity do người dùng chọn, ưu tiên khảo sát Gemini ở nhánh Antigravity; model ID/cấu hình cụ thể chưa chốt bằng thử nghiệm. Đây chưa phải lựa chọn phát hành đã đạt chất lượng/hiệu năng; xem [khảo sát model](model-candidates-v1.md).
+Trong phiên thiết kế backend, người dùng chọn Whisper large-v3 qua faster-whisper và pyannote Community-1 làm bộ thử nghiệm local. Sau phép đo của #168, default phần cứng được đổi thành Qwen3-ASR-1.7B trên GPU và Whisper small trên CPU; Whisper large-v3 vẫn là lựa chọn explicit. Qwen3-14B từng được chọn thử nhưng đã hoãn theo Q12 để tập trung VRAM cho ASR/phân biệt người nói. Tạo notes dùng ChatGPT hoặc model qua OMP + Antigravity do người dùng chọn, ưu tiên khảo sát Gemini ở nhánh Antigravity; xem [khảo sát model](model-candidates-v1.md).
 
 Các quyết định kỹ thuật cần giải quyết bằng thử nghiệm:
 

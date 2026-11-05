@@ -75,6 +75,7 @@ const MONTHS = [
 ];
 const REVIEW_REASON_LABELS = {
   asr_uncertain: t("Nhận dạng chưa chắc"),
+  repeated_segment: t("Đoạn bị lặp"),
   overlap: t("Có lời nói chồng lấn"),
   multiple_speakers: t("Nhiều người nói trong đoạn"),
   low_speaker_dominance: t("Người nói chưa rõ"),

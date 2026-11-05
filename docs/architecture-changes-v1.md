@@ -132,6 +132,95 @@ Kiến trúc
 
 - `docs/release/runtime-v0.1.0.md` — release publication verification.
 
+### #168 — Đổi mặc định GPU sang Qwen3-ASR và đánh dấu chuỗi lặp
+
+#### Vấn đề
+
+Mặc định GPU cũ là Whisper large-v3. Issue #168 yêu cầu chọn default theo kết quả đo; AC-01 của
+#80 cũng cần một tín hiệu duyệt chung cho đoạn lặp, bất kể engine hay người nói.
+
+#### Nguyên nhân đo được
+
+AC-01 của issue #168: hai dạng lỗi của large-v3 được đo riêng và phản ứng khác nhau với cùng
+thay đổi. Với câu ngắn,
+large-v3 bịa dòng ở 8/27, 12/27 và 6/27 mẫu tương ứng với input as-is, thêm 0,5 giây cuối và thêm 0,5 giây đầu; `no_context` cho đúng các con số đó. Lỗi nhạy với biên input và không được
+sửa bởi bất kỳ cấu hình decoder hoặc segmentation nào trong 12 cấu hình đã thử. Với clip dài,
+WER của base là 0,789/0,896/0,970 và của `no_context` là 0,246/0,275/0,684 theo forward 0,5
+giây, reverse 0,5 giây và forward 2 giây: conditioning là một yếu tố góp phần đo được, nhưng chưa phải toàn bộ. Cơ chế sâu hơn vẫn chưa biết.
+
+| Engine | Dòng bịa, câu ngắn as-is/tail/head | Dòng bịa, clip dài forward/reverse/2 s | Dòng bịa, VIVOS/mixed/English | WER forward 0,5 s | VIVOS | mixed | English |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| large-v3 base | 8/12/6 | 0/7/9 | 0/0/0 | 0,7890 | 0,3572 | 0,6683 | 0,1988 |
+| large-v3 `no_context` | 8/12/6 | 0/1/5 | 0/0/0 | 0,2457 | 0,1342 | 0,2670 | 0,0357 |
+| Qwen product | 0/0/0 | 0/0/0 | 0/0/0 | 0,0592 | 0,0498 | 0,1456 | 0,0405 |
+| PhoWhisper product | 0/0/0 | 0/0/0 | 0/0/0 | 0,0564 | 0,0281 | 0,3641 | 0,1071 |
+
+PhoWhisper thắng ở forward 0,5 giây và VIVOS; `no_context` thắng ở English. Trên ba meeting,
+số đoạn trùng liền kề và phần trăm cụm lặp lần đầu lần lượt là: A — base 159/3,0251%,
+`no_context` 0/0%, Qwen 1/0,0188%; B — base 76/2,2880%, `no_context` 8/0,5830%, Qwen
+2/0,0389%; C — base 67/2,7735%, `no_context` 0/0%, Qwen 0/0%. Phần trăm cụm lặp ở đây dùng một định nghĩa cho cả ba cấu hình, trong cùng phép đo. Khảo sát model không ghi định nghĩa của hai số 4,2 và 5,7, nên không so sánh được với hai số đó. Đoạn 10 phút có số output
+khác nhau giữa các lần chạy là base 3, `no_context` 1, Qwen 1, PhoWhisper 3.
+
+Số large-v3 dùng PCM WAV, còn product đưa audio qua AAC normalization; trên cùng clip, điều đó
+đổi reverse từ 0,8960 thành 0,1185 và mixed từ 0,6683 thành 0,2945. Vì vậy số v0.2.1 đã công
+bố chưa được tái lập đầy đủ. Phép so sánh ban đầu chưa có Whisper small; số đo riêng nằm trong ADR 0011.
+
+Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [số đo ứng viên model](model-candidates-v1.md#đo-trên-bản-ghi-thật-11-2026).
+
+#### Thay đổi thiết kế
+
+`auto` dùng Qwen3-ASR-1.7B với Transformers và bfloat16 khi runtime profile là CUDA; trên CPU
+vẫn dùng Whisper small với int8. `config.py`, Compose, `.env.example`, startup, model prepare,
+offline smoke và capture dùng đường dẫn Qwen làm GPU hardware default. Engine được chọn theo
+đường dẫn catalog đã resolve: một đường dẫn Whisper large-v3 explicit hoặc task cũ không bị đổi
+sang Qwen. Whisper decoder tắt `condition_on_previous_text`; các engine khác không đổi.
+
+Sau alignment, mọi engine được đánh dấu `repeated_segment` khi có run ít nhất ba segment liền
+nhau có text giống nhau sau khi casefold, bỏ khoảng trắng và dấu câu. Tất cả thành viên run được
+đánh dấu, không phụ thuộc speaker; Qwen không thêm `asr_uncertain` vì không có confidence tương ứng.
+
+#### Số đo trước và sau
+
+Revision/config: phép so sánh product dùng Qwen bfloat16; app dùng batch 4. Số trước là default
+GPU và phép đo Whisper app được ghi trong cùng hồ sơ đo; không coi đây là phép đo nhân quả.
+
+| | Trước | Sau |
+| --- | --- | --- |
+| GPU hardware default | Whisper large-v3 | Qwen3-ASR-1.7B |
+| Đỉnh VRAM app | 5554 MiB, Whisper app | 8336 MiB, Qwen batch 4 |
+| Model cần stage khi chuyển default | model cũ đã có | Qwen thêm 4.087.646.324 byte (~4,1 GB); `.env` cũ không tự đổi |
+| Chuỗi lặp liền kề | chưa có reason chung | `repeated_segment` cho run từ 3 segment |
+
+Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [model candidates](model-candidates-v1.md#đo-trên-bản-ghi-thật-11-2026).
+
+Bản cài cũ giữ large-v3 nếu file `.env` hiện tại vẫn có `ASR_GPU_MODEL_PATH=/models/whisper-large-v3`;
+`.env.example` không tự ghi đè file đó. Muốn chuyển sang Qwen, sửa dòng này thành
+`/models/qwen3-asr-1.7b` rồi chuẩn bị model, hoặc chọn Qwen làm model mặc định trong Settings.
+
+#### Đánh đổi và phương án đã loại
+
+- Qwen làm default: tăng khoảng 4,1 GB tải xuống và đỉnh VRAM 8336 MiB, đổi lại kết quả so sánh tốt hơn trên mixed/English; Whisper large-v3 vẫn có thể chọn explicit.
+- Giữ large-v3 làm default và chỉ đổi decoder: loại cho default theo kết quả so sánh; thay đổi `condition_on_previous_text` vẫn được giữ như một cải thiện decoder riêng.
+- Chỉ đánh dấu segment có cùng speaker: loại vì chuỗi lặp cần được phát hiện độc lập với diarization.
+
+#### Follow-up
+
+- #80: kiểm chứng tín hiệu duyệt chuỗi lặp trên acceptance recordings và tiếp tục quyết định các thay đổi decoder khác.
+
+#### Liên kết issue/PR
+
+[Issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), liên quan #80.
+
+#### Tag
+
+Hiệu năng | Kiến trúc
+
+#### Tài liệu đích
+
+- `docs/adr/0011-asr-model-per-run.md` — default theo phần cứng và lựa chọn từng run.
+- `docs/user-guide.md` — model mặc định, artifact, VRAM và confidence behavior.
+- `docs/backend-contract-v1.md` — semantics của `auto` và task legacy.
+
 ### #119 (pha 0 của #118) — ADR và khung reducer/store cho frontend
 
 #### Vấn đề

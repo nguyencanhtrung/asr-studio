@@ -207,6 +207,23 @@ def _prepare_browser_asr_model(path: Path) -> Path:
     return path
 
 
+def _prepare_browser_qwen_model(path: Path) -> Path:
+    path.mkdir(parents=True)
+    (path / "config.json").write_text('{"model_type": "qwen3_asr"}', encoding="utf-8")
+    (path / "processor_config.json").write_text(
+        '{"feature_extractor": {"sampling_rate": 16000}}', encoding="utf-8"
+    )
+    for filename in (
+        "generation_config.json",
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "chat_template.jinja",
+    ):
+        (path / filename).write_bytes(b"model")
+    return path
+
+
 def _publish_browser_generation(live, meeting_id, *, segments=None, speakers=None):
     model_path = _prepare_browser_asr_model(live.settings.data_dir.parent / "asr-model")
     diarization_path = prepare_diarization_model(
@@ -2328,14 +2345,14 @@ def test_runtime_profile_and_saved_status_render_without_collapsing(live, browse
         RuntimeProfile(
             device="cuda",
             compute_type="float16",
-            model_path="/models/whisper-large-v3",
+            model_path="/models/qwen3-asr-1.7b",
         ),
     )
     write_heartbeat(live.settings.data_dir, "idle")
     try:
         page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
-        expect(page.locator("#runtime-backend")).to_have_text("GPU · CUDA · float16")
-        expect(page.locator("#runtime-model")).to_have_text("whisper-large-v3")
+        expect(page.locator("#runtime-backend")).to_have_text("GPU · CUDA · bfloat16")
+        expect(page.locator("#runtime-model")).to_have_text("qwen3-asr-1.7b")
         expect(page.locator("#status-recording")).to_have_text("Bản ghi · Đã lưu · 1 giây")
         expect(page.locator("#status-transcript")).to_have_text("Transcript · Chưa chép lời")
         for item in page.locator("#meeting-status-strip li").all():

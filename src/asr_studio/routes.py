@@ -25,6 +25,7 @@ from asr_studio.asr_models import (
     model_path,
     read_default_model,
     resolve_run,
+    runtime_summary,
     selectable_models,
     write_default_model,
 )
@@ -857,7 +858,11 @@ def install_routes(
         profile = await healthy_runtime_profile()
         transcription = meeting["transcription"]
         assert isinstance(transcription, dict)
-        transcription["runtime"] = profile.public_summary() if profile is not None else None
+        transcription["runtime"] = (
+            await run_in_threadpool(runtime_summary, settings, profile)
+            if profile is not None
+            else None
+        )
         transcription["asr_models"] = await run_in_threadpool(model_choices, settings, profile)
         return meeting
 

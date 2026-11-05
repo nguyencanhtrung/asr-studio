@@ -265,7 +265,7 @@ def _runner_command(task: dict[str, Any], audio_path: Path) -> list[str]:
         "--compute-type",
         str(task["compute_type"]),
         "--engine",
-        engine_of(task.get("asr_model", AUTO)),
+        engine_of(task.get("asr_model", AUTO), Path(str(task["model_path"]))),
     ]
 
 

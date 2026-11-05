@@ -158,6 +158,7 @@ def test_runner_loads_local_only_and_emits_timestamps_and_uncertainty_measures(
         "multilingual": True,
         "beam_size": 5,
         "vad_filter": False,
+        "condition_on_previous_text": False,
     }
     assert events[0] == {"type": "stage", "stage": "loading_model"}
     assert events[1] == {"type": "stage", "stage": "transcribing"}

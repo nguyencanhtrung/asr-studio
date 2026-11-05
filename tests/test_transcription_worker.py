@@ -714,6 +714,20 @@ def test_worker_runs_the_engine_of_the_model_chosen_for_the_task(tmp_path, asr_m
     assert command[-2:] == ["--engine", engine]
 
 
+def test_legacy_automatic_task_with_qwen_hardware_path_runs_qwen(tmp_path):
+    command = worker._runner_command(
+        {
+            "model_path": Path("/models/qwen3-asr-1.7b"),
+            "device": "cuda",
+            "compute_type": "bfloat16",
+            "asr_model": "auto",
+        },
+        tmp_path / "recording.m4a",
+    )
+
+    assert command[-2:] == ["--engine", "qwen"]
+
+
 def test_diarization_command_passes_task_and_meeting_diagnostic_ids(tmp_path):
     task_id = "a" * 32
     meeting_id = "b" * 32

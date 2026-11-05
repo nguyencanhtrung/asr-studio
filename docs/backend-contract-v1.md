@@ -147,6 +147,11 @@ sàng, nhưng readiness khi đó là `false`; client vẫn cho chọn để gi�
 Backend chỉ đọc runtime profile khi worker khỏe, cùng quy tắc với dữ liệu runtime trong
 `GET /api/meetings/{id}`. Lỗi model catalog không làm hỏng việc tạo meeting.
 
+Khi không có model mặc định do người vận hành chọn, `auto` dùng `qwen3-asr-1.7b` với `bfloat16`
+trên GPU và `whisper-small` với `int8` trên CPU. Một lựa chọn explicit vẫn dùng đúng engine của
+model đó; đường dẫn Whisper large-v3 cũ không bị diễn giải thành Qwen. Task đã lưu `asr_model: auto`
+vẫn được chạy theo đường dẫn model đã lưu.
+
 Phản hồi của endpoint Cài đặt thêm, ngoài các trường trên: ở mỗi model khác `auto`,
 `install` (`{state}` với `state` là `idle`, `queued`, `running`, `cancelling` hoặc `failed`; khi
 `running` có `phase` là `downloading`, `converting` hoặc `verifying` cùng `bytes_done`/`bytes_total`
