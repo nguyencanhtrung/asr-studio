@@ -301,7 +301,7 @@ An existing installation keeps large-v3 if its existing `.env` still has
 `ASR_GPU_MODEL_PATH=/models/whisper-large-v3`; `.env.example` is not applied automatically. To move
 to Qwen, change that line to `/models/qwen3-asr-1.7b` and prepare the model, or choose Qwen as the
 default in Settings. The Qwen artifact is about 4.1 GB to stage when making that move.
-See the [model comparison](model-candidates-v1.md#đo-trên-bản-ghi-thật-11-2026) and [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168) for the measured decision.
+See the [model comparison](model-candidates.md#đo-trên-bản-ghi-thật-11-2026) and [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168) for the measured decision.
 
 These results come from a few real meetings without a reference transcript, so treat them as a
 starting point and compare on your own recordings.

@@ -18,7 +18,7 @@ Diarization (pyannote Community-1 trên CUDA) tăng theo bình phương thời l
 | 4498 s | 3059 s | 340 s | 2715 s | 1,342×10⁻⁴ |
 | 7366 s (ghép) | 7734 s | 510 s | 7223 s | 1,331×10⁻⁴ |
 
-Nguồn: issue #71 (bảng Quan sát); khớp `docs/acceptance-report-v1.md` mục 6.1.
+Nguồn: issue #71 (bảng Quan sát); khớp `docs/acceptance-report.md` mục 6.1.
 
 - Thời gian diarization = (1,331–1,362)×10⁻⁴ × thời lượng² (lệch ±1,2%), chiếm 85–93% tác vụ, chạy trên khoảng một lõi CPU (110–125%), GPU trung bình 2–3%. ASR tuyến tính, 12,5–14,4× thời gian thực. Riêng diarization chạm 30 phút ở khoảng 61 phút audio.
 - Cơ chế: khi nhận đường dẫn file, mỗi `Audio.crop` của pyannote 4.0.7 tạo `AudioDecoder` mới và giải mã file AAC từ đầu tới vị trí cần cắt. Một crop 10 s ở giây t tốn khoảng 0,255 ms × t (0,02 s ở t=10; 0,93 s ở t=3600; 1,53 s ở t=6000). Bước embeddings crop một lần cho mỗi chunk (bước 1 s) nên tổng ≈ 0,000255 × d²/2 s; với d = 7366 s là khoảng 6900 s, khớp 7223 s đo được.
@@ -49,7 +49,7 @@ Mẫu ghép 2 giờ (7366 s), RTX 5080, torch 2.11.0+cu128, CUDA 12.8, pyannote.
 | Số người nói, % thời lượng cùng nhãn với đầu ra `151f3e4` | mẫu ghép 12 → 13, 92,0%; bản 56 phút 10 → 10, 99,2% | chỉ tham khảo |
 | Từng bước, mẫu 2 giờ (hook pyannote) | giải mã 3,6 s; segmentation 4,1 s; embeddings 78,8 s; clustering 4,5 s (kèm reconstruct 5,5 s) | embeddings chiếm 87% pipeline |
 
-Nguồn: PR #98 (tiêu chí 2–6); `docs/acceptance-report-v1.md` mục 6.1 và 6.5 (cột #16 và #99). Thời gian stage và thời gian từng bước đo bằng hai cách khác nhau nên không cộng chéo. Chênh lệch nguồn: PR #98 và #99 là hai lần chạy khác nhau của cùng mẫu, mốc bắt đầu khác nhau (768 s tính từ import, 626,5 s từ `POST /api/tasks`); issue #97, tạo trước PR #98, ghi RSS đỉnh 3,10 GiB (2,05 giờ) và 2,35 GiB (0,93 giờ), nên dùng số của PR #98 vì đo sau.
+Nguồn: PR #98 (tiêu chí 2–6); `docs/acceptance-report.md` mục 6.1 và 6.5 (cột #16 và #99). Thời gian stage và thời gian từng bước đo bằng hai cách khác nhau nên không cộng chéo. Chênh lệch nguồn: PR #98 và #99 là hai lần chạy khác nhau của cùng mẫu, mốc bắt đầu khác nhau (768 s tính từ import, 626,5 s từ `POST /api/tasks`); issue #97, tạo trước PR #98, ghi RSS đỉnh 3,10 GiB (2,05 giờ) và 2,35 GiB (0,93 giờ), nên dùng số của PR #98 vì đo sau.
 
 #### Đánh đổi và phương án đã loại
 
@@ -72,9 +72,9 @@ Hiệu năng
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` mục 3 (dòng "Pipeline recording": diarization nhận waveform đã giải mã một lần; stage `decoding_input`, mã lỗi `diarization_input_decode_failed`).
-- `docs/backend-design-v1.md` mục 5, hàng "Pipeline model" (số đo thời gian và bộ nhớ).
-- `docs/acceptance-report-v1.md` mục 6.5 (AC-13 sau thay đổi).
+- `docs/backend-contract.md` mục 3 (dòng "Pipeline recording": diarization nhận waveform đã giải mã một lần; stage `decoding_input`, mã lỗi `diarization_input_decode_failed`).
+- `docs/backend-design.md` mục 5, hàng "Pipeline model" (số đo thời gian và bộ nhớ).
+- `docs/acceptance-report.md` mục 6.5 (AC-13 sau thay đổi).
 - Release notes (#17): giới hạn bộ nhớ của bản ghi 4 giờ.
 
 
@@ -95,7 +95,7 @@ Lần đo trên main `4a88ec8` (có #71, #72, #74), ChatGPT `gpt-5.6-sol` medium
 
 #### Thay đổi thiết kế
 
-Không đổi mã sản phẩm. PR cập nhật `docs/acceptance-report-v1.md`: thêm mục 6.5 (bảng stage, lượt gọi, nguyên nhân, giới hạn phép đo); cập nhật mục 1.1 (tiêu chí 5), 1.3 và 5.1 (AC-13); ghi chú số byte vượt trần là cận dưới (mục 6.3, dòng AC-39, mục 8.3); thêm follow-up #101 và #102 ở mục 9. Phương pháp giữ như #16: mốc bắt đầu `POST /api/tasks`, import tính riêng ngoài AC-13, khoảng chờ trước khi bấm "Tạo notes" ghi riêng.
+Không đổi mã sản phẩm. PR cập nhật `docs/acceptance-report.md`: thêm mục 6.5 (bảng stage, lượt gọi, nguyên nhân, giới hạn phép đo); cập nhật mục 1.1 (tiêu chí 5), 1.3 và 5.1 (AC-13); ghi chú số byte vượt trần là cận dưới (mục 6.3, dòng AC-39, mục 8.3); thêm follow-up #101 và #102 ở mục 9. Phương pháp giữ như #16: mốc bắt đầu `POST /api/tasks`, import tính riêng ngoài AC-13, khoảng chờ trước khi bấm "Tạo notes" ghi riêng.
 
 #### Số đo trước và sau
 
@@ -113,7 +113,7 @@ Mẫu ghép 2 giờ (7366 s), bản cài eval (RTX 5080).
 | Kết quả notes | lỗi ở lượt 25 sau 958,6 s (16,0 phút) | lỗi ở lượt 29 sau 1.463,47 s (24,4 phút) |
 | AC-13: bắt đầu → transcript và notes sẵn | không có mốc; tác vụ notes kết thúc lỗi sau 144,9 phút | không có mốc; tác vụ notes kết thúc lỗi ở 2.090,2 s (34,8 phút) |
 
-Nguồn: `docs/acceptance-report-v1.md` mục 6.1 (cột mẫu 2 giờ) và 6.5; PR #103; issue #99. Tỷ trọng trong 2.090,2 s: ASR 25,1%, diarization 4,6%, notes 70,0%. Diarization nhanh khoảng 75 lần, transcript sẵn nhanh khoảng 12 lần. Thời gian stage lấy từ việc hỏi API tác vụ khoảng mỗi 0,7 s nên sai số tới khoảng 1 s.
+Nguồn: `docs/acceptance-report.md` mục 6.1 (cột mẫu 2 giờ) và 6.5; PR #103; issue #99. Tỷ trọng trong 2.090,2 s: ASR 25,1%, diarization 4,6%, notes 70,0%. Diarization nhanh khoảng 75 lần, transcript sẵn nhanh khoảng 12 lần. Thời gian stage lấy từ việc hỏi API tác vụ khoảng mỗi 0,7 s nên sai số tới khoảng 1 s.
 
 #### Đánh đổi và phương án đã loại
 
@@ -138,7 +138,7 @@ Hiệu năng
 
 #### Tài liệu đích
 
-- `docs/acceptance-report-v1.md` mục 6.5 (PR #103 đã cập nhật), cùng mục 1.1, 1.3 và 5.1 (AC-13).
+- `docs/acceptance-report.md` mục 6.5 (PR #103 đã cập nhật), cùng mục 1.1, 1.3 và 5.1 (AC-13).
 - Release notes (#17): kết quả nghiệm thu AC-13 và giới hạn đã biết.
 
 
@@ -206,6 +206,6 @@ Notes; Hiệu năng
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` mục 5 (ngân sách, single-pass, citation và phục hồi).
-- `docs/backend-design-v1.md` mục 4 và 8 (Q17–Q18, model/provider và đánh đổi chia/hợp nhất).
-- `docs/acceptance-report-v1.md` mục 6.6 và hàng AC-13 (mốc đo #104); release notes (#17) cho giới hạn đã biết.
+- `docs/backend-contract.md` mục 5 (ngân sách, single-pass, citation và phục hồi).
+- `docs/backend-design.md` mục 4 và 8 (Q17–Q18, model/provider và đánh đổi chia/hợp nhất).
+- `docs/acceptance-report.md` mục 6.6 và hàng AC-13 (mốc đo #104); release notes (#17) cho giới hạn đã biết.

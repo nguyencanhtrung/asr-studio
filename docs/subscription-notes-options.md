@@ -1,6 +1,6 @@
 # Tận dụng subscription để tạo notes tiếng Anh
 
-> Trạng thái: Q12 đã chọn notes cloud qua **ChatGPT hoặc OMP + Google Antigravity**, tùy người dùng chọn khi chạy; hoãn Qwen local. [Spec v1](specification-v1.md) và [ADR 0007](adr/0007-cloud-notes-providers.md) đã cập nhật phạm vi mạng. Đọc nguồn chính thức ngày 2026-10-15; chưa đăng nhập, kiểm tra quyền lợi thực tế hoặc gửi transcript ra ngoài. “Google Pro” được hiểu là Google AI Pro cho tài khoản cá nhân. Các đường khác dưới đây là nghiên cứu tham khảo, không tự thêm vào v1.
+> Trạng thái: Q12 đã chọn notes cloud qua **ChatGPT hoặc OMP + Google Antigravity**, tùy người dùng chọn khi chạy; hoãn Qwen local. [Spec v1](specification.md) và [ADR 0007](adr/0007-cloud-notes-providers.md) đã cập nhật phạm vi mạng. Đọc nguồn chính thức ngày 2026-10-15; chưa đăng nhập, kiểm tra quyền lợi thực tế hoặc gửi transcript ra ngoài. “Google Pro” được hiểu là Google AI Pro cho tài khoản cá nhân. Các đường khác dưới đây là nghiên cứu tham khảo, không tự thêm vào v1.
 
 ## Anthropic — Claude Pro
 
@@ -26,7 +26,7 @@ Q16 đã chọn hướng thử Sign in with ChatGPT trực tiếp cho bản cài
 
 ### Đường đã chọn: OMP + Antigravity
 
-Người dùng đang sử dụng OMP với provider `google-antigravity` và muốn dùng Gemini để tạo notes. Bản OMP cài trên máy có giao thức RPC đăng nhập có thể nối tới UI; đây là bằng chứng hỗ trợ kỹ thuật, chưa kiểm chứng đăng nhập/inference trong ứng dụng Docker. `google-antigravity` khác adapter Gemini CLI và Gemini API key. [Khảo sát harness](harness-notes-v1.md)
+Người dùng đang sử dụng OMP với provider `google-antigravity` và muốn dùng Gemini để tạo notes. Bản OMP cài trên máy có giao thức RPC đăng nhập có thể nối tới UI; đây là bằng chứng hỗ trợ kỹ thuật, chưa kiểm chứng đăng nhập/inference trong ứng dụng Docker. `google-antigravity` khác adapter Gemini CLI và Gemini API key. [Khảo sát harness](harness-notes.md)
 
 Điều khoản Antigravity mục 6 cấm dùng phần mềm bên thứ ba truy cập dịch vụ và nêu khả năng đình chỉ Antigravity/Gemini CLI. FAQ cũng nói bọc `agy` trong ứng dụng bên thứ ba không được hỗ trợ trên gói cá nhân; đổi từ OMP sang wrapper CLI chính thức không tự giải quyết hạn chế này. Người dùng đã được thông báo và vẫn chọn hỗ trợ cả OMP + Antigravity lẫn ChatGPT. [Điều khoản](https://www.antigravity.google/terms), [FAQ](https://www.antigravity.google/docs/faq/)
 
@@ -46,5 +46,5 @@ Các khả năng CLI/API trên không xác nhận quyền nhúng bất kỳ lu�
 - Notes cloud đã được chốt; ASR/diarization và âm thanh local, Qwen tạo notes hoãn. Người dùng chọn ChatGPT hoặc OMP + Antigravity khi chạy và kết nối bên đó từ UI, không phải đăng nhập cả hai.
 - Cả hai lựa chọn cần kiểm chứng chất lượng notes, ID nguồn, transcript dài, quota, timeout/hủy và đăng nhập trong Docker. Chưa có benchmark; không cam kết subscription đáp ứng vô hạn hoặc không có chi phí ngoài gói trong mọi cấu hình.
 - Đề xuất ghi provider/model thực dùng và phiên bản nguồn vào metadata mỗi bản notes; không đưa thông tin vận hành này vào nội dung họp xuất ra nếu không cần.
-- Q13–Q15 đã chốt lưu một tài khoản/phiên mỗi provider và có ngắt kết nối; cho chạy ASR rồi lưu transcript/kết thúc tác vụ khi provider chưa dùng được. Notes lỗi/quota giữ transcript và chờ người dùng chọn bên khác rồi chủ động tạo lại, không tự chuyển provider/tài khoản hoặc bật API billing. Xem [backend design](backend-design-v1.md).
+- Q13–Q15 đã chốt lưu một tài khoản/phiên mỗi provider và có ngắt kết nối; cho chạy ASR rồi lưu transcript/kết thúc tác vụ khi provider chưa dùng được. Notes lỗi/quota giữ transcript và chờ người dùng chọn bên khác rồi chủ động tạo lại, không tự chuyển provider/tài khoản hoặc bật API billing. Xem [backend design](backend-design.md).
 - Claude, upload/copy thủ công và Gemini API credit là nghiên cứu tham khảo. Không bổ sung các luồng này vào v1 qua quyết định hỗ trợ hai provider nói trên.

@@ -12,4 +12,4 @@ Token được sinh ngẫu nhiên ở lần chạy đầu và lưu cùng vùng d
 
 Trình duyệt giữ trạng thái xác thực bằng cookie và xóa token khỏi thanh địa chỉ sau đăng nhập. Ứng dụng không đặt thời hạn tự hết hiệu lực; nếu cookie bị mất, người vận hành mở lại cùng link để đăng nhập. Có lệnh local để chủ động thay token, làm mất hiệu lực token cũ và toàn bộ trạng thái xác thực dựa trên nó, trong khi dữ liệu và tác vụ đã nhận được giữ nguyên.
 
-Quyết định ưu tiên thao tác thuận tiện trong môi trường máy cá nhân chỉ mở localhost. Khi mở truy cập LAN hoặc Internet ở phiên bản sau, cần đánh giá lại phạm vi tin cậy và cách quản lý truy cập. Các tiêu chí kiểm tra nằm trong [specification](../specification-v1.md).
+Quyết định ưu tiên thao tác thuận tiện trong môi trường máy cá nhân chỉ mở localhost. Khi mở truy cập LAN hoặc Internet ở phiên bản sau, cần đánh giá lại phạm vi tin cậy và cách quản lý truy cập. Các tiêu chí kiểm tra nằm trong [specification](../specification.md).

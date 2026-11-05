@@ -2,7 +2,7 @@
 // editor or speaker rename, the unsaved drafts, the four writes (segment text, speaker name, speaker assignment, new
 // speaker) with their conflicts, the reload of the latest copy, the status lines and where focus goes afterwards. No
 // DOM, fetch, timer, storage, clock or randomness: node --test loads this file directly. Contract:
-// docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design-v1.md §11.10.
+// docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design.md §11.10.
 //
 // The slice `transcript` shares the page store with `history` and `task`. The transcript itself lives in the meeting
 // that history-core holds. A write the server accepted is one action (`transcript/mutation-succeeded`) that both

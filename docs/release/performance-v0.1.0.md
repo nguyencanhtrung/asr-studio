@@ -46,5 +46,5 @@ The reported 733.2-second total combines separate stage measurements.
 It does not establish continuous end-to-end acceptance.
 Missing findings and misplaced decisions remain limitations in this evidence.
 
-See the [acceptance report](../acceptance-report-v1.md) for criterion definitions and results.
+See the [acceptance report](../acceptance-report.md) for criterion definitions and results.
 Use the [release process](process.md) before reusing any measurement.

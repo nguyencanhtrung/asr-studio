@@ -8,7 +8,7 @@ These rules guide reviewer judgement.
 ## Frontend architecture review
 
 When reviewing frontend changes, check the architecture from [#118](https://github.com/nguyencanhtrung/asr-studio/issues/118).
-Use [ADR 0010](docs/adr/0010-frontend-reducer-core.md) and [Frontend design §11](docs/frontend-design-v1.md#11-kiến-trúc-mã-frontend-reducer-effect-và-store) for the rules and exceptions.
+Use [ADR 0010](docs/adr/0010-frontend-reducer-core.md) and [Frontend design §11](docs/frontend-design.md#11-kiến-trúc-mã-frontend-reducer-effect-và-store) for the rules and exceptions.
 
 - Check pure reducers, state ownership, data effects, and view boundaries.
 - Check stale responses, cancellation, communication between features, and shared provider logic.

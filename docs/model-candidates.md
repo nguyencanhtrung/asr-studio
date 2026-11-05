@@ -1,6 +1,6 @@
 # Ứng viên model cho backend v1
 
-> Trạng thái: Qwen3-ASR-1.7B là default ASR trên GPU theo #168; Whisper small là default trên CPU. Whisper large-v3 và PhoWhisper-large vẫn là lựa chọn explicit. Qwen làm notes local vẫn **hoãn theo Q12**; notes dùng ChatGPT hoặc OMP + Google Antigravity. Đọc nguồn ngày 2026-10-15. Phạm vi, phần cứng và tiêu chí nghiệm thu theo [spec v1](specification-v1.md), đặc biệt AC-01–06, AC-10 và AC-13–14.
+> Trạng thái: Qwen3-ASR-1.7B là default ASR trên GPU theo #168; Whisper small là default trên CPU. Whisper large-v3 và PhoWhisper-large vẫn là lựa chọn explicit. Qwen làm notes local vẫn **hoãn theo Q12**; notes dùng ChatGPT hoặc OMP + Google Antigravity. Đọc nguồn ngày 2026-10-15. Phạm vi, phần cứng và tiêu chí nghiệm thu theo [spec v1](specification.md), đặc biệt AC-01–06, AC-10 và AC-13–14.
 
 ## Bộ model đã chốt để thử trước
 
@@ -10,7 +10,7 @@ Chọn **Qwen3-ASR-1.7B trên GPU**, **Whisper small trên CPU** và **pyannote 
 | --- | --- | --- |
 | Âm thanh → văn bản | `openai/whisper-large-v3` | `faster-whisper` dùng CTranslate2; hỗ trợ FP16, INT8 và timestamp theo đoạn. Model đa ngôn ngữ, có chế độ chép lời giữ ngôn ngữ nguồn. [Model card](https://huggingface.co/openai/whisper-large-v3), [runtime](https://github.com/SYSTRAN/faster-whisper) |
 | Ai nói, lúc nào | `pyannote/speaker-diarization-community-1` | `pyannote.audio`; trả đoạn thời gian theo nhãn người nói, có đầu ra exclusive giúp ghép với transcript. Chạy local được sau tải model. [Model card](https://huggingface.co/pyannote/speaker-diarization-community-1) |
-| Transcript → notes | Model được tài khoản ChatGPT hoặc Antigravity cho phép dùng; nhánh Antigravity ưu tiên khảo sát Gemini | Cloud qua adapter đã chọn; không nạp LLM local. Xem [subscription](subscription-notes-options-v1.md), [harness](harness-notes-v1.md) và ràng buộc provider tại [ADR 0007](adr/0007-cloud-notes-providers.md) |
+| Transcript → notes | Model được tài khoản ChatGPT hoặc Antigravity cho phép dùng; nhánh Antigravity ưu tiên khảo sát Gemini | Cloud qua adapter đã chọn; không nạp LLM local. Xem [subscription](subscription-notes-options.md), [harness](harness-notes.md) và ràng buộc provider tại [ADR 0007](adr/0007-cloud-notes-providers.md) |
 
 `faster-whisper`, `llama.cpp` và `vLLM` là phần mềm chạy model. WhisperX là bộ ghép ASR, căn chỉnh thời gian và diarization; không phải một model thay thế Whisper. V1 chỉ cần timestamp theo đoạn, nên chưa cần buộc thêm model căn chỉnh từng từ. [WhisperX](https://github.com/m-bain/whisperX)
 

@@ -2,9 +2,9 @@
 
 > Phạm vi sản phẩm v1 đã được thống nhất. Các quyết định nền tảng được ghi tại [kiến trúc web và Docker](adr/0001-browser-ui-container-backend.md), [truy cập bằng token](adr/0002-localhost-reusable-token.md) và [phân phối non-commercial](adr/0003-public-source-noncommercial.md). Các lựa chọn triển khai và việc kiểm chứng còn lại được nêu ở mục 9.
 
-Thiết kế giao diện A dark theme đã được duyệt theo prototype và ghi thành chuẩn triển khai tại [Frontend design v1](frontend-design-v1.md).
+Thiết kế giao diện A dark theme đã được duyệt theo prototype và ghi thành chuẩn triển khai tại [Frontend design v1](frontend-design.md).
 
-Các quyết định backend Q1–Q27 đã thống nhất tại [Backend design v1](backend-design-v1.md), được cụ thể hóa thành schema/API và vòng đời tác vụ trong [Backend contract v1](backend-contract-v1.md). Đã chọn Python/FastAPI, hai service `app`/`worker` giao việc qua SQLite và file âm thanh local. ASR/phân biệt người nói chạy local; Qwen3-ASR-1.7B là mặc định GPU, Whisper small là mặc định CPU; tạo notes dùng ChatGPT hoặc OMP + Google Antigravity theo [ADR 0007](adr/0007-cloud-notes-providers.md). Benchmark và khả năng đạt toàn bộ nghiệm thu vẫn cần kiểm chứng.
+Các quyết định backend Q1–Q27 đã thống nhất tại [Backend design v1](backend-design.md), được cụ thể hóa thành schema/API và vòng đời tác vụ trong [Backend contract v1](backend-contract.md). Đã chọn Python/FastAPI, hai service `app`/`worker` giao việc qua SQLite và file âm thanh local. ASR/phân biệt người nói chạy local; Qwen3-ASR-1.7B là mặc định GPU, Whisper small là mặc định CPU; tạo notes dùng ChatGPT hoặc OMP + Google Antigravity theo [ADR 0007](adr/0007-cloud-notes-providers.md). Benchmark và khả năng đạt toàn bộ nghiệm thu vẫn cần kiểm chứng.
 
 Ứng dụng dùng qua trình duyệt, với backend ASR và logic được đóng gói trong Docker Compose trên máy do người dùng quản lý, để biến bản ghi cuộc họp của một nhóm nội bộ cố định thành meeting notes bằng tiếng Anh hoặc tiếng Việt theo lựa chọn. Người dùng nhập bản ghi, chọn ngôn ngữ chính và nhà cung cấp tạo notes, xử lý, nghe lại và sửa bản nháp, sau đó copy hoặc xuất notes.
 
@@ -75,7 +75,7 @@ V1 không bao gồm tự ghi âm, bot tham gia Meet, chép lời thời gian th�
 - Không tự gửi âm thanh tới dịch vụ cloud khi ASR/phân biệt người nói local thất bại. Khi tạo notes lỗi/hết quota, báo lỗi, giữ transcript và notes cũ; người dùng chủ động chọn provider khác rồi chạy lại bước notes. Không tự đổi provider/tài khoản hoặc bật API billing, kể cả đã kết nối cả hai bên.
 - Khi lỗi mạng ở lượt gọi tạo notes, không tự gửi lại inference, kể cả chưa nhận được kết quả. Giữ transcript/notes cũ, kết thúc lỗi và cho người dùng chủ động thử lại; SDK/harness cũng phải tuân theo chính sách này. Lượt sửa đầu ra đã nhận nhưng không hợp lệ ở Q18 là trường hợp riêng được phép.
 
-Phần phục vụ UI/API và phần chạy model được tách thành hai service theo [ADR 0004](adr/0004-app-worker-sqlite.md). Giao tiếp, nhận việc, hủy và phục hồi được mô tả trong [backend contract](backend-contract-v1.md), cần triển khai và kiểm chứng trong giới hạn một tác vụ xử lý tại một thời điểm.
+Phần phục vụ UI/API và phần chạy model được tách thành hai service theo [ADR 0004](adr/0004-app-worker-sqlite.md). Giao tiếp, nhận việc, hủy và phục hồi được mô tả trong [backend contract](backend-contract.md), cần triển khai và kiểm chứng trong giới hạn một tác vụ xử lý tại một thời điểm.
 
 ## 3. Transcript, người nói và bằng chứng
 
@@ -217,7 +217,7 @@ Mục tiêu là khoảng **5–10 phút duyệt và sửa cho mỗi giờ họp*
 - Khi hết quota/lỗi tạo notes, giữ transcript và báo rõ để người dùng chọn provider khác rồi chủ động tạo lại. Không tự đổi bên, xoay tài khoản hoặc bật API billing. Notes đã có vẫn giữ nguyên.
 - Nhánh ChatGPT chọn thử Sign in with ChatGPT trực tiếp → Responses API cho ứng dụng cá nhân local; nhánh Antigravity gọi OMP qua RPC. Quyền tài khoản, callback Docker, refresh/revoke và đầu ra vẫn cần kiểm chứng. Không coi subscription là API credit không giới hạn hoặc catalog model là bằng chứng gọi được mọi model.
 - Khi một tác vụ đang hoạt động đã chọn tài khoản/provider cho bước notes, từ chối ngắt hoặc đổi tài khoản đó, kể cả chưa tới bước gọi model. Người dùng hủy và chờ backend xác nhận đã dừng rồi mới ngắt; provider không thuộc tác vụ vẫn ngắt được. Ngắt kết nối không xóa dữ liệu cuộc họp hay notes.
-- Đường OMP + Antigravity được giữ theo quyết định của người dùng sau khi đã thông báo ràng buộc mục 6 điều khoản Google về phần mềm bên thứ ba và khả năng đình chỉ Antigravity/Gemini CLI. Xem [ADR 0007](adr/0007-cloud-notes-providers.md), [điều khoản hiện hành](https://www.antigravity.google/terms) và [khảo sát harness](harness-notes-v1.md).
+- Đường OMP + Antigravity được giữ theo quyết định của người dùng sau khi đã thông báo ràng buộc mục 6 điều khoản Google về phần mềm bên thứ ba và khả năng đình chỉ Antigravity/Gemini CLI. Xem [ADR 0007](adr/0007-cloud-notes-providers.md), [điều khoản hiện hành](https://www.antigravity.google/terms) và [khảo sát harness](harness-notes.md).
 
 ### 6.4. Cài đặt và đóng gói
 
@@ -262,7 +262,7 @@ Khảo sát môi trường hiện tại ghi nhận Ubuntu 24.04.4, Ryzen 9 9950X
 
 [PDF nghiên cứu ban đầu](ASR-initial-deep-research-vi.pdf) là tài liệu tham khảo về giải pháp. Các tên PhoWhisper, WhisperX, pyannote, Qwen2.5 32B và vLLM là ứng viên, không phải các thành phần đã được chốt bắt buộc.
 
-Trong phiên thiết kế backend, người dùng chọn Whisper large-v3 qua faster-whisper và pyannote Community-1 làm bộ thử nghiệm local. Sau phép đo của #168, default phần cứng được đổi thành Qwen3-ASR-1.7B trên GPU và Whisper small trên CPU; Whisper large-v3 vẫn là lựa chọn explicit. Qwen3-14B từng được chọn thử nhưng đã hoãn theo Q12 để tập trung VRAM cho ASR/phân biệt người nói. Tạo notes dùng ChatGPT hoặc model qua OMP + Antigravity do người dùng chọn, ưu tiên khảo sát Gemini ở nhánh Antigravity; xem [khảo sát model](model-candidates-v1.md).
+Trong phiên thiết kế backend, người dùng chọn Whisper large-v3 qua faster-whisper và pyannote Community-1 làm bộ thử nghiệm local. Sau phép đo của #168, default phần cứng được đổi thành Qwen3-ASR-1.7B trên GPU và Whisper small trên CPU; Whisper large-v3 vẫn là lựa chọn explicit. Qwen3-14B từng được chọn thử nhưng đã hoãn theo Q12 để tập trung VRAM cho ASR/phân biệt người nói. Tạo notes dùng ChatGPT hoặc model qua OMP + Antigravity do người dùng chọn, ưu tiên khảo sát Gemini ở nhánh Antigravity; xem [khảo sát model](model-candidates.md).
 
 Các quyết định kỹ thuật cần giải quyết bằng thử nghiệm:
 
@@ -345,9 +345,9 @@ Các kiểm tra chất lượng áp dụng trên bộ mẫu đã duyệt; kết 
 
 ## 9. Công việc thiết kế và kiểm chứng trước phát hành
 
-Các quyết định phạm vi sản phẩm đã được thống nhất và đưa vào các mục trên. Các việc dưới đây tiếp tục được giải quyết qua [thiết kế backend](backend-design-v1.md), thử nghiệm, triển khai hoặc chuẩn bị phát hành:
+Các quyết định phạm vi sản phẩm đã được thống nhất và đưa vào các mục trên. Các việc dưới đây tiếp tục được giải quyết qua [thiết kế backend](backend-design.md), thử nghiệm, triển khai hoặc chuẩn bị phát hành:
 
-- Triển khai schema, HTTP API và điều phối qua SQLite theo [backend contract](backend-contract-v1.md); bảo đảm tác vụ độc lập với kết nối trình duyệt và việc thay token. Chọn framework frontend khi triển khai giao diện theo thiết kế đã duyệt.
+- Triển khai schema, HTTP API và điều phối qua SQLite theo [backend contract](backend-contract.md); bảo đảm tác vụ độc lập với kết nối trình duyệt và việc thay token. Chọn framework frontend khi triển khai giao diện theo thiết kế đã duyệt.
 - Thiết kế/kiểm chứng adapter ChatGPT và OMP + Antigravity, đăng nhập từ UI trong Docker, quản lý credential, model access, lỗi/quota, hủy và kiểm tra notes có nguồn. Hoãn Qwen local; không thêm training danh tính vào v1.
 - Xác minh GPU runtime, chọn model/cấu hình, xác định định dạng và giới hạn đầu vào từ các file mẫu, rồi đo chất lượng và hiệu năng trên máy hiện có. Các mục tiêu AC-13 và AC-14 vẫn cần kết quả thực nghiệm.
 - Triển khai token/cookie và kiểm soát truy cập backend phù hợp với localhost; kiểm tra việc xóa token khỏi URL và tránh ghi credential vào log. Thiết kế giữ token không tự hết hạn là quyết định sản phẩm cho máy cá nhân, không suy rộng thành cấu hình mặc định cho truy cập Internet sau này. [Tham khảo cơ chế phiên của OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html).

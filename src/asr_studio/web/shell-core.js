@@ -1,6 +1,6 @@
 // Pure core of the create-meeting dialog: state, reducer, selectors. No DOM, fetch, timer, storage
 // or clock: node --test loads this file directly. Contract: docs/adr/0010-frontend-reducer-core.md;
-// state table: docs/frontend-design-v1.md §11.5.
+// state table: docs/frontend-design.md §11.5.
 //
 // User-visible text is data: t(text, params) here only keeps the Vietnamese source string, and the view
 // translates it with the real t(). The name matches the call sites in the other scripts so the i18n

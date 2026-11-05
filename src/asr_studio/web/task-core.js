@@ -1,7 +1,7 @@
 // Pure core of the transcription task of the open meeting (phase 4b of #118): start and cancel, the progress poll,
 // the pending request id, the language choice, the processing state and the task error, the runtime profile and the
 // diagnostic command. No DOM, fetch, timer, storage, clock, randomness or page visibility: node --test loads this
-// file directly. Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design-v1.md §11.9.
+// file directly. Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design.md §11.9.
 //
 // The slice `task` shares the page store with `history`. The task object itself lives in the meeting that
 // history-core holds (`meeting.transcription.task`): the actions that carry a task answer (`task/poll-loaded`,

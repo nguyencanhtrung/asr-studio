@@ -2,7 +2,7 @@
 
 > **Cập nhật ngày 18/10/2026.** Tài liệu này tiếp tục là chuẩn cho kiến trúc thông tin và hành vi vận hành của phương án **A — Bàn biên tập**. Ngôn ngữ thị giác dark/teal cũ đã được thay thế bởi hệ editorial-engineering light/dark trong [`DESIGN.md`](../DESIGN.md); khi có xung đột về màu, font, bề mặt, radius, theme hoặc responsive, `DESIGN.md` là nguồn chuẩn.
 
-Tài liệu này là chuẩn thiết kế frontend v1 để triển khai. [Đặc tả sản phẩm](specification-v1.md) quy định hành vi, dữ liệu, xác thực và phạm vi nghiệm thu; tài liệu này cụ thể hóa cách trình bày và tương tác. Việc duyệt thiết kế không có nghĩa backend, model, lưu trữ hoặc xác thực đã được triển khai.
+Tài liệu này là chuẩn thiết kế frontend v1 để triển khai. [Đặc tả sản phẩm](specification.md) quy định hành vi, dữ liệu, xác thực và phạm vi nghiệm thu; tài liệu này cụ thể hóa cách trình bày và tương tác. Việc duyệt thiết kế không có nghĩa backend, model, lưu trữ hoặc xác thực đã được triển khai.
 
 ## 1. Bản thiết kế được chọn
 
@@ -22,11 +22,11 @@ Tài liệu này là chuẩn thiết kế frontend v1 để triển khai. [Đặ
 
 **Màn hình duyệt transcript và notes** (prototype ban đầu: transcript và notes ở hai vùng cạnh nhau; sản phẩm tách thành hai tab, xem mục 6.0):
 
-![Phương án A: sidebar, transcript, notes và trình phát trên dark theme](assets/frontend-v1/meeting-review.png)
+![Phương án A: sidebar, transcript, notes và trình phát trên dark theme](assets/frontend/meeting-review.png)
 
 **Màn hình lịch sử theo tháng:**
 
-![Lịch tháng lớn, lịch nhỏ trong sidebar và danh sách cuộc họp của ngày được chọn](assets/frontend-v1/meeting-calendar.png)
+![Lịch tháng lớn, lịch nhỏ trong sidebar và danh sách cuộc họp của ngày được chọn](assets/frontend/meeting-calendar.png)
 
 ## 2. Bố cục và điều hướng
 
@@ -146,7 +146,7 @@ Q20 yêu cầu lưu theo phiên bản đã đọc. Khi tab khác đã cập nh�
 
 Q21 yêu cầu có cách chọn thế hệ transcript: mặc định thế hệ mới nhất đã hoàn tất và lưu đầy đủ, các thế hệ trước chỉ đọc. Lần chạy mới chưa hoàn tất không thay mặc định; notes lỗi sau khi transcript đã lưu không làm mất bản mới. Cách trình bày bộ chọn này bổ sung sau prototype, chưa có UI được nghiệm thu.
 
-Theo quyết định backend được chốt sau khi duyệt prototype, khi đang tạo notes cho cuộc họp này, UI khóa sửa transcript và tên người nói (nút **Sửa** và chip người nói bị tắt, kèm lý do gắn vào từng nút), vẫn cho đọc nguồn; ở ô sửa đang mở, nội dung, select và **Lưu đoạn** bị tắt, còn **Hủy** vẫn dùng được. Backend phải thực thi cùng điều kiện ở API; chỉ mở lại chỉnh sửa sau khi tác vụ đã kết thúc, không ngay khi vừa gửi yêu cầu hủy. Các bản notes đã có và các cuộc họp khác vẫn sửa được. Xem [backend design v1](backend-design-v1.md).
+Theo quyết định backend được chốt sau khi duyệt prototype, khi đang tạo notes cho cuộc họp này, UI khóa sửa transcript và tên người nói (nút **Sửa** và chip người nói bị tắt, kèm lý do gắn vào từng nút), vẫn cho đọc nguồn; ở ô sửa đang mở, nội dung, select và **Lưu đoạn** bị tắt, còn **Hủy** vẫn dùng được. Backend phải thực thi cùng điều kiện ở API; chỉ mở lại chỉnh sửa sau khi tác vụ đã kết thúc, không ngay khi vừa gửi yêu cầu hủy. Các bản notes đã có và các cuộc họp khác vẫn sửa được. Xem [backend design v1](backend-design.md).
 
 ### 6.2. Tên người nói
 
@@ -245,7 +245,7 @@ Các thành phần chỉ phục vụ prototype phải được loại khỏi fro
 - Tiến độ theo bộ đếm mô phỏng, playback không có âm thanh và trạng thái chỉ lưu trong bộ nhớ rồi mất khi refresh.
 - Khoảng đệm chỉ để tránh thanh công cụ thử thiết kế ở đáy trang.
 
-Prototype hiện có không chứng minh các trạng thái backend trong mục 7 đã hoạt động. Khi triển khai, giữ thiết kế đã duyệt và thay các mô phỏng bằng hành vi thật theo [đặc tả v1](specification-v1.md).
+Prototype hiện có không chứng minh các trạng thái backend trong mục 7 đã hoạt động. Khi triển khai, giữ thiết kế đã duyệt và thay các mô phỏng bằng hành vi thật theo [đặc tả v1](specification.md).
 
 ## 10. Tiêu chí đối chiếu frontend
 
@@ -544,7 +544,7 @@ Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không
 | không login | Google còn hạn | có login | `fetch poll` ngay |
 | không login | Google hết hạn | không đổi | xóa sessionStorage, không gọi mạng |
 
-Khác bản trước pha 2 (đầy đủ trong mục #123 của `architecture-changes-v1.md`): Google cũng bỏ poll trả lời muộn sau hủy hoặc kết thúc (có `loginGen`) và tải trạng thái có `loadId`; bấm đăng nhập lặp bị bỏ; lỗi có câu riêng của nó (cửa sổ đã đóng, URL không an toàn) hiện câu đó ở cả hai ngôn ngữ; một dòng chữ giống hệt không ghi lại vào vùng `aria-live`; cuộn tới mục Google không bị hủy bởi lượt tải mới hơn.
+Khác bản trước pha 2 (đầy đủ trong mục #123 của `architecture-changes.md`): Google cũng bỏ poll trả lời muộn sau hủy hoặc kết thúc (có `loginGen`) và tải trạng thái có `loadId`; bấm đăng nhập lặp bị bỏ; lỗi có câu riêng của nó (cửa sổ đã đóng, URL không an toàn) hiện câu đó ở cả hai ngôn ngữ; một dòng chữ giống hệt không ghi lại vào vùng `aria-live`; cuộn tới mục Google không bị hủy bởi lượt tải mới hơn.
 
 ### 11.7. Notes: tab Meeting notes
 
@@ -614,7 +614,7 @@ Core `notes-core.js` (`initialState`, `reduce`, `selectView`, `hasUnsavedDraft` 
 
 **Quy ước view**: `render` chỉ chạy khi có meeting (bản cũ còn vẽ lại tab đang ẩn khi một trả lời tới sau lúc rời cuộc họp: tải/lưu lựa chọn, chép/tải xuống; không thấy được vì tab ẩn và context kế tiếp vẽ lại); ô xem trước Markdown chỉ dựng lại khi các khối đổi (khóa JSON), nên focus trên chip trích dẫn được giữ; câu hỏi chỉ đọc tới `history.js` gọi thẳng: `currentContext` lúc boot (ngay sau khi đăng ký kênh), `defaultSpeakerNames` lúc nhận tin `channel/meeting-context` (tên vào action `notes/context`), `hasUnsavedTranscriptDrafts` lúc trang đóng; ghi chú đã copy/tải chỉ cập nhật `#notes-copy-export-status` khi có chữ (như bản cũ).
 
-**Khác bản trước pha 3** (đầy đủ trong mục #126 của `architecture-changes-v1.md`): ô cảnh báo liên kết hỏng không dựng lại khi nội dung không đổi; sau một lần tạo notes mà máy chủ trả task đã kết thúc ngay, nút "Đang gửi yêu cầu…" tắt trước khi lần đọc lại xong; lỗi mở nguồn để lại nút tua bị khóa; không vẽ lại tab ẩn khi trả lời tới sau lúc rời cuộc họp; nhắc tên người nói không thấy người nói mới thêm ở tab Bản ghi tới context kế tiếp; ô xem trước không dựng lại khi khối không đổi, nên ẩn/hiện tab hay một lượt poll không làm mất focus trên chip trích dẫn.
+**Khác bản trước pha 3** (đầy đủ trong mục #126 của `architecture-changes.md`): ô cảnh báo liên kết hỏng không dựng lại khi nội dung không đổi; sau một lần tạo notes mà máy chủ trả task đã kết thúc ngay, nút "Đang gửi yêu cầu…" tắt trước khi lần đọc lại xong; lỗi mở nguồn để lại nút tua bị khóa; không vẽ lại tab ẩn khi trả lời tới sau lúc rời cuộc họp; nhắc tên người nói không thấy người nói mới thêm ở tab Bản ghi tới context kế tiếp; ô xem trước không dựng lại khi khối không đổi, nên ẩn/hiện tab hay một lượt poll không làm mất focus trên chip trích dẫn.
 
 ### 11.8. Lịch sử: điều hướng và thư viện cuộc họp
 
@@ -714,7 +714,7 @@ Nút "Thử dọn tiếp" thay "Xóa cuộc họp" khi cuộc họp có dấu d�
 
 **Cầu nối tới các lát khác**: `history.js` vẽ theo thứ tự cố định: đặt lại theo `left` (gửi `task/meeting-left`, với `switch` thêm `transcript/meeting-switched`, rồi `playback/meeting-left`); cuộc họp mới từ máy chủ (`installRev`: đối chiếu bản nháp transcript, vẽ phần transcript phụ thuộc khóa, báo notes.js); đầu cuộc họp và transcript (`paintRev`); phần task và transcript khi lát `task` đổi (`task.rev`) mà chưa vẽ ở hai bước trên; âm thanh; view và tiêu đề; tab; dòng khóa, editor, hộp thoại xóa; sidebar và lịch; tóm tắt; báo notes.js (`contextRev`); sẵn sàng (`readyRev`: gửi `task/meeting-ready`); focus; sau cùng lát `playback` (hàng đang phát, dấu nguồn notes, lệnh cuộn). Thanh bên chỉ vẽ lại khi id cuộc họp đang mở đổi (một câu trả lời của task thay object cuộc họp mỗi giây). Tin `channel/meeting-context` đọc view đang vẽ thật trên trang, nên lần báo giữa chừng của code transcript thấy view cũ như bản trước. `meetingHistory` (export của `history.js`, object đóng băng; thay `window.ASRMeetingHistory`) giữ nguyên tên hàm và giá trị trả về: `setNotesSummary`, `setNotesSourceLock`, `selectTab`, `showNotesSourceTab`, `refreshMeeting` dispatch action; `currentContext`, `defaultSpeakerNames`, `hasUnsavedTranscriptDrafts` đọc thẳng; `markNotesSource`, `seekNotesSource` dispatch action của lát `playback` (4d, xem 11.11); `playRecording` hỏi `canPlay` của core rồi gọi `audio.play()`; `focusSpeakerCatalog` chỉ chọn tab và focus (chuyển sang transcript hiện tại nếu đang xem bản cũ). `refreshMeeting` và `seekNotesSource` đợi lần tải xong (`true`) hoặc bị thay (`false`).
 
-**Khác bản trước pha 4a** (đầy đủ trong mục #128 của `architecture-changes-v1.md`): lần làm mới danh sách mới nhất thắng (bản cũ: câu trả lời tới sau cùng thắng); câu hỏi tìm kiếm đang gõ bị hủy khi xóa hộp; lịch vẽ ngay khi danh sách về, còn sidebar chờ câu trả lời tìm kiếm; `aria-current` của sidebar theo view ngay; sửa metadata giữ chữ đang gõ trong state và lấy lại giá trị ô khi nộp; lỗi trong hộp thoại xóa hiện khi lần tải lại kết thúc hoặc bị thay, và nút xác nhận tắt tới lúc đó; focus trên link sidebar được giữ khi danh sách dựng lại; lần lưu cũ bị hủy khi lưu cuộc họp khác.
+**Khác bản trước pha 4a** (đầy đủ trong mục #128 của `architecture-changes.md`): lần làm mới danh sách mới nhất thắng (bản cũ: câu trả lời tới sau cùng thắng); câu hỏi tìm kiếm đang gõ bị hủy khi xóa hộp; lịch vẽ ngay khi danh sách về, còn sidebar chờ câu trả lời tìm kiếm; `aria-current` của sidebar theo view ngay; sửa metadata giữ chữ đang gõ trong state và lấy lại giá trị ô khi nộp; lỗi trong hộp thoại xóa hiện khi lần tải lại kết thúc hoặc bị thay, và nút xác nhận tắt tới lúc đó; focus trên link sidebar được giữ khi danh sách dựng lại; lần lưu cũ bị hủy khi lưu cuộc họp khác.
 
 ### 11.9. Task phiên âm
 
@@ -785,7 +785,7 @@ Khi có `autoStart` tới hạn, task-core chỉ áp dụng ID model còn hợp 
 
 **Lỗi task và chẩn đoán** (`selectTask`): khối lỗi hiện khi task `failed`/`interrupted` hoặc có `error` của cuộc họp này. Lời: lỗi của yêu cầu, không thì câu theo mã lỗi đã biết (`diarization_*`, `publication_failed`), câu dùng chung theo mã lỗi (#82), cuối cùng "Tác vụ chưa hoàn tất."; không hiển thị nguyên văn `error_message` của server. Chi tiết chẩn đoán và lệnh `docker compose exec -T app python -m asr_studio.cli task diagnose <id>` chỉ hiện khi không có lỗi yêu cầu, mã lỗi đã biết và id task đúng 32 ký tự hex. `copy-clicked` có lệnh thì `call clipboard.write`; `copy-succeeded` → "Đã sao chép lệnh."; `copy-failed` → `call clipboard.select` (chọn lệnh và `execCommand`) → `copy-selected {value}` → "Đã sao chép lệnh." hoặc "Lệnh đã được chọn…". Kết quả chỉ hiện cho task của nó và xóa khi có câu trả lời task mới, khi cuộc họp tải lại hoặc khi rời cuộc họp.
 
-**Khác bản trước pha 4b** (đầy đủ trong mục #130 của `architecture-changes-v1.md`): chỉ một lần đọc poll chạy cho mỗi task (bản cũ: `visibilitychange` hoặc tải lại cuộc họp giữa lúc đọc đặt thêm timer, hai lần đọc có thể chồng nhau); nút Hủy giữ tắt tới khi yêu cầu hủy xong (bản cũ: lượt poll kế tiếp bật lại, bấm được lần hai); câu trả lời bắt đầu/hủy tới sau khi một cuộc họp khác đã tải xong không đổi cuộc họp đang hiện và không dựng poll (ở trang chủ hoặc khi cuộc họp khác đang tải, như bản cũ, câu trả lời áp vào cuộc họp mà history còn giữ và poll chạy tới khi task kết thúc) (bản cũ sửa object cuộc họp cũ, đặt poll cho cuộc họp không còn hiện, hoặc ghi dòng trạng thái lên cuộc họp khác); lỗi yêu cầu gắn với cuộc họp của nó (bản cũ: một biến chung, hiện ở cuộc họp nào đang mở); ngôn ngữ ô chọn nhớ lựa chọn của người dùng, không nhớ giá trị mới vẽ ra (bản cũ ghi lại mỗi lần vẽ); request chờ đọc từ sessionStorage một lần khi cuộc họp tải xong (bản cũ: mỗi lần vẽ, khi bộ nhớ chưa có); các dòng "mất kết nối", "không tải được transcript mới" và kết quả sao chép giữ tới sự kiện task kế tiếp hoặc khi lần tải lại cuộc họp xong (bản cũ: tới lần vẽ transcript kế tiếp, nên mở lại cùng cuộc họp xóa ngay lúc bấm); body 2xx không phải object là lỗi rõ ràng (bản cũ: bắt đầu hiện chữ lỗi `TypeError`; hủy gỡ task khỏi cuộc họp, không báo lỗi; poll vẽ task rỗng rồi dòng "mất kết nối"); khóa tự chạy xóa không được thì vẫn chạy một lần (bản cũ: không chạy); request poll bị hủy khi rời cuộc họp; chuỗi tin context cho `notes.js` (khi đó là `asr:meeting-context`) khác số lần (giá trị cuối giống; mỗi lần thêm là một lần đọc notes): bắt đầu `{true, task trước đó}` rồi `{false, task nhận}`, poll tới `succeeded` 3 lần (cũ 4; `canceled` như cũ), tải khôi phục request chờ +1, mở lại cuộc họp đang có dòng thông báo hoặc kết quả sao chép +1, hủy +1 đến 2, sao chép +1, poll hoặc đọc lại thất bại cũng phát (máy chủ mất kết nối thì tab Notes hiện lỗi đọc tới lượt poll tốt kế tiếp).
+**Khác bản trước pha 4b** (đầy đủ trong mục #130 của `architecture-changes.md`): chỉ một lần đọc poll chạy cho mỗi task (bản cũ: `visibilitychange` hoặc tải lại cuộc họp giữa lúc đọc đặt thêm timer, hai lần đọc có thể chồng nhau); nút Hủy giữ tắt tới khi yêu cầu hủy xong (bản cũ: lượt poll kế tiếp bật lại, bấm được lần hai); câu trả lời bắt đầu/hủy tới sau khi một cuộc họp khác đã tải xong không đổi cuộc họp đang hiện và không dựng poll (ở trang chủ hoặc khi cuộc họp khác đang tải, như bản cũ, câu trả lời áp vào cuộc họp mà history còn giữ và poll chạy tới khi task kết thúc) (bản cũ sửa object cuộc họp cũ, đặt poll cho cuộc họp không còn hiện, hoặc ghi dòng trạng thái lên cuộc họp khác); lỗi yêu cầu gắn với cuộc họp của nó (bản cũ: một biến chung, hiện ở cuộc họp nào đang mở); ngôn ngữ ô chọn nhớ lựa chọn của người dùng, không nhớ giá trị mới vẽ ra (bản cũ ghi lại mỗi lần vẽ); request chờ đọc từ sessionStorage một lần khi cuộc họp tải xong (bản cũ: mỗi lần vẽ, khi bộ nhớ chưa có); các dòng "mất kết nối", "không tải được transcript mới" và kết quả sao chép giữ tới sự kiện task kế tiếp hoặc khi lần tải lại cuộc họp xong (bản cũ: tới lần vẽ transcript kế tiếp, nên mở lại cùng cuộc họp xóa ngay lúc bấm); body 2xx không phải object là lỗi rõ ràng (bản cũ: bắt đầu hiện chữ lỗi `TypeError`; hủy gỡ task khỏi cuộc họp, không báo lỗi; poll vẽ task rỗng rồi dòng "mất kết nối"); khóa tự chạy xóa không được thì vẫn chạy một lần (bản cũ: không chạy); request poll bị hủy khi rời cuộc họp; chuỗi tin context cho `notes.js` (khi đó là `asr:meeting-context`) khác số lần (giá trị cuối giống; mỗi lần thêm là một lần đọc notes): bắt đầu `{true, task trước đó}` rồi `{false, task nhận}`, poll tới `succeeded` 3 lần (cũ 4; `canceled` như cũ), tải khôi phục request chờ +1, mở lại cuộc họp đang có dòng thông báo hoặc kết quả sao chép +1, hủy +1 đến 2, sao chép +1, poll hoặc đọc lại thất bại cũng phát (máy chủ mất kết nối thì tab Notes hiện lỗi đọc tới lượt poll tốt kế tiếp).
 
 ### 11.10. Transcript
 

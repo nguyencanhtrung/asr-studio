@@ -2,7 +2,7 @@
 
 ## 1. Mở đầu
 
-**Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report-v1.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
+**Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
 ## Documentation policy
 
@@ -165,7 +165,7 @@ Số large-v3 dùng PCM WAV, còn product đưa audio qua AAC normalization; tr�
 đổi reverse từ 0,8960 thành 0,1185 và mixed từ 0,6683 thành 0,2945. Vì vậy số v0.2.1 đã công
 bố chưa được tái lập đầy đủ. Phép so sánh ban đầu chưa có Whisper small; số đo riêng nằm trong ADR 0011.
 
-Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [số đo ứng viên model](model-candidates-v1.md#đo-trên-bản-ghi-thật-11-2026).
+Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [số đo ứng viên model](model-candidates.md#đo-trên-bản-ghi-thật-11-2026).
 
 #### Thay đổi thiết kế
 
@@ -191,7 +191,7 @@ GPU và phép đo Whisper app được ghi trong cùng hồ sơ đo; không coi 
 | Model cần stage khi chuyển default | model cũ đã có | Qwen thêm 4.087.646.324 byte (~4,1 GB); `.env` cũ không tự đổi |
 | Chuỗi lặp liền kề | chưa có reason chung | `repeated_segment` cho run từ 3 segment |
 
-Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [model candidates](model-candidates-v1.md#đo-trên-bản-ghi-thật-11-2026).
+Nguồn: [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), [model candidates](model-candidates.md#đo-trên-bản-ghi-thật-11-2026).
 
 Bản cài cũ giữ large-v3 nếu file `.env` hiện tại vẫn có `ASR_GPU_MODEL_PATH=/models/whisper-large-v3`;
 `.env.example` không tự ghi đè file đó. Muốn chuyển sang Qwen, sửa dòng này thành
@@ -219,7 +219,7 @@ Hiệu năng | Kiến trúc
 
 - `docs/adr/0011-asr-model-per-run.md` — default theo phần cứng và lựa chọn từng run.
 - `docs/user-guide.md` — model mặc định, artifact, VRAM và confidence behavior.
-- `docs/backend-contract-v1.md` — semantics của `auto` và task legacy.
+- `docs/backend-contract.md` — semantics của `auto` và task legacy.
 
 ### #119 (pha 0 của #118) — ADR và khung reducer/store cho frontend
 
@@ -346,7 +346,7 @@ Nguồn: `git show 67b8f13:src/asr_en_vi/web/connections.js`, `git show 67b8f13:
 - Poll qua effect `schedule`; sessionStorage qua effect `storage`; khôi phục đăng nhập dở qua action `provider/boot-restored` mang chuỗi đã lưu.
 - Route `/assets/provider-core.js` có bảo vệ truy cập và test asset; `connections.js`, `antigravity.js` thêm vào test asset.
 - Gate `tests/web/shell-view.test.mjs` thêm hai view và core mới, mở rộng quy tắc theo góp ý pha 1 (bí danh `store.getState()`, lệnh đổi như `state.list.push`, object cấp module bị sửa), mỗi quy tắc có một ví dụ xấu trong test.
-- Bảng trạng thái và chuyển trạng thái của core provider: `frontend-design-v1.md` mục 11.6.
+- Bảng trạng thái và chuyển trạng thái của core provider: `frontend-design.md` mục 11.6.
 
 Khác biệt hành vi so với bản cũ (đều nhỏ, ghi để review): Google bỏ qua poll trả lời muộn sau hủy hoặc kết thúc (bản cũ có thể dựng lại phiên đã hủy) và tải trạng thái có id; bấm đăng nhập lặp trong lúc đang khởi động bị bỏ; khi hủy, Google ngừng poll trong lúc chờ DELETE và poll lại nếu hủy lỗi; nút Hủy của ChatGPT khóa tới khi DELETE trả lời; lỗi có câu riêng (cửa sổ đã đóng, URL không an toàn) hiện câu đó ở cả tiếng Anh; dòng chữ giống hệt không ghi lại vào vùng `aria-live`; cuộn tới mục Google không bị hủy bởi lượt tải mới hơn; Google với URL đăng nhập sai hoặc không an toàn giữ login và hiện bảng đăng nhập cùng nút Hủy (bản cũ giữ bảng ẩn, nút Hủy không với tới); ChatGPT bị chặn popup giữ focus ở nút đăng nhập (bản cũ về `body`); sau khi ngắt ChatGPT, ô effort ẩn chỉ còn `default`; nút Hủy ẩn bị `disabled` trước lần đọc đầu của hộp thoại; cuộn tới mục Google lệch khoảng 51 px khi đọc trạng thái lỗi hoặc cần đăng nhập lại (đích vẫn là mục Google).
 
@@ -407,7 +407,7 @@ Nguồn: `git show 6f1a609:src/asr_en_vi/web/notes.js`; issue #118.
 - Poll bằng `schedule`; `localStorage` (chế độ Xem/Viết) và request chờ, ngôn ngữ đầu ra (local + session) bằng `storage`; id request tạo trong view (`crypto.randomUUID`) và vào bằng action `notes/start-clicked`.
 - Route `/assets/notes-core.js` có bảo vệ truy cập; `notes.js` và `notes-core.js` thêm vào hai test asset.
 - Gate `tests/web/shell-view.test.mjs`: thêm `notes.js` (view) và `notes-core.js` (core); sửa hai điểm mù từ pha 2: `${…}` trong template literal được quét như mã, bí danh lát cắt (`const s = state.x; s.y = 1`) bị bắt; mỗi điểm có ví dụ xấu trong test.
-- Bảng trạng thái và chuyển trạng thái: `frontend-design-v1.md` mục 11.7. ADR 0010 thêm effect `call`.
+- Bảng trạng thái và chuyển trạng thái: `frontend-design.md` mục 11.7. ADR 0010 thêm effect `call`.
 
 Khác biệt hành vi so với bản cũ (đều nhỏ, ghi để review): request đọc/tải lựa chọn có key riêng nên không bị hủy giữa chừng, response cũ bị bỏ bằng id (như bản cũ); sau khi tạo notes mà máy chủ trả task đã kết thúc ngay, nút "Đang gửi yêu cầu…" tắt trước khi lần đọc lại xong (bản cũ giữ tới khi đọc xong); ô cảnh báo liên kết hỏng chỉ dựng lại khi nội dung đổi (bản cũ dựng lại mỗi lần render, làm vùng `aria-live` đọc lại); nội dung vẫn giống nhau thì không ghi lại vào DOM; request chờ và ngôn ngữ đã lưu được đọc ở mỗi sự kiện context cho cuộc họp chưa có trong state (bản cũ đọc ngôn ngữ một lần, còn request chờ thì đọc lại ở mỗi lần render tới khi thấy); bản nháp và bước task được đối chiếu sau mỗi action thay vì khi render; tóm tắt gửi cho `history.js` chỉ khi context tới hoặc tóm tắt đổi (bản cũ gửi mỗi lần render); lỗi mở nguồn để nút "Tua bản ghi" bị khóa (bản cũ giữ trạng thái trước); vùng `aria-live` trạng thái notes chỉ ghi giá trị cuối (bản cũ ghi hai lần khi đang chép lời hoặc sau lỗi chưa chắc chắn); `markNotesSource` và `seekNotesSource` chạy sau một tick (`schedule` delay 0, action `source-shown`) để view vẽ thẻ nguồn trước, như bản cũ; gõ vào bản nháp render lại đầy đủ nên hộp xung đột ẩn ngay khi phím gõ làm hết xung đột (bản cũ chờ lần render đầy đủ kế tiếp); lưu bị 409 thì cảnh báo xung đột chỉ hiện khi bản mới nhất đã đọc xong (bản cũ không render giữa 409 và lần đọc đó); ô xem trước chỉ dựng lại khi các khối Markdown đổi (khóa JSON), nên ẩn/hiện tab trình duyệt hay một lượt poll không làm mất focus bàn phím trên chip trích dẫn (bản cũ dựng lại mỗi lần render); tên người nói mặc định đi cùng action context (view hỏi `history.js` khi nhận `asr:meeting-context`) thay vì hỏi lúc render, nên người nói mới thêm ở tab Bản ghi (chưa có đoạn nào) chưa vào câu nhắc tới context kế tiếp; render chỉ chạy khi có meeting (bản cũ còn vẽ lại tab ẩn khi trả lời tải/lưu lựa chọn, chép/tải xuống tới sau lúc rời cuộc họp; không thấy được).
 
@@ -468,7 +468,7 @@ Nguồn: `git show 2819779:src/asr_en_vi/web/history.js`; issue #118.
 - Effect mới ở `history.js`: `history/list`, `/search`, `/search-timer`, `/tab-timer`, `/meeting`, `/save`, `/conflict`, `/delete`, và lệnh `address.push` qua `calls`.
 - Route `/assets/history-core.js` có bảo vệ truy cập; thêm vào hai test asset. `shell.html` đổi `history.js` sang `type="module"`.
 - Gate `tests/web/shell-view.test.mjs`: `history-core.js` vào CORES; `history.js` vào `PARTIAL` (phải là module, miễn quy tắc view cho tới khi 4c xong).
-- Bảng trạng thái và chuyển trạng thái: `frontend-design-v1.md` mục 11.8. ADR 0010 thêm một ý: địa chỉ vào core như dữ liệu `at`.
+- Bảng trạng thái và chuyển trạng thái: `frontend-design.md` mục 11.8. ADR 0010 thêm một ý: địa chỉ vào core như dữ liệu `at`.
 
 Khác biệt hành vi so với bản cũ (đều nhỏ, ghi để review): danh sách cuộc họp tải lại nhiều lần thì kết quả mới nhất theo id thắng (bản cũ: cái tới sau cùng); xóa ô tìm kiếm hủy luôn hẹn giờ và tìm kiếm đang chạy; lịch vẽ lại ngay khi danh sách về, còn thanh bên chờ kết quả tìm kiếm; `aria-current` ở thanh bên theo view ngay, `repaintSidebar` của phần cũ chỉ dựng lại khi dữ liệu đổi; tên và ngày đang sửa nằm trong state (sự kiện input), giá trị DOM đi kèm khi gửi; promise của `loadMeeting` trả `false` ngay lúc bị thay thế (bản cũ: khi response cũ tới); hộp thoại xóa hiện lỗi khi tải lại kết thúc hoặc bị thay; cài cuộc họp tạo bản sao đã gộp (bản cũ sửa object nhận về); phản hồi lưu không phải object tính là lỗi; tab chỉ vẽ lại khi đổi; ngày tính bằng số học ngày dân sự (cùng kết quả cho năm 1000–9999); focus bàn phím trên link ở sidebar được giữ khi danh sách dựng lại (bản cũ rơi về `body` khi tải xong hoặc làm mới danh sách); sau khi xóa thất bại, nút xác nhận tắt tới khi tải lại xong kể cả khi gõ lại tên (bản cũ bật lại nếu gõ lại tên); lần lưu metadata cũ của cuộc họp đã rời bị hủy khi lưu cuộc họp khác (khóa `history/save`, bản mới nhất thắng). Giữ như cũ: nút "Xóa ngày" gán `value` trực tiếp để bỏ ngày nhập dở; làm mới cùng cuộc họp vẽ tab trước khi báo `asr:meeting-context` cho `notes.js`, để focus tiêu đề nguồn không rơi vào panel đang ẩn. Số lần `asr:meeting-context` mỗi lần tải giữ 4.
 
@@ -527,7 +527,7 @@ Nguồn: `git show e9b3e50:src/asr_en_vi/web/history.js`; issue #118, #130.
 - Lát `task` cùng store với `history` (`combine({history, task})`). Đối tượng task ở lại trong cuộc họp của `history-core`; bốn action `task/poll-loaded`, `task/start-succeeded`, `task/cancel-succeeded`, `task/refresh-loaded` do cả hai lát xử lý (`history-core` đặt task vào cuộc họp mới tạo, không sửa tại chỗ). View đóng dấu mọi action bằng `shown` (cuộc họp lát history đang giữ, kể cả ở trang chủ hoặc khi cuộc họp khác đang tải) như `at`, và đổi `legacy.rev`, `readyRev` của `history-core` thành `task/meeting-left`, `task/meeting-ready`.
 - `history.js`: bỏ 7 trường task khỏi `legacy`, bỏ `editTranscription`, `startTaskPolling`, `pollTask` và các hàm request id; `renderTranscription` chỉ đọc `selectTask`. `history-core.js` thêm bốn case dùng chung và xuất `failureOf`; cuộc họp nhận task mang khóa nguồn notes như đã báo (`notes-core` chỉ đọc lại `notes_source_locked` khi nhận object cuộc họp mới, mà object nay đổi mỗi lượt poll). Thanh bên chỉ vẽ lại khi id cuộc họp mở đổi; "Tải lại bản mới nhất" bỏ kết quả theo `installRev` thay vì so object cuộc họp (object nay đổi mỗi lượt poll, nên so object sẽ bỏ nhầm khi đang chạy task).
 - Route `/assets/task-core.js` có bảo vệ truy cập; thêm vào hai test asset. Gate `shell-view.test.mjs`: `task-core.js` vào CORES.
-- Bảng trạng thái và chuyển trạng thái: `frontend-design-v1.md` mục 11.9. ADR 0010 thêm một ý về `shown` và action dùng chung giữa các lát. Không thêm loại effect.
+- Bảng trạng thái và chuyển trạng thái: `frontend-design.md` mục 11.9. ADR 0010 thêm một ý về `shown` và action dùng chung giữa các lát. Không thêm loại effect.
 
 Khác biệt hành vi so với bản cũ (đều nhỏ, ghi để review; đã đối chiếu từng ý với `git show e9b3e50`): chỉ một lần đọc poll chạy cho mỗi task (bản cũ: `visibilitychange` hoặc cuộc họp tải lại giữa lúc đọc đặt thêm timer, hai lần đọc có thể chồng nhau); request poll bị hủy khi rời cuộc họp (bản cũ để chạy rồi bỏ kết quả); nút Hủy giữ tắt tới khi yêu cầu hủy xong (bản cũ: lượt poll kế tiếp vẽ lại và bật nút, bấm được lần hai); câu trả lời bắt đầu hoặc hủy tới sau khi một cuộc họp khác đã tải xong không đổi cuộc họp đang hiện (ở trang chủ hoặc khi cuộc họp khác đang tải thì như bản cũ: câu trả lời áp vào cuộc họp history còn giữ và poll chạy tới khi task kết thúc; bản cũ sửa object cuộc họp cũ, đặt `taskPollId` và timer cho cuộc họp không còn hiện, và với lỗi bắt đầu ghi một dòng lên trạng thái của cuộc họp khác), nhưng request chờ vẫn được rút; lỗi của yêu cầu gắn với cuộc họp của nó (bản cũ: một biến chung hiện ở mọi cuộc họp tới khi có bắt đầu hoặc hủy thành công); ô ngôn ngữ nhớ lựa chọn của người dùng, không nhớ giá trị vừa vẽ (bản cũ ghi lại giá trị đang hiện mỗi lần vẽ); request chờ đọc từ sessionStorage một lần khi cuộc họp tải xong (bản cũ: mỗi lần vẽ khi bộ nhớ chưa có của cuộc họp đó); dòng "mất kết nối", "không tải được transcript mới" và kết quả sao chép giữ tới sự kiện task kế tiếp, khi lần tải lại cuộc họp xong hoặc khi rời cuộc họp (khi mở lại cùng cuộc họp, bản cũ xóa ngay lúc bấm; bản cũ: tới lần vẽ transcript kế tiếp, do bất kỳ nguyên nhân); body 2xx không phải object là lỗi rõ ràng (bản cũ: khi bắt đầu, `TypeError` hiện chữ lỗi của JS ở khối lỗi; khi hủy, task bị gỡ khỏi cuộc họp, nút Bắt đầu hiện và poll dừng, không báo lỗi; khi poll, task rỗng được vẽ rồi dòng "mất kết nối"); khóa tự chạy mà `removeItem` bị chặn thì vẫn chạy đúng một lần (bản cũ: không chạy); nút Hủy vẽ lại khi bấm nên `asr:meeting-context` có thêm một lần (cùng nội dung) lúc bấm hủy và lúc sao chép lệnh; thanh bên không còn dựng lại khi cuộc họp cùng id được thay bằng object mới (người dùng không thấy). Chuỗi `asr:meeting-context` phát cho `notes.js` khác ở số lần, giá trị cuối giống hệt; mỗi lần thêm là một lần `notes.js` đọc lại notes (`GET …/notes`): lúc bắt đầu phát `{inflight true, task trước đó}` rồi `{false, task nhận}` (bản cũ: thêm `{true, task nhận}` ở giữa); poll tới `succeeded` (có đọc lại cuộc họp) phát 3 lần (bản cũ 4), tới `canceled` như cũ; tải cuộc họp khôi phục request chờ từ sessionStorage thêm 1 lần; mở lại cuộc họp đang có dòng "mất kết nối", "không tải được transcript mới" hoặc kết quả sao chép thêm 1 lần; hủy lỗi hoặc thành công thêm 1 đến 2 lần, trước câu trả lời vẫn mang task cũ; bấm sao chép lệnh chẩn đoán phát 1 lần; lần poll hoặc đọc lại thất bại cũng phát, nên khi máy chủ mất kết nối, lần đọc notes kèm theo cũng lỗi và tab Notes hiện lỗi đọc tới lượt poll tốt kế tiếp (bản cũ: không phát, tab Notes không đổi). Tải lại cuộc họp giữa lúc task chạy (không có request chờ) như cũ. Giữ như cũ: nhịp 1000/3000 ms, thử lại 3000 ms, `transcriptionRequestInFlight` giữ `true` tới khi đọc lại cuộc họp xong, `asr:meeting-context` cho `notes.js` giữ hình dạng và thời điểm sau mỗi lần vẽ task.
 
@@ -588,7 +588,7 @@ Nguồn: `git show ee95686:src/asr_en_vi/web/history.js`; issue #118, #132.
 - Lát `transcript` cùng store với `history` và `task` (`combine({history, task, transcript})`). Câu trả lời của lần ghi là **một** action, `transcript/mutation-succeeded`, do cả hai lát xử lý: `history-core` đặt giá trị vào cuộc họp mới tạo (`applyFieldAnswer`, `applySpeakerAdded`, xuất ra để lát transcript tính cùng kết quả), không sửa tại chỗ. `transcript/reload-loaded` cũng vậy. View đóng dấu `shown` thêm `meeting`, `view`, `installRev`, và đổi `installRev` thành `transcript/meeting-installed`, `legacy.rev` (đổi cuộc họp) thành `transcript/meeting-switched`.
 - `history.js`: bỏ 12 trường khỏi `legacy` (còn `notesSourceSegmentId` của 4d), bỏ `reportMeeting`, `history/meeting-updated`, mọi hàm lưu/mở/đóng trình sửa/tải lại/đối chiếu bản nháp; còn lại hàm dựng DOM, `runTranscriptOp` (chạy `ops`), `moveTranscriptFocus`, `paintTranscript`, `mutationFacts` và các handler chỉ dispatch. Sao chép bản nháp là effect `call transcript.copy`. `history-core.js` thêm `answerOf`, `applyFieldAnswer`, `applySpeakerAdded`, `isRecord` (core transcript dùng chung) và hai case dùng chung; cuộc họp nhận câu trả lời mang khóa nguồn notes như đã báo (như `takeTask`).
 - Route `/assets/transcript-core.js` có bảo vệ truy cập; thêm vào hai test asset. Gate `shell-view.test.mjs`: `transcript-core.js` vào CORES.
-- Bảng trạng thái và chuyển trạng thái: `frontend-design-v1.md` mục 11.10, kể cả lỗi, xung đột và response cũ. ADR 0010 thêm một ý về lệnh vẽ là dữ liệu. Không thêm loại effect.
+- Bảng trạng thái và chuyển trạng thái: `frontend-design.md` mục 11.10, kể cả lỗi, xung đột và response cũ. ADR 0010 thêm một ý về lệnh vẽ là dữ liệu. Không thêm loại effect.
 
 Khác biệt hành vi so với bản cũ (đều nhỏ; đã đối chiếu từng ý với `git show ee95686`): cuộc họp nhận giá trị đã lưu là object mới, không phải object sửa tại chỗ (bản cũ: `item.text = serverValue` trong `applyTranscriptMutationResult`), nên `notes.js` nhận object cuộc họp mới trong `asr:meeting-context` sau lần lưu (khóa nguồn notes giữ như đã báo; thêm người nói vẫn không báo `notes.js`, như cũ); dòng trạng thái chung chỉ được ghi khi chữ đổi (bản cũ ghi lại cùng chữ "Đang lưu…" ở mỗi lần đồng bộ điều khiển); nút "Thêm vào transcript hiện tại" cho một bản nháp đã mất không làm gì (bản cũ: `TypeError` ở `draft.value`, không bắt); ô tên người nói mới được core theo dõi bằng sự kiện `input` (bản cũ so với DOM lúc có kết quả): khác chỉ khi giá trị ô đổi mà không có sự kiện `input`; chữ báo kết quả sao chép ghi vào bản duyệt khớp generation, trường và mục (bản cũ: bản duyệt của nút bấm), khác chỉ khi hai bản duyệt cùng một bản nháp hiện cùng lúc (không xảy ra: bản duyệt trong bảng khôi phục chỉ có cho generation khác generation đang xem); việc chuyển nút tải lại giữa khối lỗi và trình sửa chạy khi đổi trạng thái mở/đóng, kể cả khi hàng không có trong DOM (bản cũ: bỏ qua nếu hàng không có); sau khi cài cuộc họp, phần transcript vẽ ở lượt dispatch kế tiếp (cùng đồng bộ), sau khi bản nháp được đối chiếu (bản cũ: đối chiếu rồi vẽ trong cùng lượt); bấm Lưu liên tiếp khi đang bận, trả lời cũ sau khi đổi cuộc họp và đổi generation hoạt động như cũ (đã kiểm bằng test Playwright hiện có). Các khác biệt còn lại, đều đã đối chiếu với `git show ee95686`:
 
@@ -661,7 +661,7 @@ Nguồn: `git show ded1ced:src/asr_en_vi/web/history.js`; issue #118, #134.
 - `history-core.js`: trường `legacy {rev, kind}` đổi tên thành `left`; view vẫn đổi bộ đếm đó thành `task/meeting-left`, `transcript/meeting-switched` và thêm `playback/meeting-left`.
 - `history.js`: bỏ `legacy`, `memo`, `noticeWritten`, 3 biến `let` của phần phát lại, `waitForAudioMetadata`, `applyNotesSourceMark`, `followsPlayback`. Trạng thái đã vẽ nằm trong closure của subscriber; số của dòng trạng thái chung nằm ở `data-notice-rev` của chính phần tử. `transcriptionRequestInFlight` giữ nguyên tên (`notes.js` đọc), viết thành khóa có nháy; quy tắc "bộ đếm hoặc cờ yêu cầu" của gate view nay chỉ quét mã ngoài chuỗi. `history.js` vào `VIEWS` của gate (bỏ `PARTIAL`), `playback-core.js` vào `CORES`.
 - Route `/assets/playback-core.js` có bảo vệ truy cập; thêm vào hai test asset.
-- Bảng trạng thái và chuyển trạng thái: `frontend-design-v1.md` mục 11.11, kể cả lỗi và response cũ. Không thêm loại effect.
+- Bảng trạng thái và chuyển trạng thái: `frontend-design.md` mục 11.11, kể cả lỗi và response cũ. Không thêm loại effect.
 
 Khác biệt hành vi so với bản cũ (đã đối chiếu từng ý với `git show ded1ced`):
 
@@ -724,7 +724,7 @@ Nguồn: `git show 4e29c59`; issue #118, #135.
 
 #### Thay đổi thiết kế
 
-- `channel.js` (mới, 16 dòng): hai store dựng bằng `createStore`, `meetingContext` (action `channel/meeting-context {detail}`, state là `detail` cuối) và `providerChoice` (action `channel/provider-choice-changed`, state là bộ đếm). `history.js` dispatch lên `meetingContext` với một `detail` mới mỗi lần (cùng điểm báo, cùng trường, kể cả khóa có nháy `"transcriptionRequestInFlight"`); `notes.js` đăng ký, đổi thành `notes/context`, và vẫn đọc `currentContext()` đúng chỗ cũ (sau khi đăng ký). Subscriber chạy đồng bộ trong `dispatch`, theo thứ tự báo. Chi tiết: `frontend-design-v1.md` 11.12, ADR 0010.
+- `channel.js` (mới, 16 dòng): hai store dựng bằng `createStore`, `meetingContext` (action `channel/meeting-context {detail}`, state là `detail` cuối) và `providerChoice` (action `channel/provider-choice-changed`, state là bộ đếm). `history.js` dispatch lên `meetingContext` với một `detail` mới mỗi lần (cùng điểm báo, cùng trường, kể cả khóa có nháy `"transcriptionRequestInFlight"`); `notes.js` đăng ký, đổi thành `notes/context`, và vẫn đọc `currentContext()` đúng chỗ cũ (sau khi đăng ký). Subscriber chạy đồng bộ trong `dispatch`, theo thứ tự báo. Chi tiết: `frontend-design.md` 11.12, ADR 0010.
 - Lệnh `notes.js` → `history.js`: `window.ASRMeetingHistory = Object.freeze({…})` thành `export const meetingHistory = Object.freeze({…})` (cùng hàm, cùng giá trị trả về); `notes.js` import nó, bỏ `meetingHistory()`, `toHistory` và mọi nhánh `Boolean(meetingHistory()) &&` (`history.js` luôn chạy trước).
 - Bỏ loại effect `event` và tham số `emit` của runner (còn tám loại). `provider-core.js` phát `call provider.choice-changed` đúng chỗ cũ (cùng số lần); `connections.js` nối nó vào `providerChoice.dispatch`.
 - `shell.js`: bỏ `Object.assign(window, …)`, `ApiError`, `requestJson`; export `tr`, `setProp`, `setAttr`, `formatMeetingDate`, `sameOriginAudioSource`, `meetingIdFromPath` và `history.js`, `notes.js`, `connections.js`, `antigravity.js` import chúng; còn 1 bản `tr`, `setProp`, `setAttr` (trước: 4, 4, 3). `tr` của shell xử lý thêm `fmt: "timestamp"` (bản của `connections.js`), gộp thành một; bản của `notes.js` và `history.js` là phần chung, nên không khác quan sát được. Không có global ngầm nào khác: mọi tên được dùng mà không khai báo trong file là `t`/`UI_LOCALE` (i18n) hoặc API trình duyệt (kiểm bằng phân tích tên chưa khai báo từng file).
@@ -800,7 +800,7 @@ Mục tiêu: đưa `src/asr_studio/web/` từ JS dùng global và state sửa t�
 | 4d | #134 / PR #136 | `playback-core.js`: phát lại, tua nguồn notes |
 | 5 | #135 | `channel.js`; bỏ global, `CustomEvent`, effect `event`; `access.js` thành module qua quy tắc view; gate quét mọi file; xóa code chết |
 
-Bảng state và chuyển trạng thái của từng core nằm ở `frontend-design-v1.md` 11.5 đến 11.12; chi tiết, số đo và khác biệt hành vi từng pha ở các mục #119 đến #135 phía trên.
+Bảng state và chuyển trạng thái của từng core nằm ở `frontend-design.md` 11.5 đến 11.12; chi tiết, số đo và khác biệt hành vi từng pha ở các mục #119 đến #135 phía trên.
 
 Gate trong CI (`tests/web/shell-view.test.mjs`, chạy trong `scripts/check.sh`): mọi `web/*.js` thuộc đúng một trong view, core, ngoại lệ; view không gán state hay giữ `let`/`var`/object cấp module; core không chạm DOM, mạng, timer, storage, đồng hồ, ngẫu nhiên; không file nào gán `window`/`globalThis`, dùng `CustomEvent` hay sự kiện `ns:tên`; trang không có script nội tuyến; ngoại lệ (`i18n.js`, `theme.js`, `store.js`) chỉ khai báo tên trong danh sách cho phép.
 
@@ -892,8 +892,8 @@ Hiệu năng; Kiến trúc
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` — giao thức upload theo phần byte.
-- `docs/frontend-design-v1.md` — state và retry của shell upload.
+- `docs/backend-contract.md` — giao thức upload theo phần byte.
+- `docs/frontend-design.md` — state và retry của shell upload.
 - `docs/user-guide.md` — flow upload và giới hạn bộ nhớ khi extract video.
 
 ### #117 / PR #142 — tách audio khỏi video ngay trên trình duyệt trước khi upload
@@ -914,7 +914,7 @@ Nguồn: lệnh tạo mẫu bên dưới; Cloudflare 413 sau khoảng 3 MB với
 - Thư viện vendor nguyên bản (MPL-2.0, mức file) ở `web/vendor/mediabunny/` cùng `LICENSE` và `PROVENANCE.md` (tarball npm, tích hợp sha512, sha256 của file); `release-inventory.py` ghi mục `web_vendor` như `fonts`, `collect-release-notices.py` đếm nó. CSP không đổi: không CDN, không WASM, không `wasm-unsafe-eval`; lý do loại ffmpeg.wasm nêu trong issue.
 - `store.js` thêm effect `extract` (`deps.extract(file, {signal, onProgress})`, cùng quy tắc latest-wins/cancel như `upload`); thiếu `deps.extract` thì trả lỗi `unsupported`.
 - `shell-core.js` thêm `phase` `extracting`, `sendFile`, `notice`. Sau khi dọn upload cũ, file video đi qua `extracting`; kết quả (audio hoặc file gốc khi lỗi) quyết định tên và `size_bytes` gửi ở `POST /api/uploads` và nội dung PUT. Hủy được cả ở bước tách (không có slot nên không DELETE). Khi sửa này `cancelUpload` giữ các effect `cancel` ngay cả khi chưa có `uploadId`.
-- API server không đổi; server vẫn chuyển mọi đầu vào thành M4A/AAC. Bảng chuyển trạng thái ở `frontend-design-v1.md` 11.5.
+- API server không đổi; server vẫn chuyển mọi đầu vào thành M4A/AAC. Bảng chuyển trạng thái ở `frontend-design.md` 11.5.
 
 #### Số đo trước và sau
 
@@ -962,11 +962,11 @@ Hiệu năng; Kiến trúc; Quyền riêng tư
 
 ## 4. Mốc AC-13 (#16 → #99 → #104)
 
-Đã chuyển bảng mốc và điều kiện đo vào [báo cáo nghiệm thu](acceptance-report-v1.md).
+Đã chuyển bảng mốc và điều kiện đo vào [báo cáo nghiệm thu](acceptance-report.md).
 
 ## 5. Đang làm / tiếp theo
 
-Các kết quả chưa đạt và follow-up nằm trong [release notes](release/notes-v1.md).
+Các kết quả chưa đạt và follow-up nằm trong [release notes](release/notes.md).
 
 ### #83 — Tiến độ và trạng thái task phản ánh đúng giai đoạn
 
@@ -1154,9 +1154,9 @@ Upload, media validation, recovery, privacy
 
 #### Tài liệu đích
 
-- `docs/backend-contract-v1.md` — upload state machine, duration contract, cleanup và date range.
-- `docs/frontend-design-v1.md` — validation recovery state/effects và UI transitions.
-- `docs/architecture-changes-v1.md` — mục này.
+- `docs/backend-contract.md` — upload state machine, duration contract, cleanup và date range.
+- `docs/frontend-design.md` — validation recovery state/effects và UI transitions.
+- `docs/architecture-changes.md` — mục này.
 
 ## 6. Mẫu mục mới
 
@@ -1259,7 +1259,7 @@ Kiến trúc
 
 #### Tài liệu đích
 
-- `docs/architecture-changes-v1.md` — mục này.
+- `docs/architecture-changes.md` — mục này.
 
 ### #86 — Đồng bộ dữ liệu cuộc họp và phản hồi theo trạng thái
 
@@ -1273,7 +1273,7 @@ HTTP 401 với payload middleware `{detail: "Authentication required"}` dừng p
 
 #### Kiểm chứng và đánh đổi
 
-Kiểm thử hai tab giữ bản nháp của tab nhận khi tab phát lưu rồi chuyển cuộc họp; một thông báo được phát, không echo. Các regression reducer kiểm tra workspace/provider 401, mutation bị từ chối và lý do khóa. `docs/frontend-design-v1.md` ghi đúng rail 236 px/208 px. BroadcastChannel không thay thế kiểm tra version ở server và không cung cấp đồng bộ giữa thiết bị.
+Kiểm thử hai tab giữ bản nháp của tab nhận khi tab phát lưu rồi chuyển cuộc họp; một thông báo được phát, không echo. Các regression reducer kiểm tra workspace/provider 401, mutation bị từ chối và lý do khóa. `docs/frontend-design.md` ghi đúng rail 236 px/208 px. BroadcastChannel không thay thế kiểm tra version ở server và không cung cấp đồng bộ giữa thiết bị.
 
 Nguồn: Issue #86; `tests/test_browser_history.py`, `tests/web/channel.test.mjs`, `tests/web/history-core.test.mjs`, `tests/web/notes-core.test.mjs`, `tests/web/task-core.test.mjs`, `tests/web/transcript-core.test.mjs`.
 
@@ -1306,4 +1306,4 @@ Nguồn: `tests/test_media.py`, `tests/test_browser_layout_details.py`; fixture 
 
 MP3/raw AAC không dùng duration ước lượng để phát hiện phần thiếu; decode có giới hạn vẫn bảo vệ policy thời lượng. Loại phương án nới dung sai toàn bộ vì sẽ làm yếu kiểm tra M4A bị cắt. Scroll padding giữ nguyên cách cuộn/sidebar thay vì che bớt nội dung hoặc đổi thứ tự keyboard. Không có follow-up bắt buộc.
 
-Issue #85, #86. Tag: kiến trúc, accessibility. Tài liệu đích: `docs/backend-contract-v1.md`, `docs/frontend-design-v1.md`.
+Issue #85, #86. Tag: kiến trúc, accessibility. Tài liệu đích: `docs/backend-contract.md`, `docs/frontend-design.md`.

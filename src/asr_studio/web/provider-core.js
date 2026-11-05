@@ -1,6 +1,6 @@
 // Pure core of the provider connections (ChatGPT and Google Antigravity): state, one reducer for every
 // provider, selectors. No DOM, network, timer, storage or clock: node --test loads this file directly.
-// Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design-v1.md §11.6.
+// Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design.md §11.6.
 //
 // A provider is a plain-data descriptor (endpoints, login kind, poll delays, effort support, storage
 // key, copy). The flows (load, login, poll, cancel, save, verify, disconnect) are written once;

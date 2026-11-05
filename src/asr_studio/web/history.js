@@ -4,7 +4,7 @@
 // The navigation and library state lives in history-core.js, the task state in task-core.js, the transcript state in
 // transcript-core.js and the playback state in playback-core.js, all in one store; this file renders them and
 // dispatches actions.
-// Contract: docs/adr/0010-frontend-reducer-core.md; state tables: docs/frontend-design-v1.md §11.8 to §11.11.
+// Contract: docs/adr/0010-frontend-reducer-core.md; state tables: docs/frontend-design.md §11.8 to §11.11.
 // Announces the open meeting on the channel (channel.js) and offers notes.js its commands (meetingHistory).
 import { combine, createRunner, createStore } from "./store.js";
 import { asrSettings, meetingChanges, meetingContext } from "./channel.js";

@@ -1,6 +1,6 @@
 // Pure core of the notes tab: state, reducer, selectors and the pure helpers the old notes.js held.
 // No DOM, fetch, timer, storage, clock, randomness or location: node --test loads this file directly.
-// Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design-v1.md §11.7.
+// Contract: docs/adr/0010-frontend-reducer-core.md; state table: docs/frontend-design.md §11.7.
 //
 // User-visible text is data: t(text, params) here only keeps the Vietnamese source string, and the view
 // translates it with the real t(). The name matches the call sites in the other scripts so the i18n

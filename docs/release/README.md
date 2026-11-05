@@ -23,7 +23,7 @@ The process defines these conditions.
 | Notes recovery and quality | [Notes](notes-v0.1.0.md) |
 | Telemetry and logs | [Privacy](privacy-v0.1.0.md) |
 | Media libraries and diagnostics | [Runtime](runtime-v0.1.0.md) |
-| Former release draft | [Draft status](notes-v1.md) |
+| Former release draft | [Draft status](notes.md) |
 
 The [archive](archive/README.md) preserves the original Vietnamese reports and their measurement conditions.
 These reports do not certify a later image.
@@ -34,4 +34,4 @@ The [amd64 inventory](runtime-inventory-amd64.json) describes its recorded artif
 - [User guide](../user-guide.md): installation, access, providers, and diagnostics.
 - [Third-party notices](../../third_party/README.md): licenses, source bundles, and image checks.
 - [Development checks](../agents/development.md): local checks and CI commands.
-- [Acceptance report](../acceptance-report-v1.md): historical product acceptance results.
+- [Acceptance report](../acceptance-report.md): historical product acceptance results.

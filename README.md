@@ -174,8 +174,8 @@ Release process documents use English. Most design and historical documents use 
 | Operations: configuration, models, notes providers, tokens, CI/CD | [User guide](docs/user-guide.md) |
 | Releases: process, checks, notes, and evidence | [Release guide](docs/release/README.md) · [Published releases](https://github.com/nguyencanhtrung/asr-studio/releases) |
 | Product context and vocabulary | [PRODUCT.md](PRODUCT.md) · [CONTEXT.md](CONTEXT.md) |
-| Specification | [Specification v1](docs/specification-v1.md) |
-| Design | [Design system](DESIGN.md) · [Frontend](docs/frontend-design-v1.md) · [Backend](docs/backend-design-v1.md) · [Backend contract](docs/backend-contract-v1.md) |
+| Specification | [Specification v1](docs/specification.md) |
+| Design | [Design system](DESIGN.md) · [Frontend](docs/frontend-design.md) · [Backend](docs/backend-design.md) · [Backend contract](docs/backend-contract.md) |
 | Architecture decisions | [ADRs](docs/adr/) |
 | Contributing | [Coding standards](CODING_STANDARDS.md) · [Agent guide](AGENTS.md) · [Development checks](docs/agents/development.md) |
 

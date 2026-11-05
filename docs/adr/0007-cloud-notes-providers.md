@@ -14,4 +14,4 @@ Hai lựa chọn dùng chung quy tắc khóa nguồn, kiểm tra đầu ra và l
 
 Q16 chọn thử direct Sign in with ChatGPT → Responses API cho ChatGPT, còn Antigravity qua OMP RPC. Ứng dụng tự quản OAuth/refresh cho ChatGPT để không cần thêm coding-agent runtime ở nhánh này. Q22 chặn ngắt/đổi tài khoản provider đã chọn cho tác vụ đang hoạt động; phải hủy và chờ xác nhận dừng trước, provider không thuộc tác vụ vẫn ngắt được.
 
-Callback Docker, refresh/revoke, hủy auth và giới hạn thời gian tiếp tục được làm rõ trong [backend design v1](../backend-design-v1.md); chưa có đăng nhập hay inference được kiểm thử. Xem [khảo sát harness](../harness-notes-v1.md) và [subscription](../subscription-notes-options-v1.md) để phân biệt khả năng kỹ thuật với quyền lợi tài khoản.
+Callback Docker, refresh/revoke, hủy auth và giới hạn thời gian tiếp tục được làm rõ trong [backend design v1](../backend-design.md); chưa có đăng nhập hay inference được kiểm thử. Xem [khảo sát harness](../harness-notes.md) và [subscription](../subscription-notes-options.md) để phân biệt khả năng kỹ thuật với quyền lợi tài khoản.

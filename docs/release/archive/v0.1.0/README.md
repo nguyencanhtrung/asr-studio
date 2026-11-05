@@ -70,7 +70,7 @@ trước khi công bố. Kiểm tra chuỗi không chứng minh mọi dạng bí
 
 Bản local `0.1.0` đã build và qua smoke torchcodec, media, healthz. OpenMP mới
 nạp được và CTranslate2 báo compute types CPU. Chưa có phép đo chất lượng/hiệu
-năng mới; giữ nguyên fail/partial trong [báo cáo lịch sử](../../../acceptance-report-v1.md).
+năng mới; giữ nguyên fail/partial trong [báo cáo lịch sử](../../../acceptance-report.md).
 
 Còn phải xác nhận toàn bộ kiểm thử/review, image arm64, digest công bố, pull ẩn
 danh, hai đường cài từ artifact công bố và đăng nhập provider bằng tài khoản

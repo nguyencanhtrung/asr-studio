@@ -1,8 +1,8 @@
 # Backend design v1 — ASR Studio
 
-Trạng thái: **đã thống nhất các quyết định thiết kế Q1–Q27**, ngày 2026-10-16. Không còn câu hỏi sản phẩm đang chờ trong phiên thiết kế này; các việc còn lại ở mục 5 là triển khai và kiểm chứng. Tài liệu này cụ thể hóa [specification v1](specification-v1.md) và [frontend design v1](frontend-design-v1.md), chưa xác nhận backend hoặc model đã được triển khai, chạy thử hay nghiệm thu.
+Trạng thái: **đã thống nhất các quyết định thiết kế Q1–Q27**, ngày 2026-10-16. Không còn câu hỏi sản phẩm đang chờ trong phiên thiết kế này; các việc còn lại ở mục 5 là triển khai và kiểm chứng. Tài liệu này cụ thể hóa [specification v1](specification.md) và [frontend design v1](frontend-design.md), chưa xác nhận backend hoặc model đã được triển khai, chạy thử hay nghiệm thu.
 
-[Backend contract v1](backend-contract-v1.md) cụ thể hóa ranh giới module, schema, API, ownership/hủy/phục hồi và các tình huống cạnh tranh theo Q1–Q27. Các tên bảng/endpoint và thông số vận hành là thiết kế kỹ thuật trước triển khai; kết quả kiểm chứng có thể yêu cầu điều chỉnh mà vẫn giữ các hành vi đã thống nhất.
+[Backend contract v1](backend-contract.md) cụ thể hóa ranh giới module, schema, API, ownership/hủy/phục hồi và các tình huống cạnh tranh theo Q1–Q27. Các tên bảng/endpoint và thông số vận hành là thiết kế kỹ thuật trước triển khai; kết quả kiểm chứng có thể yêu cầu điều chỉnh mà vẫn giữ các hành vi đã thống nhất.
 
 ## 1. Tổ chức backend và lưu trữ
 
@@ -53,7 +53,7 @@ Lý do lựa chọn được ghi tại [ADR 0004](adr/0004-app-worker-sqlite.md)
 - Từ chối xóa cuộc họp có tác vụ đang hoạt động. Người dùng hủy, chờ backend xác nhận đã dừng rồi mới xóa.
 - Cuộc họp khác vẫn có thể xóa theo spec.
 - Kiểm tra điều kiện xóa phải được thực thi ở backend và phối hợp với việc nhận tác vụ để tránh một tác vụ mới bắt đầu giữa lúc kiểm tra và xóa.
-- Xóa dữ liệu do ứng dụng quản lý, giữ nguyên file nguồn bên ngoài. Dùng trạng thái xóa lưu bền để tiếp tục dọn file sau restart theo [backend contract](backend-contract-v1.md); cần kiểm chứng lỗi giữa chừng.
+- Xóa dữ liệu do ứng dụng quản lý, giữ nguyên file nguồn bên ngoài. Dùng trạng thái xóa lưu bền để tiếp tục dọn file sau restart theo [backend contract](backend-contract.md); cần kiểm chứng lỗi giữa chừng.
 
 ## 4. Nội dung notes
 
@@ -81,7 +81,7 @@ Lý do lựa chọn được ghi tại [ADR 0005](adr/0005-markdown-notes.md).
 | Truy cập | Token/cookie theo ADR 0002; API và ranh giới quyền trong contract | Kiểm chứng bootstrap/cookie, đổi token, CSRF và quyền đọc audio/snapshot/export |
 | Nghiệm thu | Các AC trong spec vẫn áp dụng | Bộ mẫu, kiểm thử failure/restart và báo cáo hiệu năng/chất lượng |
 
-Người dùng đã chốt bộ thử nghiệm tại Q7 rồi điều chỉnh phần tạo notes tại Q12 trong [khảo sát model](model-candidates-v1.md). Theo [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), default phần cứng hiện là Qwen3-ASR-1.7B trên GPU và Whisper small trên CPU; cấu hình này không tự khẳng định các mục tiêu nghiệm thu chất lượng/hiệu năng. Không suy ra mục tiêu xử lý bản ghi hai giờ trong 30 phút đã đạt từ tài liệu model hoặc từ thiết kế này.
+Người dùng đã chốt bộ thử nghiệm tại Q7 rồi điều chỉnh phần tạo notes tại Q12 trong [khảo sát model](model-candidates.md). Theo [issue #168](https://github.com/nguyencanhtrung/asr-studio/issues/168), default phần cứng hiện là Qwen3-ASR-1.7B trên GPU và Whisper small trên CPU; cấu hình này không tự khẳng định các mục tiêu nghiệm thu chất lượng/hiệu năng. Không suy ra mục tiêu xử lý bản ghi hai giờ trong 30 phút đã đạt từ tài liệu model hoặc từ thiết kế này.
 
 ## 6. Vòng 2 — các quyết định đã chốt
 
@@ -105,7 +105,7 @@ Người dùng đồng ý các đề xuất Q7–Q11. Với Q7, phạm vi đồn
 - Đăng nhập provider khác token/cookie truy cập ứng dụng localhost. Không thay yêu cầu token ở ADR 0002, cũng không áp quy tắc token local không hết hạn cho OAuth của provider.
 - Quyết định giữ OMP + Antigravity được đưa ra sau khi đã thông báo ràng buộc của Google: điều khoản hiện hành cấm truy cập bằng phần mềm bên thứ ba và nêu khả năng đình chỉ Antigravity/Gemini CLI. Đây là lựa chọn tích hợp của dự án, không phải xác nhận được Google hỗ trợ. [Điều khoản, mục 6](https://www.antigravity.google/terms)
 
-Lý do và hệ quả được ghi tại [ADR 0007](adr/0007-cloud-notes-providers.md). [Khảo sát subscription](subscription-notes-options-v1.md) phân biệt quyền dùng gói với API tính phí riêng; [khảo sát harness](harness-notes-v1.md) ghi bằng chứng từ OMP/Pi đã cài. Chưa thực hiện đăng nhập, truyền dữ liệu cuộc họp hoặc chạy thử model.
+Lý do và hệ quả được ghi tại [ADR 0007](adr/0007-cloud-notes-providers.md). [Khảo sát subscription](subscription-notes-options.md) phân biệt quyền dùng gói với API tính phí riêng; [khảo sát harness](harness-notes.md) ghi bằng chứng từ OMP/Pi đã cài. Chưa thực hiện đăng nhập, truyền dữ liệu cuộc họp hoặc chạy thử model.
 
 ### 7.1. Hướng adapter — đã chọn để thử, chưa kiểm chứng
 
@@ -144,7 +144,7 @@ Người dùng đồng ý toàn bộ Q16–Q22. Các hành vi đã được đư
 | Q21 — Chọn thế hệ transcript và tên người nói sau chạy lại | Chạy lại có thế hệ transcript mới nhưng speaker ID không bảo đảm cùng nghĩa với lần trước | Khi transcript mới đã lưu đầy đủ, mặc định mở thế hệ mới; các thế hệ cũ xem lại ở chế độ chỉ đọc, notes cũ vẫn sửa/copy/xuất được. Thế hệ mới bắt đầu bằng nhãn Speaker, người dùng đặt tên lại; không tự ghép tên giữa hai lần xử lý. Nếu chạy lại chưa có transcript hoàn tất, giữ thế hệ đang có làm mặc định |
 | Q22 — Ngắt kết nối provider trong lúc xử lý | Có tác vụ đang hoạt động đã chọn tài khoản/provider đó cho bước notes, kể cả chưa tới bước gọi model | Từ chối ngắt/đổi tài khoản của provider đó; hướng dẫn hủy tác vụ và chờ backend xác nhận dừng rồi ngắt. Provider không thuộc tác vụ vẫn có thể ngắt; dữ liệu cuộc họp và các bản notes giữ nguyên |
 
-Bằng chứng cho Q16 ở [khảo sát harness](harness-notes-v1.md): direct SIWC hỗ trợ đăng ký động cho ứng dụng local và callback `127.0.0.1`; Codex app-server là phương án khác có giao thức auth dành cho UI. Với v1 chỉ localhost, chưa có nhu cầu đưa đăng nhập từ browser trên máy LAN khác vào quyết định này.
+Bằng chứng cho Q16 ở [khảo sát harness](harness-notes.md): direct SIWC hỗ trợ đăng ký động cho ứng dụng local và callback `127.0.0.1`; Codex app-server là phương án khác có giao thức auth dành cho UI. Với v1 chỉ localhost, chưa có nhu cầu đưa đăng nhập từ browser trên máy LAN khác vào quyết định này.
 
 Q17–Q18 chỉ kiểm soát cấu trúc, nguồn tham chiếu và việc bao phủ đầu vào, không bảo đảm model giữ đủ ý hoặc diễn giải đúng. Cần đánh giá riêng các quyết định bị thay đổi ở cuối cuộc họp, action item qua ranh giới chunk và lỗi ghép người nói trên bộ mẫu.
 
@@ -162,11 +162,11 @@ Người dùng đồng ý toàn bộ đề xuất Q23–Q27. Các quyết địn
 | Q26 — Liên kết nguồn do người dùng sửa bị hỏng | Markdown chỉnh tay chứa ID không tồn tại hoặc không thuộc nguồn của bản notes | Vẫn cho lưu và giữ nguyên văn bản; cảnh báo, vô hiệu thao tác mở nguồn ở liên kết không hợp lệ. Không tự sửa ID hoặc dẫn sang nguồn khác; không áp quyền sửa tự do này cho đầu ra model chưa qua Q18 |
 | Q27 — Chọn model trên UI | Một provider có nhiều model; người dùng muốn cân đối quota và chất lượng | Cho chọn provider + model trước mỗi lần chạy, nhớ lựa chọn gần nhất của từng provider và hiển thị rõ để đổi. Không đổi model giữa tác vụ hoặc khi model hết quota/không còn truy cập được. Danh sách lấy theo kết nối, model gợi ý và cấu hình phát hành chốt sau kiểm chứng; catalog không bảo đảm inference thành công |
 
-Phiên thiết kế đã thống nhất Q1–Q27. [Backend contract](backend-contract-v1.md) là bản tổng hợp kỹ thuật để triển khai; [spec](specification-v1.md) là chuẩn nghiệm thu. Không còn câu hỏi sản phẩm đang chờ trong phạm vi backend này. Việc chọn cấu hình phát hành, các ngưỡng vận hành và định dạng đầu vào phụ thuộc kiểm chứng bằng tài khoản/mẫu thật, không phải kết quả đã đạt. Chưa triển khai backend, đăng nhập, gửi dữ liệu họp hoặc benchmark trong phiên thiết kế.
+Phiên thiết kế đã thống nhất Q1–Q27. [Backend contract](backend-contract.md) là bản tổng hợp kỹ thuật để triển khai; [spec](specification.md) là chuẩn nghiệm thu. Không còn câu hỏi sản phẩm đang chờ trong phạm vi backend này. Việc chọn cấu hình phát hành, các ngưỡng vận hành và định dạng đầu vào phụ thuộc kiểm chứng bằng tài khoản/mẫu thật, không phải kết quả đã đạt. Chưa triển khai backend, đăng nhập, gửi dữ liệu họp hoặc benchmark trong phiên thiết kế.
 
 ## Hồ sơ thay đổi cho v0.1.0
 
 Xem [bằng chứng và đánh đổi theo tag](release/runtime-v0.1.0.md),
 [các thay đổi notes](release/notes-v0.1.0.md) và
-[chỉ mục thay đổi](architecture-changes-v1.md). Số đo lịch sử giữ nguyên điều kiện
+[chỉ mục thay đổi](architecture-changes.md). Số đo lịch sử giữ nguyên điều kiện
 và revision gốc; không phải phép đo lại artifact 0.1.0.
