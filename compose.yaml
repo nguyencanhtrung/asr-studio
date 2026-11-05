@@ -112,9 +112,10 @@ services:
       retries: 3
     stop_grace_period: 20s
 
-  # The only service with the network and a writable /models. It mounts neither data, auth nor
+  # The only service that downloads models and writes /models. It mounts neither data, auth nor
   # provider, so it sees no recording, transcript or credential; app asks it for a model through
-  # the small model-install volume (ADR 0012).
+  # the small model-install volume (ADR 0012). All services share the default Docker network, with
+  # internet access: HF_HUB_OFFLINE stops the model hub libraries, not the network.
   model-installer:
     image: ${ASR_IMAGE:-asr-studio:local}
     command: ["python", "-m", "asr_studio.model_installer"]
