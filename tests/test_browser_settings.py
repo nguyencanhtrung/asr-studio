@@ -34,8 +34,11 @@ VIETNAMESE = re.compile(r"[À-ỹ]")
 def start_worker(live, device):
     """A healthy worker on this device whose default model is prepared, as the server sees it."""
     data_dir = live.settings.data_dir
-    default_model = _prepare_browser_asr_model(data_dir.parent / "whisper-large-v3")
-    object.__setattr__(live.settings, "asr_gpu_model_path", default_model)
+    large = data_dir.parent / "whisper-large-v3"
+    small = data_dir.parent / "whisper-small"
+    object.__setattr__(live.settings, "asr_gpu_model_path", large)
+    object.__setattr__(live.settings, "asr_cpu_model_path", small)
+    default_model = _prepare_browser_asr_model(large if device == "cuda" else small)
     lock = acquire_worker_lock(data_dir)
     assert lock is not None
     write_runtime_profile(data_dir, RuntimeProfile(device, "float16", default_model))
@@ -257,10 +260,11 @@ def test_asr_section_shows_real_readiness_and_a_copyable_prepare_command(
     qwen = next(model for model in catalog if model["id"] == "qwen3-asr-1.7b")
 
     open_section(page, "ASR Model")
-    expect(asr_rows(page)).to_have_count(3)
+    expect(asr_rows(page)).to_have_count(4)
     names = [row.locator("strong").inner_text() for row in asr_rows(page).all()]
-    assert names == ["Whisper large-v3", "PhoWhisper-large", "Qwen3-ASR-1.7B"]
-    whisper, pho, qwen_row = asr_rows(page).all()
+    assert names == ["Whisper large-v3", "Whisper small", "PhoWhisper-large", "Qwen3-ASR-1.7B"]
+    whisper, small, pho, qwen_row = asr_rows(page).all()
+    expect(small.locator('.asr-badge[data-kind="default"]')).to_have_count(0)
     expect(page.locator("#asr-default")).to_contain_text("whisper-large-v3")
     expect(whisper.locator('.asr-badge[data-kind="default"]')).to_have_text("Mặc định")
     expect(pho.locator('.asr-badge[data-kind="default"]')).to_have_count(0)
@@ -290,8 +294,8 @@ def test_asr_copy_refused_selects_the_command_and_says_so(live, signed_in, gpu_w
     )
     page.goto(f"{live.url}/")
     open_section(page, "ASR Model")
-    expect(asr_rows(page)).to_have_count(3)
-    qwen_row = asr_rows(page).nth(2)
+    expect(asr_rows(page)).to_have_count(4)
+    qwen_row = asr_rows(page).nth(3)
     qwen_row.get_by_role("button", name="Sao chép").click()
     expect(qwen_row.locator(".asr-command-result")).to_have_text(
         "Không sao chép được. Lệnh đã được chọn; nhấn Ctrl+C."
@@ -324,8 +328,8 @@ def test_qwen_says_plainly_that_it_needs_a_gpu_when_the_worker_is_on_cpu(
     _context, page = signed_in(viewport={"width": 1280, "height": 900})
     page.goto(f"{live.url}/")
     open_section(page, "ASR Model")
-    expect(asr_rows(page)).to_have_count(3)
-    qwen = asr_rows(page).nth(2)
+    expect(asr_rows(page)).to_have_count(4)
+    qwen = asr_rows(page).nth(3)
     expect(qwen.locator('.asr-badge[data-kind="status"]')).to_have_text("Cần GPU NVIDIA")
     expect(qwen).to_contain_text("Model này chỉ chạy trên GPU NVIDIA, còn worker đang chạy CPU.")
     expect(qwen.locator("input")).to_have_count(0)
@@ -335,7 +339,7 @@ def test_asr_section_says_so_when_no_worker_can_report_readiness(live, signed_in
     _context, page = signed_in(viewport={"width": 1280, "height": 900})
     page.goto(f"{live.url}/")
     open_section(page, "ASR Model")
-    expect(asr_rows(page)).to_have_count(3)
+    expect(asr_rows(page)).to_have_count(4)
     expect(page.locator("#asr-status")).to_contain_text("Worker chép lời chưa sẵn sàng")
     expect(page.locator("#asr-default")).to_be_hidden()
     for row in asr_rows(page).all():
@@ -378,7 +382,7 @@ def test_phone_settings_open_from_the_top_bar_and_the_dialog_scrolls(
     open_section(page, "ASR Model")
     dialog = page.locator("#connections-dialog")
     expect(dialog).to_be_visible()
-    expect(asr_rows(page)).to_have_count(3)
+    expect(asr_rows(page)).to_have_count(4)
     assert overflow(page) <= 0
     body = page.locator(".connections-body")
     assert body.evaluate("element => element.scrollHeight > element.clientHeight")
@@ -408,8 +412,8 @@ def test_settings_is_complete_in_english(live, signed_in, gpu_worker):
         assert VIETNAMESE.findall(text) == [], text
     expect(page.locator("#settings-panel-about")).to_contain_text("Trung Nguyen")
     page.get_by_role("tab", name="ASR Model").click()
-    expect(asr_rows(page)).to_have_count(3)
-    expect(asr_rows(page).nth(2)).to_contain_text("Not prepared")
+    expect(asr_rows(page)).to_have_count(4)
+    expect(asr_rows(page).nth(3)).to_contain_text("Not prepared")
     expect(asr_rows(page).nth(0).locator('.asr-badge[data-kind="default"]')).to_have_text("Default")
     text = page.locator("#connections-dialog").inner_text()
     assert VIETNAMESE.findall(text) == [], text
@@ -736,7 +740,7 @@ def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_work
 
     # Both sections are longer than the column here, so a kept scroll would really show.
     page.get_by_role("tab", name="ASR Model").click()
-    expect(asr_rows(page)).to_have_count(3)
+    expect(asr_rows(page)).to_have_count(4)
     body.evaluate("element => { element.scrollTop = element.scrollHeight; }")
     assert body.evaluate("element => element.scrollTop") > 0
     page.get_by_role("tab", name="AI provider").click()
@@ -754,7 +758,7 @@ def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_work
         assert overflow(page) <= 0, name
     # The prepare command takes the full width with Copy under it, styled like other buttons.
     page.get_by_role("tab", name="ASR Model").click()
-    qwen = asr_rows(page).nth(2)
+    qwen = asr_rows(page).nth(3)
     command, copy = qwen.locator("textarea"), qwen.get_by_role("button", name="Sao chép")
     assert command.evaluate(
         "e => e.scrollHeight <= e.clientHeight && e.scrollWidth <= e.clientWidth"

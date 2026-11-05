@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 DEFAULT_PUBLIC_URL = "http://127.0.0.1:8765"
 DEFAULT_PROVIDER_DIR = Path("/var/lib/asr-studio/provider")
+DEFAULT_INSTALL_DIR = Path("/var/lib/asr-studio/install")
 CHATGPT_CALLBACK_PATH = "/auth/chatgpt/callback"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
 DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024**3
@@ -116,6 +117,7 @@ class Settings:
     asr_cpu_compute_type: str = "int8"
     diarization_model_path: Path = DEFAULT_DIARIZATION_MODEL_PATH
     provider_dir: Path | None = None
+    install_dir: Path | None = None
     chatgpt_callback_url: str | None = None
 
     def __post_init__(self) -> None:
@@ -125,6 +127,11 @@ class Settings:
         if provider_dir is None:
             provider_dir = Path(self.data_dir).parent / "provider"
         object.__setattr__(self, "provider_dir", Path(provider_dir))
+        object.__setattr__(
+            self,
+            "install_dir",
+            Path(self.install_dir or Path(self.data_dir).parent / "install"),
+        )
         if self.asr_model_path is not None:
             object.__setattr__(self, "asr_model_path", Path(self.asr_model_path))
         object.__setattr__(self, "asr_gpu_model_path", Path(self.asr_gpu_model_path))
@@ -171,6 +178,7 @@ class Settings:
             data_dir=Path(os.environ.get("ASR_DATA_DIR", "/var/lib/asr-studio/data")),
             auth_dir=Path(os.environ.get("ASR_AUTH_DIR", "/var/lib/asr-studio/auth")),
             provider_dir=Path(os.environ.get("ASR_PROVIDER_DIR", str(DEFAULT_PROVIDER_DIR))),
+            install_dir=Path(os.environ.get("ASR_INSTALL_DIR", str(DEFAULT_INSTALL_DIR))),
             public_url=os.environ.get("ASR_PUBLIC_URL", DEFAULT_PUBLIC_URL),
             chatgpt_callback_url=os.environ.get("ASR_CHATGPT_CALLBACK_URL") or None,
             cookie_secure=_bool_from_env("ASR_COOKIE_SECURE", False),

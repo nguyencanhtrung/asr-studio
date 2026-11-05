@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 from collections.abc import AsyncIterator
 from html import escape as escape_html
 from pathlib import Path
@@ -16,12 +17,20 @@ from starlette.requests import ClientDisconnect
 
 from asr_studio import __version__
 from asr_studio.antigravity import AntigravityError, AntigravityProvider
-from asr_studio.asr_models import AUTO, model_choices, resolve_run, selectable_models
+from asr_studio.asr_models import (
+    AUTO,
+    CATALOG,
+    model_choices,
+    model_path,
+    resolve_run,
+    selectable_models,
+)
 from asr_studio.auth import AuthStateError, create_session_cookie, token_matches
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
 from asr_studio.config import Settings
 from asr_studio.media import ALLOWED_EXTENSIONS, OUTPUT_BITRATE, OUTPUT_CODEC
 from asr_studio.meeting_deletion import MeetingDeletionError, delete_meeting
+from asr_studio.model_install import InstallStore
 from asr_studio.notes import has_active_notes_task
 from asr_studio.notes_routes import install_notes_routes
 from asr_studio.recordings import (
@@ -381,10 +390,65 @@ def install_routes(
             return None
         return await run_in_threadpool(read_runtime_profile, settings.data_dir)
 
+    installs = InstallStore(settings.install_dir)
+
+    def free_bytes(asr_model: str) -> int | None:
+        try:
+            return shutil.disk_usage(Path(model_path(settings, asr_model)).parent).free
+        except OSError:
+            return None
+
+    def asr_models_view(profile) -> dict[str, Any]:
+        choices = model_choices(settings, profile)
+        for choice in choices:
+            if choice["id"] == AUTO:
+                continue
+            model = CATALOG[choice["id"]]
+            choice["install"] = installs.job(model.id)
+            choice["required_bytes"] = model.required_bytes
+            choice["free_bytes"] = free_bytes(model.id)
+        return {"asr_models": choices, "installer": installs.installer()}
+
     @app.get("/api/asr-models")
     async def list_asr_models() -> dict[str, Any]:
         profile = await healthy_runtime_profile()
-        return {"asr_models": await run_in_threadpool(model_choices, settings, profile)}
+        return await run_in_threadpool(asr_models_view, profile)
+
+    def refuse(status_code: int, code: str, message: str) -> HTTPException:
+        return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+    @app.post("/api/asr-models/{asr_model}/install", status_code=202)
+    async def install_asr_model(asr_model: str) -> dict[str, Any]:
+        # Only a catalog model that is missing on a machine that can run it is worth a download.
+        if asr_model not in CATALOG:
+            raise refuse(404, "unknown_model", "This model is not in the catalog.")
+        profile = await healthy_runtime_profile()
+        choice = next(
+            item
+            for item in await run_in_threadpool(model_choices, settings, profile)
+            if item["id"] == asr_model
+        )
+        if choice["ready"]:
+            raise refuse(409, "model_ready", "This model is already prepared.")
+        if choice["reason"] == "gpu_required":
+            raise refuse(409, "gpu_required", "This model needs an NVIDIA GPU.")
+        if choice["reason"] != "not_prepared":
+            raise refuse(409, "worker_unavailable", "The transcription worker is not ready.")
+        installer = installs.installer()
+        if not installer["available"]:
+            raise refuse(503, "installer_unavailable", "The model installer is not running.")
+        if not installer["models_writable"]:
+            raise refuse(409, "models_not_writable", "The installer cannot write the model folder.")
+        await run_in_threadpool(installs.request, asr_model)
+        return {"install": await run_in_threadpool(installs.job, asr_model)}
+
+    @app.delete("/api/asr-models/{asr_model}/install", status_code=202)
+    async def cancel_asr_model_install(asr_model: str) -> dict[str, Any]:
+        if asr_model not in CATALOG:
+            raise refuse(404, "unknown_model", "This model is not in the catalog.")
+        if not await run_in_threadpool(installs.cancel, asr_model):
+            raise refuse(409, "install_not_active", "No install is running for this model.")
+        return {"install": await run_in_threadpool(installs.job, asr_model)}
 
     @app.get("/api/providers")
     async def list_providers() -> dict[str, Any]:

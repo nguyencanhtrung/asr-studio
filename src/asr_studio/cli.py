@@ -9,7 +9,7 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -28,9 +28,10 @@ from asr_studio.diarization_runner import (
     prepared_diarization_directory,
     safe_diarization_error,
 )
+from asr_studio.model_install import InstallError
+from asr_studio.model_installer import download_model, install_model
 from asr_studio.runner import (
     ModelConfigurationError,
-    prepared_engine_directory,
     prepared_model_directory,
 )
 from asr_studio.runtime import (
@@ -140,7 +141,11 @@ def prepare_model(settings: Settings) -> int:
     try:
         from huggingface_hub import snapshot_download
 
-        snapshot_download(repo_id=repository, local_dir=profile.model_path)
+        # Both hardware defaults are in the catalog and stay on their pinned revisions.
+        revision = next(
+            (model.revision for model in CATALOG.values() if model.repository == repository), None
+        )
+        snapshot_download(repo_id=repository, revision=revision, local_dir=profile.model_path)
         prepared_model_directory(profile.model_path)
     except (OSError, RuntimeError, ValueError, ModelConfigurationError):
         print("model_preparation_failed: model_preparation", file=sys.stderr)
@@ -149,54 +154,23 @@ def prepare_model(settings: Settings) -> int:
     return 0
 
 
-def _convert_whisper_checkpoint(repository: str, path: Path) -> None:
-    """Publish a CTranslate2 conversion only once it is complete; never replace existing files."""
-    from ctranslate2.converters import TransformersConverter
-    from huggingface_hub import snapshot_download
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # ponytail: a run killed here leaves .prepare-* beside the model; the next run ignores it.
-    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".prepare-") as work:
-        source = Path(work) / "source"
-        output = Path(work) / "converted"
-        snapshot_download(repo_id=repository, local_dir=source)
-        TransformersConverter(
-            str(source),
-            copy_files=["tokenizer.json", "preprocessor_config.json"],
-            load_as_float16=True,
-        ).convert(str(output), quantization="float16")
-        output.replace(path)
-
-
 def prepare_asr_model(settings: Settings, asr_model: str) -> int:
     """Download one optional ASR model; no Recording is read and no worker needs to restart."""
     model = CATALOG[asr_model]
     path = Path(model_path(settings, asr_model)).expanduser().resolve()
-    try:
-        prepared_engine_directory(model.engine, path)
-        print("Local ASR model is ready.")
-        return 0
-    except ModelConfigurationError:
-        pass
-    # A conversion publishes by renaming into place, so it cannot use a directory with files.
-    if model.engine == "whisper_vi" and path.is_dir() and any(path.iterdir()):
-        print(
-            "model_preparation_failed: the model directory is not empty. "
-            "Move its files away and run this command again.",
-            file=sys.stderr,
-        )
-        return 1
     print("Preparing local ASR model...")
     try:
-        if model.engine == "whisper_vi":
-            _convert_whisper_checkpoint(model.repository, path)
+        install_model(model, path, install_id=uuid.uuid4().hex, fetch=download_model)
+    except InstallError as error:
+        # A conversion publishes by renaming into place, so it cannot use a directory with files.
+        if error.code == "target_not_empty":
+            print(
+                "model_preparation_failed: the model directory is not empty. "
+                "Move its files away and run this command again.",
+                file=sys.stderr,
+            )
         else:
-            from huggingface_hub import snapshot_download
-
-            snapshot_download(repo_id=model.repository, local_dir=path)
-        prepared_engine_directory(model.engine, path)
-    except (OSError, RuntimeError, ValueError, ModelConfigurationError):
-        print("model_preparation_failed: model_preparation", file=sys.stderr)
+            print(f"model_preparation_failed: {error.code}", file=sys.stderr)
         return 1
     print("Local ASR model is ready.")
     return 0

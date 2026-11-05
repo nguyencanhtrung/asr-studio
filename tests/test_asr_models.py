@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 from seeding import prepare_diarization_model, seed_meeting
 
-from asr_studio.asr_models import model_choices, prepare_command, resolve_run
+from asr_studio.asr_models import CATALOG, model_choices, prepare_command, resolve_run
 from asr_studio.config import Settings
-from asr_studio.runtime import RuntimeProfile
+from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
+from asr_studio.runtime import MODEL_REPOSITORIES, RuntimeProfile
 from asr_studio.storage import initialize
 from asr_studio.tasks import (
     TaskError,
@@ -65,6 +66,7 @@ def _settings(tmp_path: Path) -> Settings:
         data_dir=tmp_path / "data",
         auth_dir=tmp_path / "auth",
         asr_gpu_model_path=_whisper_dir(tmp_path / "whisper-large-v3"),
+        asr_cpu_model_path=tmp_path / "whisper-small",
         asr_phowhisper_model_path=tmp_path / "pho-whisper-large",
         asr_qwen_model_path=tmp_path / "qwen3-asr-1.7b",
         diarization_model_path=prepare_diarization_model(tmp_path / "diarization"),
@@ -82,7 +84,13 @@ def _by_id(settings: Settings, profile: RuntimeProfile | None) -> dict[str, dict
 def test_readiness_is_per_model_and_only_unprepared_models_get_a_command(tmp_path):
     settings = _settings(tmp_path)
     choices = _by_id(settings, _gpu(settings))
-    assert list(choices) == ["auto", "whisper-large-v3", "pho-whisper-large", "qwen3-asr-1.7b"]
+    assert list(choices) == [
+        "auto",
+        "whisper-large-v3",
+        "whisper-small",
+        "pho-whisper-large",
+        "qwen3-asr-1.7b",
+    ]
     assert choices["auto"]["ready"] is True
     assert choices["auto"]["model_name"] == "whisper-large-v3"
     assert choices["whisper-large-v3"]["prepare_command"] is None
@@ -91,6 +99,7 @@ def test_readiness_is_per_model_and_only_unprepared_models_get_a_command(tmp_pat
     assert pho["prepare_command"].endswith("model prepare --asr-model pho-whisper-large")
     assert "HF_HUB_OFFLINE=0" in pho["prepare_command"]
 
+    _whisper_dir(settings.asr_cpu_model_path)
     _whisper_dir(settings.asr_phowhisper_model_path)
     _qwen_dir(settings.asr_qwen_model_path)
     assert all(choice["ready"] for choice in model_choices(settings, _gpu(settings)))
@@ -234,3 +243,26 @@ def test_the_generation_records_the_runtime_of_the_run_that_made_it(tmp_path):
     generation = transcription_state(settings.data_dir, meeting_id)["generation"]
     assert generation["model_name"] == "qwen3-asr-1.7b"
     assert (generation["device"], generation["compute_type"]) == ("cuda", "bfloat16")
+
+
+def test_the_cpu_default_is_a_catalog_model_that_automatic_points_at(tmp_path):
+    settings = _settings(tmp_path)
+    profile = RuntimeProfile("cpu", "int8", settings.asr_cpu_model_path)
+
+    choices = {item["id"]: item for item in model_choices(settings, profile)}
+
+    assert choices["auto"]["model_name"] == choices["whisper-small"]["model_name"]
+    assert choices["whisper-small"]["prepare_command"].endswith("--asr-model whisper-small")
+    assert resolve_run(settings, profile, "whisper-small")["compute_type"] == "int8"
+    assert CATALOG["whisper-small"].repository == MODEL_REPOSITORIES["cpu"]
+
+
+def test_a_whisper_model_without_a_preprocessor_file_is_prepared_as_whisper_small_ships(tmp_path):
+    model = _whisper_dir(tmp_path / "whisper-small")
+    preprocessor = model / "preprocessor_config.json"
+    preprocessor.unlink()
+    assert prepared_engine_directory("whisper", model) == model.resolve()
+
+    preprocessor.write_text("{}", encoding="utf-8")
+    with pytest.raises(ModelConfigurationError):  # a file that is there must still be right
+        prepared_engine_directory("whisper", model)

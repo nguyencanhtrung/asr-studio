@@ -75,7 +75,8 @@ Chọn HTTP JSON cho thao tác và polling trạng thái khi có tác vụ; chu 
 | `POST /api/access/session` | Đổi token local hợp lệ lấy cookie; loại token khỏi URL theo ADR 0002 |
 | `GET /api/meetings` và `GET /api/meetings/{id}` | Lịch sử, lịch ngày/chưa đặt ngày, metadata và các kết quả hiện có |
 | `POST /api/uploads`, `GET /api/uploads/{id}`, `PUT /api/uploads/{id}/content`, hoàn tất upload | Tạo vùng tạm bằng ID backend cấp, nhận file theo từng phần byte rồi kiểm tra; chưa hoàn tất không tạo recording ready |
-| `GET /api/asr-models` | Danh mục bốn lựa chọn ASR cho một lượt chạy, kèm readiness theo worker và phần cứng hiện tại |
+| `GET /api/asr-models` | Danh mục bốn lựa chọn ASR cho một lượt chạy, kèm readiness theo worker và phần cứng hiện tại, và trạng thái cài đặt từng model |
+| `POST /api/asr-models/{id}/install`, `DELETE /api/asr-models/{id}/install` | Xếp một job cài model vào service `model-installer`, hoặc xin dừng job đang chạy ([ADR 0012](adr/0012-model-installer-network-boundary.md)) |
 | `POST /api/meetings` và `PATCH /api/meetings/{id}` | Tạo meeting từ upload hợp lệ; sửa title/ngày với expected metadata version. Đổi ngày phải kiểm tra khóa nguồn và làm notes cần cập nhật |
 | `GET /api/meetings/{id}/audio` | Phát/tua audio được cấp quyền, không lộ đường dẫn filesystem |
 | `GET /api/meetings/{id}/generations` và `GET /api/generations/{id}` | Chọn current generation hoặc đọc lịch sử; trạng thái readonly do backend trả và kiểm tra khi ghi |
@@ -145,6 +146,24 @@ lịch và giới hạn.
 sàng, nhưng readiness khi đó là `false`; client vẫn cho chọn để giữ hành vi tự chọn hiện tại.
 Backend chỉ đọc runtime profile khi worker khỏe, cùng quy tắc với dữ liệu runtime trong
 `GET /api/meetings/{id}`. Lỗi model catalog không làm hỏng việc tạo meeting.
+
+Phản hồi của endpoint Cài đặt thêm, ngoài các trường trên: ở mỗi model khác `auto`,
+`install` (`{state}` với `state` là `idle`, `queued`, `running`, `cancelling` hoặc `failed`; khi
+`running` có `phase` là `downloading`, `converting` hoặc `verifying` cùng `bytes_done`/`bytes_total`
+đã đo ở thư mục tạm; khi `failed` có `error` và, với `insufficient_disk`, `required_bytes` và
+`free_bytes`), `required_bytes` (dung lượng trống cần có) và `free_bytes` (còn trống ở thư mục
+model, hoặc `null`); ở cấp ngoài, `installer`: `{available, models_writable}`. `available` là
+`false` khi nhịp tim của `model-installer` cũ quá 10 giây hoặc chưa có; giao diện khi đó giữ lệnh
+`prepare_command`. `GET /api/meetings/{id}` không có các trường này.
+
+`POST /api/asr-models/{id}/install` (cùng yêu cầu session và same-origin với các route ghi khác)
+trả 202 `{install: {...}}`; gọi lại khi job đang chờ hoặc chạy trả cùng một job, không tạo thêm.
+`DELETE` cùng đường dẫn trả 202 và đặt `cancelling`; job dừng và dọn thư mục tạm. Từ chối, mã
+trong `detail.code`: `unknown_model` 404 (gồm `auto`), `model_ready` 409 (không bao giờ ghi đè
+model đã chuẩn bị), `gpu_required` 409 (từ chối trước khi tải bất cứ gì), `worker_unavailable`
+409, `models_not_writable` 409, `installer_unavailable` 503, và với `DELETE` `install_not_active`
+409. Mã lỗi của job: `insufficient_disk`, `network`, `disk_full`, `integrity`, `target_not_empty`,
+`models_not_writable`, `interrupted`; thử lại là gọi `POST` lần nữa.
 
 Client disconnect trong lúc ghi là một kết quả dự kiến: server drain thao tác ghi/fsync/commit
 đang sở hữu, trả 204 khi xử lý trực tiếp và giữ offset bền vững; cancellation thật sự vẫn được

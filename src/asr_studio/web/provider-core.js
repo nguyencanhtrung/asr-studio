@@ -11,7 +11,7 @@
 // with the real t(). A param is a primitive, a t() result, a timestamp() marker, or an array of those.
 
 import { combine } from "./store.js";
-import { ASR_MODEL_TEXT, errorMessageForCode } from "./shell-core.js";
+import { ASR_MODEL_TEXT, bytes, errorMessageForCode } from "./shell-core.js";
 import { ASR_MODEL_GUIDANCE } from "./task-core.js";
 
 const t = (text, params) => (params ? { text, params } : { text });
@@ -340,7 +340,7 @@ function initial(d) {
   };
 }
 
-export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false, section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null } };
+export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false, section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null, installer: { available: false, models_writable: false }, open: false, notice: null } };
 
 const done = (state, effects = []) => ({ state, effects });
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1050,22 +1050,77 @@ function reduceLauncher(state, action) {
 
 // The ASR slice: the model catalog the settings dialog shows, read each time the dialog opens.
 // The newest read wins; a reply of an older read is dropped by its id.
+// An install runs in a separate service: the page asks (POST), then reads the catalog every second while the
+// dialog is open and a job is active. The reducer only holds what the server last said, plus the one optimistic
+// step (queued, cancelling) that keeps a click from looking ignored.
+const GET = { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" };
+const asrFetch = (request) => ({ type: "fetch", key: "provider/asr-models", url: "/api/asr-models", init: GET, ok: "provider/asr-loaded", error: "provider/asr-failed", meta: { id: request } });
+const ASR_POLL = { type: "schedule", key: "provider/asr-poll", delay: 1000, action: { type: "provider/asr-poll" } };
+const JOB_ACTIVE = ["queued", "running", "cancelling"];
+const jobActive = (choice) => JOB_ACTIVE.includes(choice.install?.state);
+const installerUsable = (installer) => installer.available && installer.models_writable;
+const asrPolling = (state) => state.open && state.installer.available && state.models.some(jobActive);
+const withPoll = (state) => done(state, asrPolling(state) ? [ASR_POLL] : []);
+const withInstall = (state, id, install) => ({ ...state, models: state.models.map((choice) => (choice.id === id ? { ...choice, install } : choice)) });
+
+function asrInstallCall(state, action, method, optimistic) {
+  const choice = state.models.find((item) => item.id === action.id && item.id !== "auto");
+  // A second click on a job that is already going asks for nothing; Cancel is the only click that does.
+  if (!choice || (method === "POST" && jobActive(choice))) return done(state);
+  // Cancel waits until the server has the job: before that there is nothing to cancel and the job would still start.
+  if (method === "DELETE" && (choice.install?.sending || choice.install?.state === "cancelling")) return done(state);
+  const init = { method, headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" };
+  // A new request id drops a catalog read that was already in flight: its answer predates this click.
+  // Only the newest create or cancel of a model may answer: a late reply must not undo a later click.
+  const mutation = (state.mutation ?? 0) + 1;
+  const next = withInstall({ ...state, request: state.request + 1, notice: null, mutation, latest: { ...state.latest, [action.id]: mutation } }, action.id, optimistic);
+  return done(next, [{ type: "fetch", key: `provider/asr-install/${method}/${action.id}`, url: `/api/asr-models/${action.id}/install`, init, ok: "provider/asr-install-sent", error: "provider/asr-install-refused", meta: { id: action.id, mutation } }]);
+}
+
 function reduceAsr(state, action) {
   switch (action.type) {
     case "provider/dialog-opened": {
       const request = state.request + 1;
-      return done({ ...state, status: "loading", request, copy: null }, [{ type: "fetch", key: "provider/asr-models", url: "/api/asr-models", init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" }, ok: "provider/asr-loaded", error: "provider/asr-failed", meta: { id: request } }]);
+      return done({ ...state, status: "loading", request, copy: null, notice: null, open: true }, [asrFetch(request)]);
+    }
+    case "provider/dialog-closed":
+      return done({ ...state, open: false }, [{ type: "cancel", key: "provider/asr-poll" }]);
+    case "provider/asr-poll": {
+      if (!state.open) return done(state);
+      const request = state.request + 1;
+      return done({ ...state, request }, [asrFetch(request)]);
     }
     case "provider/asr-loaded": {
       if (action.meta.id !== state.request) return done(state);
       const list = action.response.body?.asr_models;
       if (!Array.isArray(list)) return done({ ...state, status: "error" });
       const models = list.filter((choice) => isObject(choice) && (choice.id === "auto" || Object.hasOwn(ASR_MODEL_TEXT, choice.id)));
-      // A reply with no usable model must say so; an empty list would leave the section blank.
-      return done({ ...state, status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty", models });
+      const installer = action.response.body?.installer;
+      const next = { ...state, models, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
+        // A reply with no usable model must say so; an empty list would leave the section blank.
+        status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
+      return withPoll(next);
     }
     case "provider/asr-failed":
-      return action.meta.id === state.request ? done({ ...state, status: "error" }) : done(state);
+      // A failed poll keeps the rows: the next tick reads again.
+      if (action.meta.id !== state.request) return done(state);
+      return state.status === "ready" ? withPoll(state) : done({ ...state, status: "error" });
+    case "provider/asr-install-requested":
+      return asrInstallCall(state, action, "POST", { state: "queued", sending: true });
+    case "provider/asr-cancel-requested":
+      return asrInstallCall(state, action, "DELETE", { state: "cancelling" });
+    case "provider/asr-install-sent": {
+      if (action.meta.mutation !== state.latest?.[action.meta.id]) return done(state);
+      const install = isObject(action.response.body?.install) ? action.response.body.install : { state: "queued" };
+      return withPoll(withInstall(state, action.meta.id, install));
+    }
+    // The server said no (no installer, no GPU, already prepared, nothing to cancel): say why, then read the truth.
+    case "provider/asr-install-refused": {
+      if (action.meta.mutation !== state.latest?.[action.meta.id]) return done(state);
+      const code = action.error?.body?.detail?.code ?? "request_failed";
+      const request = state.request + 1;
+      return done({ ...state, request, notice: { id: action.meta.id, code } }, [asrFetch(request)]);
+    }
     // The copy button: the clipboard is a call effect; the feedback line is state. A refused clipboard selects the command.
     case "provider/asr-copy-requested": {
       const command = selectAsr(state).rows.find((row) => row.id === action.id)?.command;
@@ -1109,6 +1164,7 @@ export function selectLauncher(d, s) {
 const ASR_STATUS = {
   ready: t("Sẵn sàng"),
   not_prepared: t("Chưa chuẩn bị"),
+  installing: t("Đang cài đặt"),
   gpu_required: t("Cần GPU NVIDIA"),
   worker_unavailable: t("Chưa kiểm tra được"),
 };
@@ -1118,6 +1174,62 @@ const ASR_COPY = {
   selected: t("Không sao chép được. Lệnh đã được chọn; nhấn Ctrl+C."),
 };
 
+const INSTALL_GUIDANCE = t("Tải model công khai về máy này. Bản ghi không rời khỏi máy.");
+const INSTALL_PHASES = {
+  queued: t("Đang chờ cài đặt…"),
+  downloading: t("Đang tải model…"),
+  converting: t("Đang chuyển đổi model…"),
+  verifying: t("Đang kiểm tra file model…"),
+  cancelling: t("Đang hủy…"),
+};
+// What a failed or refused install says, in plain words and with the way out.
+const INSTALL_ERRORS = {
+  insufficient_disk: (space) => (space ? t("Không đủ dung lượng: cần {required}, còn {free}. Giải phóng chỗ trống rồi thử lại.", space) : t("Không đủ dung lượng. Giải phóng chỗ trống rồi thử lại.")),
+  network: () => t("Mất kết nối khi tải model. Kiểm tra mạng của máy rồi thử lại."),
+  disk_full: () => t("Ổ đĩa đầy giữa chừng. Giải phóng chỗ trống rồi thử lại."),
+  integrity: () => t("File tải về không hợp lệ. Thử lại để tải lại."),
+  target_not_empty: () => t("Thư mục model đã có file khác nên không ghi đè. Chuyển file đó đi rồi thử lại."),
+  models_not_writable: () => t("Dịch vụ cài đặt không ghi được vào thư mục model. Kiểm tra quyền của thư mục."),
+  interrupted: () => t("Quá trình cài đặt bị gián đoạn. Thử lại."),
+};
+const INSTALL_REFUSALS = {
+  gpu_required: t("Model này cần GPU NVIDIA nên không cài được ở đây."),
+  model_ready: t("Model này đã sẵn sàng."),
+  installer_unavailable: t("Dịch vụ cài model chưa chạy. Dùng lệnh chuẩn bị model."),
+  models_not_writable: t("Dịch vụ cài đặt không ghi được vào thư mục model. Kiểm tra quyền của thư mục."),
+  worker_unavailable: ASR_MODEL_GUIDANCE.worker_unavailable,
+  install_not_active: t("Không còn lượt cài nào để hủy."),
+  request_failed: t("Không gửi được yêu cầu. Thử lại."),
+};
+
+const finite = (value) => (Number.isFinite(value) && value >= 0 ? value : null);
+
+// The install block of one unprepared model: the offer, the running job, or the failure with its retry.
+function installView(choice, notice) {
+  const job = isObject(choice.install) ? choice.install : { state: "idle" };
+  const required = finite(choice.required_bytes);
+  const free = finite(choice.free_bytes);
+  const space = required === null ? null : free === null ? { required: bytes(required) } : { required: bytes(required), free: bytes(free) };
+  const spaceLine = space ? (space.free ? t("Cần {required} trống, còn {free}.", space) : t("Cần {required} trống.", space)) : null;
+  const refusal = notice ? INSTALL_REFUSALS[notice.code] ?? INSTALL_REFUSALS.request_failed : null;
+  if (JOB_ACTIVE.includes(job.state)) {
+    const phase = job.state === "running" ? job.phase ?? "downloading" : job.state;
+    const total = finite(job.bytes_total);
+    const done = finite(job.bytes_done);
+    const counting = phase === "downloading" && total && done !== null;
+    return {
+      view: { kind: "progress", phase: typeof phase === "string" && Object.hasOwn(INSTALL_PHASES, phase) ? INSTALL_PHASES[phase] : INSTALL_PHASES.downloading, cancelDisabled: job.state === "cancelling" || job.sending === true, refusal },
+      progress: { ratio: counting ? Math.min(done / total, 1) : null, detail: counting ? t("{done} / {total}", { done: bytes(done), total: bytes(total) }) : null },
+    };
+  }
+  if (job.state === "failed") {
+    const message = (INSTALL_ERRORS[job.error] ?? INSTALL_ERRORS.interrupted)(finite(job.required_bytes) !== null && finite(job.free_bytes) !== null ? { required: bytes(job.required_bytes), free: bytes(job.free_bytes) } : space);
+    return { view: { kind: "failed", message, refusal }, progress: null };
+  }
+  const roomy = required === null || free === null || free >= required;
+  return { view: { kind: "offer", spaceLine, blocked: !roomy, blockedMessage: roomy ? null : INSTALL_ERRORS.insufficient_disk(space), refusal }, progress: null };
+}
+
 export function selectAsr(s) {
   const text = { loading: t("Đang tải danh sách model…"), error: t("Không tải được danh sách model. Mở lại Cài đặt để thử lại."), empty: t("Máy chủ không trả về model nào. Mở lại Cài đặt để thử lại.") }[s.status] ?? null;
   const auto = s.models.find((choice) => choice.id === "auto");
@@ -1125,18 +1237,25 @@ export function selectAsr(s) {
   if (s.status === "loading" && !models.length) return { text, defaultText: null, rows: [] };
   if (s.status === "error" || s.status === "empty") return { text, defaultText: null, rows: [] };
   const defaultName = auto?.model_name ?? null;
+  const usable = installerUsable(s.installer);
   const rows = models.map((choice) => {
     const reason = choice.ready ? "ready" : choice.reason in ASR_STATUS ? choice.reason : "not_prepared";
+    // Without a usable installer the page keeps what it always had: the command to copy.
+    const install = reason === "not_prepared" && (usable || (s.installer.available && jobActive(choice))) ? installView(choice, s.notice?.id === choice.id ? s.notice : null) : null;
+    const busy = install?.view.kind === "progress";
+    const state = busy ? "installing" : reason;
     return {
       id: choice.id,
       label: ASR_MODEL_TEXT[choice.id].label,
       note: ASR_MODEL_TEXT[choice.id].note,
       isDefault: Boolean(defaultName) && choice.model_name === defaultName,
-      state: reason,
-      status: ASR_STATUS[reason],
-      guidance: reason === "ready" ? null : ASR_MODEL_GUIDANCE[reason] ?? null,
-      command: reason === "not_prepared" ? choice.prepare_command || "" : "",
+      state,
+      status: ASR_STATUS[state],
+      guidance: reason === "ready" ? null : install ? INSTALL_GUIDANCE : ASR_MODEL_GUIDANCE[reason] ?? null,
+      command: reason === "not_prepared" && !install ? choice.prepare_command || "" : "",
       copy: s.copy?.id === choice.id ? ASR_COPY[s.copy.how] : null,
+      install: install?.view ?? null,
+      progress: install?.progress ?? null,
     };
   });
   // No worker means no model can be checked: say it once, above the list, instead of on every row.

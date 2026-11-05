@@ -95,8 +95,10 @@ COPY --from=omp-bin /usr/local/share/licenses/omp /usr/local/share/licenses/omp
 RUN groupadd --gid 10001 asr \
     && useradd --uid 10001 --gid asr --no-create-home --shell /usr/sbin/nologin asr \
     && mkdir -p /var/lib/asr-studio/data /var/lib/asr-studio/auth /var/lib/asr-studio/provider \
+        /var/lib/asr-studio/install \
     && chown -R 10001:10001 /var/lib/asr-studio \
     && chmod 0700 /var/lib/asr-studio/data /var/lib/asr-studio/auth /var/lib/asr-studio/provider \
+    && chmod 0777 /var/lib/asr-studio/install \
     && chmod -R a+rX /usr/local/share/licenses
 USER 10001:10001
 CMD ["uvicorn", "asr_studio.app:app", "--host", "0.0.0.0", "--port", "8765", "--no-proxy-headers", "--no-server-header", "--no-access-log"]

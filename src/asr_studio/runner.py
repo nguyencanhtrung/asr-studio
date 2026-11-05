@@ -20,7 +20,6 @@ _REQUIRED_MODEL_FILES = (
     "model.bin",
     "config.json",
     "tokenizer.json",
-    "preprocessor_config.json",
 )
 
 
@@ -65,8 +64,13 @@ def prepared_model_directory(path: Path) -> Path:
     try:
         tokenizer_config = json.loads((resolved / "tokenizer.json").read_text(encoding="utf-8"))
         model_config = json.loads((resolved / "config.json").read_text(encoding="utf-8"))
-        preprocessor_config = json.loads(
-            (resolved / "preprocessor_config.json").read_text(encoding="utf-8")
+        # Optional: whisper-small ships none, and faster-whisper then uses its own defaults.
+        # ponytail: a large model missing this file fails at load, not here; pinned ones have it.
+        preprocessor_path = resolved / "preprocessor_config.json"
+        preprocessor_config = (
+            json.loads(preprocessor_path.read_text(encoding="utf-8"))
+            if preprocessor_path.exists()
+            else None
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ModelConfigurationError("The local model configuration is invalid.") from error
@@ -78,6 +82,8 @@ def prepared_model_directory(path: Path) -> Path:
         key not in model_config for key in ("lang_ids", "suppress_ids", "suppress_ids_begin")
     ):
         raise ModelConfigurationError("The local model configuration is incomplete.")
+    if preprocessor_config is None:
+        return resolved
     if not isinstance(preprocessor_config, dict):
         raise ModelConfigurationError("The local model preprocessor configuration is invalid.")
     for key in ("feature_size", "sampling_rate", "hop_length", "n_fft", "chunk_length"):

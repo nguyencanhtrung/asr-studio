@@ -119,6 +119,7 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
         [
             "Tự động · sẵn sàng",
             "Whisper large-v3 · sẵn sàng",
+            "Whisper small · chưa sẵn sàng",
             "PhoWhisper-large · sẵn sàng",
             "Qwen3-ASR-1.7B · chưa sẵn sàng",
         ]

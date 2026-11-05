@@ -116,7 +116,7 @@ def _run_start(
         'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'if [ "$1" = compose ] && [ "$4" = config ]; then\n'
         '  if [ "$5" = --images ]; then\n'
-        '    printf \'%s\\n%s\\n\' "$COMPOSE_IMAGE" "$COMPOSE_SECOND_IMAGE"\n'
+        '    printf \'%s\\n%s\\n%s\\n\' "$COMPOSE_IMAGE" "$COMPOSE_SECOND_IMAGE" "$COMPOSE_IMAGE"\n'
         "  else\n"
         "    printf 'ASR_DEVICE=%s\\nASR_MODEL_HOST_PATH=%s\\n"
         "ASR_DIARIZATION_MODEL_PATH=/models/speaker-diarization-community-1\\n' "
@@ -451,6 +451,17 @@ def test_unknown_revision_warns_with_guidance_and_continues(
     assert f"Checkout revision: {source_revision}" in result.stderr
     assert "release tag" in result.stderr
     assert " up --pull never --no-build " in result.docker_log
+
+
+def test_offline_start_leaves_the_only_service_that_can_download_stopped(tmp_path):
+    offline = _run_start(
+        tmp_path / "offline", COMMUNITY_1_FILES, args=("--offline",), prepared_asr_model=True
+    )
+    assert offline.returncode == 0, offline.stdout + offline.stderr
+    assert " --scale model-installer=0 " in offline.docker_log
+    source = _run_start(tmp_path / "source", COMMUNITY_1_FILES, prepared_asr_model=True)
+    assert source.returncode == 0, source.stdout + source.stderr
+    assert "--scale" not in source.docker_log
 
 
 @pytest.mark.parametrize("through_symlink", [False, True], ids=["plain-path", "symlinked-path"])

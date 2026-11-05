@@ -103,7 +103,8 @@ git clone https://hf.co/pyannote/speaker-diarization-community-1 \
 ```
 
 `start.sh` downloads any missing Whisper model, builds the image and starts the `app` and `worker`
-services. On an interactive terminal it prints an access link and a QR code. When stdout is a
+services, plus a `model-installer` that adds the PhoWhisper and Qwen3-ASR models from
+**Settings → ASR Model** (the only service that downloads models and writes `./models`; it sees no recordings). On an interactive terminal it prints an access link and a QR code. When stdout is a
 pipe, redirect or CI log, access details are withheld; run `docker compose exec -T app python -m
 asr_studio.cli access show` explicitly when you want to display them. Open that exact link (the
 default address is `http://127.0.0.1:8765`), then connect ChatGPT or Google from the workspace

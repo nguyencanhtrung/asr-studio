@@ -455,6 +455,25 @@ Cuộn tới mục Google (`launcher.scroll`): đặt khi mở từ nút Google;
 
 Mục của Cài đặt (`launcher.section`: `ai`, `asr`, `theme`, `about`): `dialog-opened` đặt về `ai`, hoặc về `action.section` khi mở lại sau lần đổi ngôn ngữ và khi đó xóa khóa phiên `asr-studio:settings-section`; `settings-section-selected` đổi mục và hủy cuộn còn chờ. Ngôn ngữ và chế độ hiển thị vẫn do `i18n.js` và `theme.js` giữ, ngoài store.
 
+**Lát `asr` (mục ASR Model, cài model từ giao diện, #159)**: state `{status, models, request, copy, installer, open, notice}`. `request` tăng ở mỗi lần đọc và mỗi lần bấm Cài đặt model, Hủy hay gặp từ chối; câu trả lời của lần đọc cũ bị bỏ theo id. Mỗi `install` trong `models` là điều máy chủ nói lần cuối, trừ hai bước lạc quan: `queued` ngay khi bấm và `cancelling` ngay khi hủy. Nút Cài đặt model chỉ hiện khi `installer.available` và `installer.models_writable`; không thì dòng giữ lệnh sao chép như trước. Việc đọc lặp chỉ chạy khi hộp thoại mở, installer còn sống và có một model `queued`, `running` hoặc `cancelling`.
+
+| Từ | Sự kiện | Tới | Effect |
+| --- | --- | --- | --- |
+| đóng | `dialog-opened` | `open`, `status = loading`, xóa `notice` và `copy` | `fetch provider/asr-models` |
+| mở | `dialog-closed` | `open = false` | `cancel provider/asr-poll` |
+| mở, có job | `asr-poll` (hẹn 1 s) | tăng `request` | `fetch provider/asr-models` |
+| đóng | `asr-poll` | không đổi | |
+| tải | `asr-loaded` đúng `request` | đặt `models`, `installer`, `status` | `schedule provider/asr-poll` nếu còn job; không thì không hẹn nữa |
+| `ready` | `asr-failed` đúng `request` | giữ các dòng | `schedule provider/asr-poll` nếu còn job |
+| tải | `asr-failed` | `status = error` | |
+| model chưa có job | `asr-install-requested` | model `queued`, tăng `request` | `fetch provider/asr-install/<id>` POST |
+| model có job | `asr-install-requested` | không đổi (không gửi yêu cầu thứ hai) | |
+| model có job | `asr-cancel-requested` | model `cancelling`, tăng `request` | `fetch provider/asr-install/<id>` DELETE |
+| bất kỳ | `asr-install-sent` | model nhận `install` của máy chủ | `schedule provider/asr-poll` nếu còn job |
+| bất kỳ | `asr-install-refused` | `notice = {id, code}`, tăng `request` | `fetch provider/asr-models` (đọc lại sự thật) |
+
+Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không dựng lại dòng, để nút Hủy giữ focus; khi bấm làm nút bị thay, focus đi theo tới nút thay thế đầu tiên bấm được (kể cả sau một bước trung gian bị tắt), trừ khi người dùng đã chuyển focus đi nơi khác.
+
 **Lỗi cần đăng nhập lại** (tải, lưu, kiểm tra): mã `*reconnect_required` và các mã hết quyền (ChatGPT, trừ HTTP 401 là phiên workspace) hoặc `reconnect_required`/`provider_disconnected` (Google).
 
 | Từ | Sự kiện | Tới | Effect |
