@@ -83,7 +83,8 @@ on the CPU otherwise.
 - **Versioned Markdown notes.** You can edit notes in Markdown, keep earlier versions, and copy or
   download them.
 - **Private by default.** The app is published only on the host's loopback address and is accessed
-  with a token link. Audio and models stay on the host.
+  with a token link. Audio and models stay on the host. Notes send the transcript to the provider
+  you connect. Containers can reach the internet; see [Network access](docs/user-guide.md#network-access).
 
 <p align="center">
   <img src="docs/assets/readme/transcript.png" alt="Transcript with named speakers and mixed English and Vietnamese" width="900">
@@ -135,7 +136,8 @@ header.
 
 To install a release, check out its tag and run `./scripts/start.sh --pull` with a versioned
 `ASR_IMAGE` copied from that release’s published instructions, or `--source` to build it.
-After setup, `--offline` starts without network access. See
+After setup, `--offline` starts without building, pulling or downloading anything. It does not
+block the containers' network. See
 [Install a release](docs/user-guide.md#install-a-release).
 
 ## Documentation
