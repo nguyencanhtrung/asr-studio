@@ -2294,7 +2294,7 @@ class ChatGPTProvider:
                 self._record_failure(error, budget=budget)
                 return error
 
-            return generate_notes_pipeline(
+            document = generate_notes_pipeline(
                 snapshot=snapshot,
                 output_language=output_language,
                 transport=transport,
@@ -2307,6 +2307,9 @@ class ChatGPTProvider:
                 provider="chatgpt",
                 model=model,
             )
+            with self.store.locked(write=True) as state:
+                state.pop("last_diagnostic", None)
+            return document
 
     def verify(self, *, model: str, reasoning_effort: str | None = None) -> dict[str, Any]:
         if not isinstance(model, str) or not 1 <= len(model) <= 200:

@@ -28,11 +28,22 @@ def _prepared_model(path: Path) -> Path:
     return prepare_diarization_model(path)
 
 
-def _install_pipeline_modules(monkeypatch, pipeline):
+def _install_pipeline_modules(monkeypatch, pipeline, *, check_environment=False):
     pyannote_package = ModuleType("pyannote")
     pyannote_package.__path__ = []
     pyannote_audio = ModuleType("pyannote.audio")
-    pyannote_audio.Pipeline = SimpleNamespace(from_pretrained=lambda *_args, **_kwargs: pipeline)
+
+    def from_pretrained(*_args, **_kwargs):
+        if check_environment:
+            assert os.environ["ORT_DISABLE_TELEMETRY"] == "1"
+            assert os.environ["HF_HUB_OFFLINE"] == "1"
+            assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+            assert os.environ["HF_HUB_DISABLE_TELEMETRY"] == "1"
+            assert os.environ["PYANNOTE_METRICS_ENABLED"] == "0"
+            assert os.environ["DO_NOT_TRACK"] == "1"
+        return pipeline
+
+    pyannote_audio.Pipeline = SimpleNamespace(from_pretrained=from_pretrained)
     torch = ModuleType("torch")
     torch.device = lambda name: f"device:{name}"
     monkeypatch.setitem(sys.modules, "pyannote", pyannote_package)
@@ -162,6 +173,12 @@ def test_runner_loads_local_pipeline_with_telemetry_and_network_disabled(tmp_pat
     class FakePipelineType:
         @staticmethod
         def from_pretrained(source, *, token):
+            assert os.environ["ORT_DISABLE_TELEMETRY"] == "1"
+            assert os.environ["HF_HUB_OFFLINE"] == "1"
+            assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+            assert os.environ["HF_HUB_DISABLE_TELEMETRY"] == "1"
+            assert os.environ["PYANNOTE_METRICS_ENABLED"] == "0"
+            assert os.environ["DO_NOT_TRACK"] == "1"
             observed["model_path"] = source
             observed["token"] = token
             return FakePipeline()
@@ -254,7 +271,7 @@ def test_runtime_preflight_loads_offline_pipeline_and_moves_to_selected_device(
             observed["device"] = device
 
     pipeline = FakePipeline()
-    _install_pipeline_modules(monkeypatch, pipeline)
+    _install_pipeline_modules(monkeypatch, pipeline, check_environment=True)
     monkeypatch.setattr(diarization_runner, "load_audio_decoder", lambda: object())
     monkeypatch.setenv("ORT_DISABLE_TELEMETRY", "0")
 
