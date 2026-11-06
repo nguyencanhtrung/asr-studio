@@ -715,6 +715,10 @@ class EgressObserverProcess:
             self.failure = error_name if isinstance(error_name, str) else "unknown_error"
             raise SmokeFailure(f"{self.service} egress observer failed closed ({self.failure}).")
         if event_type == "stopped":
+            if not self.stopping or (
+                self.task_finished_at is not None and event["at"] < self.task_finished_at
+            ):
+                raise SmokeFailure(f"The {self.service} capture stopped before the task ended.")
             self.stopped = True
             return
         if event_type == "sample":
@@ -865,51 +869,88 @@ class EgressObserverProcess:
             return 0.0
         return max(0.0, self.last_diarizing_at - self.first_diarizing_at)
 
+    def _control_owned_helper(self, action: str, *arguments: str) -> bool:
+        """Never signal or remove a container without checking its ownership labels."""
+        name = egress_observer.observer_name(self.project, self.service)
+        inspected = subprocess.run(
+            ["docker", "container", "inspect", "--format", "{{json .Config.Labels}}", name],
+            cwd=ROOT,
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            timeout=EGRESS_OBSERVER_STOP_TIMEOUT,
+            check=False,
+        )
+        if inspected.returncode != 0:
+            if self.process is not None and self.process.poll() is not None:
+                return False
+            raise SmokeFailure(f"Could not verify {self.service} observer ownership.")
+        try:
+            labels = json.loads(inspected.stdout)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise SmokeFailure(f"Could not verify {self.service} observer ownership.") from error
+        if not isinstance(labels, dict) or (
+            labels.get("com.asr.offline-smoke.project") != self.project
+            or labels.get("com.asr.offline-smoke.helper") != "egress-observer"
+        ):
+            raise SmokeFailure(f"Refusing to control an unowned {self.service} observer container.")
+        result = subprocess.run(
+            ["docker", action, *arguments, name],
+            cwd=ROOT,
+            env=self.environment,
+            capture_output=True,
+            timeout=EGRESS_OBSERVER_STOP_TIMEOUT,
+            check=False,
+        )
+        return result.returncode == 0
+
     def stop(self) -> None:
         if self.process is None:
             return
         self.stopping = True
-        self.poll()
-        name = egress_observer.observer_name(self.project, self.service)
-        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-            subprocess.run(
-                ["docker", "stop", "--time", str(EGRESS_OBSERVER_STOP_TIMEOUT), name],
-                cwd=ROOT,
-                env=self.environment,
-                capture_output=True,
-                timeout=EGRESS_OBSERVER_STOP_TIMEOUT,
-                check=False,
-            )
-        deadline = time.monotonic() + EGRESS_OBSERVER_STOP_TIMEOUT
-        while self.process.poll() is None and time.monotonic() < deadline:
+        try:
             self.poll()
-            time.sleep(0.02)
-        if self.process.poll() is None:
-            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                subprocess.run(
-                    ["docker", "rm", "-f", name],
-                    cwd=ROOT,
-                    env=self.environment,
-                    capture_output=True,
-                    timeout=EGRESS_OBSERVER_STOP_TIMEOUT,
-                    check=False,
+            if self.process.poll() is None and not self._control_owned_helper(
+                "kill", "--signal=SIGTERM"
+            ):
+                raise SmokeFailure(f"Could not request {self.service} observer shutdown.")
+            deadline = time.monotonic() + EGRESS_OBSERVER_STOP_TIMEOUT
+            while not self.stopped and time.monotonic() < deadline:
+                self.poll()
+                if self.process.poll() is not None:
+                    break
+                time.sleep(0.02)
+            # The helper stays alive after its final capture marker. Acknowledge
+            # only after the marker and all preceding events reached this reader.
+            if (
+                self.stopped
+                and self.process.poll() is None
+                and not self._control_owned_helper("kill", "--signal=SIGUSR1")
+            ):
+                raise SmokeFailure(f"Could not acknowledge {self.service} capture shutdown.")
+            while self.process.poll() is None and time.monotonic() < deadline:
+                self.poll()
+                time.sleep(0.02)
+            if self.process.poll() is None:
+                raise SmokeFailure(f"The {self.service} observer did not exit after shutdown.")
+            for thread in self.reader_threads:
+                thread.join(timeout=2)
+            self.poll()
+            if not self.stopped:
+                raise SmokeFailure(
+                    f"The {self.service} observer stopped without a final health event "
+                    f"(status={self.process.returncode}, stdout_eof={self.stdout_done}, "
+                    f"stderr_seen={self.stderr_seen})."
                 )
-            self.process.kill()
-            self.process.wait(timeout=5)
-        for thread in self.reader_threads:
-            thread.join(timeout=2)
-        # The helper can exit cleanly while its stdout reader is still queueing
-        # the final stopped event. Drain after the join so cleanup does not
-        # mistake that normal handoff for a failed health shutdown.
-        self.poll()
-        if not self.stopped:
-            raise SmokeFailure(
-                f"The {self.service} observer stopped without a final health event "
-                f"(status={self.process.returncode}, stdout_eof={self.stdout_done}, "
-                f"stderr_seen={self.stderr_seen})."
-            )
-        if self.process.returncode not in {0, None}:
-            raise SmokeFailure(f"The {self.service} observer exited during cleanup.")
+            if self.process.returncode != 0:
+                raise SmokeFailure(f"The {self.service} observer exited during cleanup.")
+        finally:
+            if self.process.poll() is None:
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired, SmokeFailure):
+                    self._control_owned_helper("rm", "-f")
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                    self.process.kill()
+                    self.process.wait(timeout=5)
 
     def validate_task(self) -> None:
         if self.policy_violation_reason:
@@ -2009,9 +2050,13 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             labels = details.get("Config", {}).get("Labels") or {}
             state = details.get("State") or {}
             networks = details.get("NetworkSettings", {}).get("Networks", {})
-            ip = next(
-                (item.get("IPAddress") for item in networks.values() if item.get("IPAddress")),
-                None,
+            ips = sorted(
+                {
+                    item[key]
+                    for item in networks.values()
+                    for key in ("IPAddress", "GlobalIPv6Address")
+                    if item.get(key)
+                }
             )
         except (json.JSONDecodeError, IndexError, AttributeError, TypeError):
             raise SmokeFailure(f"Could not read the owned {service} namespace metadata.") from None
@@ -2020,7 +2065,7 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
         host_pid = state.get("Pid")
         if state.get("Status") != "running" or not isinstance(host_pid, int) or host_pid <= 0:
             raise SmokeFailure(f"The owned {service} container is not running for observation.")
-        if not isinstance(ip, str) or not ip:
+        if not ips or any(not egress_observer._is_ip(value) for value in ips):
             raise SmokeFailure(f"The owned {service} container has no network address.")
         resolver_result = self.container_python(
             service,
@@ -2050,7 +2095,7 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
         return {
             "id": container_id,
             "host_pid": host_pid,
-            "ip": ip,
+            "ips": ips,
             "resolver_ips": sorted(set(resolver_ips)),
         }
 
@@ -2080,11 +2125,11 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
         metadata = {
             service: self._egress_container_metadata(service) for service in ("app", "worker")
         }
-        owned_ips = tuple(sorted({metadata[service]["ip"] for service in ("app", "worker")}))
+        owned_ips = tuple(sorted({ip for item in metadata.values() for ip in item["ips"]}))
         for service in ("app", "worker"):
             policy = egress_observer.CapturePolicy(
                 service=service,
-                local_ips=frozenset({metadata[service]["ip"]}),
+                local_ips=frozenset(metadata[service]["ips"]),
                 owned_ips=frozenset(owned_ips),
                 resolver_ips=frozenset(metadata[service]["resolver_ips"]),
                 listener_ports=(egress_observer.APP_LISTENER_PORT,) if service == "app" else (),
@@ -2101,8 +2146,10 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             )
             self.egress_observers[service] = observer
             observer.start()
-        app_ip = metadata["app"]["ip"]
-        for service, expected_ips in (("app", {"127.0.0.1"}), ("worker", {app_ip})):
+        for service, expected_ips in (
+            ("app", {"127.0.0.1"}),
+            ("worker", set(metadata["app"]["ips"])),
+        ):
             observer = self.egress_observers[service]
             observer.configure_selftest(expected_ips)
             self._run_egress_selftest(service)

@@ -178,6 +178,18 @@ def test_ethernet_mac_prefix_is_not_interpreted_as_an_ip_version(mac_prefix):
     assert event["protocol"] == "udp"
 
 
+def test_secondary_ipv6_source_cannot_hide_public_udp_egress():
+    policy = observer.CapturePolicy(service="worker", local_ips=frozenset({"10.0.0.2", "fd00::2"}))
+    frame = _ipv6_frame(
+        "fd00::2", "2606:4700:4700::1111", observer.IPPROTO_UDP, _udp(40000, 443, b"")
+    )
+
+    event = observer.decode_packet(frame, policy=policy)
+
+    assert event is not None
+    assert observer.policy_violation(event, policy=policy) is not None
+
+
 @pytest.mark.parametrize("mac_prefix", [0x42, 0x62])
 def test_non_ip_ethernet_frame_is_ignored_regardless_of_mac_prefix(mac_prefix):
     frame = _ethernet(bytes(28), 0x0806)
@@ -198,6 +210,62 @@ def test_packet_parser_ignores_bridge_frame_that_does_not_involve_target():
     )
 
     assert event is None
+
+
+@pytest.mark.parametrize("acknowledge", [True, False])
+def test_observer_drains_queued_packet_then_requires_shutdown_ack(monkeypatch, acknowledge):
+    handlers = {}
+    events = []
+    frame = _ipv4_frame("10.0.0.2", "1.1.1.1", observer.IPPROTO_UDP, _udp(40000, 443, b""))
+
+    class Capture:
+        reads = 0
+        closed = False
+
+        def settimeout(self, _value):
+            pass
+
+        def setsockopt(self, *_args):
+            pass
+
+        def recvmsg(self, *_args):
+            self.reads += 1
+            if self.reads == 1:
+                handlers[observer.signal.SIGTERM](observer.signal.SIGTERM, None)
+                return frame, [], 0, None
+            raise TimeoutError
+
+        def close(self):
+            self.closed = True
+
+    capture = Capture()
+
+    def emit(event):
+        events.append(event)
+        if event["type"] == "stopped" and acknowledge:
+            handlers[observer.signal.SIGUSR1](observer.signal.SIGUSR1, None)
+
+    monkeypatch.setattr(
+        observer.signal, "signal", lambda key, handler: handlers.update({key: handler})
+    )
+    monkeypatch.setattr(observer.socket, "socket", lambda *_args: capture)
+    monkeypatch.setattr(observer, "_packet_drop_count", lambda _capture: 0)
+    monkeypatch.setattr(observer, "read_socket_snapshot", lambda **_kwargs: [])
+    monkeypatch.setattr(observer, "_emit", emit)
+    monkeypatch.setattr(observer, "SHUTDOWN_ACK_TIMEOUT_SECONDS", 0.0)
+
+    result = observer._run_observer("worker", 0.2, local_ips=("10.0.0.2",))
+
+    kinds = [event["type"] for event in events]
+    assert kinds.index("packet") < kinds.index("stopped")
+    assert capture.reads == 2
+    assert capture.closed
+    if acknowledge:
+        assert result == 0
+        assert kinds[-1] == "stopped"
+    else:
+        assert result == 2
+        assert events[-1] == {"type": "error", "error": "shutdown_ack_timeout"}
 
 
 def test_dns_query_is_decoded_and_normalized():

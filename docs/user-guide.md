@@ -193,6 +193,12 @@ fails closed on a drop, malformed evidence or helper failure. TLS inspection is 
 ClientHello SNI when the handshake is visible. Encrypted payloads, later TLS names and certificate
 content are not inspected.
 
+At shutdown the helper drains queued packets and sends a final capture marker while it is still
+running. The controller acknowledges that marker before the helper exits, so closing Docker's
+attached stream cannot discard the last observations. Missing acknowledgement, an early stop or
+missing final health evidence fails the smoke. Every signal or forced cleanup first verifies the
+helper's project ownership labels.
+
 ### Troubleshooting
 
 | Message            | Check                                                               |

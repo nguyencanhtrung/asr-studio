@@ -1190,3 +1190,123 @@ def test_egress_observer_stop_drains_final_event_after_process_exit(monkeypatch,
     observer.stop()
 
     assert observer.stopped is True
+
+
+def test_capture_shutdown_is_acknowledged_only_after_the_barrier(monkeypatch, tmp_path):
+    observer = _egress_observer(tmp_path)
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    observer.process = Process()
+    commands = []
+
+    def control(action, signal):
+        commands.append((action, signal))
+        if signal == "--signal=SIGTERM":
+            observer.events.put(b'{"type":"stopped","at":1.0}\n')
+        else:
+            assert observer.stopped
+            assert signal == "--signal=SIGUSR1"
+            observer.process.returncode = 0
+            observer.events.put(None)
+        return True
+
+    monkeypatch.setattr(observer, "_control_owned_helper", control)
+
+    observer.stop()
+
+    assert commands == [("kill", "--signal=SIGTERM"), ("kill", "--signal=SIGUSR1")]
+    assert observer.stdout_done
+
+
+def test_clean_exit_without_capture_barrier_still_fails(monkeypatch, tmp_path):
+    observer = _egress_observer(tmp_path)
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    observer.process = Process()
+    commands = []
+
+    def control(action, signal):
+        commands.append((action, signal))
+        observer.process.returncode = 0
+        observer.events.put(None)
+        return True
+
+    monkeypatch.setattr(observer, "_control_owned_helper", control)
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="without a final health event"):
+        observer.stop()
+
+    assert commands == [("kill", "--signal=SIGTERM")]
+
+
+@pytest.mark.parametrize("stopping", [False, True])
+def test_capture_cannot_stop_before_the_task_finishes(tmp_path, stopping):
+    observer = _egress_observer(tmp_path)
+    observer.stopping = stopping
+    observer.task_finished_at = 10.0
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="before the task ended"):
+        observer._handle_event({"type": "stopped", "at": 9.0})
+
+
+def test_helper_control_refuses_foreign_ownership_labels(monkeypatch, tmp_path):
+    observer = _egress_observer(tmp_path)
+    commands = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return offline_smoke.subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps({"com.asr.offline-smoke.project": "someone-else"})
+        )
+
+    monkeypatch.setattr(offline_smoke.subprocess, "run", run)
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="Refusing to control an unowned"):
+        observer._control_owned_helper("rm", "-f")
+
+    assert len(commands) == 1
+    assert commands[0][:3] == ["docker", "container", "inspect"]
+
+
+def test_egress_metadata_covers_all_assigned_ipv4_and_ipv6_addresses(monkeypatch):
+    harness = object.__new__(offline_smoke.SmokeHarness)
+    harness.project = "asr-offline-smoke-test"
+    metadata = {
+        "Config": {"Labels": {"com.docker.compose.project": harness.project}},
+        "State": {"Status": "running", "Pid": 123},
+        "NetworkSettings": {
+            "Networks": {
+                "default": {"IPAddress": "10.0.0.2", "GlobalIPv6Address": "fd00::2"},
+                "second": {"IPAddress": "10.1.0.2"},
+            }
+        },
+    }
+    monkeypatch.setattr(
+        harness,
+        "compose",
+        lambda *_args, **_kwargs: offline_smoke.subprocess.CompletedProcess([], 0, stdout="a" * 64),
+    )
+    monkeypatch.setattr(
+        harness,
+        "run_command",
+        lambda *_args, **_kwargs: offline_smoke.subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps([metadata])
+        ),
+    )
+    monkeypatch.setattr(
+        harness, "container_python", lambda *_args, **_kwargs: {"nameservers": ["127.0.0.11"]}
+    )
+
+    result = harness._egress_container_metadata("worker")
+
+    assert set(result["ips"]) == {"10.0.0.2", "fd00::2", "10.1.0.2"}

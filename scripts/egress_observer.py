@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_SAMPLE_INTERVAL = 0.2
+SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 2.0
+SHUTDOWN_ACK_TIMEOUT_SECONDS = 20.0
 MAX_CAPTURE_FRAME_BYTES = 262_144
 MAX_STREAM_BYTES = 65_536
 MAX_EVENT_LINE_BYTES = 32_768
@@ -1030,13 +1032,22 @@ def _run_observer(
         _emit({"type": "error", "error": "invalid_sample_interval"})
         return 2
     stopping = False
+    stop_deadline: float | None = None
+    acknowledged = False
 
     def request_stop(_signum, _frame) -> None:
-        nonlocal stopping
+        nonlocal stopping, stop_deadline
+        if not stopping:
+            stop_deadline = time.monotonic() + SHUTDOWN_DRAIN_TIMEOUT_SECONDS
         stopping = True
+
+    def acknowledge_stop(_signum, _frame) -> None:
+        nonlocal acknowledged
+        acknowledged = True
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGUSR1, acknowledge_stop)
     try:
         policy = CapturePolicy(
             service=service,
@@ -1069,7 +1080,7 @@ def _run_observer(
     )
     next_sample = time.monotonic()
     try:
-        while not stopping:
+        while True:
             try:
                 frame, ancillary, _flags, _address = capture.recvmsg(MAX_CAPTURE_FRAME_BYTES, 256)
             except TimeoutError:
@@ -1085,6 +1096,8 @@ def _run_observer(
                     if dropped:
                         raise ObserverError("capture packet drops detected")
             now = time.monotonic()
+            if stop_deadline is not None and now >= stop_deadline:
+                raise ObserverError("capture drain exceeded its shutdown deadline")
             dropped = _packet_drop_count(capture)
             if dropped:
                 raise ObserverError("capture packet drops detected")
@@ -1105,6 +1118,10 @@ def _run_observer(
                     }
                 )
                 next_sample = now + sample_interval
+            if stopping and not frame:
+                # Drain queued packets through one quiet read after the task ends.
+                # Stopping at the signal alone could discard its final connection.
+                break
     except MalformedPacket:
         _emit({"type": "error", "error": "malformed_packet"})
         return 2
@@ -1115,6 +1132,14 @@ def _run_observer(
     finally:
         capture.close()
     _emit({"type": "stopped", "at": time.monotonic()})
+    # Keep Docker's attach stream alive until the controller has consumed the
+    # barrier and every preceding event. Immediate exit can truncate its tail.
+    ack_deadline = time.monotonic() + SHUTDOWN_ACK_TIMEOUT_SECONDS
+    while not acknowledged and time.monotonic() < ack_deadline:
+        time.sleep(0.02)
+    if not acknowledged:
+        _emit({"type": "error", "error": "shutdown_ack_timeout"})
+        return 2
     return 0
 
 
