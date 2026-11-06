@@ -103,11 +103,14 @@ không ghi payload hay gọi provider.
   không dùng privileged mode, host PID hoặc host filesystem mount. Vì helper có proc access,
   thiết kế không tuyên bố rằng nó không thể đọc file đích qua `/proc`.
 - Khi dừng, helper đọc hết packet đang chờ tới một lần đọc yên lặng, rồi gửi barrier health và
-  chờ controller ACK trước khi thoát. Phép đo thật từng quan sát được exit status thành công và
-  stdout EOF nhưng thiếu marker cuối; ACK giữ attach stream sống tới khi controller đã nhận
-  toàn bộ metadata trước barrier. Capture dừng trước khi task kết thúc hoặc thiếu ACK đều fail.
+  chờ controller ACK trước khi thoát để chứng minh toàn bộ metadata trước barrier đã tới nơi.
+  Capture dừng trước khi task kết thúc hoặc thiếu ACK đều fail.
   Mọi signal và xóa cưỡng bức kiểm tra nhãn ownership của helper trước khi thực hiện.
   Nguồn regression: `tests/test_offline_smoke.py`, `tests/test_egress_observer.py`.
+- Bộ lấy mẫu bỏ `TIME_WAIT` đã đóng, không còn process sở hữu; packet capture vẫn giữ SYN.
+  Các hàng đã đóng từng làm sample vượt giới hạn reader khi có nhiều HTTP poll. Lỗi stream giữ
+  lý do cụ thể và không bị lỗi cleanup che mất. Regression có bảng nhiều hàng `TIME_WAIT`, một
+  socket đang hoạt động và trường hợp task/cleanup cùng lỗi.
 
 #### Số giới hạn và nguồn
 

@@ -190,6 +190,29 @@ def test_secondary_ipv6_source_cannot_hide_public_udp_egress():
     assert observer.policy_violation(event, policy=policy) is not None
 
 
+def test_closed_tcp_rows_do_not_overflow_live_socket_samples(tmp_path, monkeypatch):
+    net = tmp_path / "net"
+    net.mkdir()
+    rows = [f"{i}: 0200000A:223D 0100000A:{40000 + i:04X} 06 0 0 0 10001 0 0\n" for i in range(400)]
+    rows.append("401: 0200000A:223D 0100000A:C350 01 0 0 0 10001 0 42\n")
+    (net / "tcp").write_text("".join(rows))
+    for name in ("tcp6", "udp", "udp6"):
+        (net / name).write_text("")
+    monkeypatch.setattr(
+        observer,
+        "socket_owners",
+        lambda **_kwargs: {
+            "42": {"pid": 12, "comm": "python", "executable": "python", "role": "app"}
+        },
+    )
+
+    connections = observer.read_socket_snapshot(proc_root=tmp_path, policy=_policy("app"))
+
+    assert len(connections) == 1
+    assert connections[0]["state"] == "01"
+    assert connections[0]["process"]["pid"] == 12
+
+
 @pytest.mark.parametrize("mac_prefix", [0x42, 0x62])
 def test_non_ip_ethernet_frame_is_ignored_regardless_of_mac_prefix(mac_prefix):
     frame = _ethernet(bytes(28), 0x0806)

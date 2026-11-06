@@ -194,10 +194,14 @@ ClientHello SNI when the handshake is visible. Encrypted payloads, later TLS nam
 content are not inspected.
 
 At shutdown the helper drains queued packets and sends a final capture marker while it is still
-running. The controller acknowledges that marker before the helper exits, so closing Docker's
-attached stream cannot discard the last observations. Missing acknowledgement, an early stop or
+running. The controller acknowledges that marker before the helper exits to confirm it consumed
+all preceding metadata. Missing acknowledgement, an early stop or
 missing final health evidence fails the smoke. Every signal or forced cleanup first verifies the
 helper's project ownership labels.
+
+Socket samples omit `TIME_WAIT` rows, which have no owning process; packet observation retains
+their connection attempts. Reader-size or queue failures remain fatal and keep their specific
+reason even if cleanup also fails.
 
 ### Troubleshooting
 

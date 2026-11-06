@@ -603,18 +603,17 @@ class EgressObserverProcess:
                 if not line:
                     break
                 if len(line) > egress_observer.MAX_EVENT_LINE_BYTES:
-                    self.events.put(
-                        egress_observer.ObserverError("observer output line exceeded the bound")
-                    )
+                    self.failure = "observer output line exceeded the bound"
+                    with contextlib.suppress(queue.Full):
+                        self.events.put_nowait(egress_observer.ObserverError(self.failure))
                     break
                 try:
                     self.events.put_nowait(line)
                 except queue.Full:
-                    self.events.put(
-                        egress_observer.ObserverError("observer output queue overflowed")
-                    )
+                    self.failure = "observer output queue overflowed"
                     break
         except BaseException as error:
+            self.failure = self.failure or "observer stdout reader failed"
             with contextlib.suppress(queue.Full):
                 self.events.put_nowait(error)
         finally:
@@ -768,6 +767,8 @@ class EgressObserverProcess:
     def poll(self) -> None:
         if self.process is None:
             raise SmokeFailure(f"{self.service} egress observer was not started.")
+        if self.failure is not None:
+            raise SmokeFailure(f"{self.service} observer stream failed closed: {self.failure}.")
         while True:
             try:
                 raw = self.events.get_nowait()
@@ -917,6 +918,10 @@ class EgressObserverProcess:
             deadline = time.monotonic() + EGRESS_OBSERVER_STOP_TIMEOUT
             while not self.stopped and time.monotonic() < deadline:
                 self.poll()
+                if self.stdout_done and not self.stopped:
+                    raise SmokeFailure(
+                        f"The {self.service} observer stream ended before its final capture marker."
+                    )
                 if self.process.poll() is not None:
                     break
                 time.sleep(0.02)
@@ -2547,6 +2552,23 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             self.log(f"browser stage failed: {current_stage}; exception={type(error).__name__}")
             raise
 
+    def _transcribe_with_egress(
+        self, client: ApiClient, meeting_id: str, request_id: str
+    ) -> dict[str, Any]:
+        self._start_egress_check()
+        try:
+            result = self._start_transcription(client, meeting_id, request_id)
+        except BaseException:
+            if self.options.check_egress:
+                try:
+                    self._finish_egress_check()
+                except Exception as cleanup_error:
+                    self.log(f"egress cleanup after task failure: {cleanup_error}")
+            raise
+        if self.options.check_egress:
+            self._finish_egress_check()
+        return result
+
     def _run_acceptance(self) -> None:
         self.evidence["source_commit"] = self._source_commit()
         self.evidence["image_reference"] = self.options.image
@@ -2579,14 +2601,9 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
 
         self._seed_provider_fixture()
         first_meeting = self._create_meeting(self.api, "GPU smoke input")
-        self._start_egress_check()
-        try:
-            first_run = self._start_transcription(
-                self.api, first_meeting, f"{self.project}-transcript-1"
-            )
-        finally:
-            if self.options.check_egress:
-                self._finish_egress_check()
+        first_run = self._transcribe_with_egress(
+            self.api, first_meeting, f"{self.project}-transcript-1"
+        )
         self._edit_generation(self.api, first_meeting, first_run["generation"])
         second_run = self._start_transcription(
             self.api, first_meeting, f"{self.project}-transcript-2"

@@ -1243,7 +1243,7 @@ def test_clean_exit_without_capture_barrier_still_fails(monkeypatch, tmp_path):
 
     monkeypatch.setattr(observer, "_control_owned_helper", control)
 
-    with pytest.raises(offline_smoke.SmokeFailure, match="without a final health event"):
+    with pytest.raises(offline_smoke.SmokeFailure, match="before its final capture marker"):
         observer.stop()
 
     assert commands == [("kill", "--signal=SIGTERM")]
@@ -1310,3 +1310,47 @@ def test_egress_metadata_covers_all_assigned_ipv4_and_ipv6_addresses(monkeypatch
     result = harness._egress_container_metadata("worker")
 
     assert set(result["ips"]) == {"10.0.0.2", "fd00::2", "10.1.0.2"}
+
+
+def test_reader_bound_failure_keeps_its_specific_reason(tmp_path):
+    observer = _egress_observer(tmp_path)
+
+    class Process:
+        stdout = io.BytesIO(bytes(offline_smoke.egress_observer.MAX_EVENT_LINE_BYTES + 1) + b"\n")
+
+        def poll(self):
+            return None
+
+    observer.process = Process()
+    observer._queue_stdout()
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="output line exceeded the bound"):
+        observer.poll()
+
+
+@pytest.mark.parametrize("task_fails", [False, True])
+def test_transcription_failure_is_not_masked_by_observer_cleanup(monkeypatch, task_fails):
+    harness = object.__new__(offline_smoke.SmokeHarness)
+    harness.options = type("Options", (), {"check_egress": True})()
+    messages = []
+    primary = offline_smoke.SmokeFailure("primary capture failure")
+    secondary = offline_smoke.SmokeFailure("secondary cleanup failure")
+    monkeypatch.setattr(harness, "_start_egress_check", lambda: None)
+    monkeypatch.setattr(harness, "log", messages.append)
+
+    def transcribe(*_args):
+        if task_fails:
+            raise primary
+        return {"generation": {}}
+
+    def cleanup():
+        raise secondary
+
+    monkeypatch.setattr(harness, "_start_transcription", transcribe)
+    monkeypatch.setattr(harness, "_finish_egress_check", cleanup)
+
+    with pytest.raises(offline_smoke.SmokeFailure) as error:
+        harness._transcribe_with_egress(object(), "meeting", "request")
+
+    assert error.value is (primary if task_fails else secondary)
+    assert bool(messages) is task_fails

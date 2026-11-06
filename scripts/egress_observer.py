@@ -346,7 +346,7 @@ def socket_owners(*, proc_root: Path = Path("/proc")) -> dict[str, dict[str, Any
 def read_socket_snapshot(
     *, proc_root: Path = Path("/proc"), policy: CapturePolicy | None = None
 ) -> list[dict[str, Any]]:
-    """Read TCP and connected UDP sockets with bounded process metadata."""
+    """Read live TCP and connected UDP sockets with bounded process metadata."""
     try:
         ipv4 = (proc_root / "net" / "tcp").read_text(encoding="ascii")
         ipv6 = (proc_root / "net" / "tcp6").read_text(encoding="ascii")
@@ -370,7 +370,10 @@ def read_socket_snapshot(
             direction=_socket_direction(record, policy),
         )
         for record in records
-        if record.remote_port
+        # TIME_WAIT has no owning process and adds no current connection. The
+        # packet observer already records its SYN; retaining closed rows makes
+        # polling clients bloat every later sample until the kernel expires them.
+        if record.remote_port and not (record.protocol == "tcp" and record.state == "06")
     ]
 
 
@@ -1132,8 +1135,8 @@ def _run_observer(
     finally:
         capture.close()
     _emit({"type": "stopped", "at": time.monotonic()})
-    # Keep Docker's attach stream alive until the controller has consumed the
-    # barrier and every preceding event. Immediate exit can truncate its tail.
+    # Keep the stream alive until the controller consumes the barrier and all
+    # preceding events. A clean process exit alone does not prove delivery.
     ack_deadline = time.monotonic() + SHUTDOWN_ACK_TIMEOUT_SECONDS
     while not acknowledged and time.monotonic() < ack_deadline:
         time.sleep(0.02)
