@@ -53,6 +53,85 @@ notes — chia chunk → trích xuất → hợp nhất → kiểm tra → rende
 
 Đã chuyển nguyên mục: [Quyền riêng tư](release/privacy-v0.1.0.md).
 
+### #92 — Kiểm tra egress metadata trong offline smoke
+
+#### Vấn đề
+
+Issue #92 cần một bước smoke có mạng để phát hiện telemetry hoặc đích kết nối ngoài trong lúc
+ASR và diarization chạy. Mục đích của bước này là bắt lại kiểu kết nối đã được nêu trong #74 mà
+không ghi payload hay gọi provider.
+
+#### Thay đổi thiết kế
+
+- `scripts/offline-smoke.py --check-egress` theo dõi lần phiên âm thật đầu tiên trong network
+  namespace của `app` và `worker`. WAV của bước này giữ trần 25 MiB và cho phép thời lượng tới
+  1800 giây. Guard yêu cầu khoảng thời gian lớn hơn 8 giây từ quan sát `diarizing` đầu tiên tới
+  quan sát `diarizing` cuối cùng. Poll chuyển stage muộn và thời gian dọn helper không được tính.
+- `scripts/egress_observer.py` lấy mẫu `/proc/net/tcp*` và `/proc/net/udp*`, kèm PID/process
+  metadata khi đọc được, và thu packet metadata bằng AF_PACKET. Nó giữ IP, port, DNS qname, TLS
+  SNI, hướng và process metadata trong bộ nhớ hoặc evidence, không giữ payload.
+- Policy chỉ tin exact IP của các service thuộc Compose project, exact resolver IP của từng
+  container và loopback. Policy không coi mọi private, link-local, reserved, `.local` hoặc
+  `.internal` là nội bộ. App listener response được phân biệt với initiated egress.
+- DNS request được nhận diện khi đi tới resolver đã xác minh, kể cả khi Docker DNAT đổi port đích
+  trước khi packet tới AF_PACKET. DNS response được giữ là inbound UDP. Mọi UDP khác, gồm UDP
+  443, vẫn tạo endpoint metadata và đi qua deny policy.
+- Mỗi observer chạy trong helper disposable với `--cap-drop ALL` và chỉ thêm `NET_RAW`,
+  `SYS_PTRACE` và `DAC_READ_SEARCH`. Helper dùng network/PID namespace của đúng container đích,
+  không dùng privileged mode, host PID hoặc host filesystem mount. Vì helper có proc access,
+  thiết kế không tuyên bố rằng nó không thể đọc file đích qua `/proc`.
+
+#### Số giới hạn và nguồn
+
+Các con số dưới đây là guard hoặc giao thức quan sát, không phải benchmark hiệu năng.
+
+| Hạng mục | Giá trị | Nguồn |
+| --- | ---: | --- |
+| WAV tối thiểu | 2 giây | [`MIN_AUDIO_SECONDS`](../scripts/offline-smoke.py) |
+| WAV tối đa của egress path | 1800 giây | [`EGRESS_MAX_AUDIO_SECONDS`](../scripts/offline-smoke.py) |
+| Trần file WAV | 25 MiB | [`MAX_AUDIO_BYTES`](../scripts/offline-smoke.py) |
+| Diarization stage tối thiểu | lớn hơn 8 giây | [`EGRESS_MIN_DIARIZATION_SECONDS`](../scripts/offline-smoke.py) |
+| Chu kỳ lấy mẫu mặc định | 0,2 giây | [`DEFAULT_SAMPLE_INTERVAL`](../scripts/egress_observer.py) |
+| App listener của selftest | port 8765 | [`APP_LISTENER_PORT`](../scripts/egress_observer.py) |
+
+Nguồn yêu cầu và giới hạn: [Issue #92](https://github.com/nguyencanhtrung/asr-studio/issues/92),
+[`offline-smoke.py`](../scripts/offline-smoke.py), và
+[`egress_observer.py`](../scripts/egress_observer.py). Không có số đo throughput, latency hoặc
+độ chính xác được suy ra từ bước smoke này.
+
+#### Đánh đổi và phương án đã loại
+
+- Đọc socket table cho process ownership và AF_PACKET cho SYN/DNS/SNI: giữ được attribution và
+  kiểm tra capture có nhìn thấy traffic, nhưng vẫn chỉ cung cấp metadata.
+- Helper root với đúng ba capability được thêm: đáp ứng proc ownership trong shared PID namespace
+  mà không cấp privileged, host PID hoặc host mount. Proc access là một giới hạn bảo mật cần ghi
+  rõ, không được che bằng tuyên bố helper chỉ đọc network.
+- Strict external deny với allowlist rỗng: phù hợp với smoke không gọi provider và không tạo
+  quyết định allowlist động từ DNS hoặc private address. Provider traffic nằm ngoài bước này.
+- First-to-last actual `diarizing` observation: số đo là lower bound. Không dùng poll terminal
+  hoặc `finish_task` vì chúng có thể kéo dài số đo sau khi diarization đã kết thúc.
+
+#### Giới hạn
+
+TLS chỉ cho phép đọc ClientHello SNI khi handshake và segment cần thiết đều được capture. Observer
+không kiểm tra payload mã hóa, certificate hoặc tên phát sinh sau ClientHello. Packet drop,
+malformed packet, malformed evidence, process ownership không chứng minh được hoặc helper chết
+đều làm smoke fail closed.
+
+#### Liên kết issue/PR
+
+[Issue #92](https://github.com/nguyencanhtrung/asr-studio/issues/92).
+
+#### Tag
+
+Kiến trúc | Quyền riêng tư
+
+#### Tài liệu đích
+
+- `docs/user-guide.md` — invocation, policy, capability và TLS limitation.
+- `scripts/offline-smoke.py` — lifecycle và diarization lower-bound guard.
+- `scripts/egress_observer.py` — capture, parsing và policy protocol.
+
 ### #72 / PR #94 — Phục hồi notes khi đầu ra của provider vượt trần
 
 Đã chuyển nguyên mục: [Pipeline notes](release/notes-v0.1.0.md).
@@ -986,7 +1065,7 @@ Nguồn: issue #83, `tests/test_browser_task_progress.py`, `tests/test_notes_pro
 - Upload chuyển sang thanh indeterminate trong lúc `POST /complete` kiểm tra server, kèm byte đã truyền và đồng hồ elapsed được stamp bởi reducer runner.
 - Notes pipeline phát callback progress allowlist riêng với coverage final-only: `preparing_source`, `generating`, `chunking`, `merging`, `repairing`, `rendering`. Chunk chỉ tăng sau validation thành công; merge/recovery để `total` trống khi tổng số lượt chưa biết. Task lưu các số đo trong migration schema 14 và UI notes hiển thị stage/count.
 - Nhận notes kiểm tra processing slot nhanh trước provider operation lock, nhưng vẫn kiểm tra lại trong transaction. Notes UI ưu tiên `checking-worker` khi heartbeat active task đã cũ.
-- HTTPX notes read timeout là 60 giây, còn total timeout mỗi lượt gọi 900 giây và deadline toàn tác vụ 3600 giây; không retry inference khi mất mạng.
+- HTTPX notes read timeout là 60 giây, còn total timeout mỗi lượt gọi 900 giây và deadline toàn tác vụ 31800 giây; không retry inference khi mất mạng.
 - Không đổi restart policy hoặc thêm watchdog. Compose vẫn dùng `unless-stopped`; quy trình kiểm chứng recovery phải làm process worker crash để container thoát bất thường, sau đó startup recovery đánh dấu task dở `interrupted`. Không dùng `docker kill -s KILL` như bằng chứng container tự restart, vì [Docker ghi rõ manual stop suppresses restart policy](https://docs.docker.com/engine/containers/start-containers-automatically/).
 
 #### Số đo trước và sau
@@ -997,7 +1076,7 @@ Nguồn: issue #83, `tests/test_browser_task_progress.py`, `tests/test_notes_pro
 | Server upload checking | 38–81 giây không có số | indeterminate + byte đã truyền + elapsed khi có clock |
 | Notes chunk/merge | chỉ elapsed/provider/model | stage + chunk count hoàn tất; merge count hoàn tất; recovery count là số lượt bắt đầu, total indeterminate khi động |
 | Busy notes admission | 5,0–5,1 giây trong bằng chứng issue | focused regression trả lời dưới 1 giây khi slot đã biết bận |
-| Notes silent read | 300 giây read timeout | 60 giây read inactivity, 900 giây mỗi lượt gọi; 3600 giây toàn tác vụ |
+| Notes silent read | 300 giây read timeout | 60 giây read inactivity, 900 giây mỗi lượt gọi; 31800 giây toàn tác vụ |
 
 Điều kiện đo sau: interpreter hiện có của workspace, `PYTHONPATH` trỏ source/test helpers, test offline/fake provider; browser chạy với `ASR_RUN_BROWSER_TESTS=1`. Không có live provider, model hoặc Docker socket trong phạm vi issue này.
 
@@ -1006,7 +1085,7 @@ Nguồn: issue #83; `tests/test_notes.py`, `tests/test_notes_provider.py`, `test
 #### Đánh đổi và phương án đã loại
 
 - Dùng stage/count thật và để `total` indeterminate cho reduction động: giữ thông tin hữu ích mà không dựng tổng giả.
-- Giảm read inactivity xuống 60 giây nhưng giữ total mỗi lượt gọi 900 giây và toàn tác vụ 3600 giây: mất mạng im lặng được báo sớm, còn lượt reasoning dài vẫn có ngân sách tổng. Lượt reasoning hợp lệ cũng có thể bị dừng nếu provider không gửi chunk nào trong 60 giây; timeout không tự chứng minh mất mạng.
+- Giảm read inactivity xuống 60 giây nhưng giữ total mỗi lượt gọi 900 giây và toàn tác vụ 31800 giây: mất mạng im lặng được báo sớm, còn lượt reasoning dài vẫn có ngân sách tổng. Lượt reasoning hợp lệ cũng có thể bị dừng nếu provider không gửi chunk nào trong 60 giây; timeout không tự chứng minh mất mạng.
 - Kiểm tra slot trước provider lock và lặp lại trong transaction: busy refusal nhanh nhưng vẫn giữ tính đúng khi hai request chạy đồng thời; nếu slot bận, đọc lại idempotency để nhận ra request giống hệt vừa được chấp nhận.
 - Giữ `unless-stopped` và recovery trong worker: phân biệt crash process với manual stop theo semantics của Docker; loại watchdog host/container vì vượt phạm vi và dễ che khuất lỗi vận hành.
 
