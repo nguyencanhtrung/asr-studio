@@ -1,0 +1,315 @@
+{
+  "kind": "Community-1 on a public repeated synthetic waveform; no ASR or notes",
+  "audio_seconds": 14400.0,
+  "sample_rate": 16000,
+  "waveform_bytes": 921600000,
+  "source_wav_sha256": "f488d28ada19b19dbe34ff5ba67566f9f04b850471d36d13df635d3da51bfe4d",
+  "repeat_count": 24,
+  "source_wav_seconds": 600.0,
+  "model_sha256": {
+    "config.yaml": "5ce2bfa9a938dc132cec1172592d65173cbb8f444ea1e4133f10f9391de155be",
+    "embedding/pytorch_model.bin": "6f10ff60898a1d185fa22e1d11e0bfa8a92efec811f11bca48cb8cafebefd929",
+    "plda/plda.npz": "9b77bcd840692710dd3496f62ecfeed8d8e5f002fd991b785079b244eab7d255",
+    "plda/xvec_transform.npz": "325f1ce8e48f7e55e9c8aa47e05d2766b7c48c4b25b8de8dd751e7a4cc5fbe8f",
+    "segmentation/pytorch_model.bin": "7ad24338d844fb95985486eb1a464e32d229f6d7a03c9abe60f978bacf3f816e"
+  },
+  "measurement": "Sampled RSS can miss native peaks while the GIL is held; use kernel HWM before/after each call for peak attribution. Phase RSS includes nested calls.",
+  "sample_interval_seconds": 0.02,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "device": "cuda",
+  "torch_cpu_threads": 16,
+  "versions": {
+    "pyannote-audio": "4.0.7",
+    "torch": "2.11.0+cu128",
+    "scipy": "1.18.1",
+    "numpy": "2.5.4",
+    "torchcodec": "0.11.1"
+  },
+  "phase_sampled_peak_rss_bytes": {
+    "whole_process": 4903305216,
+    "load_model": 1111646208,
+    "decode_source": 1169203200,
+    "repeat_waveform": 2091368448,
+    "pipeline": 4903305216,
+    "get_segmentations": 2815860736,
+    "get_embeddings": 3519598592,
+    "clustering": 4903305216,
+    "linkage": 4903305216,
+    "pdist": 4104290304,
+    "fast_linkage": 4903305216,
+    "fcluster": 3246837760,
+    "plda": 3345588224,
+    "cluster_vbx": 3345924096,
+    "cdist": 3408195584,
+    "constrained_assignment": 3346055168,
+    "reconstruct": 3335979008
+  },
+  "events": [
+    {
+      "phase": "load_model",
+      "start_seconds": 0.0002261679619550705,
+      "elapsed_seconds": 0.4413971221074462,
+      "rss_before_bytes": 877654016,
+      "rss_after_bytes": 1111646208,
+      "hwm_before_kib": 854684,
+      "hwm_after_kib": 1080124,
+      "input_shapes": []
+    },
+    {
+      "phase": "decode_source",
+      "start_seconds": 0.4416723530739546,
+      "elapsed_seconds": 0.035290452651679516,
+      "rss_before_bytes": 1111646208,
+      "rss_after_bytes": 1169203200,
+      "hwm_before_kib": 1080124,
+      "hwm_after_kib": 1136476,
+      "input_shapes": []
+    },
+    {
+      "phase": "repeat_waveform",
+      "start_seconds": 0.4770113481208682,
+      "elapsed_seconds": 0.03944979701191187,
+      "rss_before_bytes": 1169203200,
+      "rss_after_bytes": 2091368448,
+      "hwm_before_kib": 1136476,
+      "hwm_after_kib": 2035860,
+      "input_shapes": [
+        [
+          1,
+          9600000
+        ]
+      ]
+    },
+    {
+      "phase": "get_segmentations",
+      "start_seconds": 0.5180152272805572,
+      "elapsed_seconds": 7.769233093596995,
+      "rss_before_bytes": 2052964352,
+      "rss_after_bytes": 2815860736,
+      "hwm_before_kib": 2035860,
+      "hwm_after_kib": 2743880,
+      "input_shapes": []
+    },
+    {
+      "phase": "get_embeddings",
+      "start_seconds": 8.550083016976714,
+      "elapsed_seconds": 168.53362492937595,
+      "rss_before_bytes": 2815995904,
+      "rss_after_bytes": 3208536064,
+      "hwm_before_kib": 2776992,
+      "hwm_after_kib": 3433052,
+      "input_shapes": []
+    },
+    {
+      "phase": "pdist",
+      "start_seconds": 177.26172100752592,
+      "elapsed_seconds": 4.947171417064965,
+      "rss_before_bytes": 3275829248,
+      "rss_after_bytes": 4104290304,
+      "hwm_before_kib": 3433052,
+      "hwm_after_kib": 4002668,
+      "input_shapes": [
+        [
+          14391,
+          256
+        ]
+      ]
+    },
+    {
+      "phase": "fast_linkage",
+      "start_seconds": 182.266395624727,
+      "elapsed_seconds": 2.38993376865983,
+      "rss_before_bytes": 4074815488,
+      "rss_after_bytes": 4074958848,
+      "hwm_before_kib": 4074776,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          103543245
+        ]
+      ]
+    },
+    {
+      "phase": "linkage",
+      "start_seconds": 177.2600784189999,
+      "elapsed_seconds": 7.419712501578033,
+      "rss_before_bytes": 3246354432,
+      "rss_after_bytes": 3246612480,
+      "hwm_before_kib": 3433052,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          14391,
+          256
+        ]
+      ]
+    },
+    {
+      "phase": "fcluster",
+      "start_seconds": 184.6798932235688,
+      "elapsed_seconds": 0.0011811042204499245,
+      "rss_before_bytes": 3246612480,
+      "rss_after_bytes": 3246837760,
+      "hwm_before_kib": 4782612,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          14390,
+          4
+        ]
+      ]
+    },
+    {
+      "phase": "plda",
+      "start_seconds": 184.68120211921632,
+      "elapsed_seconds": 0.018808524124324322,
+      "rss_before_bytes": 3246923776,
+      "rss_after_bytes": 3345588224,
+      "hwm_before_kib": 4782612,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          14391,
+          256
+        ]
+      ]
+    },
+    {
+      "phase": "cluster_vbx",
+      "start_seconds": 184.70005737245083,
+      "elapsed_seconds": 0.013539664447307587,
+      "rss_before_bytes": 3345588224,
+      "rss_after_bytes": 3345924096,
+      "hwm_before_kib": 4782612,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          14391
+        ],
+        [
+          14391,
+          128
+        ],
+        [
+          128
+        ]
+      ]
+    },
+    {
+      "phase": "cdist",
+      "start_seconds": 184.71753226220608,
+      "elapsed_seconds": 0.009294363670051098,
+      "rss_before_bytes": 3345985536,
+      "rss_after_bytes": 3345985536,
+      "hwm_before_kib": 4782612,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          43173,
+          256
+        ],
+        [
+          1,
+          256
+        ]
+      ]
+    },
+    {
+      "phase": "constrained_assignment",
+      "start_seconds": 184.79806257691234,
+      "elapsed_seconds": 0.014478682540357113,
+      "rss_before_bytes": 3345985536,
+      "rss_after_bytes": 3346055168,
+      "hwm_before_kib": 4782612,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          14391,
+          3,
+          1
+        ]
+      ]
+    },
+    {
+      "phase": "clustering",
+      "start_seconds": 177.08376220893115,
+      "elapsed_seconds": 7.729632285423577,
+      "rss_before_bytes": 3208536064,
+      "rss_after_bytes": 3249291264,
+      "hwm_before_kib": 3433052,
+      "hwm_after_kib": 4782612,
+      "input_shapes": []
+    },
+    {
+      "phase": "reconstruct",
+      "start_seconds": 184.88748582731932,
+      "elapsed_seconds": 0.8479882637038827,
+      "rss_before_bytes": 3255988224,
+      "rss_after_bytes": 3259846656,
+      "hwm_before_kib": 4782612,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          14391,
+          3
+        ]
+      ]
+    },
+    {
+      "phase": "reconstruct",
+      "start_seconds": 186.11597867310047,
+      "elapsed_seconds": 0.8523080805316567,
+      "rss_before_bytes": 3268165632,
+      "rss_after_bytes": 3268165632,
+      "hwm_before_kib": 4782612,
+      "hwm_after_kib": 4782612,
+      "input_shapes": [
+        [
+          14391,
+          3
+        ]
+      ]
+    },
+    {
+      "phase": "pipeline",
+      "start_seconds": 0.5177728785201907,
+      "elapsed_seconds": 186.83630359359086,
+      "rss_before_bytes": 2052964352,
+      "rss_after_bytes": 3131596800,
+      "hwm_before_kib": 2035860,
+      "hwm_after_kib": 4782612,
+      "input_shapes": []
+    }
+  ],
+  "hwm_kib": 4782612,
+  "regular_turn_count": 3697,
+  "exclusive_turn_count": 3697,
+  "elapsed_seconds": 187.38325922191143,
+  "image_id": "sha256:5bf256540b117017779d4f9715506ec67422ac3c6c0cb1e04c9c545d13c42870",
+  "image_source_commit": "a807dbc19f938243f5f7ebfc2a9124e1b9593814",
+  "profiler_sha256": "b9159bc4a10f6faf89d13205e66dbd5c33e6e793d45d14d5399c7b894c7713a6",
+  "profiler_path": "scripts/profile-diarization-pipeline.py",
+  "container_memory_limit_gib": 12,
+  "container_network": "none",
+  "source": {
+    "dataset": "ademax/vivos-vie-speech2text",
+    "revision": "1c937fd",
+    "source_rows": [
+      0,
+      1
+    ],
+    "sources": [
+      {
+        "path": "VIVOSSPK41_211.wav",
+        "sha256": "c8be9e92432723cdc88f1426de48b7fccd994e7d06d852c658c710717a26e5e3"
+      },
+      {
+        "path": "VIVOSSPK11_R018.wav",
+        "sha256": "76ad92460d408f81088d874709c09cbbfee16545ff264f54bebe5932e0656129"
+      }
+    ],
+    "operation": "repeat public 85-second fixture and truncate at 600 seconds; no new source",
+    "sha256": "f488d28ada19b19dbe34ff5ba67566f9f04b850471d36d13df635d3da51bfe4d",
+    "seconds": 600
+  }
+}

@@ -4,6 +4,28 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #97 — Attribute quadratic clustering memory and document the RAM budget
+
+**Problem and measured cause.** The historical four-hour composite reached 4.93 GiB runner RSS
+([historical source](release/archive/v0.1.0/performance-v0.1.0.md)). Current phase instrumentation
+on a public repeated four-hour waveform reaches 4.561 GiB: kernel HWM rises
+inside centroid `fast_linkage` after `pdist` creates the condensed distance vector. The
+[measurement report](release/diarization-memory.md) links raw per-phase results, model/runtime
+hashes and the exact public input recipe. The fixtures differ, so these are not before/after
+optimization scores.
+
+**Decision.** Take the issue's documentation alternative and keep speaker clustering unchanged.
+Publish provisional budgets of 8 GiB installed RAM and 6 GiB available to the worker for the
+four-hour cap; larger ASR footprints or other processes can need more. These are provisioning
+decisions, not certified minima for every recording. The report distinguishes cumulative kernel
+HWM from sampled RSS and contains no private recording or transcript.
+
+**Trade-offs and follow-up.** Windowed clustering or subsampling would need a speaker identity/merge
+design and speaker-quality acceptance. This change adds read-only reproduction tools rather than
+altering assignments. Full app/ASR/notes acceptance and representative real-meeting data remain
+separate from these memory measurements. Issue [#97](https://github.com/nguyencanhtrung/asr-studio/issues/97).
+Tag: performance, operations. Target: `docs/release/diarization-memory.md`, README hardware guidance.
+
 ## Documentation policy
 
 The [release process](release/process.md) defines checks and evidence reuse for new releases.

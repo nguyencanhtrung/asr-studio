@@ -140,6 +140,11 @@ peak on clips under one minute, so a full meeting can need more, and system memo
 not measured. On a CPU, Whisper small takes about 0.4 minutes per minute of audio, and the large
 models 0.6 to 1.5.
 
+For recordings near the four-hour limit, budget at least **8 GiB system RAM with 6 GiB available
+to the worker** for diarization. These are provisional deployment budgets; allow extra memory for
+the selected ASR model and other processes. Current and historical four-hour synthetic runs exceed
+4 GiB runner RSS. See the [memory measurements and limits](docs/release/diarization-memory.md).
+
 ## Quickstart
 
 ```sh
