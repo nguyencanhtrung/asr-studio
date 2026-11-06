@@ -2,6 +2,14 @@
 
 set -eu
 
+# Fast gate for a writer's handoff and before a freeze: lint plus unit tests.
+if [ "${1:-}" = "--fast" ]; then
+    uv run --no-sync ruff check src tests scripts
+    uv run --no-sync ruff format --check src tests scripts
+    uv run --no-sync pytest -q
+    exit 0
+fi
+
 ./scripts/check-shell-syntax.sh
 python3 scripts/check-environment.py --cache-only
 
