@@ -111,8 +111,11 @@ def test_runner_loads_local_only_and_emits_timestamps_and_uncertainty_measures(
     audio.write_bytes(b"audio")
     observed: dict[str, object] = {}
 
+    monkeypatch.setenv("ORT_DISABLE_TELEMETRY", "0")
+
     class FakeWhisperModel:
         def __init__(self, model_path, **kwargs):
+            assert os.environ["ORT_DISABLE_TELEMETRY"] == "1"
             observed["model_path"] = model_path
             observed["kwargs"] = kwargs
 
