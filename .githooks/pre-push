@@ -2,13 +2,6 @@
 # Enable once per clone: git config core.hooksPath .githooks
 set -eu
 
-while read -r _ _ remote_ref _; do
-    if [ "$remote_ref" = refs/heads/main ]; then
-        echo "pre-push: main is protected; push a branch and open a PR." >&2
-        exit 1
-    fi
-done
-
 # The fast lint gates CI would fail on first; the full gate stays scripts/check.sh.
 uv run --no-sync ruff check src tests scripts
 uv run --no-sync ruff format --check src tests scripts

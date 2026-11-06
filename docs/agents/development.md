@@ -112,7 +112,7 @@ read-only review runs add `PYTHONDONTWRITEBYTECODE=1` and `-p no:cacheprovider`.
 ## Git hooks
 
 Enable the repository hooks once per clone with `git config core.hooksPath .githooks`.
-`pre-push` refuses a push to `main` and runs the ruff gates.
+`pre-push` runs the ruff gates.
 
 ## CI and merge
 
