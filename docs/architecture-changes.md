@@ -1096,7 +1096,7 @@ Nguồn: issue #83, `tests/test_browser_task_progress.py`, `tests/test_notes_pro
 - Upload chuyển sang thanh indeterminate trong lúc `POST /complete` kiểm tra server, kèm byte đã truyền và đồng hồ elapsed được stamp bởi reducer runner.
 - Notes pipeline phát callback progress allowlist riêng với coverage final-only: `preparing_source`, `generating`, `chunking`, `merging`, `repairing`, `rendering`. Chunk chỉ tăng sau validation thành công; merge/recovery để `total` trống khi tổng số lượt chưa biết. Task lưu các số đo trong migration schema 14 và UI notes hiển thị stage/count.
 - Nhận notes kiểm tra processing slot nhanh trước provider operation lock, nhưng vẫn kiểm tra lại trong transaction. Notes UI ưu tiên `checking-worker` khi heartbeat active task đã cũ.
-- HTTPX notes read timeout là 60 giây, còn total timeout mỗi lượt gọi 900 giây và deadline toàn tác vụ 31800 giây; không retry inference khi mất mạng.
+- HTTPX notes read timeout là 60 giây, còn total timeout mỗi lượt gọi 900 giây và deadline toàn tác vụ 3600 giây; không retry inference khi mất mạng.
 - Không đổi restart policy hoặc thêm watchdog. Compose vẫn dùng `unless-stopped`; quy trình kiểm chứng recovery phải làm process worker crash để container thoát bất thường, sau đó startup recovery đánh dấu task dở `interrupted`. Không dùng `docker kill -s KILL` như bằng chứng container tự restart, vì [Docker ghi rõ manual stop suppresses restart policy](https://docs.docker.com/engine/containers/start-containers-automatically/).
 
 #### Số đo trước và sau
@@ -1107,7 +1107,7 @@ Nguồn: issue #83, `tests/test_browser_task_progress.py`, `tests/test_notes_pro
 | Server upload checking | 38–81 giây không có số | indeterminate + byte đã truyền + elapsed khi có clock |
 | Notes chunk/merge | chỉ elapsed/provider/model | stage + chunk count hoàn tất; merge count hoàn tất; recovery count là số lượt bắt đầu, total indeterminate khi động |
 | Busy notes admission | 5,0–5,1 giây trong bằng chứng issue | focused regression trả lời dưới 1 giây khi slot đã biết bận |
-| Notes silent read | 300 giây read timeout | 60 giây read inactivity, 900 giây mỗi lượt gọi; 31800 giây toàn tác vụ |
+| Notes silent read | 300 giây read timeout | 60 giây read inactivity, 900 giây mỗi lượt gọi; 3600 giây toàn tác vụ |
 
 Điều kiện đo sau: interpreter hiện có của workspace, `PYTHONPATH` trỏ source/test helpers, test offline/fake provider; browser chạy với `ASR_RUN_BROWSER_TESTS=1`. Không có live provider, model hoặc Docker socket trong phạm vi issue này.
 
@@ -1116,7 +1116,7 @@ Nguồn: issue #83; `tests/test_notes.py`, `tests/test_notes_provider.py`, `test
 #### Đánh đổi và phương án đã loại
 
 - Dùng stage/count thật và để `total` indeterminate cho reduction động: giữ thông tin hữu ích mà không dựng tổng giả.
-- Giảm read inactivity xuống 60 giây nhưng giữ total mỗi lượt gọi 900 giây và toàn tác vụ 31800 giây: mất mạng im lặng được báo sớm, còn lượt reasoning dài vẫn có ngân sách tổng. Lượt reasoning hợp lệ cũng có thể bị dừng nếu provider không gửi chunk nào trong 60 giây; timeout không tự chứng minh mất mạng.
+- Giảm read inactivity xuống 60 giây nhưng giữ total mỗi lượt gọi 900 giây và toàn tác vụ 3600 giây: mất mạng im lặng được báo sớm, còn lượt reasoning dài vẫn có ngân sách tổng. Lượt reasoning hợp lệ cũng có thể bị dừng nếu provider không gửi chunk nào trong 60 giây; timeout không tự chứng minh mất mạng.
 - Kiểm tra slot trước provider lock và lặp lại trong transaction: busy refusal nhanh nhưng vẫn giữ tính đúng khi hai request chạy đồng thời; nếu slot bận, đọc lại idempotency để nhận ra request giống hệt vừa được chấp nhận.
 - Giữ `unless-stopped` và recovery trong worker: phân biệt crash process với manual stop theo semantics của Docker; loại watchdog host/container vì vượt phạm vi và dễ che khuất lỗi vận hành.
 
