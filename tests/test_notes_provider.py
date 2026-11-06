@@ -1324,6 +1324,8 @@ def test_intermediate_reduction_has_its_own_hard_output_budget(
     final_payload = json.loads(reduction_calls[-1].prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
     assert final_payload["summaries"][1]["notes"]["overview"][0]["text"].startswith("reduce-3|")
     assert result["overview"][0]["text"] == "All six chunks were synthesized."
+    with provider.store.locked() as state:
+        assert "last_diagnostic" not in state
 
 
 def test_transport_failure_diagnostics_use_actual_stage_and_bounded_metadata(tmp_path, monkeypatch):
@@ -1922,6 +1924,8 @@ def test_level_two_reduce_over_its_cap_is_asked_again_for_a_smaller_answer(
     result = _generate(provider, snapshot, on_coverage=manifests.append)
 
     assert result["overview"][0]["text"] == "All six chunks were synthesized."
+    with provider.store.locked() as state:
+        assert "last_diagnostic" not in state
     # Calls 1-6 are chunks, 7-9 level-one reductions and 10 the level-two reduction.
     primary, *asked_again = adapter.calls[9 : 10 + overflows]
     assert len(adapter.calls) == 11 + overflows
