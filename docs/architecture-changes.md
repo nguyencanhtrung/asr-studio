@@ -1418,6 +1418,41 @@ MP3/raw AAC không dùng duration ước lượng để phát hiện phần thi�
 
 Issue #85, #86. Tag: kiến trúc, accessibility. Tài liệu đích: `docs/backend-contract.md`, `docs/frontend-design.md`.
 
+### #166 — Tách notes service khỏi worker model và giữ invariant một slot
+
+#### Vấn đề và quyết định
+
+Notes provider không nên nằm trong worker transcription: worker cần chạy ASR/diarization
+local, không cần provider mount và chỉ dùng mạng nội bộ. `notes-service` nhận notes task,
+giữ provider mount và mạng egress; `compose.model-prepare.yaml` giữ mạng mặc định cho
+process one-shot chuẩn bị model. Các service vẫn dùng cùng data volume hiện có, vì vậy
+đây là boundary mạng/provider, không phải filesystem isolation của recording.
+
+Schema v16 thêm `tasks.owner_role` với mặc định `legacy` cho row cũ
+([`storage.py`](../src/asr_studio/storage.py)). `processing_slot` hiện có vẫn là nguồn
+sự thật duy nhất; claim/recovery lọc kind và role trong transaction và không clear slot
+của task khác ([`tasks.py`](../src/asr_studio/tasks.py)). `accepted` vẫn là pending để
+split role claim task cũ; `running` được đánh dấu `interrupted` khi role tương ứng chết,
+`stopping` thành `canceled`, còn task của role đang sống được bảo vệ.
+
+Legacy combined worker giữ worker lock và notes reservation; split startup giữ/check
+lock trước recovery. Vì thế owner_role chỉ tương thích dữ liệu, không phải bằng chứng
+service còn sống. Heartbeat/readiness và lock/recovery được tách riêng trong
+[`service_runtime.py`](../src/asr_studio/service_runtime.py), với regression ở
+[`test_service_isolation.py`](../tests/test_service_isolation.py).
+
+#### Đánh đổi, giới hạn và rollback
+
+Tách database/recording volume sẽ cho isolation mạnh hơn nhưng cần thay layout snapshot,
+recording và publication hiện tại; issue này ghi rõ giới hạn shared data volume thay vì
+hứa cách ly audio. Bản application cũ không mở database schema mới; rollback phải dùng
+backup database trước migration hoặc một application tương thích để export/migrate, không
+xóa cột bằng tay. Runtime stack/provider/egress checks vẫn là kiểm tra độc lập do root
+thực hiện.
+
+Issue #166. Tag: kiến trúc, vận hành, riêng tư. Tài liệu đích: [ADR 0013](adr/0013-notes-service-boundary.md),
+[`docs/user-guide.md`](user-guide.md), [`docs/release/privacy-v0.1.0.md`](release/privacy-v0.1.0.md).
+
 ### #177 — callback ChatGPT từ GUI remote và tạo lại registration ASR Studio
 
 #### Vấn đề và nguyên nhân

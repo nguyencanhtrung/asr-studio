@@ -12,6 +12,7 @@ def test_compose_separates_services_volumes_and_loopback_publish():
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
     app = compose["services"]["app"]
     worker = compose["services"]["worker"]
+    notes = compose["services"]["notes-service"]
 
     assert app["ports"] == ["127.0.0.1:${ASR_PORT:-8765}:8765"]
     assert "ports" not in worker
@@ -20,9 +21,11 @@ def test_compose_separates_services_volumes_and_loopback_publish():
     assert "auth:/var/lib/asr-studio/auth" in app["volumes"]
     assert all("auth:" not in mount for mount in worker["volumes"])
     assert "provider:/var/lib/asr-studio/provider" in app["volumes"]
-    assert "provider:/var/lib/asr-studio/provider" in worker["volumes"]
+    assert "provider:/var/lib/asr-studio/provider" in notes["volumes"]
+    assert all("provider:" not in mount for mount in worker["volumes"])
     assert app["environment"]["ASR_PROVIDER_DIR"] == "/var/lib/asr-studio/provider"
-    assert worker["environment"]["ASR_PROVIDER_DIR"] == "/var/lib/asr-studio/provider"
+    assert "ASR_PROVIDER_DIR" not in worker["environment"]
+    assert notes["environment"]["ASR_PROVIDER_DIR"] == "/var/lib/asr-studio/provider"
     assert "--no-access-log" in app["command"]
     assert app["image"] == "${ASR_IMAGE:-asr-studio:local}"
     assert app["image"] == worker["image"]
@@ -43,30 +46,36 @@ def test_compose_separates_services_volumes_and_loopback_publish():
         "speaker-diarization-community-1}"
     )
     assert "HF_TOKEN" not in app["environment"] and "HF_TOKEN" not in worker["environment"]
-    for service in (app, worker):
+    for service in (app, worker, notes):
         assert service["environment"]["DO_NOT_TRACK"] == "1"
         assert service["environment"]["HF_HUB_DISABLE_TELEMETRY"] == "1"
         assert service["environment"]["PYANNOTE_METRICS_ENABLED"] == "0"
         assert service["environment"]["HF_HUB_OFFLINE"] == "1"
         assert service["environment"]["TRANSFORMERS_OFFLINE"] == "1"
-    assert "gpus" not in worker
+    assert "gpus" not in worker and "gpus" not in notes
     gpu_override = yaml.safe_load((ROOT / "compose.gpu.yaml").read_text(encoding="utf-8"))
     assert gpu_override["services"]["worker"]["gpus"] == "all"
     assert any(mount.endswith(":/models:ro") for mount in app["volumes"])
     assert any(mount.endswith(":/models:ro") for mount in worker["volumes"])
+    assert not any(":/models" in mount for mount in notes["volumes"])
     # Compose keeps the service's :ro mount over `run -v`; only an override file widens it.
     prepare = yaml.safe_load((ROOT / "compose.model-prepare.yaml").read_text(encoding="utf-8"))
     model_mount = next(m for m in worker["volumes"] if m.endswith(":/models:ro"))
     assert prepare["services"]["worker"]["volumes"] == [model_mount.removesuffix(":ro") + ":rw"]
+    assert prepare["services"]["worker"]["networks"] == ["default"]
     assert app["healthcheck"]
     assert worker["healthcheck"]
+    assert notes["healthcheck"]
+    assert compose["networks"]["internal"]["internal"] is True
+    assert worker["networks"] == ["internal"]
+    assert notes["networks"] == ["default"]
 
 
 def test_only_the_model_installer_has_the_network_and_a_writable_models_folder():
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
     installer = services["model-installer"]
-    app, worker = services["app"], services["worker"]
+    app, worker, notes = services["app"], services["worker"], services["notes-service"]
 
     # app and worker stay offline and read-only on /models.
     for service in (app, worker):
@@ -77,6 +86,8 @@ def test_only_the_model_installer_has_the_network_and_a_writable_models_folder()
         ]
         assert "model-install:/var/lib/asr-studio/install" not in worker["volumes"]
     assert "model-install:/var/lib/asr-studio/install" in app["volumes"]
+    assert "model-install:/var/lib/asr-studio/install" not in notes["volumes"]
+    assert not any(":/models" in mount for mount in notes["volumes"])
 
     # The installer is the only writer of /models and sees none of the application's records.
     assert installer["image"] == app["image"]

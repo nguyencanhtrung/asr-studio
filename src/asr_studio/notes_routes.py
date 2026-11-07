@@ -23,10 +23,20 @@ from asr_studio.notes import (
     save_notes_preference,
     update_note,
 )
+from asr_studio.notes_service import is_healthy as notes_service_is_healthy
 from asr_studio.tasks import TaskError
 from asr_studio.worker import is_healthy as worker_is_healthy
+from asr_studio.worker import worker_role
 
 WEB_DIR = Path(__file__).parent / "web"
+
+
+def _notes_processing_ready(data_dir: Path) -> bool:
+    if notes_service_is_healthy(data_dir):
+        return True
+    # A pre-upgrade combined worker remains a valid notes processor, but the
+    # transcription-only worker is deliberately not treated as one.
+    return worker_is_healthy(data_dir) and worker_role(data_dir) == "legacy"
 
 
 async def _json_object(
@@ -88,7 +98,7 @@ def install_notes_routes(
             },
             optional={"output_language", "provider", "expected_model", "expected_reasoning_effort"},
         )
-        worker_ready = worker_is_healthy(settings.data_dir)
+        worker_ready = _notes_processing_ready(settings.data_dir)
         provider_id = payload.get("provider", "chatgpt")
         try:
             result = await run_in_threadpool(

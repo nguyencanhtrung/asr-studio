@@ -31,7 +31,7 @@ the Compose port directly.
 | `--pull`             | Pulls `ASR_IMAGE`. The image must have a version tag (`:v0.1.3`) or a digest (`@sha256:...`). The script rejects `local`, `latest` and `edge`. |
 | `--offline`          | Uses a local image and local models. It does not build, pull or download, it leaves the model installer stopped and it does not block the [network](#network-access), so **Settings → ASR Model** shows the prepare command.                                                                                  |
 
-App, worker and model installer always use the same `ASR_IMAGE`. Before it starts the services, the script:
+App, transcription worker, notes service and model installer always use the same `ASR_IMAGE`. Before it starts the services, the script:
 
 1. Compares the app version and schema version in the image with the checkout.
 2. Compares the image label `org.opencontainers.image.revision` with the checkout commit. A
@@ -40,7 +40,9 @@ App, worker and model installer always use the same `ASR_IMAGE`. Before it start
 3. Downloads a missing default ASR model (`--source` and `--pull` only). Only the `model prepare`
    step and the `model-installer` service download from the model hub.
 4. Waits until the services are healthy.
-5. Checks that the worker runs and that both models are readable through the read-only mount.
+5. Checks that the transcription worker runs, that the notes service is ready (or a legacy
+   combined worker is serving notes), and that both local models are readable through the
+   read-only mount.
 
 After these checks pass, an interactive terminal shows the access link and a QR code. In a pipe,
 CI or redirect, the script hides the token. To show it:
@@ -211,15 +213,16 @@ reason even if cleanup also fails.
 | Message            | Check                                                               |
 | ------------------ | ------------------------------------------------------------------- |
 | Worker not ready   | The `worker` service and the shared `data` volume.              |
-| Model not readable | `ASR_MODEL_HOST_PATH` and the `/models` mount in both services. |
+| Notes not ready    | The `notes-service` health and the provider volume/session.      |
+| Model not readable | `ASR_MODEL_HOST_PATH` and the `/models` mounts in app and worker. |
 
 ### Volumes and settings
 
 | Volume               | Content                                                    | Mounted by  |
 | -------------------- | ---------------------------------------------------------- | ----------- |
-| `data`             | SQLite database and worker liveness state                  | app, worker |
+| `data`             | SQLite database, service liveness state, recordings and publications | app, worker, notes service |
 | `auth`             | Access token and cookie signing key (restricted file mode) | app         |
-| `provider`         | ChatGPT and OMP registration and credentials               | app, worker |
+| `provider`         | ChatGPT and OMP registration and credentials               | app, notes service |
 | Host model directory | ASR and diarization models (read-only, not in the image)   | app, worker |
 
 Restart and recreate keep the volumes. A new Compose project makes a new token.
@@ -235,19 +238,26 @@ Restart and recreate keep the volumes. A new Compose project makes a new token.
 
 ### Network access
 
-All services share the default Docker network, and each one can reach the internet. Nothing on it
-is published except the app's port on the host's loopback address.
+The app, notes service and model installer use the default Docker network. The transcription
+worker uses an internal-only network and has no provider mount. Nothing is published except the
+app's port on the host's loopback address.
 
 | Service | Why it needs the network | Holds |
 | --- | --- | --- |
-| `app` | Sign-in with a notes provider. | Recordings, transcripts, sign-in data. |
-| `worker` | Notes run in its child process and call the provider. ASR and diarization do not use the network. | Recordings, transcripts, provider sign-in. |
+| `app` | Sign-in and provider connection management. | Recordings, transcripts, sign-in data. |
+| `worker` | ASR and diarization use local model paths; it has no provider egress. | Recordings, transcripts and task state. |
+| `notes-service` | Calls the selected notes provider. | SQLite, recordings, transcripts, provider sign-in. |
 | `model-installer` | Downloads catalog models at pinned revisions. | Only `/models` and its job files. |
 
-`HF_HUB_OFFLINE=1` on `app` and `worker` stops the model hub libraries. It does not block the
-network, and neither does `--offline`, which only skips builds, pulls and downloads and leaves the
-model installer stopped. To cut the network, do it on the host, for example with a firewall rule.
-Notes then fail with a clear error, and transcription keeps working.
+`HF_HUB_OFFLINE=1` on `app`, `worker` and `notes-service` stops model-hub libraries. It does not
+block the notes provider network, and neither does `--offline`, which only skips builds, pulls and
+downloads and leaves the model installer stopped. To cut all egress, do it on the host, for example
+with a firewall rule. Notes then fail with a clear provider error, and transcription keeps working.
+
+The notes service shares the current `data` volume so it can read the SQLite/source/publication
+layout and recording paths used by the existing application. This means the service boundary does
+not prevent it from reading recordings at filesystem level; it is not an audio-isolation guarantee.
+The notes adapter's provider request still uses transcript/source data rather than recording bytes.
 
 ### Access token
 
@@ -374,6 +384,10 @@ docker compose -f compose.yaml -f compose.model-prepare.yaml run --pull never --
   --user "$(id -u):$(id -g)" -e HF_HOME=/tmp/huggingface -e HF_HUB_OFFLINE=0 \
   -e TRANSFORMERS_OFFLINE=0 worker python -m asr_studio.cli model prepare --asr-model pho-whisper-large
 ```
+
+The model-preparation override deliberately puts this one-shot command on the default network so
+it can reach the model hub. The regular transcription worker remains on the internal-only network;
+the override does not change the running worker's network or provider mounts.
 
 Run it with the same `COMPOSE_PROJECT_NAME`, `ASR_IMAGE` and `ASR_MODEL_HOST_PATH` as the running
 installation, or the model lands where the app does not look. Use `--asr-model qwen3-asr-1.7b`

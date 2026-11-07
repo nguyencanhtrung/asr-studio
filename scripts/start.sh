@@ -8,7 +8,7 @@ usage() {
     cat <<'HELP'
 Usage: ./scripts/start.sh [--source | --pull | --offline]
 
-Start the app and worker with one resolved Compose image.
+Start the app, transcription worker and notes service with one resolved Compose image.
 
   --source   Build ASR_IMAGE from this checkout, then prepare local models.
   --pull     Pull the versioned/digest ASR_IMAGE, verify it, then prepare models.
@@ -72,7 +72,7 @@ compose_images=$(compose_base config --images)
 selected_image=$(printf '%s\n' "$compose_images" | sed -n '1p')
 distinct_images=$(printf '%s\n' "$compose_images" | sort -u | grep -c . || true)
 if [ -z "$selected_image" ] || [ "$distinct_images" -ne 1 ]; then
-    fail "Compose app, worker and model-installer must resolve to the same single ASR_IMAGE."
+    fail "Compose app, worker, notes-service and model-installer must resolve to the same single ASR_IMAGE."
 fi
 
 source_version=$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' src/asr_studio/__init__.py)

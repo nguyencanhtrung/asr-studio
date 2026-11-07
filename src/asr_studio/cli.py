@@ -30,6 +30,7 @@ from asr_studio.diarization_runner import (
 )
 from asr_studio.model_install import InstallError
 from asr_studio.model_installer import download_model, install_model
+from asr_studio.notes_service import is_healthy as notes_service_is_healthy
 from asr_studio.runner import (
     ModelConfigurationError,
     prepared_engine_directory,
@@ -44,6 +45,7 @@ from asr_studio.runtime import (
 from asr_studio.storage import SCHEMA_VERSION
 from asr_studio.tasks import TASK_ERROR_MESSAGES, TaskError, get_task
 from asr_studio.worker import is_healthy as worker_is_healthy
+from asr_studio.worker import worker_role
 
 _TASK_ID_RE = re.compile(r"[0-9a-f]{32}\Z")
 _SAFE_TASK_STATES = frozenset(
@@ -208,9 +210,15 @@ def check_runtime(settings: Settings, *, verbose: bool = False) -> int:
 
 
 def check_installation(settings: Settings) -> int:
-    """Check that the app can use the worker and both mounted local models."""
+    """Check both processing roles and the mounted local models."""
     if not worker_is_healthy(settings.data_dir):
         print("Installation incomplete: the transcription worker is not ready.", file=sys.stderr)
+        return 1
+    if (
+        not notes_service_is_healthy(settings.data_dir)
+        and worker_role(settings.data_dir) != "legacy"
+    ):
+        print("Installation incomplete: the notes service is not ready.", file=sys.stderr)
         return 1
     profile = read_runtime_profile(settings.data_dir)
     if profile is None:

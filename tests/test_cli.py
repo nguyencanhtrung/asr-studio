@@ -109,6 +109,18 @@ def test_installation_check_requires_worker_before_printing_access_link(
     assert captured.out == ""
 
 
+def test_installation_check_requires_notes_service_for_split_worker(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ASR_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "worker_is_healthy", lambda _directory: True)
+    monkeypatch.setattr(cli, "worker_role", lambda _directory: "transcription")
+    monkeypatch.setattr(cli, "notes_service_is_healthy", lambda _directory: False)
+
+    assert main(["installation", "check"]) == 1
+    captured = capsys.readouterr()
+    assert "notes service is not ready" in captured.err
+    assert captured.out == ""
+
+
 def test_installation_check_requires_models_visible_from_app(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ASR_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(cli, "worker_is_healthy", lambda _directory: True)

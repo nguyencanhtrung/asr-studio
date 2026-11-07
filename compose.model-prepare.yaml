@@ -2,5 +2,9 @@
 # services' read-only /models mount, an override file replaces it by target.
 services:
   worker:
+    # The regular worker is internal-only; this one-shot preparation role needs
+    # egress to the model hub and is never started as the worker service.
+    networks:
+      - default
     volumes:
       - "${ASR_MODEL_HOST_PATH:-./models}:/models:rw"
