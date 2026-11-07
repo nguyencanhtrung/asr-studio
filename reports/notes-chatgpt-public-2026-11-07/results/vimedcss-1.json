@@ -1,0 +1,205 @@
+{
+  "case": "vimedcss-1",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "a61505a748e510e98b7b3e9fbf27e3673f202a100ddbbd17f23ac044eb87bc5a",
+  "source_segments": 27,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [],
+    "key_topics": [
+      {
+        "text": "Unspecified disease manifestation requiring mutations in both gene copies and genetically male patient",
+        "source_ids": [
+          "0101246d57235d6f5d1405f82e7076ed"
+        ]
+      },
+      {
+        "text": "Alpha lipid previous formulation: 1 billion digestive probiotics per serving",
+        "source_ids": [
+          "31f1743e95bf9d70b1e952426281262b"
+        ]
+      },
+      {
+        "text": "Alpha lipid: three main minerals—iron, magnesium, calcium",
+        "source_ids": [
+          "0d53b8b0b8459a84a1548b6cdb98b054"
+        ]
+      },
+      {
+        "text": "Recent global research: methionine functions described as highly beneficial for healthy people",
+        "source_ids": [
+          "480547a5e412d867fcffd3f5879e882b",
+          "90206af5c3dc045c0b4ffcae0139fb2e"
+        ]
+      },
+      {
+        "text": "Methionine unsuitable for paracetamol-poisoning treatment more than 12 hours after overdose",
+        "source_ids": [
+          "618b67d278b4a029d35279dc0af74b13"
+        ]
+      },
+      {
+        "text": "Methionine potentially reducing Levodopa effectiveness",
+        "source_ids": [
+          "2c5c911ade433779c1dfc7c6cc09bd37"
+        ]
+      },
+      {
+        "text": "Possible increased or decreased estrogen activity; harms of estrogen imbalance in women",
+        "source_ids": [
+          "061f631f81eb192a7091cc6037e389ff"
+        ]
+      },
+      {
+        "text": "Female sex hormone level described as gradually declining to normal; unclear estrogen context",
+        "source_ids": [
+          "00db21c3cd76f3fad92a7e98a3a0e518"
+        ]
+      },
+      {
+        "text": "Wistar Institute, 1958: Hayflick began studying whether viruses could cause human cancer",
+        "source_ids": [
+          "dbfd261ec946fa925458e92335b4bfbd"
+        ]
+      },
+      {
+        "text": "Basedow disease usually ages 20–50; toxic nodular goiter usually over age 50",
+        "source_ids": [
+          "07190b92c77b968008da57e30b84ef58"
+        ]
+      },
+      {
+        "text": "Basedow hyperthyroidism autoantibodies potentially affecting eyes and causing bulging eyes",
+        "source_ids": [
+          "577f0427490aa46e40bdfb1472159f9a"
+        ]
+      },
+      {
+        "text": "Beta-glucan during pregnancy: strengthened immunity, bacterial and viral infection prevention, maternal protection, support for fetal health and development",
+        "source_ids": [
+          "d3bff99bddd4b07cfed11f8b5f7d3403"
+        ]
+      },
+      {
+        "text": "Unspecified second effect: lower blood lipids, fat and cholesterol",
+        "source_ids": [
+          "01568f9e591934d30d049be5a7c072ce"
+        ]
+      },
+      {
+        "text": "Acetone: main ingredient in nail polish remover",
+        "source_ids": [
+          "8eb34df7f81da2b88770080488827187"
+        ]
+      },
+      {
+        "text": "Unspecified minimum duration for “age-freezing” effect",
+        "source_ids": [
+          "7f6eb3dcb68afbcff9e51d58067213f2"
+        ]
+      },
+      {
+        "text": "Japan’s collagen and NMN supplementation revolution described as worldwide health and beauty boom",
+        "source_ids": [
+          "7f6eb3dcb68afbcff9e51d58067213f2"
+        ]
+      },
+      {
+        "text": "Listed ingredients: glycyrrhizic acid from licorice root, glycine, DL-methionine",
+        "source_ids": [
+          "996362c1bb4ee4461ca2b4e1fc455c53"
+        ]
+      },
+      {
+        "text": "Responsible acetone use and proper disposal: key to benefits and risk reduction",
+        "source_ids": [
+          "8131b8df2dc60cebb79f0e6ca7d949ff"
+        ]
+      },
+      {
+        "text": "HbA1c: indicator of average blood glucose over 3 months; lookup from left to right for corresponding average level",
+        "source_ids": [
+          "1c975c829b37be48aaf8404d1844b05e",
+          "89fb8c814b4ae2b4501cfb94416de26f"
+        ]
+      },
+      {
+        "text": "Unspecified product or intervention described as especially beneficial for women with conditions such as Candida infection",
+        "source_ids": [
+          "5159157f053ae413f10adab3e4439778"
+        ]
+      },
+      {
+        "text": "Uric acid 550: high, but not yet classified as gout",
+        "source_ids": [
+          "61194bcbe58060b7a94b2967e04177bf"
+        ]
+      },
+      {
+        "text": "Tophi: hard subcutaneous lumps from elevated uric acid and urate crystal accumulation on joint surfaces, commonly finger joints",
+        "source_ids": [
+          "030adae46303a18ca9b84d2495d024bd"
+        ]
+      },
+      {
+        "text": "Unspecified high-protein, high-purine substance unsuitable for people with gout",
+        "source_ids": [
+          "a9a311d9b55550a38d4c6392e981c525"
+        ]
+      },
+      {
+        "text": "Simple lipids: no antigenic properties",
+        "source_ids": [
+          "fa1b115e920d83e698899cd96e40049b"
+        ]
+      },
+      {
+        "text": "hem 7600T line; context unspecified",
+        "source_ids": [
+          "529039f2a0b618045ed4f8e1eebf2d03"
+        ]
+      }
+    ],
+    "decisions": [],
+    "open_questions": [
+      {
+        "text": "Effects of steroid, ampicillin, estrogen-containing drugs, phenothiazine, tetracycline and diet on estrogen levels?",
+        "source_ids": [
+          "779265ea115bcb29de2732999e4ee7e6"
+        ]
+      },
+      {
+        "text": "Sources of acetone exposure?",
+        "source_ids": [
+          "8eb34df7f81da2b88770080488827187"
+        ]
+      }
+    ],
+    "action_items": [],
+    "confirmation_items": []
+  },
+  "coverage": {
+    "version": 1,
+    "segment_count": 27,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          27
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "elapsed_seconds": 32.757
+}

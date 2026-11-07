@@ -1,0 +1,198 @@
+{
+  "case": "librispeech-1",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "8900d3f29bc5fd6a8c841832d6ba8b838ef03c41175c34859c33a1c98e71634a",
+  "source_segments": 27,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [],
+    "key_topics": [
+      {
+        "text": "Mister Quilter welcomed as “apostle of the middle classes”; his “gospel” praised",
+        "source_ids": [
+          "c1a143de58f362dd570d203dd7adbb0e"
+        ]
+      },
+      {
+        "text": "Mister Quilter’s manner described as no less interesting than his matter",
+        "source_ids": [
+          "df5532e9050148ab2c3722971ad81114"
+        ]
+      },
+      {
+        "text": "Festive season, Christmas and roast beef cited as prompting eating-related similes",
+        "source_ids": [
+          "7b1a256fe41aedba28a287c9d4d43272"
+        ]
+      },
+      {
+        "text": "Grave doubts over Sir Frederick Leighton’s work being Greek; little “rocky Ithaca” detected",
+        "source_ids": [
+          "1a74365a942bb409125d39486af93d63"
+        ]
+      },
+      {
+        "text": "Linnell’s pictures likened to “up Guards and at ’em” paintings; Mason’s idylls called as national as a Jingo poem",
+        "source_ids": [
+          "37a86522e3ca280c373c8ee0361e8290"
+        ]
+      },
+      {
+        "text": "Mister Birket Foster’s landscapes compared with Mister Carker flashing his teeth; Mister John Collier likened to Turkish-bath shampooer calling “next man”",
+        "source_ids": [
+          "37a86522e3ca280c373c8ee0361e8290"
+        ]
+      },
+      {
+        "text": "Criticisms characterized ironically as luminous and delicate in expression",
+        "source_ids": [
+          "f30ed4f90cf8e7afdcb4f190339b0bed"
+        ]
+      },
+      {
+        "text": "Mister Quilter’s writing on general art principles characterized as equally lucid",
+        "source_ids": [
+          "c5b32dd679a3e4a51b0d971cd3f22d80"
+        ]
+      },
+      {
+        "text": "Painting described as different in quality from mathematics; finish in art defined as adding more fact",
+        "source_ids": [
+          "926dc428af02e36b0eb76b460b4e58f4"
+        ]
+      },
+      {
+        "text": "Etchings divided into two kinds: British and foreign",
+        "source_ids": [
+          "189f9b998d1118c0cb6867a49d6310cd"
+        ]
+      },
+      {
+        "text": "Bitter lament over separation of decorative art from pictures; appeal to Last Judgment and Michael Angelo’s role as “furnishing upholsterer”",
+        "source_ids": [
+          "1c373df69d0ee3d2703d8599eac1c70b"
+        ]
+      },
+      {
+        "text": "Fragment mentioning fire and ornaments Fred brought home from India on mantel board",
+        "source_ids": [
+          "146de65b4e33feb75200461c31cf1e02"
+        ]
+      },
+      {
+        "text": "Mister Ruskin criticized for not recognizing that picture should denote human frailty; incomplete reference to “many phases of feeling”",
+        "source_ids": [
+          "d7c4a9cc622f93145bbe3ad2c87e5590"
+        ]
+      },
+      {
+        "text": "Mister Quilter’s own work judged never to “get good”; chance missed even to become “Tupper of painting”",
+        "source_ids": [
+          "027c76935d129746bbfddbf47117b4bd",
+          "40f06c858b1506309c57c7bd00a5fefb"
+        ]
+      },
+      {
+        "text": "Attribution: By Harry Quilter M A",
+        "source_ids": [
+          "74dc54b4ce05879227099a8360cd7483"
+        ]
+      },
+      {
+        "text": "Failure to conquer while sleeping blamed for Rose Princess becoming fiddle without bow and Shaggy becoming cooing dove",
+        "source_ids": [
+          "4239b63002b9636fd6a41a9c43d2a910"
+        ]
+      },
+      {
+        "text": "Polychrome reports unnamed male gone for good; presence beside dragon and observation of events",
+        "source_ids": [
+          "991a3424602e72c0c4848e516321af23"
+        ]
+      },
+      {
+        "text": "Prisoner claims voluntary captivity; breaks stout chains like threads",
+        "source_ids": [
+          "e57d00eae1b6b9c132cc8c2a5c225cd1"
+        ]
+      },
+      {
+        "text": "Little girl awakened by raps; door opened",
+        "source_ids": [
+          "babe5ffd66afc0fb53216c81e86d8acd"
+        ]
+      },
+      {
+        "text": "King reported fled in disgrace; friends asking for unnamed person",
+        "source_ids": [
+          "95b9cf519605390e8acfb5eab4c9b355"
+        ]
+      },
+      {
+        "text": "Past request for Ruggedo to send unnamed male away refused",
+        "source_ids": [
+          "12affa63374108fec19a1d8d37c333d1"
+        ]
+      },
+      {
+        "text": "Past offer to help brother escape refused",
+        "source_ids": [
+          "5156d06a3db6c84d45a2997aeaf329fe"
+        ]
+      },
+      {
+        "text": "New King reports brother eating and sleeping steadily",
+        "source_ids": [
+          "a9fca93e44515de66d63662cfbeec98d"
+        ]
+      },
+      {
+        "text": "Shaggy hopes brother not working too hard; response says no work at all",
+        "source_ids": [
+          "757745c610fa384dd6547023f3d3d9e2",
+          "e5afda23b1c17fec802a243807624b28"
+        ]
+      },
+      {
+        "text": "No suitable work in dominions; numerous Nomes already difficult to keep busy",
+        "source_ids": [
+          "fccf78947f24cf33239d921ff4539d92"
+        ]
+      },
+      {
+        "text": "Kaliko replies, “Not exactly”",
+        "source_ids": [
+          "593e7d538141c188aa543b023d440fcd"
+        ]
+      }
+    ],
+    "decisions": [],
+    "open_questions": [],
+    "action_items": [],
+    "confirmation_items": []
+  },
+  "coverage": {
+    "version": 1,
+    "segment_count": 27,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          27
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "elapsed_seconds": 22.914
+}

@@ -1,0 +1,9 @@
+{
+  "image": "asr-studio:main-705f706",
+  "image_id": "sha256:71d7fb6aac14b8322d86754fbde334a9a7d6fd6696a692f564ad51fe7cf181e0",
+  "revision": "705f706fcddb44d83131aae12948d1163c9068c5",
+  "provider_calls": 8,
+  "input": "public reference transcripts only",
+  "package_source": "installed image package; module hashes asserted before every case",
+  "notes_version": "notes-hierarchical-v8"
+}

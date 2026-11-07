@@ -1,0 +1,204 @@
+{
+  "case": "vivos-1",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "29ff6d8de85aba7209de42a3ab00b89ed47ede6beb7fa9329d470d72737f7fd1",
+  "source_segments": 27,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [],
+    "key_topics": [
+      {
+        "text": "Transplant completed as expected; reported by Mr. Liêm",
+        "source_ids": [
+          "43df003517ab06d4246e16b99837104b"
+        ]
+      },
+      {
+        "text": "Many people; names still remembered",
+        "source_ids": [
+          "921d72e48cfcdc8d77125af9b0a02a5b"
+        ]
+      },
+      {
+        "text": "Living with kindness and loyalty",
+        "source_ids": [
+          "71c31a2ef717d7ad599cf372283091e8"
+        ]
+      },
+      {
+        "text": "Incomplete reference: these foods",
+        "source_ids": [
+          "1da6a216e8c6423c347025352de15bd3"
+        ]
+      },
+      {
+        "text": "Numbers: twenty-six, twenty-seven",
+        "source_ids": [
+          "50035c923509fe7fbf71e983234a21e4"
+        ]
+      },
+      {
+        "text": "Work boredom; potentially fertile ground for creative activity",
+        "source_ids": [
+          "f332b3337e333ba02a3df6dd15e8fa8b"
+        ]
+      },
+      {
+        "text": "Many hot spots cooled down",
+        "source_ids": [
+          "48c8a39380a3fdd09752e81edb893044"
+        ]
+      },
+      {
+        "text": "Postdoctoral fellowship in South Korea",
+        "source_ids": [
+          "3521cb0fabdfdb5b4b8ef7a940af278d"
+        ]
+      },
+      {
+        "text": "University of Science, Ho Chi Minh City",
+        "source_ids": [
+          "0dc76ba4c134aeca06dafa3afad78357"
+        ]
+      },
+      {
+        "text": "Police disclosed no contents of two packages",
+        "source_ids": [
+          "e264b2f31bd52c20516a2a5a915d3012"
+        ]
+      },
+      {
+        "text": "Incomplete thought: when able to grasp or hold",
+        "source_ids": [
+          "46cd478bfa545a5534f11369eae4372a"
+        ]
+      },
+      {
+        "text": "Unspecified condition: frequent bruising, slow healing",
+        "source_ids": [
+          "bef8e44423209db8a3d2d81b738140cf"
+        ]
+      },
+      {
+        "text": "Each college and university admissions season; festival season for làng Rồng",
+        "source_ids": [
+          "aa2c08ad2164bd155ead778fd02ebf52"
+        ]
+      },
+      {
+        "text": "People returning to fields; every household preparing planting and harvesting",
+        "source_ids": [
+          "73e4a239006dcacec4f2c3a1368e4df8"
+        ]
+      },
+      {
+        "text": "Incomplete phrase: opportunistic in “thị hiếu pháp”; meaning uncertain",
+        "source_ids": [
+          "31a6f364e1b3614aa985c980e3a0117b"
+        ]
+      },
+      {
+        "text": "Numbers: forty-four, forty-five",
+        "source_ids": [
+          "6da3f19f91095786866f02d2e03df975"
+        ]
+      },
+      {
+        "text": "Time for observation and thinking; resulting idea to adjust traffic-light timing; shared by Mr. Tuấn",
+        "source_ids": [
+          "5b60f91b2b922de5511b48de39b9b676"
+        ]
+      },
+      {
+        "text": "Incomplete explanation: thanks to witty, humorous orators",
+        "source_ids": [
+          "810163a8f40f8e8e96108343bf747b16"
+        ]
+      },
+      {
+        "text": "Child flattering father when wanting a toy",
+        "source_ids": [
+          "5151ac3b117b82d4944ccd99372db3b9"
+        ]
+      },
+      {
+        "text": "Numbers: sixty, sixty-one",
+        "source_ids": [
+          "5f662d73ba14a3ec88d166b6d26b9499"
+        ]
+      },
+      {
+        "text": "Activity fragment: fishing while crossing suspension bridge; four legs moving on three plastic chairs; blindfolded crossing seesaw bridge; pot smashing; throwing còn ball; photo reference",
+        "source_ids": [
+          "322820036179cb93257cc7271dafd03f"
+        ]
+      },
+      {
+        "text": "Incomplete thought: standing outside community",
+        "source_ids": [
+          "693849e2f264f9e041b273d896f0930c"
+        ]
+      },
+      {
+        "text": "Fragmented account: someone teasing “lá rụng về cội”; Mr. Hai Chi and Chín Hoà mentioned; intense anger linked to deep love for foster father",
+        "source_ids": [
+          "9022edcecd00cb06f6997940677c5604"
+        ]
+      },
+      {
+        "text": "Numbers: sixty-four, sixty-five",
+        "source_ids": [
+          "b61886b794c6ea6a583162498060f017"
+        ]
+      },
+      {
+        "text": "Project costs expected to be far from cheap",
+        "source_ids": [
+          "e5be5feaa7a9aa16617c5aa604548031"
+        ]
+      }
+    ],
+    "decisions": [],
+    "open_questions": [
+      {
+        "text": "Whether grunting old fellow also has intelligence; rhetorical, unresolved",
+        "source_ids": [
+          "d3e55f0db70a772b30b5adea75335fae"
+        ]
+      }
+    ],
+    "action_items": [],
+    "confirmation_items": [
+      {
+        "text": "Advice from everyone: bring mother to hospital; no agreement recorded",
+        "source_ids": [
+          "1679017f0ba8c1d7210b25c0756c90de"
+        ]
+      }
+    ]
+  },
+  "coverage": {
+    "version": 1,
+    "segment_count": 27,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          27
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "elapsed_seconds": 31.901
+}

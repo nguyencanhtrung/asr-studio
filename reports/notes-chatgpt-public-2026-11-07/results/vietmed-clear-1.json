@@ -1,0 +1,67 @@
+{
+  "case": "vietmed-clear-1",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "87be4a947debdaf33398c94cb705c8092f0b94716e94761869a34fea4b6358c8",
+  "source_segments": 4,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [
+      {
+        "text": "Genital-tract injury or foreign bodies as possible conditions",
+        "source_ids": [
+          "7e5f7a9066bcb8f40d91132ebf5e5b6d"
+        ]
+      }
+    ],
+    "key_topics": [
+      {
+        "text": "Possible cases among some children or people from rural areas visiting fields",
+        "source_ids": [
+          "7e5f7a9066bcb8f40d91132ebf5e5b6d",
+          "8661ef789ba0add23df865ee5f42779b",
+          "82e1d4e9bc438cb28d9fc5ce2697194a"
+        ]
+      },
+      {
+        "text": "Animals such as leeches possibly entering genital tract in fields",
+        "source_ids": [
+          "82e1d4e9bc438cb28d9fc5ce2697194a"
+        ]
+      },
+      {
+        "text": "Foreign animal lodging in vagina; frequent, prolonged bleeding",
+        "source_ids": [
+          "537b08949b2e7f1446f4955933d4d87c"
+        ]
+      }
+    ],
+    "decisions": [],
+    "open_questions": [],
+    "action_items": [],
+    "confirmation_items": []
+  },
+  "coverage": {
+    "version": 1,
+    "segment_count": 4,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          4
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "elapsed_seconds": 8.967
+}

@@ -1,0 +1,141 @@
+{
+  "case": "vietmed-2",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "d6b2b06fe5e2e98223b2f25eca27c4f1e69b1d18822b2a8e974d2fa63178a8fc",
+  "source_segments": 27,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [
+      {
+        "text": "Educational discussion: definitions and causes of rong kinh and rong huyết",
+        "source_ids": [
+          "6ab4e4b4d5f63c11cef670b80a0008e1",
+          "51c7a4b34e67984705cbfeb2fc6d1016",
+          "e6c768b08ed6366175dc06c14cc4a65b"
+        ]
+      }
+    ],
+    "key_topics": [
+      {
+        "text": "Normal menstruation: 3–5 days; sometimes up to 7 days; lower blood volume on days 5–7",
+        "source_ids": [
+          "6ab4e4b4d5f63c11cef670b80a0008e1",
+          "a91b18631845e2e2ce37765237244231",
+          "8939bedadd53f8c6216b974439cfeb74"
+        ]
+      },
+      {
+        "text": "Rong kinh: menstruation at expected time, lasting over 7 days",
+        "source_ids": [
+          "3c7319ae10f9b14415f1250028922691",
+          "a772f3b96ba0c4c7c601c809d526d1e7"
+        ]
+      },
+      {
+        "text": "Rong huyết: abnormal vaginal bleeding outside expected menstrual timing, prolonged",
+        "source_ids": [
+          "a772f3b96ba0c4c7c601c809d526d1e7",
+          "67ba1d1ed2309bf61fd2a0707fa5c3ff",
+          "51c7a4b34e67984705cbfeb2fc6d1016"
+        ]
+      },
+      {
+        "text": "Cause categories: functional and organic",
+        "source_ids": [
+          "e6c768b08ed6366175dc06c14cc4a65b",
+          "e72f24bb125fca8ca118b9e9bac0441d"
+        ]
+      },
+      {
+        "text": "Functional causes: normal uterus and adnexa; ovarian estrogen and progesterone dysfunction; irregular or absent menstruation, prolonged vaginal bleeding",
+        "source_ids": [
+          "e72f24bb125fca8ca118b9e9bac0441d",
+          "3838666b1d730a8347a069da4355b185",
+          "f89d49bbc1ec6d583b3436ff1e9c7070",
+          "7eda6cb6fbfef6acfabd86d5d45025e2",
+          "57a88e0f24a272a1a1129590fdb37cd1"
+        ]
+      },
+      {
+        "text": "Organic causes: pathology in uterus, vagina or cervix",
+        "source_ids": [
+          "57a88e0f24a272a1a1129590fdb37cd1",
+          "42f9b05b7d8c1df53a326cc0923f813d"
+        ]
+      },
+      {
+        "text": "Uterine fibroids: common organic cause; intramyometrial or subserosal locations less likely to cause rong kinh or rong huyết",
+        "source_ids": [
+          "270f6c23f373b6816f61b1a46c996a93",
+          "1162e34933dba1a353e707f089fd49d6",
+          "1620c21d9f1663f11725477be1ec095a",
+          "075ccc7c07650594c6f6797dcef46784"
+        ]
+      },
+      {
+        "text": "Other organic causes: endometrial polyps, endometrial hyperplasia, endometrial cancer",
+        "source_ids": [
+          "b11cc4fe2cd8b9f2ac11854fd02e168f",
+          "1e7941e5f5ed7f4eec65eb83b817fa2c"
+        ]
+      },
+      {
+        "text": "Genital-tract trauma or foreign bodies: possible bleeding causes",
+        "source_ids": [
+          "7e5f7a9066bcb8f40d91132ebf5e5b6d"
+        ]
+      },
+      {
+        "text": "Rural field exposure: possible leech or other foreign body in vagina; frequent, prolonged bleeding of unclear apparent cause",
+        "source_ids": [
+          "8661ef789ba0add23df865ee5f42779b",
+          "82e1d4e9bc438cb28d9fc5ce2697194a",
+          "537b08949b2e7f1446f4955933d4d87c",
+          "c0308753e444bd84a988eb04ef6012d7"
+        ]
+      },
+      {
+        "text": "Medical bleeding disorders: prolonged rong kinh or rong huyết from inability to stop bleeding",
+        "source_ids": [
+          "c2ff12a510c8518f136b7d6387fc1abc",
+          "c67408e1d13e15e8a7ca95da15a80d9b"
+        ]
+      }
+    ],
+    "decisions": [],
+    "open_questions": [],
+    "action_items": [],
+    "confirmation_items": [
+      {
+        "text": "Later transition to examination section for further discussion of organic causes",
+        "source_ids": [
+          "42f9b05b7d8c1df53a326cc0923f813d"
+        ]
+      }
+    ]
+  },
+  "coverage": {
+    "version": 1,
+    "segment_count": 27,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          27
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "elapsed_seconds": 21.228
+}
