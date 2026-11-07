@@ -67,16 +67,21 @@ hợp đồng prompt cũ. Hoàn tất hàng đợi trước upgrade, hoặc dùn
 đã giữ sau upgrade. Guard này tránh ghi phiên bản prompt cũ cho kết quả dùng prompt mới
 ([`notes_runner.py`](../../src/asr_studio/notes_runner.py)).
 
-Notes audit ở prompt v16 là một lượt tùy chọn có giới hạn sau draft đơn hoặc final phân cấp khi
-full-source payload vừa ngân sách. Model chỉ chọn mã catalog trong trường `item.text`; runtime
-giải mã mã draft/tiền tố hoặc quote nguồn nguyên văn trước khi publication, nên audit không được
-sinh prose mới hay metadata action mới. Quote nguồn giữ ngôn ngữ gốc và thêm nhãn ngôn ngữ đầu
-ra, chỉ được đặt ở context/confirmation. Guard này không chứng minh semantic correctness của mọi
-claim draft được giữ; nó chỉ chặn ref lạ, đổi nhóm, lặp origin, metadata mới và các tiền tố làm
-mất phủ định/tình thái. Kiểm tra audit phải giữ phân biệt thì/tình thái: thảo luận hoặc khám về
-sau không phải việc đã thực hiện. Audit dùng cùng repair/recovery budget; nếu payload không vừa,
-ghi `prompt_budget`, còn audit lỗi là terminal để không công bố bản chưa kiểm tra. Các primary
-prompt/schema/model/caps và adapter ngoài boundary không đổi.
+Notes audit ở prompt v17 là một lượt tùy chọn có giới hạn sau draft đơn hoặc final phân cấp khi
+full-source payload vừa ngân sách. Model chỉ chọn mã catalog trong trường `item.text`; trước khi
+chọn phải đối chiếu toàn bộ source với draft để tìm fact, speaker position, constraint,
+qualification, status và temporal/modality bị bỏ sót. Chỉ nhắc cùng topic không giữ được position
+riêng. Với cùng confirmed work, ưu tiên action chi tiết hơn và chỉ bỏ decision khi không mất
+outcome hoặc constraint có căn cứ riêng; shared citation/topic/wording không đủ để xóa. Sau khi
+gộp phải giữ ý riêng, còn nếu mã draft không giữ được thì dùng source ref được phép. Runtime
+giải mã mọi ref, kể cả ref được thêm vào, giữ đúng quote nguồn và thêm label; model không viết source
+prose hoặc label. Quote nguồn chỉ được đặt ở context/confirmation, không ép quote hay chép toàn
+bộ transcript. Audit không được sinh prose mới hay metadata action mới. Guard này không chứng minh
+semantic correctness của mọi claim draft được giữ; nó chỉ chặn ref lạ, đổi nhóm, lặp origin,
+metadata mới và các tiền tố làm mất phủ định/tình thái. Kiểm tra audit phải giữ phân biệt thì/tình
+thái: thảo luận hoặc khám về sau không phải việc đã thực hiện. Audit dùng cùng repair/recovery
+budget; nếu payload không vừa, ghi `prompt_budget`, còn audit lỗi là terminal để không công bố bản
+chưa kiểm tra. Các primary prompt/schema/model/caps và adapter ngoài boundary không đổi.
 
 Upgrade được thực hiện bởi `initialize()` trong transaction và ghi migration v16 sau
 khi thêm cột. Không sửa tay `owner_role` hoặc xóa migration record để rollback. Bản
