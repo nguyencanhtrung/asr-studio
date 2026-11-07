@@ -6,7 +6,7 @@
 
 - Model quality: **PASS_WITH_PARTIALS** — 110 supported, 11 partial, 0 unsupported bullets out of 121; 4 certainty promotions; 0 invented owner/deadline fields; 0 exact duplicate pairs.
 - Meeting acceptance: **NOT ESTABLISHED**. Public row snippets cannot prove a meeting, real duration, speaker count, owners/deadlines, or the original private acceptance criteria.
-- Gold is a frozen historical aid, not blind or human-approved. It was read before generated results; source/gold tensions are recorded in scores.json.
+- Gold is a frozen historical aid, not blind or human-approved. It was read before generated results; source/gold tensions are recorded in screening-scores.json.
 
 ## Verification
 
@@ -70,7 +70,7 @@ Bullet aggregate: 22 supported, 4 partial, 0 unsupported; certainty promotions 4
 | key_topics[24] | SUPPORTED | no | sufficient | no | no | fccf78947f24cf33239d921ff4539d92 | fccf78947f24cf33239d921ff4539d92: IN FACT THERE IS NOTHING HE CAN DO IN THESE DOMINIONS AS WELL AS OUR NOMES WHOSE NUMBERS ARE SO GREAT THAT IT WORRIES US T... |
 | key_topics[25] | SUPPORTED | no | sufficient | no | no | 593e7d538141c188aa543b023d440fcd | 593e7d538141c188aa543b023d440fcd: NOT EXACTLY RETURNED KALIKO |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ### vietmed-1
 
@@ -90,7 +90,7 @@ Bullet aggregate: 10 supported, 1 partial, 0 unsupported; certainty promotions 0
 | key_topics[8] | PARTIAL | no | partial | no | no | 7e5f7a9066bcb8f40d91132ebf5e5b6d<br>8661ef789ba0add23df865ee5f42779b<br>82e1d4e9bc438cb28d9fc5ce2697194a<br>537b08949b2e7f1446f4955933d4d87c<br>c0308753e444bd84a988eb04ef6012d7 | 7e5f7a9066bcb8f40d91132ebf5e5b6d: là bị chấn thương hoặc là dị vật đường sinh dục một số em bé một số người mới ở; 8661ef789ba0add23df865ee5f42779b: vùng nông thôn; 82e1d4e9bc438cb28d9fc5ce2697194a: xuống mấy đồng ruộng thì có thể là có bị dị vật như là những con vật như con đỉa gì đó mà nó nó vào đường sinh dục; 537b08949b2e7f1446f4955933d4d87c: bạn nó sẽ nằm ở chỗ âm đạo và nó sẽ gây chảy máu mau kéo dài thường xuyên; c0308753e444bd84a988eb04ef6012d7: không biết là nguyên nhân gì sau nay mình đặt bỏ việc nạp và do những Note: The cited segments support trauma, leech, and prolonged bleeding; the clipped c030 segment does not independently support ... |
 | key_topics[9] | SUPPORTED | no | sufficient | no | no | c2ff12a510c8518f136b7d6387fc1abc<br>c67408e1d13e15e8a7ca95da15a80d9b | c2ff12a510c8518f136b7d6387fc1abc: cái mặt lý để bị nội khoa bệnh về rối loạn trong chảy máu thì nó gây nên một cái tình trạng là; c67408e1d13e15e8a7ca95da15a80d9b: rong kinh rong huyết kéo dài do không không cầm máu được ngoài ra thì do những |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ### vietmed-2
 
@@ -112,7 +112,7 @@ Bullet aggregate: 12 supported, 1 partial, 0 unsupported; certainty promotions 0
 | key_topics[10] | SUPPORTED | no | sufficient | no | no | c2ff12a510c8518f136b7d6387fc1abc<br>c67408e1d13e15e8a7ca95da15a80d9b | c2ff12a510c8518f136b7d6387fc1abc: cái mặt lý để bị nội khoa bệnh về rối loạn trong chảy máu thì nó gây nên một cái tình trạng là; c67408e1d13e15e8a7ca95da15a80d9b: rong kinh rong huyết kéo dài do không không cầm máu được ngoài ra thì do những |
 | confirmation_items[0] | SUPPORTED | no | sufficient | no | no | 42f9b05b7d8c1df53a326cc0923f813d | 42f9b05b7d8c1df53a326cc0923f813d: tế ở tử cung hoặc âm đạo hoặc là cổ của tử cung thì tí nữa mình sẽ sang cái phần thăm khám |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ### vietmed-3
 
@@ -133,7 +133,7 @@ Bullet aggregate: 11 supported, 1 partial, 0 unsupported; certainty promotions 0
 | key_topics[9] | SUPPORTED | no | sufficient | no | no | c2ff12a510c8518f136b7d6387fc1abc<br>c67408e1d13e15e8a7ca95da15a80d9b | c2ff12a510c8518f136b7d6387fc1abc: cái mặt lý để bị nội khoa bệnh về rối loạn trong chảy máu thì nó gây nên một cái tình trạng là; c67408e1d13e15e8a7ca95da15a80d9b: rong kinh rong huyết kéo dài do không không cầm máu được ngoài ra thì do những |
 | confirmation_items[0] | SUPPORTED | no | sufficient | no | no | 42f9b05b7d8c1df53a326cc0923f813d | 42f9b05b7d8c1df53a326cc0923f813d: tế ở tử cung hoặc âm đạo hoặc là cổ của tử cung thì tí nữa mình sẽ sang cái phần thăm khám |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ### vietmed-clear-1
 
@@ -146,7 +146,7 @@ Bullet aggregate: 4 supported, 0 partial, 0 unsupported; certainty promotions 0;
 | key_topics[1] | SUPPORTED | no | sufficient | no | no | 82e1d4e9bc438cb28d9fc5ce2697194a | 82e1d4e9bc438cb28d9fc5ce2697194a: xuống mấy đồng ruộng thì có thể là có bị dị vật như là những con vật như con đỉa gì đó mà nó nó vào đường sinh dục |
 | key_topics[2] | SUPPORTED | no | sufficient | no | no | 537b08949b2e7f1446f4955933d4d87c | 537b08949b2e7f1446f4955933d4d87c: bạn nó sẽ nằm ở chỗ âm đạo và nó sẽ gây chảy máu mau kéo dài thường xuyên |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ### vietmed-noise-1
 
@@ -156,7 +156,7 @@ Bullet aggregate: 0 supported, 1 partial, 0 unsupported; certainty promotions 0;
 |---|---|---|---|---|---|---|---|
 | open_questions[0] | PARTIAL | no | partial | no | no | c0308753e444bd84a988eb04ef6012d7 | c0308753e444bd84a988eb04ef6012d7: không biết là nguyên nhân gì sau nay mình đặt bỏ việc nạp và do những Note: The unknown-cause/fragment framing is supported; glossing 'nạp' as loading/top-up is not supported by the clipped source. |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ### vimedcss-1
 
@@ -192,7 +192,7 @@ Bullet aggregate: 26 supported, 1 partial, 0 unsupported; certainty promotions 0
 | open_questions[0] | SUPPORTED | no | sufficient | no | no | 779265ea115bcb29de2732999e4ee7e6 | 779265ea115bcb29de2732999e4ee7e6: Một số loại thuốc như steroid, ampicillin, thuốc có chứa estrogen, phenothiazine và tetracycline, chế độ ăn uống ảnh hưởng... |
 | open_questions[1] | SUPPORTED | no | sufficient | no | no | 8eb34df7f81da2b88770080488827187 | 8eb34df7f81da2b88770080488827187: Bạn có thể biết đến nó là thành phần chính trong nước tẩy sơn móng tay. Vậy chúng ta tiếp xúc với aceton ở đâu? |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ### vivos-1
 
@@ -228,7 +228,7 @@ Bullet aggregate: 25 supported, 2 partial, 0 unsupported; certainty promotions 0
 | open_questions[0] | SUPPORTED | no | sufficient | no | no | d3e55f0db70a772b30b5adea75335fae | d3e55f0db70a772b30b5adea75335fae: Chúa ơi, chả lẽ lão ủn ỉn cũng có trí tuệ ư? |
 | confirmation_items[0] | SUPPORTED | no | sufficient | no | no | 1679017f0ba8c1d7210b25c0756c90de | 1679017f0ba8c1d7210b25c0756c90de: Khi tư vấn thì mọi người đều nói đem mẹ đến bệnh viện |
 
-Gold fact records for this case are complete in scores.json; the table above cites the source text for every generated bullet.
+Gold fact records for this case are complete in screening-scores.json; the table above cites the source text for every generated bullet.
 
 ## Limitation matrix
 
@@ -250,6 +250,6 @@ The current issue captures were read after result inspection and used only for t
 - No prior scoring report was opened.
 - The frozen gold is not blind or human-approved. It was revised after earlier outputs and is used only as a source-derived comparison aid.
 - The seven current issue captures were read after result inspection and used only for the limitation matrix.
-- Preparation also included some historical repository documentation/git-history inspection before the user's correction. Those materials are excluded from per-bullet support labels; no blind-scoring claim is made. Full disclosure is in scores.json.
+- Preparation also included some historical repository documentation/git-history inspection before the scope correction. Those materials are excluded from per-bullet support labels; no blind-scoring claim is made. Full disclosure is in screening-scores.json.
 
-Machine-readable detail, including every gold fact and all source/gold tensions: scores.json.
+Machine-readable detail, including every gold fact and all source/gold tensions: screening-scores.json.
