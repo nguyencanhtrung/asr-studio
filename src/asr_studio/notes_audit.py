@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -69,6 +70,16 @@ _MARKERS = frozenset(
         "ủnghộ",
     }
 )
+_COMPOUND_MARKER_TOKENS = frozenset(
+    {
+        ("không", "được"),
+        ("có", "thể"),
+        ("dự", "kiến"),
+        ("đề", "xuất"),
+        ("phản", "đối"),
+        ("ủng", "hộ"),
+    }
+)
 _WORD_RE = re.compile(r"\S+", re.UNICODE)
 
 AuditKind = Literal["draft", "source"]
@@ -85,7 +96,7 @@ def _error(
 
 def _marker_token(value: str) -> str:
     """Fold punctuation around a word without copying any source prefix."""
-    folded = value.casefold()
+    folded = unicodedata.normalize("NFC", value).casefold()
     while folded and not folded[0].isalnum() and folded[0] != "'":
         folded = folded[1:]
     while folded and not folded[-1].isalnum() and folded[-1] != "'":
@@ -100,13 +111,20 @@ def _safe_prefix_end_offsets(text: str) -> tuple[int, ...]:
     for the one reference the provider actually selects.
     """
     matches = tuple(_WORD_RE.finditer(text))
+    tokens = tuple(_marker_token(match.group()) for match in matches)
+    marker_tokens = [token in _MARKERS for token in tokens]
+    for index in range(len(tokens) - 1):
+        if (tokens[index], tokens[index + 1]) in _COMPOUND_MARKER_TOKENS:
+            marker_tokens[index] = True
+            marker_tokens[index + 1] = True
     safe: list[int] = []
     marker_after = False
-    for match in reversed(matches):
+    for index in range(len(matches) - 1, -1, -1):
+        match = matches[index]
         end = match.end()
         if end < len(text) and not marker_after:
             safe.append(end)
-        marker_after = marker_after or _marker_token(match.group()) in _MARKERS
+        marker_after = marker_after or marker_tokens[index]
     safe.reverse()
     return tuple(safe)
 

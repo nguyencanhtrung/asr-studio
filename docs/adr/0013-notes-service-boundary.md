@@ -61,13 +61,13 @@ Pending semantics được giữ rõ ràng:
   khóa các overlap này.
 
 Role migration không đổi hợp đồng prompt đã lưu trên task. Khi nâng cấp đồng thời sang
-`notes-hierarchical-v18`, task Notes đã nhận bằng prompt cũ có thể kết thúc với
+`notes-hierarchical-v19`, task Notes đã nhận bằng prompt cũ có thể kết thúc với
 `notes_contract_changed`; không được mô tả kiểm tra role-only như bằng chứng tự chạy lại
 hợp đồng prompt cũ. Hoàn tất hàng đợi trước upgrade, hoặc dùng GUI tạo lại Notes từ transcript
 đã giữ sau upgrade. Guard này tránh ghi phiên bản prompt cũ cho kết quả dùng prompt mới
 ([`notes_runner.py`](../../src/asr_studio/notes_runner.py)).
 
-Notes audit ở prompt v18 chỉ giữ các đường đã có bằng chứng cho nguồn đơn: ChatGPT hợp nhất
+Notes audit ở prompt v19 chỉ giữ các đường đã có bằng chứng cho nguồn đơn: ChatGPT hợp nhất
 lại schema 1, còn Antigravity chọn tham chiếu từ catalog. Reference guard của Antigravity chặn mã
 lạ, đổi nhóm, lặp origin và metadata mới; runtime giải mã quote và thêm nhãn. ChatGPT có thể viết
 lại prose và phải qua validator/source review. Cả hai dùng cùng provider/model đã chọn và tối đa

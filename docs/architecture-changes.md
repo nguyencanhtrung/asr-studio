@@ -1503,7 +1503,7 @@ Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `
 Map tuần tự theo ngân sách và final chỉ đọc các bản nháp có thể giữ trạng thái cũ, bỏ cam kết
 qua ranh giới hoặc thiếu ngữ cảnh trích dẫn. Chống lặp chỉ bằng prompt cũng chưa có bước đối chiếu
 riêng. Hợp đồng nền dùng `notes-hierarchical-v16`; bản audit-only hiện tại dùng
-`notes-hierarchical-v18`, schema công khai vẫn là `1`.
+`notes-hierarchical-v19`, schema công khai vẫn là `1`.
 
 Độ dài là `max(end_seconds) - min(start_seconds)`. Khi span lớn hơn `3_600` giây, planner
 chia phần sở hữu xấp xỉ một giờ, giữ segment nguyên vẹn và overlap tối đa `2_000` byte; phần quá
@@ -1564,7 +1564,7 @@ chẩn đoán lỗi audit đã lọc nội dung riêng tư. Nguồn:
 `tests/test_notes_provider.py`, `tests/test_chatgpt_transport.py`,
 `tests/test_antigravity_provider.py`, `tests/test_omp_contract.py`.
 
-Lượt đối chiếu có thêm chi phí/quota và thời gian. v18 thu hẹp về các đường nguồn đơn đã đạt;
+Lượt đối chiếu có thêm chi phí/quota và thời gian. v19 thu hẹp về các đường nguồn đơn đã đạt;
 không mở thêm vòng thử prompt. Kiểm tra routing bằng request fingerprint và replay giữ nguyên
 output thực đã được chấm, không công bố điểm inference mới. Nguồn dài còn thiếu một checkpoint
 nội dung nên #79 vẫn mở. Các ngưỡng cohort riêng tư và thời gian ASR/diarization/người duyệt chưa

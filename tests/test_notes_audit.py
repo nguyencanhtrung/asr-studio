@@ -105,6 +105,46 @@ def test_prefixes_cannot_drop_polarity_or_uncertainty_markers():
         catalog.resolve(f"{entry['ref']}p2")
 
 
+@pytest.mark.parametrize("marker", ["dự kiến", "có thể", "đề xuất"])
+def test_vietnamese_compound_markers_protect_both_words_and_keep_prior_prefixes(marker):
+    source = _source()
+    draft = _draft()
+    text = f"Ra mắt ngày 5/12, {marker} vào tuần sau"
+    draft["decisions"] = [{"text": text, "source_ids": ["seg-0"]}]
+    catalog = AuditCatalog.from_documents(source, draft)
+    entry = next(
+        item
+        for item in catalog.prompt_payload()["draft_candidates"]
+        if item["section"] == "decisions"
+    )
+    first_word_end = text.index(marker) + len(marker.split()[0])
+    second_word_end = text.index(marker) + len(marker)
+    assert first_word_end not in entry["prefix_end_offsets"]
+    assert second_word_end in entry["prefix_end_offsets"]
+
+    selected = _empty_document()
+    selected["decisions"] = [{"text": f"{entry['ref']}p{first_word_end}", "source_ids": ["seg-0"]}]
+    with pytest.raises(NotesDocumentError, match="unknown reference|allowed reference"):
+        catalog.apply(selected)
+
+
+def test_marker_guard_preserves_english_and_valid_prefixes():
+    source = _source()
+    draft = _draft()
+    draft["decisions"] = [{"text": "The team may ship the release.", "source_ids": ["seg-0"]}]
+    catalog = AuditCatalog.from_documents(source, draft)
+    entry = next(
+        item
+        for item in catalog.prompt_payload()["draft_candidates"]
+        if item["section"] == "decisions"
+    )
+    text = draft["decisions"][0]["text"]
+    may_end = text.index("may") + len("may")
+    before_may_end = text.index("may") - 1
+    assert may_end in entry["prefix_end_offsets"]
+    assert before_may_end not in entry["prefix_end_offsets"]
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
