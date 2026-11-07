@@ -1502,7 +1502,7 @@ Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `
 
 Map tuần tự theo ngân sách và final chỉ đọc các bản nháp có thể giữ trạng thái cũ, bỏ cam kết
 qua ranh giới hoặc thiếu ngữ cảnh trích dẫn. Chống lặp chỉ bằng prompt cũng chưa có bước đối chiếu
-riêng. Hợp đồng mới dùng `notes-hierarchical-v15`, schema công khai vẫn là `1`.
+riêng. Hợp đồng mới dùng `notes-hierarchical-v16`, schema công khai vẫn là `1`.
 
 Độ dài là `max(end_seconds) - min(start_seconds)`. Khi span lớn hơn `3_600` giây, planner
 chia phần sở hữu xấp xỉ một giờ, giữ segment nguyên vẹn và overlap tối đa `2_000` byte; phần quá
@@ -1519,16 +1519,20 @@ hướng dẫn dùng đúng `SYNTHESIS_INPUT_JSON.source` và cho phép khôi ph
 draft bỏ sót. Giới hạn “chỉ đọc draft” chỉ áp dụng cho fallback không có transcript.
 Prompt yêu cầu giữ các nhóm liệt kê, số lượng, điều kiện và ý kiến riêng với quyết định;
 không thay nhiều chi tiết bằng một câu tổng quát để rút ngắn tài liệu. Nếu không vừa, fallback phân tầng dùng
-các draft từ đầy đủ coverage và nói rõ giới hạn. Với nguồn ngắn vừa ngân sách ở ChatGPT owner
-model đã biết, một draft được kiểm tra rồi có tối đa một lượt đối chiếu bổ sung với toàn bộ nguồn
-và draft. Antigravity giữ một lượt draft và ghi `source_audit.status=skipped`,
-`reason=provider_policy`: audit trong nghiệm thu đã thêm chi tiết khám không có trong nguồn,
-nên chưa bật lượt bổ sung khi nó làm giảm fidelity. Chính sách áp dụng cho cấu hình và
-các quan sát được ghi trong báo cáo nghiệm thu.
-Người vận hành đã cho phép lượt bổ sung này để cải thiện chất lượng, thay quy tắc một call cũ
-của #108. Nếu full-source audit không vừa, trả draft hợp lệ và ghi `source_audit.status=skipped`,
-`reason=prompt_budget`; model/budget chưa biết giữ đường conservative hiện có. Audit không tự
-lặp. Lỗi audit giữ nguyên transcript và Notes cũ, không công bố một phần.
+các draft từ đầy đủ coverage và nói rõ giới hạn. Với owner model đã biết, một draft đơn hoặc final
+phân cấp được kiểm tra rồi có tối đa một lượt đối chiếu bổ sung với toàn bộ nguồn và draft. Audit
+trả về mã catalog trong `item.text`, không được viết lại tự do: `dN` là mục draft nguyên vẹn,
+`dNpEND` là tiền tố an toàn, còn `sN` là một đoạn nguồn nguyên văn. Runtime giải mã mã trước khi
+publication; quote `sN` chỉ vào `key_topics`/`confirmation_items`, giữ ngôn ngữ gốc và thêm nhãn
+ngôn ngữ đầu ra, đồng thời nhận đúng source ID theo vị trí segment. Guard cấm mã lạ, lặp origin,
+đổi section, metadata action mới và làm mất phủ định/tình thái ở tiền tố. Audit-specific prompt
+yêu cầu kiểm tra thì và tình thái: thảo luận/khám về sau không phải đã diễn ra. Anchoring ngăn
+prose mới trong audit, nhưng không phải bằng chứng semantic rằng mọi claim draft được giữ là đúng;
+kiểm chứng này vẫn cần source và người duyệt. Nếu full-source audit không vừa, trả draft hợp lệ và
+ghi `source_audit.status=skipped`, `reason=prompt_budget`; model/budget chưa biết giữ đường
+conservative hiện có. Audit không tự lặp. Lỗi audit sau repair/recovery chung giữ nguyên transcript
+và Notes cũ, không công bố một phần. Lượt audit thêm vào global call ceiling nhưng không đổi
+prompt/schema/model/caps của các primary request.
 
 Đối chiếu phân biệt chưa có đồng thuận với quyết định bác bỏ/hoãn; đề xuất chưa cam kết chỉ
 ở một mục cần xác nhận, không lặp lại trạng thái chờ trong quyết định và câu hỏi mở.

@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v15"
+PROMPT_VERSION = "notes-hierarchical-v16"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -164,7 +164,9 @@ MAX_REDUCTION_CALLS = 24
 # request and this many calls per task. They come on top of the planned calls and the one repair.
 MAX_OUTPUT_RECOVERY_ATTEMPTS = 2
 MAX_OUTPUT_RECOVERY_CALLS = 4
-MAX_PROVIDER_CALLS = MAX_NOTES_CHUNKS + MAX_REDUCTION_CALLS + 1 + MAX_OUTPUT_RECOVERY_CALLS
+# A bounded run may use maps, reductions, one final request and one reference audit. Recovery
+# attempts are additional calls and share the same global ceiling.
+MAX_PROVIDER_CALLS = MAX_NOTES_CHUNKS + MAX_REDUCTION_CALLS + 2 + MAX_OUTPUT_RECOVERY_CALLS
 MAX_REDUCTION_LEVELS = 8
 NOTES_VALIDATION_REASON_CODES = frozenset(
     {"fields", "version", "json", "size", "items", "text", "source_ids", "action_fields"}
@@ -2180,22 +2182,43 @@ def _reduction_instructions(
             if output_language == "en":
                 instructions += (
                     "This is one bounded source audit of one valid draft. Return the complete "
-                    "corrected JSON, not a review. Remove unsupported claims and semantic "
-                    "duplicates across sections. Keep every distinct source-supported fact, "
-                    "commitment, final state and uncertainty. Do not choose a confirmed "
-                    "decision, tentative confirmation, open question or action item from "
-                    "identical wording alone. Use explicit certainty and source chronology. "
-                    "Do not run another audit.\n"
+                    "corrected JSON, not a review. Every item.text must be exactly one reference "
+                    "from SYNTHESIS_INPUT_JSON.audit_catalog: a draft ref (dN, or dNpEND for a "
+                    "listed safe prefix) or a whole-source quote ref (sN). Never write prose in "
+                    "item.text and never invent a reference. Resolve draft refs only after the "
+                    "response is validated. Remove unsupported claims and semantic duplicates "
+                    "across sections. Keep every distinct source-supported fact, commitment, "
+                    "final state and uncertainty. Do not choose a confirmed decision, tentative "
+                    "confirmation, open question or action item from identical wording alone. "
+                    "Use explicit certainty and source chronology. Source quote refs are whole "
+                    "segment excerpts for key_topics or confirmation_items only; preserve their "
+                    "original-language text, add an output-language label, preserve their source "
+                    "position and label them as source excerpts. Check temporal and modality "
+                    "explicitly before selecting: a later discussion or examination is not an "
+                    "examination already performed; preserve future, conditional, negative, "
+                    "uncertain and support/opposition wording. Anchoring prevents new audit prose "
+                    "but does not prove every retained draft claim, so keep a draft ref only when "
+                    "the complete selected text is source-supported. Do not run another audit.\n"
                 )
             else:
                 instructions += (
                     "Đây là một lượt audit nguồn có giới hạn cho một bản nháp đã hợp lệ. Trả về "
-                    "toàn bộ JSON đã sửa, không trả về nhận xét. Xóa khẳng định không có căn cứ "
-                    "và ý trùng về nghĩa giữa các nhóm. Giữ mọi sự việc, cam kết, trạng thái cuối "
-                    "và điểm không chắc chắn có căn cứ từ nguồn. Không chọn quyết định đã xác "
-                    "nhận, đề xuất cần xác nhận, câu hỏi còn mở hoặc hành động chỉ vì câu chữ "
-                    "giống nhau. Dùng mức chắc chắn được nói rõ và thứ tự thời gian của nguồn. "
-                    "Không chạy audit thêm.\n"
+                    "toàn bộ JSON đã sửa, không trả về nhận xét. Trường item.text phải chính xác "
+                    "là một mã trong SYNTHESIS_INPUT_JSON.audit_catalog: mã bản nháp dN hoặc "
+                    "tiền tố an toàn dNpEND đã liệt kê, hoặc mã trích nguyên đoạn nguồn sN. "
+                    "Không viết văn xuôi trong item.text và không tự tạo mã. Chỉ giải mã mã sau "
+                    "khi đã kiểm tra đầu ra. Xóa khẳng định không có căn cứ và ý trùng về nghĩa "
+                    "giữa các nhóm. Giữ mọi sự việc, cam kết, trạng thái cuối và điểm không chắc "
+                    "chắn có căn cứ từ nguồn. Không chọn quyết định đã xác nhận, đề xuất cần xác "
+                    "nhận, câu hỏi còn mở hoặc hành động chỉ vì câu chữ giống nhau. Dùng mức chắc "
+                    "chắn được nói rõ và thứ tự thời gian của nguồn. Mã sN chỉ là trích nguyên "
+                    "đoạn cho key_topics hoặc confirmation_items; giữ nguyên ngôn ngữ gốc, thêm "
+                    "nhãn ngôn ngữ đầu ra, giữ vị trí nguồn và gắn nhãn trích nguồn. Kiểm tra rõ "
+                    "thì và tình thái trước khi chọn: cuộc thảo luận hoặc khám dự kiến về sau "
+                    "không phải việc đã khám; giữ nguyên cách nói tương lai, điều kiện, phủ định, "
+                    "không chắc chắn và ủng hộ/phản đối. Mã neo ngăn văn xuôi audit mới nhưng "
+                    "không chứng minh mọi khẳng định bản nháp được giữ lại, vì vậy chỉ giữ mã bản "
+                    "nháp khi toàn bộ nội dung được nguồn hỗ trợ. Không chạy audit thêm.\n"
                 )
     elif final:
         if output_language == "en":
@@ -2243,6 +2266,7 @@ def _reduction_payload(
     documents: list[dict[str, Any]],
     *,
     include_source: bool = False,
+    audit_catalog: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     positions = {segment["id"]: index for index, segment in enumerate(snapshot["segments"])}
     records = []
@@ -2263,6 +2287,8 @@ def _reduction_payload(
     payload: dict[str, Any] = {"meeting_date": snapshot.get("meeting_date"), "summaries": records}
     if include_source:
         payload["source"] = provider_source(snapshot)
+    if audit_catalog is not None:
+        payload["audit_catalog"] = audit_catalog
     return payload
 
 
@@ -2274,8 +2300,14 @@ def _reduction_prompt(
     output_language: str = "en",
     source_aware: bool = False,
     audit: bool = False,
+    audit_catalog: dict[str, Any] | None = None,
 ) -> str:
-    payload = _reduction_payload(snapshot, documents, include_source=source_aware)
+    payload = _reduction_payload(
+        snapshot,
+        documents,
+        include_source=source_aware,
+        audit_catalog=audit_catalog,
+    )
     return (
         _reduction_instructions(
             final=final, output_language=output_language, source_aware=source_aware, audit=audit
@@ -2296,6 +2328,7 @@ def build_reduction_prompt(
     max_unit_size: int = 1,
     require_source: bool = False,
     audit: bool = False,
+    audit_catalog: dict[str, Any] | None = None,
 ) -> str:
     """Build a bounded reduction request, optionally requiring a full-source audit payload."""
     output_language = validate_output_language(output_language)
@@ -2322,6 +2355,7 @@ def build_reduction_prompt(
                     output_language=output_language,
                     source_aware=True,
                     audit=audit,
+                    audit_catalog=audit_catalog if audit else None,
                 ),
                 full_scope,
             )

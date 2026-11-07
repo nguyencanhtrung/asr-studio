@@ -184,6 +184,20 @@ def _document_for_prompt(prompt):
                 for source_id in summary["source_order"]
             )
         )
+        audit_catalog = payload.get("audit_catalog")
+        if isinstance(audit_catalog, dict):
+            document = _valid_document()
+            draft_candidates = audit_catalog.get("draft_candidates", [])
+            if draft_candidates:
+                entry = draft_candidates[0]
+                section = entry["section"]
+                item = {"text": entry["ref"], "source_ids": source_ids[:1]}
+                if section == "action_items":
+                    item.update({"owner": None, "deadline_text": None, "deadline_date": None})
+                document[section] = [item]
+            else:
+                document["key_topics"] = [{"text": "s0", "source_ids": source_ids[:1]}]
+            return json.dumps(document)
     document = _valid_document()
     document["overview"] = [{"text": "A concise summary.", "source_ids": source_ids[:1]}]
     return json.dumps(document)
@@ -1468,6 +1482,11 @@ def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
             finally:
                 with state_lock:
                     active -= 1
+        if kwargs["stage"] == "audit":
+            payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
+            ref = payload["audit_catalog"]["draft_candidates"][0]["ref"]
+            source_id = next(iter(payload["summaries"][0]["source_order"]))
+            return document(ref, source_id)
         final_payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
         final_payloads.append(final_payload)
         source_id = next(iter(final_payload["summaries"][0]["source_order"]))
@@ -2351,6 +2370,16 @@ def test_parallel_map_progress_reports_completed_results_before_all_maps_finish(
                 )
             else:
                 second_returned.set()
+        if kwargs["stage"] == "audit":
+            payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
+            result = _valid_document()
+            result["overview"] = [
+                {
+                    "text": payload["audit_catalog"]["draft_candidates"][0]["ref"],
+                    "source_ids": [kwargs["allowed_source_ids"][0]],
+                }
+            ]
+            return json.dumps(result)
         result = _valid_document()
         result["overview"] = [{"text": "Purpose", "source_ids": [kwargs["allowed_source_ids"][0]]}]
         return json.dumps(result)
@@ -2440,7 +2469,7 @@ def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tm
     )
     assert result["overview"]
     assert len(adapter.refresh_calls) == 1
-    assert len(adapter.calls) == coverage[0]["provider_calls"] == 3
+    assert len(adapter.calls) == coverage[0]["provider_calls"] == 4
     assert {call.access_token for call in adapter.calls} == {"fake-refreshed-access-1"}
     state = provider.store._read()
     assert state["connection_status"] == "connected"

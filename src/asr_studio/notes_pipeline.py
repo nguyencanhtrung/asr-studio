@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 # Limits are read through the module at call time so tests can lower them.
 from asr_studio import notes_document as nd
+from asr_studio.notes_audit import AuditCatalog
 
 # The code a transport gives a response over its output cap.
 _OUTPUT_TOO_LARGE = "provider_output_too_large"
@@ -295,6 +296,7 @@ def generate_notes_document(
         citation_scope: dict[str, Any],
         *,
         max_output_bytes: int,
+        extra_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not isinstance(raw_output, str):
             raise nd.NotesDocumentError("The notes response must be text.", reason_code="json")
@@ -305,16 +307,26 @@ def generate_notes_document(
                 "The notes response must be valid JSON.", reason_code="json"
             ) from None
         try:
-            document = nd.normalize_duplicate_source_refs(
+            if extra_validator is None:
+                document = nd.normalize_duplicate_source_refs(
+                    document,
+                    nd._unique_source_ids(
+                        tuple(segment["id"] for segment in citation_scope["segments"])
+                    ),
+                    max_unit_size=max_unit_size,
+                )
+                document = nd.coalesce_exact_duplicate_items(document, max_unit_size=max_unit_size)
+            validated = nd.validate_document(
                 document,
-                nd._unique_source_ids(
-                    tuple(segment["id"] for segment in citation_scope["segments"])
-                ),
+                citation_scope,
+                max_output_bytes=max_output_bytes,
                 max_unit_size=max_unit_size,
             )
-            document = nd.coalesce_exact_duplicate_items(document, max_unit_size=max_unit_size)
+            if extra_validator is None:
+                return validated
+            resolved = extra_validator(validated)
             return nd.validate_document(
-                document,
+                resolved,
                 citation_scope,
                 max_output_bytes=max_output_bytes,
                 max_unit_size=max_unit_size,
@@ -360,6 +372,7 @@ def generate_notes_document(
         stage: str,
         repair_prompt: Callable[[str], str],
         budget: nd.NotesBudget,
+        extra_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], int]:
         nonlocal last_successful_response, repair_used
         allowed_source_ids = nd._unique_source_ids(
@@ -400,6 +413,7 @@ def generate_notes_document(
                     raw_output,
                     citation_scope,
                     max_output_bytes=max_output_bytes,
+                    extra_validator=extra_validator,
                 )
                 with ledger_lock:
                     if (
@@ -461,6 +475,7 @@ def generate_notes_document(
                         repaired_output,
                         citation_scope,
                         max_output_bytes=max_output_bytes,
+                        extra_validator=extra_validator,
                     )
                     with ledger_lock:
                         if (
@@ -525,6 +540,37 @@ def generate_notes_document(
             on_coverage(coverage)
         return document
 
+    def audit_request_parts(
+        draft: dict[str, Any],
+    ) -> tuple[Callable[[str | None], str], Callable[[dict[str, Any]], dict[str, Any]]]:
+        """Build one source-audit prompt and its boundary resolver for one accepted draft."""
+        catalog = AuditCatalog.from_documents(projected_snapshot, draft)
+        catalog_payload = catalog.prompt_payload()
+
+        def audit_prompt(invalid_output: str | None = None) -> str:
+            return nd.build_reduction_prompt(
+                projected_snapshot,
+                [draft],
+                final=True,
+                invalid_output=invalid_output,
+                output_language=output_language,
+                budget=single_budget,
+                max_unit_size=max_unit_size,
+                require_source=True,
+                audit=True,
+                audit_catalog=catalog_payload,
+            )
+
+        def audit_validator(document: dict[str, Any]) -> dict[str, Any]:
+            return catalog.apply(
+                document,
+                max_output_bytes=nd.MAX_OUTPUT_BYTES,
+                max_unit_size=max_unit_size,
+                output_language=output_language,
+            )
+
+        return audit_prompt, audit_validator
+
     if not plan.chunked:
         source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in projected_snapshot["segments"])
@@ -552,21 +598,9 @@ def generate_notes_document(
             budget=single_budget,
         )
         coverage["chunks"][0]["provider_call_index"] = accepted_call_index
-        if single_budget.uses_token_estimate and provider == "chatgpt":
+        if single_budget.uses_token_estimate:
             draft = document
-
-            def audit_prompt(invalid_output: str | None = None) -> str:
-                return nd.build_reduction_prompt(
-                    projected_snapshot,
-                    [draft],
-                    final=True,
-                    invalid_output=invalid_output,
-                    output_language=output_language,
-                    budget=single_budget,
-                    max_unit_size=max_unit_size,
-                    require_source=True,
-                    audit=True,
-                )
+            audit_prompt, audit_validator = audit_request_parts(draft)
 
             try:
                 source_audit_prompt = audit_prompt()
@@ -581,6 +615,7 @@ def generate_notes_document(
                     stage="audit",
                     repair_prompt=audit_prompt,
                     budget=single_budget,
+                    extra_validator=audit_validator,
                 )
                 document = audited_document
                 coverage["source_audit"] = {
@@ -588,10 +623,6 @@ def generate_notes_document(
                     "provider_call_index": audit_call_index,
                 }
                 progress("merging", 1, 1, "calls")
-        elif single_budget.uses_token_estimate:
-            # Keep the validated draft where the extra audit has not demonstrated fidelity.
-            # The public Antigravity control gained an unsupported claim during its audit.
-            coverage["source_audit"] = {"status": "skipped", "reason": "provider_policy"}
         document = restore_final_document(
             document,
             stage="audit"
@@ -780,7 +811,45 @@ def generate_notes_document(
                 ),
                 budget=synthesis_budget,
             )
-            final_document = restore_final_document(final_document, stage="final")
+            source_aware_final = nd.reduction_prompt_includes_source(final_prompt)
+            if synthesis_budget.uses_token_estimate:
+                if not source_aware_final:
+                    coverage["source_audit"] = {
+                        "status": "skipped",
+                        "reason": "prompt_budget",
+                    }
+                else:
+                    audit_prompt, audit_validator = audit_request_parts(final_document)
+                    try:
+                        source_audit_prompt = audit_prompt()
+                    except nd.NotesDocumentError:
+                        coverage["source_audit"] = {
+                            "status": "skipped",
+                            "reason": "prompt_budget",
+                        }
+                    else:
+                        audited_document, audit_call_index = request_document(
+                            source_audit_prompt,
+                            projected_snapshot,
+                            max_output_bytes=nd.MAX_OUTPUT_BYTES,
+                            stage="audit",
+                            repair_prompt=audit_prompt,
+                            budget=synthesis_budget,
+                            extra_validator=audit_validator,
+                        )
+                        final_document = audited_document
+                        coverage["source_audit"] = {
+                            "status": "applied",
+                            "provider_call_index": audit_call_index,
+                        }
+            final_document = restore_final_document(
+                final_document,
+                stage=(
+                    "audit"
+                    if coverage.get("source_audit", {}).get("status") == "applied"
+                    else "final"
+                ),
+            )
             progress("merging", reduction_calls, None, "calls")
             return finish(final_document)
 
