@@ -1502,7 +1502,7 @@ Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `
 
 Map tuần tự theo ngân sách và final chỉ đọc các bản nháp có thể giữ trạng thái cũ, bỏ cam kết
 qua ranh giới hoặc thiếu ngữ cảnh trích dẫn. Chống lặp chỉ bằng prompt cũng chưa có bước đối chiếu
-riêng. Hợp đồng mới dùng `notes-hierarchical-v12`, schema công khai vẫn là `1`.
+riêng. Hợp đồng mới dùng `notes-hierarchical-v13`, schema công khai vẫn là `1`.
 
 Độ dài là `max(end_seconds) - min(start_seconds)`. Khi span lớn hơn `3_600` giây, planner
 chia phần sở hữu xấp xỉ một giờ, giữ segment nguyên vẹn và overlap tối đa `2_000` byte; phần quá
@@ -1511,7 +1511,11 @@ lớn vẫn được tách theo ngân sách byte, không nội suy timestamp. Ha
 không tăng trước khi có kết quả. Call index, một lượt repair chung, recovery và tổng số request
 vẫn có giới hạn nguyên tử. Usage được cô lập theo thread/call; OMP prepare được serialize.
 
-Final dùng nguồn đã lọc và các bản nháp khi vừa ngân sách. Nếu không vừa, fallback phân tầng dùng
+Final dùng nguồn đã lọc và các bản nháp khi vừa ngân sách. Khi có transcript đầy đủ,
+hướng dẫn dùng đúng `SYNTHESIS_INPUT_JSON.source` và cho phép khôi phục chi tiết/mã nguồn mà
+draft bỏ sót. Giới hạn “chỉ đọc draft” chỉ áp dụng cho fallback không có transcript.
+Prompt yêu cầu giữ các nhóm liệt kê, số lượng, điều kiện và ý kiến riêng với quyết định;
+không thay nhiều chi tiết bằng một câu tổng quát để rút ngắn tài liệu. Nếu không vừa, fallback phân tầng dùng
 các draft từ đầy đủ coverage và nói rõ giới hạn. Với nguồn ngắn vừa ngân sách ở owner model đã
 biết, một draft được kiểm tra rồi có tối đa một lượt đối chiếu bổ sung với toàn bộ nguồn và draft.
 Người vận hành đã cho phép lượt bổ sung này để cải thiện chất lượng, thay quy tắc một call cũ

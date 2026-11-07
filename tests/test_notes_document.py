@@ -1017,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v12"
+    assert PROMPT_VERSION == "notes-hierarchical-v13"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1194,11 +1194,11 @@ def test_primary_prompts_are_byte_identical_to_those_before_output_recovery(snap
         "en-single": "69f25e3f4b1c3d0f",
         "en-chunk": "128a6353fbabe44e",
         "en-reduce": "a748b416c809803d",
-        "en-final": "8de176c138f7325e",
+        "en-final": "887b141c70b69267",
         "vi-single": "467791450948f69c",
         "vi-chunk": "a79b76e1355829c9",
         "vi-reduce": "e802ebec55c431dc",
-        "vi-final": "76a3044b9c78df37",
+        "vi-final": "2a55c63bc570dce1",
     }
 
 
@@ -1308,3 +1308,22 @@ def test_source_planning_uses_selected_language_prompt_size(snapshot, monkeypatc
     assert english.chunked is False
     assert vietnamese.chunked is True
     assert len(vietnamese.chunks) == 2
+
+
+@pytest.mark.parametrize("language", ["en", "vi"])
+def test_full_source_reduction_does_not_restrict_evidence_to_drafts(snapshot, document, language):
+    prompt = build_reduction_prompt(
+        snapshot,
+        [document],
+        final=True,
+        output_language=language,
+        budget=notes_budget("chatgpt", "gpt-5.6-sol"),
+        require_source=True,
+    )
+    payload = json.JSONDecoder().raw_decode(prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])[0]
+    assert payload["source"] == provider_source(snapshot)
+    assert "SYNTHESIS_INPUT_JSON.source" in prompt
+    assert "Use only the source IDs cited by input summaries" not in prompt
+    assert "The reducer sees summaries, not the transcript" not in prompt
+    assert "Chỉ dùng mã nguồn được trích dẫn trong các bản tóm tắt" not in prompt
+    assert "gọn chỉ thấy các bản tóm tắt, không thấy transcript" not in prompt
