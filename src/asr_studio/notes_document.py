@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v11"
+PROMPT_VERSION = "notes-hierarchical-v12"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -2114,6 +2114,24 @@ def _reduction_instructions(
                 "nguồn "
                 "được trích dẫn, nếu không thì giữ nguyên sự không chắc chắn hoặc null. Không tự "
                 "khôi phục tên riêng hay quy trình miền ngoài nguồn.\n"
+            )
+        if output_language == "en":
+            instructions += (
+                "Absence of agreement or an assigned owner is not an agreement to reject, defer "
+                "or not implement a proposal. Record an uncommitted proposal and its pending "
+                "status exactly once in confirmation_items, without repeating that status as a "
+                "decision or an open question. Use open_questions for a distinct explicit "
+                "unanswered question. A source-explicit agreement to reject or defer may be a "
+                "decision; distinguish that agreement from mere lack of acceptance.\n"
+            )
+        else:
+            instructions += (
+                "Chưa có đồng thuận hoặc chưa có người nhận việc không có nghĩa là đã thống "
+                "nhất bác bỏ, hoãn hay không triển khai đề xuất. Ghi đề xuất chưa cam kết và "
+                "trạng thái chờ đúng một lần trong confirmation_items, không lặp trạng thái đó "
+                "thành quyết định hoặc câu hỏi mở. Chỉ dùng open_questions cho câu hỏi tường "
+                "minh, riêng biệt và chưa được trả lời. Thỏa thuận bác bỏ hay hoãn được nguồn "
+                "nói rõ có thể là quyết định; phân biệt nó với việc chưa chấp nhận.\n"
             )
         if audit:
             if output_language == "en":

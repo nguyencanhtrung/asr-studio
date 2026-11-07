@@ -1017,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v11"
+    assert PROMPT_VERSION == "notes-hierarchical-v12"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1194,11 +1194,11 @@ def test_primary_prompts_are_byte_identical_to_those_before_output_recovery(snap
         "en-single": "69f25e3f4b1c3d0f",
         "en-chunk": "128a6353fbabe44e",
         "en-reduce": "a748b416c809803d",
-        "en-final": "b1551424c490429d",
+        "en-final": "8de176c138f7325e",
         "vi-single": "467791450948f69c",
         "vi-chunk": "a79b76e1355829c9",
         "vi-reduce": "e802ebec55c431dc",
-        "vi-final": "6f29bb952eade6dc",
+        "vi-final": "76a3044b9c78df37",
     }
 
 
