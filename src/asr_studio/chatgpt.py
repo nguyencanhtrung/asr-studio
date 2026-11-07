@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import httpx
 import jwt
@@ -58,7 +58,10 @@ RESOURCE = API_BASE_URL
 DIRECT_SCOPE = "chatgpt.tokens.use.direct"
 REQUESTED_SCOPES = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 DYNAMIC_CLIENT_ID = "dynamic_agent_client"
+DEFAULT_REGISTRATION_NAME = "ASR Studio"
 SESSION_TTL_SECONDS = 10 * 60
+MAX_CALLBACK_URL_BYTES = 16 * 1024
+MAX_REGISTRATION_NAME_BYTES = 200
 ACCESS_REFRESH_MARGIN_SECONDS = 60
 MAX_PROVIDER_STATE_BYTES = 1024 * 1024
 MAX_HTTP_BODY_BYTES = 1024 * 1024
@@ -1530,7 +1533,100 @@ class ChatGPTProvider:
         with self.store.locked(write=True) as state:
             self._clear_tokens(state["registrations"][client_id])
 
-    def _start_login(self) -> dict[str, Any]:
+    @staticmethod
+    def _registration_name(value: object) -> str:
+        if not isinstance(value, str):
+            raise ChatGPTError(
+                400, "invalid_registration_name", "Choose a valid ChatGPT registration name."
+            )
+        name = value.strip()
+        try:
+            name_bytes = len(name.encode("utf-8"))
+        except UnicodeEncodeError:
+            name_bytes = MAX_REGISTRATION_NAME_BYTES + 1
+        if (
+            not name
+            or name_bytes > MAX_REGISTRATION_NAME_BYTES
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in name)
+        ):
+            raise ChatGPTError(
+                400, "invalid_registration_name", "Choose a valid ChatGPT registration name."
+            )
+        return name
+
+    @staticmethod
+    def _valid_session_id(session_id: object) -> bool:
+        return isinstance(session_id, str) and bool(
+            re.fullmatch(r"[A-Za-z0-9_-]{20,64}", session_id)
+        )
+
+    def recreate_registration(
+        self, *, display_name: str = DEFAULT_REGISTRATION_NAME
+    ) -> dict[str, Any]:
+        """Revoke the current registration, then start a deliberately dynamic login."""
+        registration_name = self._registration_name(display_name)
+        with self.store.operation():
+            self._assert_provider_mutation_allowed()
+            if not self.callback_url:
+                raise ChatGPTError(
+                    409,
+                    "callback_not_configured",
+                    "Configure an HTTP loopback callback before signing in to ChatGPT.",
+                )
+            with self.store.locked() as state:
+                if state["connection_status"] not in {"connected", "reconnect_required"}:
+                    raise ChatGPTError(
+                        409,
+                        "registration_recreation_unavailable",
+                        "Connect ChatGPT before recreating its registration.",
+                    )
+                client_id = state.get("active_client_id")
+                registration = state["registrations"].get(client_id) if client_id else None
+                refresh_token = (
+                    registration.get("refresh_token") if isinstance(registration, dict) else None
+                )
+                if not self._issued_client_id(client_id) or not isinstance(refresh_token, str):
+                    raise ChatGPTError(
+                        409,
+                        "registration_recreation_unavailable",
+                        "The current ChatGPT registration cannot be recreated safely.",
+                    )
+            try:
+                confirmed = self.adapter.revoke(
+                    client_id=client_id,
+                    refresh_token=refresh_token,
+                )
+            except Exception:
+                confirmed = False
+            if not confirmed:
+                raise ChatGPTError(
+                    503,
+                    "revocation_unconfirmed",
+                    "Confirm revocation before recreating the ChatGPT registration.",
+                )
+            with self.store.locked(write=True) as state:
+                state["registrations"].pop(client_id, None)
+                state["active_client_id"] = None
+                state["connection_status"] = "disconnected"
+                state["connection_version"] += 1
+                state["notes_provider"] = None
+                state.pop("provisional_client_id", None)
+                state.pop("last_provider_error", None)
+                state.pop("last_diagnostic", None)
+                state["verification"] = None
+            response = self._start_login(
+                force_dynamic_registration=True,
+                registration_name=registration_name,
+            )
+            response["registration_recreated"] = True
+            return response
+
+    def _start_login(
+        self,
+        *,
+        force_dynamic_registration: bool = False,
+        registration_name: str = DEFAULT_REGISTRATION_NAME,
+    ) -> dict[str, Any]:
         if not self.callback_url:
             raise ChatGPTError(
                 409,
@@ -1549,9 +1645,13 @@ class ChatGPTProvider:
                 session["status"] = "cancelled"
                 session["error"] = None
                 self._clear_session_secrets(session)
-            client_id = state.get("active_client_id")
+            client_id = None if force_dynamic_registration else state.get("active_client_id")
             registration = state["registrations"].get(client_id) if client_id else None
-            if registration is None and state.get("provisional_client_id"):
+            if (
+                not force_dynamic_registration
+                and registration is None
+                and state.get("provisional_client_id")
+            ):
                 client_id = state["provisional_client_id"]
                 registration = {}
             if registration is not None and not self._issued_client_id(client_id):
@@ -1596,7 +1696,7 @@ class ChatGPTProvider:
                 "code_challenge": challenge,
             }
             if registration is None:
-                parameters["agent_name_hint"] = "ASR Studio"
+                parameters["agent_name_hint"] = registration_name
             elif registration.get("email"):
                 parameters["login_hint"] = registration["email"]
             if state.get("last_provider_error") in {
@@ -1661,24 +1761,107 @@ class ChatGPTProvider:
         for key, value in pairs:
             if key not in {"state", "code", "client_id", "error", "scope"}:
                 continue
-            if key in values or len(value) > 4096:
+            if (
+                key in values
+                or len(value) > 4096
+                or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+            ):
                 raise ChatGPTError(
                     400, "invalid_callback", "The ChatGPT sign-in response is invalid."
                 )
             values[key] = value
         return values
 
-    def _claim_callback(self, oauth_state: str) -> tuple[str, dict[str, Any]]:
+    def _callback_url_pairs(self, callback_url: object) -> list[tuple[str, str]]:
+        if not isinstance(callback_url, str):
+            raise self._callback_error(
+                "invalid_callback_url", "Provide the ChatGPT callback URL from the browser."
+            )
+        try:
+            callback_bytes = len(callback_url.encode("utf-8"))
+        except UnicodeEncodeError:
+            callback_bytes = MAX_CALLBACK_URL_BYTES + 1
+        if (
+            not callback_url
+            or callback_bytes > MAX_CALLBACK_URL_BYTES
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in callback_url)
+        ):
+            raise self._callback_error(
+                "invalid_callback_url", "Provide the ChatGPT callback URL from the browser."
+            )
+        try:
+            configured = urlsplit(self.callback_url)
+            parsed = urlsplit(callback_url)
+            if re.search(r"%(?![0-9A-Fa-f]{2})", parsed.query):
+                raise ValueError("Invalid callback encoding")
+            pairs = parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=20,
+                errors="strict",
+            )
+        except (TypeError, ValueError):
+            raise self._callback_error(
+                "invalid_callback_url", "Provide the ChatGPT callback URL from the browser."
+            ) from None
+        if (
+            configured.scheme != "http"
+            or configured.hostname is None
+            or configured.hostname.lower() != "127.0.0.1"
+            or configured.username is not None
+            or configured.password is not None
+            or configured.path != "/auth/chatgpt/callback"
+            or configured.query
+            or configured.fragment
+            or parsed.scheme != configured.scheme
+            or parsed.netloc != configured.netloc
+            or parsed.path != configured.path
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            raise self._callback_error(
+                "invalid_callback_url", "Provide the ChatGPT callback URL from the browser."
+            )
+        seen: set[str] = set()
+        for key, value in pairs:
+            if (
+                not key
+                or key in seen
+                or any(ord(character) < 0x20 or ord(character) == 0x7F for character in key)
+                or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+            ):
+                raise self._callback_error(
+                    "invalid_callback_url", "Provide the ChatGPT callback URL from the browser."
+                )
+            seen.add(key)
+        return pairs
+
+    def _claim_callback(
+        self, oauth_state: str, *, expected_session_id: str | None = None
+    ) -> tuple[str, dict[str, Any]]:
         now = self._now()
         with self.store.locked(write=True) as state:
             self._expire_sessions(state, now)
-            matches = [
-                (session_id, session)
-                for session_id, session in state["sessions"].items()
-                if session.get("status") == "pending"
-                and isinstance(session.get("state"), str)
-                and hmac.compare_digest(session["state"], oauth_state)
-            ]
+            if expected_session_id is None:
+                matches = [
+                    (session_id, session)
+                    for session_id, session in state["sessions"].items()
+                    if session.get("status") == "pending"
+                    and isinstance(session.get("state"), str)
+                    and hmac.compare_digest(session["state"], oauth_state)
+                ]
+            else:
+                session = state["sessions"].get(expected_session_id)
+                matches = (
+                    [(expected_session_id, session)]
+                    if isinstance(session, dict)
+                    and session.get("status") == "pending"
+                    and isinstance(session.get("state"), str)
+                    and hmac.compare_digest(session["state"], oauth_state)
+                    else []
+                )
             if len(matches) != 1:
                 raise ChatGPTError(
                     400,
@@ -1766,6 +1949,15 @@ class ChatGPTProvider:
             self._assert_provider_mutation_allowed()
             self._handle_callback(pairs)
 
+    def submit_callback(self, session_id: str, callback_url: str) -> dict[str, Any]:
+        if not self._valid_session_id(session_id):
+            raise ChatGPTError(404, "login_session_not_found", "ChatGPT sign-in session not found.")
+        pairs = self._callback_url_pairs(callback_url)
+        with self.store.operation():
+            self._assert_provider_mutation_allowed()
+            self._handle_callback(pairs, expected_session_id=session_id)
+        return self.login_session(session_id)
+
     def _revoke_rejected_exchange(self, client_id: str, tokens: object) -> None:
         # Best-effort cleanup mirrors explicit logout: discarded credentials are never usable.
         refresh_token = tokens.get("refresh_token") if isinstance(tokens, dict) else None
@@ -1774,12 +1966,16 @@ class ChatGPTProvider:
         with suppress(Exception):
             self.adapter.revoke(client_id=client_id, refresh_token=refresh_token)
 
-    def _handle_callback(self, pairs: Sequence[tuple[str, str]]) -> None:
+    def _handle_callback(
+        self, pairs: Sequence[tuple[str, str]], *, expected_session_id: str | None = None
+    ) -> None:
         values = self._query_values(pairs)
         oauth_state = values.get("state")
-        if oauth_state is None or not 20 <= len(oauth_state) <= 256:
+        if oauth_state is None or not oauth_state.isascii() or not 20 <= len(oauth_state) <= 256:
             raise ChatGPTError(400, "invalid_callback", "The ChatGPT sign-in response is invalid.")
-        session_id, session = self._claim_callback(oauth_state)
+        session_id, session = self._claim_callback(
+            oauth_state, expected_session_id=expected_session_id
+        )
 
         oauth_error = values.get("error")
         if oauth_error:

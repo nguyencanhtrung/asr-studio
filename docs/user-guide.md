@@ -16,9 +16,11 @@ cp .env.example .env
 ./scripts/start.sh
 ```
 
-The app opens at `http://127.0.0.1:8765`. Compose publishes the port on loopback only. Open the
-exact URL that the terminal prints. The app rejects other hosts (also `localhost`) to prevent DNS
-rebinding.
+The default app URL is `http://127.0.0.1:8765`. Compose publishes the port on loopback only, and
+the app checks the exact configured Host and Origin. For a browser on another machine, keep the
+Compose bind on loopback, terminate TLS at a reverse proxy, and set `ASR_PUBLIC_URL` to the exact
+public HTTPS origin (for example, `https://asr.example.test`). Proxy that origin to
+`127.0.0.1:8765`; do not enable forwarded-header trust or expose the Compose port directly.
 
 ### Start modes
 
@@ -169,8 +171,8 @@ Restart and recreate keep the volumes. A new Compose project makes a new token.
 | Setting                       | Purpose                                                                 |
 | ----------------------------- | ----------------------------------------------------------------------- |
 | `ASR_PORT`                  | Published port. The default link follows it.                            |
-| `ASR_PUBLIC_URL`            | A specific loopback URL.                                                |
-| `ASR_COOKIE_SECURE`         | Default `false` for HTTP. Set `true` behind a local TLS terminator. |
+| `ASR_PUBLIC_URL`            | Exact loopback HTTP/HTTPS origin, or exact public HTTPS origin only; no credentials, path, query, fragment or wildcard. |
+| `ASR_COOKIE_SECURE`         | Default `false` for HTTP. HTTPS `ASR_PUBLIC_URL` forces the access cookie to `Secure`. |
 | `ASR_MAX_UPLOAD_BYTES`      | Upload limit. Default 4 GiB.                                            |
 | `ASR_UPLOAD_CHUNK_BYTES`    | Maximum browser upload request size. Default 64 MiB.                   |
 | `ASR_MAX_RECORDING_SECONDS` | Duration limit. Default 4 hours.                                        |
@@ -528,14 +530,36 @@ does not change models automatically. The model list does not prove quota or inf
 
 ### Callback
 
-The callback is `http://127.0.0.1:<port>/auth/chatgpt/callback`. Open the browser on the Docker
-host. Do not change the callback to `localhost`.
+The callback is `http://127.0.0.1:<port>/auth/chatgpt/callback`. For the automatic callback, open the browser on the Docker
+host. Do not change the callback to `localhost` or to a public redirect URL.
+
+When the GUI is opened through the HTTPS reverse proxy from another machine:
+
+1. Set `ASR_PUBLIC_URL` to the exact HTTPS GUI origin and keep the Compose port bound to
+   `127.0.0.1`.
+2. Set `ASR_CHATGPT_CALLBACK_URL` separately to the HTTP loopback callback URL that reaches the
+   app, such as `http://127.0.0.1:8765/auth/chatgpt/callback`.
+3. Select **Continue with ChatGPT**, complete authorization in the ChatGPT window, then paste the
+   complete callback URL into **URL callback after ChatGPT sign-in** and select **Send callback URL**.
+   The pasted URL is sent to this app only in a POST JSON body; ASR Studio parses it and never
+   fetches it. The URL must be the configured HTTP `127.0.0.1` callback with its OAuth query.
+
+The callback input is protected by the workspace session and the pending sign-in session. If it is
+rejected, paste the complete URL again after correcting it. The normal callback browser tab still
+works when it can reach the loopback address directly.
 
 - Compose and the image disable the access log, so the log does not record the authorization
   code. If you run Uvicorn yourself, add `--no-access-log`. A proxy must drop or mask the
   callback query.
 - Behind a TLS terminator, set `ASR_CHATGPT_CALLBACK_URL` to an HTTP `127.0.0.1` URL that routes
   to the app. Without it, only the ChatGPT sign-in fails, with a callback configuration error.
+
+The registration name is stored by ChatGPT. New dynamic registration requests suggest **ASR
+Studio**. A connected account keeps its existing registration during ordinary sign-in. To change
+an older display name, select **Recreate ChatGPT registration**, confirm the impact, edit the
+suggested name, and complete a new sign-in. The current credential is revoked only after your confirmation. If remote revocation fails,
+ASR Studio keeps the current local connection and does not start a new registration. The old named
+app entry may remain in ChatGPT; this action does not claim to delete that entry.
 
 **Disconnect** deletes the stored ChatGPT token and tries to revoke the session at OpenAI. It
 does not delete meetings. If remote revocation is not confirmed, check

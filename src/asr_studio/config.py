@@ -1,4 +1,4 @@
-"""Runtime configuration with strict localhost URL validation."""
+"""Runtime configuration with strict GUI-origin and callback URL validation."""
 
 from __future__ import annotations
 
@@ -52,18 +52,35 @@ def _positive_int_from_env(name: str, default: int) -> int:
 
 
 def _validate_public_url(raw_url: str) -> str:
-    parsed = urlsplit(raw_url)
+    if not isinstance(raw_url, str) or any(
+        ord(character) < 0x20 or ord(character) == 0x7F for character in raw_url
+    ):
+        raise ValueError(
+            "ASR_PUBLIC_URL must be a loopback http(s) origin or an HTTPS public origin"
+        )
+    try:
+        parsed = urlsplit(raw_url)
+        hostname = parsed.hostname
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "ASR_PUBLIC_URL must be a loopback http(s) origin or an HTTPS public origin"
+        ) from exc
+    loopback = hostname is not None and hostname.lower() in LOOPBACK_HOSTS
     if (
         parsed.scheme not in {"http", "https"}
-        or parsed.hostname is None
-        or parsed.hostname.lower() not in LOOPBACK_HOSTS
+        or hostname is None
         or parsed.username is not None
         or parsed.password is not None
         or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
+        or "*" in parsed.netloc
+        or any(character.isspace() for character in hostname)
+        or (not loopback and parsed.scheme != "https")
     ):
-        raise ValueError("ASR_PUBLIC_URL must be an http(s) localhost origin without a path")
+        raise ValueError(
+            "ASR_PUBLIC_URL must be a loopback http(s) origin or an HTTPS public origin"
+        )
     try:
         port = parsed.port
     except ValueError as exc:
@@ -74,7 +91,20 @@ def _validate_public_url(raw_url: str) -> str:
 
 
 def _validate_chatgpt_callback_url(raw_url: str) -> str:
-    parsed = urlsplit(raw_url)
+    if not isinstance(raw_url, str) or any(
+        ord(character) < 0x20 or ord(character) == 0x7F for character in raw_url
+    ):
+        raise ValueError(
+            "ASR_CHATGPT_CALLBACK_URL must be an HTTP 127.0.0.1 callback URL at "
+            f"{CHATGPT_CALLBACK_PATH}"
+        )
+    try:
+        parsed = urlsplit(raw_url)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "ASR_CHATGPT_CALLBACK_URL must be an HTTP 127.0.0.1 callback URL at "
+            f"{CHATGPT_CALLBACK_PATH}"
+        ) from exc
     if (
         parsed.scheme != "http"
         or parsed.hostname != "127.0.0.1"

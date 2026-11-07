@@ -46,6 +46,10 @@ const REQUEST_ERRORS = {
   CANCEL_NOT_CONFIRMED: t("Máy chủ chưa hủy được phiên đăng nhập."),
   POPUP_BLOCKED: t("Trình duyệt đang chặn cửa sổ đăng nhập. Cho phép mở cửa sổ cho không gian làm việc này rồi thử lại."),
   SIGN_IN_FAILED: t("Không thể hoàn tất đăng nhập ChatGPT."),
+  invalid_callback_url: t("URL callback không đúng với phiên đăng nhập hoặc cấu hình loopback. Hãy dán lại URL đầy đủ."),
+  callback_replayed: t("URL callback này đã được dùng. Hãy bắt đầu hoặc tiếp tục phiên đăng nhập hiện tại."),
+  invalid_registration_name: t("Tên đăng ký ChatGPT không hợp lệ."),
+  registration_recreation_unavailable: t("Không thể tạo lại đăng ký ChatGPT từ kết nối hiện tại."),
   INVALID_PROVIDER_STATUS: t("Máy chủ chưa công bố trạng thái kết nối ChatGPT hợp lệ."),
   DISCONNECT_NOT_CONFIRMED: t("Máy chủ chưa xác nhận đã ngắt kết nối ChatGPT."),
   provider_reconnect_required: t("Tài khoản ChatGPT cần đăng nhập lại trước khi tiếp tục."),
@@ -116,6 +120,7 @@ export const CHATGPT = {
     preferences: "/api/notes-preferences",
     models: "/api/providers/chatgpt/models",
     loginSessions: "/api/providers/chatgpt/login-sessions",
+    registrationRecreate: "/api/providers/chatgpt/registration/recreate",
     verify: "/api/providers/chatgpt/verify",
     connection: "/api/providers/chatgpt/connection",
   },
@@ -180,6 +185,10 @@ export const CHATGPT = {
     replaced: t("Đã thay thế phiên đăng nhập đang chờ. Hãy tiếp tục ở cửa sổ ChatGPT mới; phản hồi từ cửa sổ cũ sẽ bị bỏ qua."),
     windowClosed: t("Cửa sổ đăng nhập đã đóng. Hãy hủy phiên này rồi bắt đầu lại."),
     loginConnected: t("Đã xác thực tài khoản ChatGPT."),
+    callbackPending: t("Dán toàn bộ URL callback sau khi đăng nhập trên máy khác, rồi gửi để hoàn tất ở đây."),
+    callbackSubmitting: t("Đang gửi URL callback…"),
+    callbackFailed: t("URL callback chưa được chấp nhận. Hãy kiểm tra và dán lại URL đầy đủ."),
+    callbackSubmitted: t("Đã gửi URL callback. Đang chờ máy chủ xác nhận…"),
     loginCancelled: t("Đã hủy đăng nhập ChatGPT."),
     loginExpired: t("Phiên đăng nhập đã hết hạn. Hãy bắt đầu lại để kết nối ChatGPT."),
     loginFailed: t("Đăng nhập ChatGPT chưa hoàn tất."),
@@ -202,6 +211,10 @@ export const CHATGPT = {
     disconnect: t("Ngắt kết nối"),
     disconnectedRemote: t("Đã xóa thông tin đăng nhập trong không gian làm việc và xác nhận thu hồi quyền truy cập từ xa."),
     disconnectedLocal: t("Đã ngắt kết nối trong không gian làm việc. ChatGPT chưa xác nhận thu hồi quyền từ xa; hãy kiểm tra ChatGPT → Cài đặt → Mức sử dụng."),
+    recreateStarted: t("Đăng ký cũ đã được thu hồi. Hãy tiếp tục trong cửa sổ ChatGPT mới."),
+    recreateConnected: t("Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT."),
+    recreateSubmitting: t("Đang tạo lại đăng ký…"),
+    recreate: t("Tạo lại đăng ký ChatGPT"),
   },
 };
 
@@ -331,9 +344,14 @@ function initial(d) {
     loginLink: null,
     inputPrompt: null,
     inputOpen: false,
+    callbackPending: false,
+    callbackRequest: 0,
+    recreatingRegistration: false,
+    recreateConfirming: false,
+    recreateName: "ASR Studio",
     signInDisabled: false,
     cancelling: false,
-    pending: { save: false, verify: false, disconnect: false },
+    pending: { save: false, verify: false, disconnect: false, recreate: false },
     confirming: false, // chatgpt: the "keep or disconnect" question is open
     afterLoad: null, // "disconnected": answer notes.js when the load that follows a disconnect settles
     ui: null, // one-shot request to the view: focus:* or clear-input
@@ -640,12 +658,32 @@ function applySession(d, s, session) {
 
 function finishLogin(d, s, status, payload) {
   const gen = s.loginGen + 1;
-  let next = { ...s, login: null, loginGen: gen, cancelling: false, signInDisabled: false, loginLink: null, inputOpen: false };
+  const recreating = s.recreatingRegistration;
+  let next = {
+    ...s,
+    login: null,
+    loginGen: gen,
+    callbackRequest: s.callbackRequest + 1,
+    callbackPending: false,
+    recreatingRegistration: false,
+    recreateConfirming: false,
+    cancelling: false,
+    signInDisabled: false,
+    loginLink: null,
+    inputOpen: false,
+    ui: "clear-callback-input",
+    pending: { ...s.pending, recreate: false },
+  };
   const effects = [...stopPoll(d), persist(d, null)];
   if (d.login.clearOnFinish) next = { ...next, error: null };
   if (status === "connected") {
-    next = { ...next, message: d.copy.loginConnected };
+    next = { ...next, message: recreating ? d.copy.recreateConnected : d.copy.loginConnected };
     const load = startLoad(d, next);
+    return done(load.state, [...effects, ...load.effects, CHOICE_CHANGED]);
+  }
+  if (recreating) {
+    const message = status === "expired" ? d.copy.loginExpired : status === "failed" ? d.copy.loginFailed : d.copy.loginCancelled;
+    const load = startLoad(d, { ...next, message });
     return done(load.state, [...effects, ...load.effects, CHOICE_CHANGED]);
   }
   if (status === "cancelled") return done({ ...next, message: d.copy.loginCancelled }, effects);
@@ -669,33 +707,47 @@ function finishLogin(d, s, status, payload) {
 
 function startLogin(d, s) {
   if (s.signInDisabled || s.login) return done(s); // a second click while the first is still starting
-  const next = { ...s, error: null, signInDisabled: true, ...(d.clearMessages ? { message: null } : {}) };
+  const next = { ...s, error: null, signInDisabled: true, ui: "clear-callback-input", ...(d.clearMessages ? { message: null } : {}) };
   if (d.login.kind === "popup") {
     return done(next, [windowEffect(d, "reserve", { title: d.copy.windowTitle, text: d.copy.windowText, ok: "provider/window-reserved", error: "provider/window-blocked" })]);
   }
   return done(next, [call(d, "login-start", "login-start", d.endpoints.loginSessions, { method: "POST", body: {} })]);
 }
 
-function loginStartFailed(d, s, error) {
-  return done({ ...showError(d, s, error), signInDisabled: false }, d.login.kind === "popup" ? [windowEffect(d, "close")] : []);
+function loginStartFailed(d, s, error, recreation = false) {
+  const next = recreation
+    ? { ...setPending(showError(d, s, error), "recreate", false), recreateConfirming: true }
+    : { ...showError(d, s, error), signInDisabled: false };
+  return done(
+    { ...next, signInDisabled: false },
+    d.login.kind === "popup" ? [windowEffect(d, "close")] : [],
+  );
 }
 
-function loginStarted(d, s, session, now) {
+function loginStarted(d, s, session, now, recreation = false) {
   if (d.login.kind === "code") {
-    if (!isObject(session)) return loginStartFailed(d, s, { code: "INVALID_LOGIN_SESSION", message: REQUEST_ERRORS.INVALID_LOGIN_SESSION });
+    if (!isObject(session)) return loginStartFailed(d, s, { code: "INVALID_LOGIN_SESSION", message: REQUEST_ERRORS.INVALID_LOGIN_SESSION }, recreation);
     const applied = applySession(d, s, session);
     const next = { ...applied.state, signInDisabled: false };
-    if (applied.error) return done(showError(d, next, applied.error), applied.effects);
+    if (applied.error) return loginStartFailed(d, next, applied.error, recreation);
     return done(next, [...applied.effects, call(d, "poll", "poll", loginUrl(d, session.id), { extra: { gen: s.loginGen } })]);
   }
   if (!session || session.status !== "pending" || !session.id || !session.expires_at) {
-    return loginStartFailed(d, s, { code: "INVALID_LOGIN_SESSION", message: REQUEST_ERRORS.INVALID_LOGIN_SESSION });
+    return loginStartFailed(d, s, { code: "INVALID_LOGIN_SESSION", message: REQUEST_ERRORS.INVALID_LOGIN_SESSION }, recreation);
   }
   const checked = validateAuthorizationUrl(session.authorization_url);
-  if (checked.error) return loginStartFailed(d, s, checked.error);
+  if (checked.error) return loginStartFailed(d, s, checked.error, recreation);
   const applied = applySession(d, s, session);
-  let next = { ...applied.state, loginGen: s.loginGen + 1 };
-  if (session.replaced_previous === true) next = { ...next, message: d.copy.replaced };
+  let next = {
+    ...applied.state,
+    loginGen: s.loginGen + 1,
+    recreatingRegistration: recreation,
+    recreateConfirming: false,
+    pending: { ...s.pending, recreate: false },
+    signInDisabled: false,
+  };
+  if (recreation) next = { ...next, message: d.copy.recreateStarted };
+  else if (session.replaced_previous === true) next = { ...next, message: d.copy.replaced };
   if (loginExpired(next.login, now)) {
     const finished = finishLogin(d, next, "expired");
     return done(finished.state, [...applied.effects, windowEffect(d, "close"), ...finished.effects]);
@@ -758,10 +810,73 @@ function cancelFailed(d, s, meta, error) {
   return done(showError(d, { ...s, cancelling: false }, error), [pollWait(d, d.login.poll, meta.gen)]);
 }
 
+function submitCallback(d, s, value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (d.id !== "chatgpt" || !s.login || s.callbackPending || !text) return done(s);
+  const request = s.callbackRequest + 1;
+  const next = {
+    ...s,
+    callbackRequest: request,
+    callbackPending: true,
+    loginCopy: d.copy.callbackSubmitting,
+    error: null,
+    ui: "clear-callback-input",
+  };
+  return done(next, [
+    call(d, "callback", "callback", loginUrl(d, s.login.id, "/input"), {
+      method: "POST",
+      body: { callback_url: text },
+      extra: { gen: s.loginGen, callback: request },
+    }),
+  ]);
+}
+
+function callbackOk(d, s, meta, session, now) {
+  if (meta.gen !== s.loginGen || meta.callback !== s.callbackRequest || !s.login) return done(s);
+  const status = isObject(session) ? session.status : undefined;
+  const next = { ...s, callbackPending: false, loginCopy: d.copy.callbackSubmitted };
+  if (SESSION_DONE.includes(status)) return finishLogin(d, next, status, session);
+  if (status === "pending") return done(next, [pollWait(d, d.login.poll, meta.gen)]);
+  return callbackFailed(d, next, meta, { code: "INVALID_LOGIN_STATUS", message: REQUEST_ERRORS.INVALID_LOGIN_STATUS });
+}
+
+function callbackFailed(d, s, meta, error) {
+  if (meta.gen !== s.loginGen || meta.callback !== s.callbackRequest || !s.login) return done(s);
+  return done({ ...showError(d, { ...s, callbackPending: false, loginCopy: d.copy.callbackPending, ui: "focus:callback-input" }, error) });
+}
+
+function recreateRegistration(d, s, displayName) {
+  if (
+    d.id !== "chatgpt"
+    || !s.info
+    || !["connected", "reconnect_required"].includes(s.info.status)
+    || !s.recreateConfirming
+    || s.pending.recreate
+  ) return done(s);
+  const name = typeof displayName === "string" ? displayName.trim() : "";
+  const next = setPending({ ...s, recreateName: name, error: null, message: null }, "recreate", true);
+  return done(next, [
+    windowEffect(d, "reserve", {
+      title: d.copy.windowTitle,
+      text: d.copy.windowText,
+      ok: "provider/recreate-window-reserved",
+      error: "provider/recreate-window-blocked",
+    }),
+  ]);
+}
+
 function submitInput(d, s, value) {
   const text = typeof value === "string" ? value.trim() : "";
   if (!s.login || !text) return done(s);
   return done(s, [call(d, "login-input", "input", loginUrl(d, s.login.id, "/input"), { method: "POST", body: { value: text } })]);
+}
+
+function recreateWindowBlocked(d, s) {
+  if (d.id !== "chatgpt" || !s.pending.recreate) return done(s);
+  return done({
+    ...showError(d, setPending(s, "recreate", false), { code: "POPUP_BLOCKED" }),
+    recreateConfirming: true,
+  });
 }
 
 function inputOk(d, s, session) {
@@ -948,9 +1063,14 @@ function reduceProvider(d, state, action) {
     case "provider/login-requested":
       return startLogin(d, state);
     case "provider/window-reserved":
-      return done(state, [call(d, "login-start", "login-start", d.endpoints.loginSessions, { method: "POST", body: {} })]);
+      return done(state, [call(d, "login-start", "login-start", d.endpoints.loginSessions, { method: "POST", body: {}, extra: { recreation: state.pending.recreate } })]);
     case "provider/window-blocked":
       return done({ ...showError(d, state, { code: "POPUP_BLOCKED" }), signInDisabled: false });
+    case "provider/recreate-window-reserved":
+      if (d.id !== "chatgpt" || !state.pending.recreate) return done(state);
+      return done(state, [call(d, "registration-recreate", "registration-recreate", d.endpoints.registrationRecreate, { method: "POST", body: { display_name: state.recreateName }, extra: { recreation: true } })]);
+    case "provider/recreate-window-blocked":
+      return recreateWindowBlocked(d, state);
     case "provider/window-closed":
       return done(showError(d, state, { code: "POPUP_BLOCKED", message: d.copy.windowClosed }));
     case "provider/poll-due":
@@ -961,6 +1081,25 @@ function reduceProvider(d, state, action) {
       return cancelLogin(d, state);
     case "provider/login-input-submitted":
       return submitInput(d, state, action.value);
+    case "provider/login-callback-submitted":
+      return submitCallback(d, state, action.value);
+    case "provider/registration-recreate-confirm-toggled":
+      if (
+        d.id !== "chatgpt"
+        || !state.info
+        || !["connected", "reconnect_required"].includes(state.info.status)
+        || state.login
+        || state.pending.recreate
+      ) return done(state);
+      return done({
+        ...state,
+        recreateConfirming: action.open === true,
+        recreateName: action.open === true ? "ASR Studio" : state.recreateName,
+        error: null,
+        ui: action.open === true ? "focus:registration-name" : "focus:registration-trigger",
+      });
+    case "provider/registration-recreate-requested":
+      return recreateRegistration(d, state, action.displayName);
     case "provider/choice-edited":
       return editChoice(d, state, action.field, action.value);
     case "provider/save-requested":
@@ -988,13 +1127,17 @@ function onResponse(d, s, meta, body, now) {
     case "refresh":
       return refreshed(d, s, meta, body);
     case "login-start":
-      return loginStarted(d, s, body, now);
+      return loginStarted(d, s, body, now, meta.recreation === true);
+    case "registration-recreate":
+      return loginStarted(d, s, body, now, true);
     case "poll":
       return pollOk(d, s, meta, body, now);
     case "cancel":
       return cancelOk(d, s, meta, body);
     case "input":
       return inputOk(d, s, body);
+    case "callback":
+      return callbackOk(d, s, meta, body, now);
     case "save":
       return saveOk(d, s, meta, body);
     case "verify":
@@ -1013,13 +1156,17 @@ function onFailure(d, s, meta, error) {
     case "refresh":
       return refreshed(d, s, meta, null);
     case "login-start":
-      return loginStartFailed(d, s, error);
+      return loginStartFailed(d, s, error, meta.recreation === true);
+    case "registration-recreate":
+      return loginStartFailed(d, s, error, true);
     case "poll":
       return pollFailed(d, s, meta, error);
     case "cancel":
       return cancelFailed(d, s, meta, error);
     case "input":
       return done(showError(d, s, error));
+    case "callback":
+      return callbackFailed(d, s, meta, error);
     case "save":
       return fail(d, s, error, "save");
     case "verify":
@@ -1336,6 +1483,14 @@ export function selectView(d, s) {
     account: s.info ? s.info.account?.label || d.copy.noAccount : null,
     modelSectionHidden: !connected,
     signInHidden: connected || Boolean(s.login),
+    registrationHidden: d.id !== "chatgpt"
+      || !s.info
+      || !["connected", "reconnect_required"].includes(s.info.status)
+      || Boolean(s.login),
+    registrationConfirming: d.id === "chatgpt" && s.recreateConfirming,
+    registrationDisabled: inUse || s.pending.recreate,
+    registrationLabel: d.copy.recreate,
+    registrationSubmitting: d.copy.recreateSubmitting,
   };
   if (d.exclusive) {
     const anyBusy = busy(d, s, "save");

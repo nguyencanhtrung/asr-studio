@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from fake_chatgpt import FakeChatGPTAdapter
@@ -81,6 +81,11 @@ def callback_pairs(started, *, returned_client_id=ISSUED_CLIENT_ID, code="one-ti
     return pairs
 
 
+def callback_url(started, *, returned_client_id=ISSUED_CLIENT_ID, code="one-time-code"):
+    pairs = callback_pairs(started, returned_client_id=returned_client_id, code=code)
+    return f"{CALLBACK_URL}?{urlencode(pairs)}"
+
+
 def connect(provider, *, returned_client_id=ISSUED_CLIENT_ID):
     started = provider.start_login()
     provider.handle_callback(callback_pairs(started, returned_client_id=returned_client_id))
@@ -141,6 +146,123 @@ def test_authorization_uses_dynamic_registration_pkce_scopes_and_stable_host(tmp
     assert "id_token_hint" not in returning_query
     provider.handle_callback(callback_pairs(returning, returned_client_id=None, code="second-code"))
     assert provider.get_providers()["providers"][0]["status"] == "connected"
+
+
+def test_pasted_callback_is_exact_loopback_json_equivalent_and_session_bound(tmp_path):
+    adapter = FakeChatGPTAdapter()
+    provider = provider_for(tmp_path, adapter)
+    started = provider.start_login()
+
+    wrong_session = "A" * 20
+    with pytest.raises(ChatGPTError) as cross_session:
+        provider.submit_callback(wrong_session, callback_url(started))
+    assert cross_session.value.code == "invalid_or_replayed_state"
+    assert provider.login_session(started["id"])["status"] == "pending"
+    assert adapter.exchange_calls == []
+
+    invalid_urls = [
+        callback_url(started).replace(CALLBACK_URL, "https://127.0.0.1:8765/auth/chatgpt/callback"),
+        callback_url(started).replace(CALLBACK_URL, f"{CALLBACK_URL}/extra"),
+        callback_url(started) + "#fragment",
+        callback_url(started).replace("http://127.0.0.1", "http://user:pass@127.0.0.1"),
+        callback_url(started) + "&state=duplicate",
+        callback_url(started) + "&unknown=" + ("x" * 20_000),
+        callback_url(started)[:-1] + "\n",
+    ]
+    for pasted in invalid_urls:
+        with pytest.raises(ChatGPTError) as invalid:
+            provider.submit_callback(started["id"], pasted)
+        assert invalid.value.code == "invalid_callback_url"
+    assert provider.login_session(started["id"])["status"] == "pending"
+    assert adapter.exchange_calls == []
+
+    completed = provider.submit_callback(started["id"], callback_url(started))
+    assert completed["status"] == "connected"
+    assert adapter.exchange_calls[0]["code"] == "one-time-code"
+    assert callback_url(started) not in json.dumps(provider.store._read())
+    with pytest.raises(ChatGPTError) as replayed:
+        provider.submit_callback(started["id"], callback_url(started))
+    assert replayed.value.code == "invalid_or_replayed_state"
+
+
+@pytest.mark.parametrize("encoded_code", ["bad%ZZ", "bad%", "%FF"])
+def test_pasted_callback_rejects_broken_encoding_before_consuming_session(tmp_path, encoded_code):
+    adapter = FakeChatGPTAdapter()
+    provider = provider_for(tmp_path, adapter)
+    started = provider.start_login()
+    query = urlencode([pair for pair in callback_pairs(started) if pair[0] != "code"])
+    with pytest.raises(ChatGPTError) as invalid:
+        provider.submit_callback(started["id"], f"{CALLBACK_URL}?{query}&code={encoded_code}")
+    assert invalid.value.code == "invalid_callback_url"
+    assert adapter.exchange_calls == []
+    assert provider.login_session(started["id"])["status"] == "pending"
+    assert provider.submit_callback(started["id"], callback_url(started))["status"] == "connected"
+
+
+def test_callback_rejects_non_ascii_state_without_comparison_error(tmp_path):
+    provider = provider_for(tmp_path)
+    started = provider.start_login()
+    with pytest.raises(ChatGPTError) as invalid:
+        provider.submit_callback(
+            started["id"], f"{CALLBACK_URL}?{urlencode({'state': 'é' * 32, 'code': 'fake'})}"
+        )
+    assert invalid.value.code == "invalid_callback"
+    assert provider.login_session(started["id"])["status"] == "pending"
+
+
+def test_registration_recreation_invalidates_saved_connection_version_and_choice(tmp_path):
+    provider = provider_for(tmp_path)
+    connect(provider)
+    with provider.store.locked(write=True) as state:
+        state["notes_provider"] = "chatgpt"
+    before = provider.store._read()
+    provider.recreate_registration()
+    after = provider.store._read()
+    assert after["connection_version"] == before["connection_version"] + 1
+    assert after["notes_provider"] is None
+    assert after["host_id"] == before["host_id"]
+
+
+def test_registration_recreation_is_explicit_and_normal_login_reuses_registration(tmp_path):
+    adapter = FakeChatGPTAdapter()
+    provider = provider_for(tmp_path, adapter)
+    connect(provider)
+    host_id = provider.store._read()["host_id"]
+
+    recreated = provider.recreate_registration(display_name="My ASR Studio")
+    query = parse_qs(urlsplit(recreated["authorization_url"]).query)
+    assert recreated["registration_recreated"] is True
+    assert query["client_id"] == [DYNAMIC_CLIENT_ID]
+    assert query["agent_name_hint"] == ["My ASR Studio"]
+    state = provider.store._read()
+    assert state["host_id"] == host_id
+    assert state["connection_status"] == "disconnected"
+    assert state["active_client_id"] is None
+    assert state["registrations"] == {}
+
+    provider.handle_callback(callback_pairs(recreated))
+    returning = provider.start_login()
+    returning_query = parse_qs(urlsplit(returning["authorization_url"]).query)
+    assert returning_query["client_id"] == [ISSUED_CLIENT_ID]
+    assert "agent_name_hint" not in returning_query
+
+
+def test_registration_recreation_keeps_old_registration_when_revoke_is_unconfirmed(tmp_path):
+    adapter = FakeChatGPTAdapter()
+    provider = provider_for(tmp_path, adapter)
+    connect(provider)
+    before = provider.store._read()
+    adapter.revoke_results.clear()
+    adapter.revoke_results.append(False)
+
+    with pytest.raises(ChatGPTError) as unconfirmed:
+        provider.recreate_registration(display_name="New name")
+
+    assert unconfirmed.value.code == "revocation_unconfirmed"
+    after = provider.store._read()
+    assert after == before
+    assert provider.get_providers()["providers"][0]["status"] == "connected"
+    assert len(after["sessions"]) == len(before["sessions"])
 
 
 def test_new_provider_instance_replaces_pending_login_and_rejects_old_callback(tmp_path):
