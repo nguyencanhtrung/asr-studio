@@ -1496,71 +1496,48 @@ adapter giả lập; test giả không chứng minh consent thật, tên hiển 
 Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `docs/user-guide.md`,
 `docs/frontend-design.md`, `src/asr_studio/config.py`.
 
-### #77/#78/#79/#107/#108/#110 — Notes synthesis phân tầng có giới hạn và giữ bằng chứng
+### #77/#78/#79/#107/#108/#110 — Notes synthesis giữ nguồn và có giới hạn
 
-#### Vấn đề và quyết định
+#### Vấn đề và thay đổi
 
-Notes dùng `PROMPT_VERSION = notes-hierarchical-v10` và vẫn giữ schema công khai phiên bản `1`.
-Độ dài nguồn được tính bằng `max(end_seconds) - min(start_seconds)`, không dùng mốc kết thúc
-tuyệt đối. Nguồn có span không quá `MAX_RETAINED_SOURCE_SPAN_SECONDS` (`3_600.0`) và vừa
-ngân sách tiếp tục đi qua đúng một request; một utterance ngắn bắt đầu ở giây `3_661` không bị
-xem là cuộc họp dài. Nguồn dài được chia theo thứ tự nguồn thành các phần sở hữu xấp xỉ một giờ,
-lặp các segment nguyên vẹn trong giới hạn `NOTES_OVERLAP_BYTES` (`2_000`); segment quá lớn vẫn
-đi qua đường tách part theo byte hiện có, không nội suy timestamp.
+Map tuần tự theo ngân sách và final chỉ đọc các bản nháp có thể giữ trạng thái cũ, bỏ cam kết
+qua ranh giới hoặc thiếu ngữ cảnh trích dẫn. Chống lặp chỉ bằng prompt cũng chưa có bước đối chiếu
+riêng. Hợp đồng mới dùng `notes-hierarchical-v11`, schema công khai vẫn là `1`.
 
-Map của hai provider đã biết dùng tối đa `2` worker khi budget owner có token estimate; transport
-không biết hoặc fake vẫn tuần tự. Kết quả map được ghép lại theo thứ tự nguồn. Call index được
-reserve nguyên tử cho từng attempt và coverage ghi index của attempt đã được chấp nhận, bao gồm
-repair/recovery. Giới hạn chunk, reduction, recovery và tổng provider calls vẫn lấy trực tiếp từ
-`MAX_NOTES_CHUNKS`, `MAX_REDUCTION_CALLS`, `MAX_OUTPUT_RECOVERY_ATTEMPTS`,
-`MAX_OUTPUT_RECOVERY_CALLS` và `MAX_PROVIDER_CALLS` trong `notes_document.py`.
+Độ dài là `max(end_seconds) - min(start_seconds)`. Khi span lớn hơn `3_600` giây, planner
+chia phần sở hữu xấp xỉ một giờ, giữ segment nguyên vẹn và overlap tối đa `2_000` byte; phần quá
+lớn vẫn được tách theo ngân sách byte, không nội suy timestamp. Hai owner model đã biết dùng tối
+đa `2` map worker. Kết quả được hợp nhất theo thứ tự nguồn; tiến độ tăng khi từng map hoàn tất,
+không tăng trước khi có kết quả. Call index, một lượt repair chung, recovery và tổng số request
+vẫn có giới hạn nguyên tử. Usage được cô lập theo thread/call; OMP prepare được serialize.
 
-Ở final, khi toàn bộ `provider_source(...)` đã sanitize cùng các draft theo thứ tự nguồn vừa
-budget owner, request mang cả source và draft để đối chiếu quyết định sau cùng, request/acceptance
-qua ranh giới, câu hỏi đã được trả lời, antecedent, owner và uncertainty. Nếu không vừa, pipeline
-giữ fallback phân tầng bounded và nói rõ rằng final chỉ dùng các draft đã sinh từ toàn bộ coverage;
-không đưa raw source không giới hạn vào request. Sau generation, chỉ các item có full content trùng
-khớp mới được coalesce; citation refs được union trong giới hạn, còn fact khác citation, owner,
-deadline, phủ định hay metadata khác nhau đều giữ riêng. Không dùng shared source ID, fuzzy
-similarity, bỏ phủ định hay topic overlap làm điều kiện xóa.
+Final dùng nguồn đã lọc và các bản nháp khi vừa ngân sách. Nếu không vừa, fallback phân tầng dùng
+các draft từ đầy đủ coverage và nói rõ giới hạn. Với nguồn ngắn vừa ngân sách ở owner model đã
+biết, một draft được kiểm tra rồi có tối đa một lượt đối chiếu bổ sung với toàn bộ nguồn và draft.
+Người vận hành đã cho phép lượt bổ sung này để cải thiện chất lượng, thay quy tắc một call cũ
+của #108. Nếu full-source audit không vừa, trả draft hợp lệ và ghi `source_audit.status=skipped`,
+`reason=prompt_budget`; model/budget chưa biết giữ đường conservative hiện có. Audit không tự
+lặp. Lỗi audit giữ nguyên transcript và Notes cũ, không công bố một phần.
 
-Usage của ChatGPT HTTP adapter và OMP adapter được cô lập theo thread/call. OMP vẫn prepare storage
-atomically, khởi tạo process mới, set model/thinking level trước prompt và giữ deadline/cancellation
-hiện có.
+Đối chiếu giữ trạng thái cuối, nối request/acceptance, đóng câu hỏi đã có câu trả lời và không
+suy diễn owner, deadline, thuật ngữ hoặc thủ thuật từ đoạn nhiễu. Nó là bước xử lý chất lượng,
+không phải bằng chứng rằng mọi đầu ra đều đúng. Coalesce xác định chỉ gộp full content giống hệt
+trong cùng nhóm hoặc giữa `overview`/`key_topics`, union citation trong giới hạn. Khác biệt về
+loại mục, mức chắc chắn, owner, deadline hoặc phủ định được giữ; không xóa chỉ vì chung ID hay
+chủ đề. Bước đối chiếu nguồn quyết định các xung đột ngữ nghĩa.
 
-#### Kiểm chứng và giới hạn
+#### Kiểm chứng, đánh đổi và follow-up
 
-Regression offline: `tests/test_notes_document.py` và `tests/test_notes_provider.py` đạt `141 passed`
-(command `UV_CACHE_DIR=/tmp/asr-uv-cache timeout 180 .venv/bin/python -m pytest -q ...`), adapter
-tests đạt `95 passed`, hai thread-isolation tests đạt `2 passed`, và contract OMP v18.5.0 đạt
-`8 passed` với `ASR_RUN_OMP_CONTRACT=1`. Các test này không phải bằng chứng cho chất lượng ngữ nghĩa
-hoặc latency model. Semantic gold, compact live cases và acceptance gate thực tế vẫn cần được chạy
-ở bước nghiệm thu provider; không có inference hay network call trong các kiểm chứng này.
+Các regression kiểm tra ranh giới thời lượng, map song song và thứ tự kết quả, tiến độ khi map
+còn chạy, payload source/draft, giới hạn audit/repair/recovery, coalesce giữ mức chắc chắn và
+chẩn đoán lỗi audit đã lọc nội dung riêng tư. Nguồn:
+`tests/test_notes_document.py`, `tests/test_issue_104_budgets.py`,
+`tests/test_notes_provider.py`, `tests/test_chatgpt_transport.py`,
+`tests/test_antigravity_provider.py`, `tests/test_omp_contract.py`.
 
-Nguồn: `src/asr_studio/notes_document.py`, `src/asr_studio/notes_pipeline.py`,
-`src/asr_studio/chatgpt.py`, `src/asr_studio/antigravity.py`,
-`tests/test_notes_document.py`, `tests/test_notes_provider.py`,
-`tests/test_chatgpt_transport.py`, `tests/test_antigravity_provider.py`,
-`tests/test_omp_contract.py`.
+Lượt đối chiếu có thêm chi phí/quota và thời gian. Kiểm thử offline không chứng minh lợi ích
+ngữ nghĩa hoặc latency; nghiệm thu compact phải so draft thật với kết quả sau đối chiếu, giữ cả
+lỗi và giới hạn. Không dùng nó để công nhận lại các điểm số cohort riêng tư hoặc thời gian ASR/
+diarization/người duyệt chưa đo. #88 tiếp tục theo dõi bộ audio đại diện và duyệt của người dùng.
 
-#### Bổ sung — một lượt audit nguồn cho notes ngắn
-
-Với transcript vừa ngân sách của đúng cấu hình provider/model đã biết, pipeline giữ lượt sinh
-bản nháp hiện có rồi thực hiện tối đa một lượt audit nguồn. Prompt audit chứa toàn bộ nguồn đã
-lọc và bản nháp, dùng nguồn làm bằng chứng duy nhất để loại bỏ khẳng định không có căn cứ và lặp
-ý giữa các nhóm, nhưng giữ mọi sự việc, cam kết, trạng thái cuối và điểm không chắc chắn có căn
-cứ. Audit không gọi lại chính nó. Nếu prompt nguồn đầy đủ không vừa ngân sách, pipeline trả bản
-nháp đã kiểm tra và ghi `source_audit.status=skipped` cùng lý do `prompt_budget` trong manifest.
-Model hoặc budget không thuộc cấu hình owner đã biết giữ hành vi cũ.
-
-Hợp đồng prompt tăng từ `notes-hierarchical-v10` lên `notes-hierarchical-v11`; schema công khai
-vẫn là phiên bản `1`.
-
-Phân loại transcript dài dùng span thời lượng tương đối `max(end_seconds) - min(start_seconds)`.
-Span lớn hơn 3.600 giây đi qua phân vùng theo giờ với overlap và fallback hợp nhất có giới hạn.
-Logic coalesce chỉ gộp bản ghi trùng chính xác trong cùng nhóm hoặc giữa `overview` và
-`key_topics`; các khác biệt về mức chắc chắn hoặc loại mục được giữ cho audit nguồn quyết định.
-
-Đây là thay đổi về đường kiểm tra chất lượng, không phải bằng chứng về chất lượng ngữ nghĩa,
-latency hoặc quota thực tế. Kiểm thử offline chỉ kiểm tra routing, payload, giới hạn, manifest và
-không gọi provider thật.
+Tag: kiến trúc, chất lượng Notes. Tài liệu đích: `docs/specification.md`, báo cáo nghiệm thu.

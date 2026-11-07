@@ -98,7 +98,7 @@ _CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{5,256}\Z")
 _SAFE_ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}\Z")
 _ALL_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 _POSITIVE_REASONING_EFFORTS = _ALL_REASONING_EFFORTS[1:]
-_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final"})
+_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit"})
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
 

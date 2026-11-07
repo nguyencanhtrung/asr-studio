@@ -88,6 +88,13 @@ uses the same volumes and model directory. Prepare the ASR model while online. D
 Community-1 only after you accept its conditions (see
 [Speaker diarization model](#speaker-diarization-model)).
 
+Before upgrading an existing installation, finish or cancel pending Notes tasks and back up
+the data volume. Role migration preserves task/source records, but a task accepted with an old
+prompt can fail with `notes_contract_changed` after the prompt upgrade. Use **Create notes**
+again from the retained transcript in the GUI. Saved transcripts and Notes revisions remain.
+For schema rollback, restore the matching pre-upgrade database/data backup; see
+[the Notes service ADR](adr/0013-notes-service-boundary.md).
+
 Build from source:
 
 ```sh

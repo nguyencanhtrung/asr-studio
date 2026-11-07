@@ -2311,3 +2311,81 @@ def test_a_lower_target_prompt_that_overruns_the_context_for_its_ids_is_not_sent
     assert len(adapter.calls) == 1
     diagnostic = provider.store._read()["last_diagnostic"]
     assert (diagnostic["stage"], diagnostic["attempt"]) == ("single", "primary")
+
+
+def test_parallel_map_progress_reports_completed_results_before_all_maps_finish():
+    from asr_studio.notes_pipeline import generate_notes_document
+
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": start,
+            "end_seconds": start + 1,
+            "text": label,
+            "speaker_name": "Morgan",
+        }
+        for index, start, label in ((1, 0.0, "first"), (2, 3_601.0, "second"))
+    ]
+    entered = threading.Barrier(2)
+    second_returned = threading.Event()
+    intermediate_progress = threading.Event()
+    initial_counts = []
+    progress = []
+
+    def on_progress(event):
+        progress.append(event)
+        if event["stage"] == "chunking" and event["current"] == 1 and second_returned.is_set():
+            intermediate_progress.set()
+
+    def transport(prompt, **kwargs):
+        if kwargs["stage"] == "chunk":
+            initial_counts.append([x["current"] for x in progress if x["stage"] == "chunking"][-1])
+            entered.wait(timeout=5)
+            payload = _payload(prompt, "SOURCE_JSON:\n")
+            owned = [x for x in payload["segments"] if not x.get("overlap")]
+            if owned[0]["text"] == "first":
+                assert intermediate_progress.wait(timeout=5), (
+                    "First completed map was not reported while another map was running"
+                )
+            else:
+                second_returned.set()
+        result = _valid_document()
+        result["overview"] = [{"text": "Purpose", "source_ids": [kwargs["allowed_source_ids"][0]]}]
+        return json.dumps(result)
+
+    generate_notes_document(
+        snapshot=snapshot,
+        transport=transport,
+        output_language="en",
+        invalid_output_error=lambda value: AssertionError(value),
+        limit_error=RuntimeError,
+        provider="chatgpt",
+        model="gpt-5.6-sol",
+        on_progress=on_progress,
+    )
+
+    assert initial_counts == [0, 0]
+    assert [x["current"] for x in progress if x["stage"] == "chunking"] == [0, 1, 2]
+
+
+def test_source_audit_invalid_output_retains_stage_and_redacts_private_source_ids(tmp_path):
+    invalid_document = _valid_document()
+    invalid_document["overview"][0]["source_ids"] = ["private-unknown-source-id"]
+    bad = json.dumps(invalid_document)
+    adapter = NotesOnlyAdapter([json.dumps(_valid_document()), bad, bad])
+    provider = _provider(tmp_path, adapter)
+    with pytest.raises(ChatGPTError) as failure:
+        provider.generate_notes_document(
+            snapshot=_snapshot(),
+            connection_version=7,
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        )
+    assert failure.value.code == "notes_invalid_output"
+    assert len(adapter.calls) == 3
+    diagnostic = provider.store._read()["last_diagnostic"]
+    assert diagnostic["stage"] == "audit"
+    assert diagnostic["provider_call_index"] == 3
+    assert diagnostic["attempt"] == "repair"
+    assert "private-unknown-source-id" not in json.dumps(diagnostic)

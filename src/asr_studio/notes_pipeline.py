@@ -589,7 +589,10 @@ def generate_notes_document(
                 }
                 progress("merging", 1, 1, "calls")
         document = restore_final_document(
-            document, stage="audit" if single_budget.uses_token_estimate else "single"
+            document,
+            stage="audit"
+            if coverage.get("source_audit", {}).get("status") == "applied"
+            else "single",
         )
         progress("generating", 1, 1, "calls")
         return finish(document)
@@ -639,8 +642,7 @@ def generate_notes_document(
         and len(prepared_chunks) > 1
     )
     if parallel_maps:
-        for index in range(len(prepared_chunks)):
-            progress("chunking", index, len(prepared_chunks), "chunks")
+        progress("chunking", 0, len(prepared_chunks), "chunks")
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="notes-map")
         futures: dict[Future[tuple[dict[str, Any], int]], int] = {}
         try:
@@ -656,8 +658,9 @@ def generate_notes_document(
                         budget=synthesis_budget,
                     )
                 ] = index
-            for future in as_completed(futures):
+            for completed_count, future in enumerate(as_completed(futures), start=1):
                 map_results[futures[future]] = future.result()
+                progress("chunking", completed_count, len(prepared_chunks), "chunks")
         except BaseException:
             for future in futures:
                 future.cancel()
@@ -686,8 +689,6 @@ def generate_notes_document(
         if result is None:
             raise limit_error("The notes map did not return a document for every source part.")
         document, accepted_call_index = result
-        if parallel_maps:
-            progress("chunking", index, len(prepared_chunks), "chunks")
         coverage["chunks"][index - 1]["provider_call_index"] = accepted_call_index
         if previous_document is not None:
             # The previous chunk read the overlap in full, so an exact repeat can be removed;

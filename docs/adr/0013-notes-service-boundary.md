@@ -60,14 +60,21 @@ Pending semantics được giữ rõ ràng:
   trước recovery; unit test [`test_service_isolation.py`](../../tests/test_service_isolation.py)
   khóa các overlap này.
 
+Role migration không đổi hợp đồng prompt đã lưu trên task. Khi nâng cấp đồng thời sang
+`notes-hierarchical-v11`, task Notes đã nhận bằng prompt cũ có thể kết thúc với
+`notes_contract_changed`; không được mô tả kiểm tra role-only như bằng chứng tự chạy lại
+hợp đồng prompt cũ. Hoàn tất hàng đợi trước upgrade, hoặc dùng GUI tạo lại Notes từ transcript
+đã giữ sau upgrade. Guard này tránh ghi phiên bản prompt cũ cho kết quả dùng prompt mới
+([`notes_runner.py`](../../src/asr_studio/notes_runner.py)).
+
 Upgrade được thực hiện bởi `initialize()` trong transaction và ghi migration v16 sau
 khi thêm cột. Không sửa tay `owner_role` hoặc xóa migration record để rollback. Bản
- application cũ thấy schema mới hơn và dừng với lỗi `Database schema is newer than this
- application` ([`storage.py`](../../src/asr_studio/storage.py)). Rollback an toàn là
- dừng Compose, giữ bản backup của database/data trước upgrade và khôi phục bản backup
- rồi chạy bản cũ; nếu không có backup thì phải chạy forward-compatible application để
- export/migrate dữ liệu trước khi chọn phương án khác. Audio có thể vẫn nằm trong data
- volume, nhưng database và task slot phải được khôi phục cùng phiên bản.
+application cũ thấy schema mới hơn và dừng với lỗi `Database schema is newer than this
+application` ([`storage.py`](../../src/asr_studio/storage.py)). Rollback an toàn là
+dừng Compose, giữ bản backup của database/data trước upgrade và khôi phục bản backup
+rồi chạy bản cũ; nếu không có backup thì phải chạy forward-compatible application để
+export/migrate dữ liệu trước khi chọn phương án khác. Audio có thể vẫn nằm trong data
+volume, nhưng database và task slot phải được khôi phục cùng phiên bản.
 
 ## Giới hạn riêng tư và phương án loại
 
