@@ -111,8 +111,11 @@ def test_installation_check_requires_worker_before_printing_access_link(
 
 def test_installation_check_requires_notes_service_for_split_worker(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ASR_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(cli, "worker_is_healthy", lambda _directory: True)
-    monkeypatch.setattr(cli, "worker_role", lambda _directory: "transcription")
+    monkeypatch.setattr(
+        cli,
+        "worker_is_healthy",
+        lambda _directory, *, role=None: role is None,
+    )
     monkeypatch.setattr(cli, "notes_service_is_healthy", lambda _directory: False)
 
     assert main(["installation", "check"]) == 1
@@ -123,7 +126,7 @@ def test_installation_check_requires_notes_service_for_split_worker(tmp_path, mo
 
 def test_installation_check_requires_models_visible_from_app(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ASR_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(cli, "worker_is_healthy", lambda _directory: True)
+    monkeypatch.setattr(cli, "worker_is_healthy", lambda _directory, *, role=None: True)
     model = _prepared_model(tmp_path / "model")
     monkeypatch.setattr(cli, "read_runtime_profile", lambda _directory: None)
     assert main(["installation", "check"]) == 1

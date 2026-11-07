@@ -903,7 +903,6 @@ def recover_abandoned_tasks(
     data_dir: Path,
     *,
     role: str = "legacy",
-    legacy_worker_active: bool = False,
 ) -> list[str]:
     """Recover only tasks this role can own, preserving another live role's slot."""
     kinds, _ = _claim_role_kinds(role, None)
@@ -925,8 +924,6 @@ def recover_abandoned_tasks(
                 recoverable = owner_role in _TASK_ROLES
             else:
                 recoverable = owner_role in {role, "legacy"}
-            if role == "notes" and owner_role == "legacy" and legacy_worker_active:
-                recoverable = False
             # Accepted work is still pending, not abandoned.  A split service
             # leaves it in the authoritative slot so it can claim pre-v16 rows
             # whose compatibility owner is legacy.  The legacy role retains

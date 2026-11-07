@@ -20,15 +20,17 @@ mạng mặc định để gọi provider. Lệnh chuẩn bị model dùng overr
 model hub egress; đó là một process one-shot, không phải quyền egress của worker đang
 chạy ([`compose.model-prepare.yaml`](../../compose.model-prepare.yaml)).
 
-Worker transcription và notes service có heartbeat/lifetime lock riêng trong
-[`service_runtime.py`](../../src/asr_studio/service_runtime.py). Worker legacy giữ
-exclusive `.worker.lock` và shared probe trên `.notes-service.lock`; notes service giữ
-exclusive notes lock. Vì vậy legacy combined worker không khởi động khi split role đang
-sống, và split transcription worker không khởi động khi legacy worker đang sống. Một
-legacy process trước khi có probe vẫn được bảo vệ: notes service kiểm tra worker lock
-và coi heartbeat cũ/không gắn role là legacy trước khi recovery. Heartbeat dùng cho
-readiness; lock là bằng chứng overlap/liveness trong các guard này
-([`worker.py`](../../src/asr_studio/worker.py), [`notes_service.py`](../../src/asr_studio/notes_service.py)).
+Worker legacy giữ exclusive `.worker.lock`. Worker transcription giữ exclusive
+`.transcription.lock`; notes service giữ exclusive `.notes-service.lock`. Cả hai split
+service giữ shared `.worker.lock` trong toàn bộ lifetime. Vì vậy legacy combined worker
+không khởi động khi split role đang sống, và split role không khởi động khi legacy worker
+đang sống. Các descriptor của role và shared gate được truyền cho child executor
+([`service_runtime.py`](../../src/asr_studio/service_runtime.py),
+[`worker.py`](../../src/asr_studio/worker.py),
+[`notes_service.py`](../../src/asr_studio/notes_service.py)).
+
+Startup chỉ recovery sau khi giữ đủ lock. Heartbeat chỉ phục vụ readiness. Role marker và
+heartbeat không thay thế lifetime lock khi quyết định process còn sống.
 
 Không tạo slot riêng cho từng role. `processing_slot` hiện có tiếp tục là nguồn sự thật
 cho task active; claim dùng một giao dịch `BEGIN IMMEDIATE`, kiểm tra kind và
@@ -53,14 +55,10 @@ Pending semantics được giữ rõ ràng:
 - `running` của role đang khởi động lại được đánh dấu `interrupted`; `stopping` được
   đánh dấu `canceled`. Recovery chỉ xét kind/owner role của service và chỉ nhường slot
   khi ID trong slot thuộc tập task đã xử lý. Task của role đang sống không bị đụng tới.
-- Nếu notes service đã thấy một legacy worker cũ không có notes probe, nó chờ worker lock
-  nhả rồi mới recovery ở vòng lặp tiếp theo; không dùng heartbeat hết hạn một mình để
-  kết luận process đã dừng.
-- Legacy helper vẫn giữ semantics cũ cho caller cũ, nhưng production legacy worker chỉ
-  gọi recovery sau khi đã giữ cả worker lock và notes reservation. Split startup giữ
-  worker lock (transcription) hoặc kiểm tra worker lock legacy (notes) trước recovery;
-  unit test [`test_service_isolation.py`](../../tests/test_service_isolation.py) khóa
-  các overlap này.
+- Legacy helper vẫn giữ semantics cũ cho caller cũ. Production legacy worker chỉ gọi
+  recovery sau khi giữ worker lock. Split startup giữ role lock và shared worker gate
+  trước recovery; unit test [`test_service_isolation.py`](../../tests/test_service_isolation.py)
+  khóa các overlap này.
 
 Upgrade được thực hiện bởi `initialize()` trong transaction và ghi migration v16 sau
 khi thêm cột. Không sửa tay `owner_role` hoặc xóa migration record để rollback. Bản
@@ -84,4 +82,5 @@ boundary khác, chưa chọn trong issue này.
 Giữ notes trong worker bị loại vì worker khi đó vẫn cần provider mount và egress. Tạo
 database hoặc processing slot riêng cho notes bị loại vì phá invariant một task xử lý
 toàn hệ thống và làm recovery hai nguồn sự thật. Runtime disposable-stack, provider và
-egress checks là phần root sở hữu; các unit/contract test ở đây không chứng minh chúng.
+egress checks là các acceptance check riêng; các unit/contract test ở đây không chứng
+minh chúng.

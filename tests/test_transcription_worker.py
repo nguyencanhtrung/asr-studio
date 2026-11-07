@@ -149,6 +149,65 @@ def test_lifetime_lock_stays_owned_by_runner_child_after_worker_descriptor_close
             )
 
 
+def test_split_runner_child_inherits_role_and_legacy_gate_descriptors(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    settings = Settings(data_dir=data_dir, auth_dir=tmp_path / "auth")
+    role_fd = worker.acquire_transcription_lock(data_dir)
+    assert role_fd is not None
+    legacy_gate_fd = worker.acquire_service_probe(data_dir, "worker", retry_seconds=0)
+    assert legacy_gate_fd is not None
+    marker = tmp_path / "child-ready"
+    stop_event = threading.Event()
+    result: dict[str, object] = {}
+    monkeypatch.setattr(worker, "task_runtime_state", lambda *_args: ("running", "owner"))
+    monkeypatch.setattr(worker, "update_task_progress", lambda *_args, **_kwargs: True)
+    command = [
+        sys.executable,
+        "-c",
+        "from pathlib import Path; import sys, time; "
+        "Path(sys.argv[1]).write_text('ready', encoding='ascii'); time.sleep(60)",
+        str(marker),
+    ]
+
+    def run_child() -> None:
+        result.update(
+            worker._run_child(
+                settings,
+                (role_fd, legacy_gate_fd),
+                "task",
+                "owner",
+                command,
+                stop_event,
+                time.monotonic(),
+                lambda: ("running", 0.0, 0, None, None, None),
+                lambda _event: False,
+                heartbeat_writer=lambda _directory, _state: None,
+            )
+        )
+
+    thread = threading.Thread(target=run_child)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert marker.exists()
+        os.close(role_fd)
+        os.close(legacy_gate_fd)
+        role_fd = legacy_gate_fd = -1
+        assert worker.acquire_transcription_lock(data_dir, retry_seconds=0) is None
+        assert worker.acquire_worker_lock(data_dir, retry_seconds=0) is None
+    finally:
+        stop_event.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        if role_fd >= 0:
+            os.close(role_fd)
+        if legacy_gate_fd >= 0:
+            os.close(legacy_gate_fd)
+    assert result["stop_reason"] == "interrupted"
+
+
 def test_cancellation_terminates_and_reaps_the_complete_runner_process_group(tmp_path):
     script = (
         "import signal, subprocess, sys, time\n"

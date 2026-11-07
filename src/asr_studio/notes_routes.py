@@ -26,7 +26,6 @@ from asr_studio.notes import (
 from asr_studio.notes_service import is_healthy as notes_service_is_healthy
 from asr_studio.tasks import TaskError
 from asr_studio.worker import is_healthy as worker_is_healthy
-from asr_studio.worker import worker_role
 
 WEB_DIR = Path(__file__).parent / "web"
 
@@ -34,9 +33,7 @@ WEB_DIR = Path(__file__).parent / "web"
 def _notes_processing_ready(data_dir: Path) -> bool:
     if notes_service_is_healthy(data_dir):
         return True
-    # A pre-upgrade combined worker remains a valid notes processor, but the
-    # transcription-only worker is deliberately not treated as one.
-    return worker_is_healthy(data_dir) and worker_role(data_dir) == "legacy"
+    return worker_is_healthy(data_dir, role="legacy")
 
 
 async def _json_object(

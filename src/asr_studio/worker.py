@@ -92,10 +92,24 @@ def worker_lock_path(data_dir: Path) -> Path:
     return service_lock_path(data_dir, "worker")
 
 
+def transcription_heartbeat_path(data_dir: Path) -> Path:
+    return service_heartbeat_path(data_dir, "transcription")
+
+
+def transcription_lock_path(data_dir: Path) -> Path:
+    return service_lock_path(data_dir, "transcription")
+
+
 def acquire_worker_lock(
     data_dir: Path, *, retry_seconds: float = WORKER_LOCK_RETRY_SECONDS
 ) -> int | None:
     return acquire_service_lock(data_dir, "worker", retry_seconds=retry_seconds)
+
+
+def acquire_transcription_lock(
+    data_dir: Path, *, retry_seconds: float = WORKER_LOCK_RETRY_SECONDS
+) -> int | None:
+    return acquire_service_lock(data_dir, "transcription", retry_seconds=retry_seconds)
 
 
 def _worker_lock_is_held(data_dir: Path) -> bool:
@@ -106,14 +120,42 @@ def write_heartbeat(data_dir: Path, state: str = "idle", *, role: str = "legacy"
     write_service_heartbeat(data_dir, "worker", state, role=role)
 
 
+def write_transcription_heartbeat(data_dir: Path, state: str = "idle") -> None:
+    write_service_heartbeat(data_dir, "transcription", state, role="transcription")
+
+
+def _service_for_role(role: str) -> str:
+    if role == "legacy":
+        return "worker"
+    if role == "transcription":
+        return "transcription"
+    raise ValueError(f"Unknown worker role: {role}")
+
+
 def is_healthy(data_dir: Path, *, now: float | None = None, role: str | None = None) -> bool:
-    expected_roles = {role} if role is not None else None
-    return service_is_healthy(data_dir, "worker", now=now, expected_roles=expected_roles)
+    if role is None:
+        return is_healthy(data_dir, now=now, role="legacy") or is_healthy(
+            data_dir, now=now, role="transcription"
+        )
+    return service_is_healthy(
+        data_dir,
+        _service_for_role(role),
+        now=now,
+        expected_roles={role},
+    )
 
 
 def is_active(data_dir: Path, *, now: float | None = None, role: str | None = None) -> bool:
-    expected_roles = {role} if role is not None else None
-    return service_is_active(data_dir, "worker", now=now, expected_roles=expected_roles)
+    if role is None:
+        return is_active(data_dir, now=now, role="legacy") or is_active(
+            data_dir, now=now, role="transcription"
+        )
+    return service_is_active(
+        data_dir,
+        _service_for_role(role),
+        now=now,
+        expected_roles={role},
+    )
 
 
 def worker_role(data_dir: Path) -> str | None:
@@ -266,7 +308,7 @@ def _notes_command(task: dict[str, Any], owner_id: str, data_dir: Path) -> list[
 
 def _run_child(
     settings: Settings,
-    lock_fd: int,
+    lock_fd: int | tuple[int, ...],
     task_id: str,
     owner_id: str,
     command: list[str],
@@ -300,6 +342,7 @@ def _run_child(
         return result
 
     try:
+        pass_fds = (lock_fd,) if isinstance(lock_fd, int) else lock_fd
         process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
@@ -307,7 +350,7 @@ def _run_child(
             stderr=subprocess.PIPE,
             bufsize=0,
             close_fds=True,
-            pass_fds=(lock_fd,),
+            pass_fds=pass_fds,
             start_new_session=True,
             env={
                 **_safe_runner_environment(),
@@ -502,7 +545,7 @@ def _finish_after_child_stop(
 
 def _run_notes_task(
     settings: Settings,
-    lock_fd: int,
+    lock_fd: int | tuple[int, ...],
     task: dict[str, Any],
     stop_event: threading.Event,
     *,
@@ -696,7 +739,7 @@ def _run_notes_task(
 
 def _run_task(
     settings: Settings,
-    lock_fd: int,
+    lock_fd: int | tuple[int, ...],
     task: dict[str, Any],
     stop_event: threading.Event,
     *,
@@ -986,7 +1029,7 @@ def _run_task(
 
 def _worker_loop(
     settings: Settings,
-    lock_fd: int,
+    lock_fd: int | tuple[int, ...],
     stop_event: threading.Event,
     *,
     role: str = "legacy",
@@ -998,16 +1041,10 @@ def _worker_loop(
         if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
             heartbeat_writer(settings.data_dir, "idle")
             last_heartbeat = now
-        allowed_kinds = (
-            {"transcription"}
-            if role == "legacy" and service_is_active(settings.data_dir, "notes")
-            else None
-        )
         task = claim_next_task(
             settings.data_dir,
             owner_id=uuid.uuid4().hex,
             role=role,
-            allowed_kinds=allowed_kinds,
         )
         if task is None:
             stop_event.wait(TASK_POLL_INTERVAL_SECONDS)
@@ -1028,21 +1065,33 @@ def run_worker(settings: Settings, *, role: str = "legacy") -> None:
         signum: signal.signal(signum, lambda *_: stop_event.set())
         for signum in (signal.SIGTERM, signal.SIGINT)
     }
-    lock_fd: int | None = None
-    notes_probe_fd: int | None = None
+    own_lock_fd: int | None = None
+    legacy_gate_fd: int | None = None
+    executor_lock_fd: int | tuple[int, ...] | None = None
 
     def heartbeat_writer(directory: Path, state: str) -> None:
-        write_heartbeat(directory, state, role=role)
+        if role == "legacy":
+            write_heartbeat(directory, state)
+        else:
+            write_transcription_heartbeat(directory, state)
 
     try:
         initialize(settings.data_dir)
-        lock_fd = acquire_worker_lock(settings.data_dir)
-        if lock_fd is None:
-            raise WorkerAlreadyRunning("Another worker still owns the local processing lock.")
         if role == "legacy":
-            notes_probe_fd = acquire_service_probe(settings.data_dir, "notes")
-            if notes_probe_fd is None:
-                raise WorkerAlreadyRunning("The notes service still owns its processing lock.")
+            own_lock_fd = acquire_worker_lock(settings.data_dir)
+            if own_lock_fd is None:
+                raise WorkerAlreadyRunning("Another worker still owns the local processing lock.")
+            executor_lock_fd = own_lock_fd
+        else:
+            legacy_gate_fd = acquire_service_probe(settings.data_dir, "worker")
+            if legacy_gate_fd is None:
+                raise WorkerAlreadyRunning("The legacy worker still owns the processing lock.")
+            own_lock_fd = acquire_transcription_lock(settings.data_dir)
+            if own_lock_fd is None:
+                raise WorkerAlreadyRunning(
+                    "Another transcription worker still owns the local processing lock."
+                )
+            executor_lock_fd = (own_lock_fd, legacy_gate_fd)
         profile = select_runtime(settings)
         if profile.device == "cuda":
             _verify_torch_cuda()
@@ -1061,24 +1110,24 @@ def run_worker(settings: Settings, *, role: str = "legacy") -> None:
             recover_abandoned_tasks(settings.data_dir, role=role)
         heartbeat_writer(settings.data_dir, "idle")
         if role == "legacy":
-            _worker_loop(settings, lock_fd, stop_event)
+            _worker_loop(settings, executor_lock_fd, stop_event)
         else:
             _worker_loop(
                 settings,
-                lock_fd,
+                executor_lock_fd,
                 stop_event,
                 role=role,
                 heartbeat_writer=heartbeat_writer,
             )
     finally:
-        if lock_fd is not None:
+        if own_lock_fd is not None:
             with suppress(OSError):
                 heartbeat_writer(settings.data_dir, "stopped")
-        if notes_probe_fd is not None:
+        if legacy_gate_fd is not None:
             with suppress(OSError):
-                os.close(notes_probe_fd)
-        if lock_fd is not None:
-            os.close(lock_fd)
+                os.close(legacy_gate_fd)
+        if own_lock_fd is not None:
+            os.close(own_lock_fd)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         os.umask(previous_umask)

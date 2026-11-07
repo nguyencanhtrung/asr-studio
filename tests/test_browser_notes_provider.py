@@ -68,7 +68,7 @@ def fake_notes_provider(monkeypatch):
         )
 
     monkeypatch.setattr(notes_routes, "accept_notes_task", accept_with_stub)
-    monkeypatch.setattr(notes_routes, "worker_is_healthy", lambda _path: True)
+    monkeypatch.setattr(notes_routes, "worker_is_healthy", lambda _path, *, role=None: True)
 
 
 def mock_providers(

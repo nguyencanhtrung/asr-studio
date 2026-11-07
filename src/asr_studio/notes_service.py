@@ -17,17 +17,16 @@ from asr_studio.safe_logging import emit_safe_log
 from asr_studio.service_runtime import (
     LOCK_RETRY_SECONDS,
     acquire_service_lock,
+    acquire_service_probe,
     service_heartbeat_path,
     service_is_active,
     service_is_healthy,
-    service_lock_is_held,
     service_lock_path,
     write_service_heartbeat,
 )
 from asr_studio.storage import initialize
 from asr_studio.tasks import claim_next_task, recover_abandoned_tasks
-from asr_studio.worker import _run_notes_task, worker_role
-from asr_studio.worker import is_active as worker_is_active
+from asr_studio.worker import _run_notes_task
 from asr_studio.worker import is_healthy as worker_is_healthy
 
 NOTES_SERVICE_ROLE = "notes"
@@ -73,51 +72,22 @@ def is_active(data_dir: Path, *, now: float | None = None) -> bool:
     )
 
 
-def _legacy_worker_active(data_dir: Path) -> bool:
-    """Use the legacy worker's lifetime lock as the overlap authority.
-
-    A pre-split worker may have a stale or untagged heartbeat while it is still
-    processing.  The worker lock is therefore checked independently of
-    heartbeat freshness; the role tag only distinguishes it from the split
-    transcription worker.
-    """
-    if not service_lock_is_held(data_dir, "worker"):
-        return False
-    if worker_role(data_dir) != "transcription":
-        return True
-    # A stale split heartbeat with a held worker lock is ambiguous during a
-    # pre-split/upgrade overlap; fail closed and protect the task.
-    return not worker_is_active(data_dir, role="transcription")
-
-
 def is_ready(data_dir: Path) -> bool:
     """Notes readiness accepts the split service or an active legacy combined worker."""
     return is_healthy(data_dir) or worker_is_healthy(data_dir, role="legacy")
 
 
-def _notes_loop(settings: Settings, lock_fd: int, stop_event: threading.Event) -> None:
+def _notes_loop(
+    settings: Settings,
+    lock_fd: int | tuple[int, ...],
+    stop_event: threading.Event,
+) -> None:
     last_heartbeat = 0.0
-    legacy_was_seen = False
     while not stop_event.is_set():
         now = time.monotonic()
         if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
             write_heartbeat(settings.data_dir, "idle")
             last_heartbeat = now
-        legacy_active = _legacy_worker_active(settings.data_dir)
-        if legacy_active:
-            legacy_was_seen = True
-            stop_event.wait(TASK_POLL_INTERVAL_SECONDS)
-            continue
-        if legacy_was_seen:
-            # A pre-split legacy process may have started without the notes
-            # reservation probe. Recover its notes task only after its worker
-            # lifetime lock is gone.
-            recover_abandoned_tasks(
-                settings.data_dir,
-                role=NOTES_SERVICE_ROLE,
-                legacy_worker_active=False,
-            )
-            legacy_was_seen = False
         task = claim_next_task(
             settings.data_dir,
             owner_id=uuid.uuid4().hex,
@@ -141,35 +111,38 @@ def run_notes_service(settings: Settings) -> None:
         signum: signal.signal(signum, lambda *_: stop_event.set())
         for signum in (signal.SIGTERM, signal.SIGINT)
     }
-    lock_fd: int | None = None
+    own_lock_fd: int | None = None
+    legacy_gate_fd: int | None = None
+    executor_lock_fd: int | tuple[int, ...] | None = None
     try:
         initialize(settings.data_dir)
-        lock_fd = acquire_lock(settings.data_dir)
-        if lock_fd is None:
+        legacy_gate_fd = acquire_service_probe(settings.data_dir, "worker")
+        if legacy_gate_fd is None:
+            raise NotesServiceAlreadyRunning("The legacy worker still owns the processing lock.")
+        own_lock_fd = acquire_lock(settings.data_dir)
+        if own_lock_fd is None:
             raise NotesServiceAlreadyRunning(
                 "Another notes service still owns the notes processing lock."
             )
+        executor_lock_fd = (own_lock_fd, legacy_gate_fd)
         provider_dir = settings.provider_dir
         if provider_dir is None:
             raise RuntimeError("ASR_PROVIDER_DIR could not be resolved")
         provider_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         ChatGPTProvider(provider_dir, callback_url="").ensure()
         AntigravityProvider(provider_dir).ensure()
-        legacy_active = _legacy_worker_active(settings.data_dir)
         write_heartbeat(settings.data_dir, "starting")
-        recover_abandoned_tasks(
-            settings.data_dir,
-            role=NOTES_SERVICE_ROLE,
-            legacy_worker_active=legacy_active,
-        )
+        recover_abandoned_tasks(settings.data_dir, role=NOTES_SERVICE_ROLE)
         write_heartbeat(settings.data_dir, "idle")
-        _notes_loop(settings, lock_fd, stop_event)
+        _notes_loop(settings, executor_lock_fd, stop_event)
     finally:
-        if lock_fd is not None:
+        if own_lock_fd is not None:
             with suppress(OSError):
                 write_heartbeat(settings.data_dir, "stopped")
-        if lock_fd is not None:
-            os.close(lock_fd)
+        if legacy_gate_fd is not None:
+            os.close(legacy_gate_fd)
+        if own_lock_fd is not None:
+            os.close(own_lock_fd)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         os.umask(previous_umask)

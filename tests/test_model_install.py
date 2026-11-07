@@ -526,7 +526,11 @@ async def api(rig, monkeypatch):
     settings = rig.settings
     _whisper_dir(settings.asr_gpu_model_path)
     profile = {"value": RuntimeProfile("cuda", "float16", settings.asr_gpu_model_path)}
-    monkeypatch.setattr(routes, "worker_is_healthy", lambda _data_dir: profile["value"] is not None)
+    monkeypatch.setattr(
+        routes,
+        "worker_is_healthy",
+        lambda _data_dir, *, role=None: profile["value"] is not None,
+    )
     monkeypatch.setattr(routes, "read_runtime_profile", lambda _data_dir: profile["value"])
     app = create_app(settings)
     async with (

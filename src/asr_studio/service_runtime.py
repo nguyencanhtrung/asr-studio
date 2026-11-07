@@ -16,6 +16,7 @@ HEALTHY_STATES = frozenset({"idle", "running", "stopping"})
 ACTIVE_STATES = frozenset({*HEALTHY_STATES, "starting"})
 SERVICE_FILES = {
     "worker": (".worker.lock", "worker.liveness"),
+    "transcription": (".transcription.lock", "transcription.liveness"),
     "notes": (".notes-service.lock", "notes-service.liveness"),
 }
 
@@ -64,8 +65,13 @@ def acquire_service_lock(
             time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
 
 
-def acquire_service_probe(data_dir: Path, service: str) -> int | None:
-    """Hold a shared lifetime probe so a legacy role cannot overlap a split service."""
+def acquire_service_probe(
+    data_dir: Path,
+    service: str,
+    *,
+    retry_seconds: float = LOCK_RETRY_SECONDS,
+) -> int | None:
+    """Hold a shared lifetime probe on a service lock for the process lifetime."""
     directory = Path(data_dir)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory, 0o700)
@@ -75,12 +81,16 @@ def acquire_service_probe(data_dir: Path, service: str) -> int | None:
         0o600,
     )
     os.fchmod(descriptor, 0o600)
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(descriptor)
-        return None
-    return descriptor
+    deadline = time.monotonic() + retry_seconds
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            return descriptor
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(descriptor)
+                return None
+            time.sleep(LOCK_RETRY_INTERVAL_SECONDS)
 
 
 def service_lock_is_held(data_dir: Path, service: str) -> bool:

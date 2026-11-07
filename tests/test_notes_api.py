@@ -29,7 +29,10 @@ async def test_notes_routes_enforce_auth_and_preserve_saved_revision_contract(
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         meeting_id, generation_id, segment_ids = seed_completed_transcript(settings.data_dir)
-        monkeypatch.setattr("asr_studio.notes_routes.worker_is_healthy", lambda _path: True)
+        monkeypatch.setattr(
+            "asr_studio.notes_routes.worker_is_healthy",
+            lambda _path, *, role=None: True,
+        )
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url=settings.public_url
         ) as client:

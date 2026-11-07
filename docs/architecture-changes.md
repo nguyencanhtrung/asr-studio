@@ -1435,9 +1435,10 @@ của task khác ([`tasks.py`](../src/asr_studio/tasks.py)). `accepted` vẫn l�
 split role claim task cũ; `running` được đánh dấu `interrupted` khi role tương ứng chết,
 `stopping` thành `canceled`, còn task của role đang sống được bảo vệ.
 
-Legacy combined worker giữ worker lock và notes reservation; split startup giữ/check
-lock trước recovery. Vì thế owner_role chỉ tương thích dữ liệu, không phải bằng chứng
-service còn sống. Heartbeat/readiness và lock/recovery được tách riêng trong
+Legacy combined worker giữ exclusive `.worker.lock`. Mỗi split role giữ exclusive lock
+riêng và shared `.worker.lock` trong toàn bộ lifetime, trước runtime/provider init và
+recovery. Vì thế owner_role chỉ tương thích dữ liệu, không phải bằng chứng service còn
+sống. Heartbeat/readiness và lock/recovery được tách riêng trong
 [`service_runtime.py`](../src/asr_studio/service_runtime.py), với regression ở
 [`test_service_isolation.py`](../tests/test_service_isolation.py).
 
@@ -1447,8 +1448,7 @@ Tách database/recording volume sẽ cho isolation mạnh hơn nhưng cần thay
 recording và publication hiện tại; issue này ghi rõ giới hạn shared data volume thay vì
 hứa cách ly audio. Bản application cũ không mở database schema mới; rollback phải dùng
 backup database trước migration hoặc một application tương thích để export/migrate, không
-xóa cột bằng tay. Runtime stack/provider/egress checks vẫn là kiểm tra độc lập do root
-thực hiện.
+xóa cột bằng tay. Runtime stack/provider/egress checks vẫn là các kiểm tra độc lập.
 
 Issue #166. Tag: kiến trúc, vận hành, riêng tư. Tài liệu đích: [ADR 0013](adr/0013-notes-service-boundary.md),
 [`docs/user-guide.md`](user-guide.md), [`docs/release/privacy-v0.1.0.md`](release/privacy-v0.1.0.md).
