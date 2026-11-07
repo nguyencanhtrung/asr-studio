@@ -61,7 +61,7 @@ Pending semantics được giữ rõ ràng:
   khóa các overlap này.
 
 Role migration không đổi hợp đồng prompt đã lưu trên task. Khi nâng cấp đồng thời sang
-`notes-hierarchical-v14`, task Notes đã nhận bằng prompt cũ có thể kết thúc với
+`notes-hierarchical-v15`, task Notes đã nhận bằng prompt cũ có thể kết thúc với
 `notes_contract_changed`; không được mô tả kiểm tra role-only như bằng chứng tự chạy lại
 hợp đồng prompt cũ. Hoàn tất hàng đợi trước upgrade, hoặc dùng GUI tạo lại Notes từ transcript
 đã giữ sau upgrade. Guard này tránh ghi phiên bản prompt cũ cho kết quả dùng prompt mới

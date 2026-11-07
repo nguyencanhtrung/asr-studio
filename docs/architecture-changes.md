@@ -1502,7 +1502,7 @@ Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `
 
 Map tuần tự theo ngân sách và final chỉ đọc các bản nháp có thể giữ trạng thái cũ, bỏ cam kết
 qua ranh giới hoặc thiếu ngữ cảnh trích dẫn. Chống lặp chỉ bằng prompt cũng chưa có bước đối chiếu
-riêng. Hợp đồng mới dùng `notes-hierarchical-v14`, schema công khai vẫn là `1`.
+riêng. Hợp đồng mới dùng `notes-hierarchical-v15`, schema công khai vẫn là `1`.
 
 Độ dài là `max(end_seconds) - min(start_seconds)`. Khi span lớn hơn `3_600` giây, planner
 chia phần sở hữu xấp xỉ một giờ, giữ segment nguyên vẹn và overlap tối đa `2_000` byte; phần quá
@@ -1519,8 +1519,12 @@ hướng dẫn dùng đúng `SYNTHESIS_INPUT_JSON.source` và cho phép khôi ph
 draft bỏ sót. Giới hạn “chỉ đọc draft” chỉ áp dụng cho fallback không có transcript.
 Prompt yêu cầu giữ các nhóm liệt kê, số lượng, điều kiện và ý kiến riêng với quyết định;
 không thay nhiều chi tiết bằng một câu tổng quát để rút ngắn tài liệu. Nếu không vừa, fallback phân tầng dùng
-các draft từ đầy đủ coverage và nói rõ giới hạn. Với nguồn ngắn vừa ngân sách ở owner model đã
-biết, một draft được kiểm tra rồi có tối đa một lượt đối chiếu bổ sung với toàn bộ nguồn và draft.
+các draft từ đầy đủ coverage và nói rõ giới hạn. Với nguồn ngắn vừa ngân sách ở ChatGPT owner
+model đã biết, một draft được kiểm tra rồi có tối đa một lượt đối chiếu bổ sung với toàn bộ nguồn
+và draft. Antigravity giữ một lượt draft và ghi `source_audit.status=skipped`,
+`reason=provider_policy`: audit trong nghiệm thu đã thêm chi tiết khám không có trong nguồn,
+nên chưa bật lượt bổ sung khi nó làm giảm fidelity. Chính sách áp dụng cho cấu hình và
+các quan sát được ghi trong báo cáo nghiệm thu.
 Người vận hành đã cho phép lượt bổ sung này để cải thiện chất lượng, thay quy tắc một call cũ
 của #108. Nếu full-source audit không vừa, trả draft hợp lệ và ghi `source_audit.status=skipped`,
 `reason=prompt_budget`; model/budget chưa biết giữ đường conservative hiện có. Audit không tự
@@ -1534,7 +1538,10 @@ cùng một thông tin đang chờ; quyết định bác bỏ/hoãn cần thỏa
 này áp dụng từ source/map, không chỉ tại final audit, để tránh giữ nhãn sai từ bản nháp.
 Quy tắc cũng giữ thì và mức chắc chắn: dự kiến thảo luận/khám không trở thành sự kiện đã xảy ra.
 Bản nháp và kiến thức miền không phải bằng chứng; chi tiết nhiễu không có căn cứ bị bỏ, không
-được tự khôi phục thành thuật ngữ hoặc thủ thuật.
+được tự khôi phục thành thuật ngữ hoặc thủ thuật. Quyết định không nhắc lại việc đã có trong
+action_items; key_topics chỉ giữ lý do mà mục khác chưa nêu. Bỏ câu khái quát lặp nội dung
+chi tiết, giữ các ý riêng. Đề xuất/điều kiện phải được thể hiện trong nội dung, không chỉ qua
+tên nhóm; không thêm số, định ngữ hoặc mức cụ thể không có nguồn.
 
 Đối chiếu giữ trạng thái cuối, nối request/acceptance, đóng câu hỏi đã có câu trả lời và không
 suy diễn owner, deadline, thuật ngữ hoặc thủ thuật từ đoạn nhiễu. Nó là bước xử lý chất lượng,

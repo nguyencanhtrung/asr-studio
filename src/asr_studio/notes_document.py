@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v14"
+PROMPT_VERSION = "notes-hierarchical-v15"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -1137,31 +1137,29 @@ _TELEGRAPH_RULE = {
 }
 _PLACEMENT_RULE = {
     "en": (
-        "Classify source commitment before choosing one section per fact. action_items: committed "
-        "tasks. decisions: agreed outcomes, plans and dates. confirmation_items: pending "
-        "proposals. open_questions: distinct unanswered questions. key_topics: distinct "
-        "discussion/rationale. overview: purpose/context (at most 3). A pending proposal and its "
-        "lack of acceptance, owner or implementation are one confirmation item, never a decision. "
-        "Explicit rejection or deferral needs source agreement. Keep task, owner and deadline "
-        "together. Do not repeat them elsewhere. Preserve every distinct supported fact. Neither "
-        "drafts nor domain knowledge are evidence. Cite complete source context for each claim. "
-        "Preserve tense and modality: a planned discussion or future examination is not a "
-        "completed event. Omit unsupported details of noisy terms or procedures instead of "
-        "reconstructing them. Compare complete claims and remove semantic repetitions before "
-        "returning.\n"
+        "Classify source commitment before placement. Each fact appears once. action_items: "
+        "accepted tasks with owner/deadline. decisions: agreed outcomes/plans/dates, never a task "
+        "already stated in action_items. confirmation_items: a proposal with its pending status, "
+        "including no acceptance, owner or implementation. Rejection or deferral needs explicit "
+        "agreement. open_questions: distinct unanswered questions. key_topics: reasoning that no "
+        "other item states. overview: purpose/context only, at most 3 items. Compare every item "
+        "with every other. Remove broad restatements of detailed facts without dropping distinct "
+        "facts. Preserve proposal/conditional framing in text, not just section names. Drafts and "
+        "domain knowledge are not evidence. Cite complete context. Preserve tense and certainty: "
+        "future discussion/examination is not completion. Omit unsupported names, numbers, "
+        "qualifiers, specificity and procedures. Never reconstruct noise.\n"
     ),
     "vi": (
-        "Phân loại mức cam kết trong nguồn trước khi chọn một nhóm cho mỗi ý. Dùng action_items "
-        "cho việc đã cam kết; decisions cho kết quả, kế hoạch và ngày đã thống nhất; "
-        "confirmation_items cho đề xuất đang chờ; open_questions cho câu hỏi riêng chưa có trả "
-        "lời; key_topics cho thảo luận/lý do riêng; overview cho mục đích/bối cảnh (tối đa 3). Đề "
-        "xuất cùng trạng thái chưa chấp nhận, chưa có người nhận hay chưa triển khai là một mục "
-        "cần xác nhận, không phải quyết định. Bác bỏ hay hoãn cần thỏa thuận rõ trong nguồn. Giữ "
-        "việc, người nhận và hạn cùng nhau, không lặp ở mục khác. Giữ mọi ý riêng có nguồn. Bản "
-        "nháp và kiến thức miền không phải bằng chứng. Trích đủ ngữ cảnh cho mỗi khẳng định. Giữ "
-        "thì và mức chắc chắn: dự kiến thảo luận hay khám sau không phải sự kiện đã diễn ra. Bỏ "
-        "chi tiết nhiễu không có căn cứ, không tự khôi phục thuật ngữ/thủ thuật. So sánh toàn bộ "
-        "khẳng định và bỏ ý trùng trước khi trả lời.\n"
+        "Phân loại cam kết trong nguồn trước khi chọn nhóm. Mỗi ý chỉ xuất hiện một lần. "
+        "action_items: việc đã nhận cùng người/hạn. decisions: kết quả/kế hoạch/ngày đã thống "
+        "nhất, không nhắc lại việc trong action_items. confirmation_items: đề xuất cùng trạng "
+        "thái chưa chốt/chưa có người/chưa triển khai. Bác bỏ hay hoãn cần thỏa thuận rõ. "
+        "open_questions: câu hỏi riêng chưa có trả lời. key_topics: lý do mà mục khác chưa nêu. "
+        "overview: chỉ mục đích/bối cảnh, tối đa 3 mục. So từng mục với mọi mục khác. Bỏ ý khái "
+        "quát lặp chi tiết nhưng giữ mọi ý riêng. Giữ tính đề xuất/điều kiện trong nội dung, "
+        "không chỉ ở tên nhóm. Bản nháp và kiến thức miền không phải bằng chứng. Trích đủ ngữ "
+        "cảnh. Giữ thì và mức chắc chắn: dự kiến thảo luận/khám không phải đã diễn ra. Bỏ tên, "
+        "số, định ngữ, mức cụ thể và thủ thuật không có nguồn. Không khôi phục đoạn nhiễu.\n"
     ),
 }
 

@@ -1017,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v14"
+    assert PROMPT_VERSION == "notes-hierarchical-v15"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1123,29 +1123,26 @@ _RULE_MARKERS = {
             "Telegraph style never drops details that matter: who, what, numbers, dates, deadlines "
             "and the stated reason"
         ),
-        "Classify source commitment before choosing one section per fact",
-        "action_items: committed tasks",
-        "decisions: agreed outcomes, plans and dates",
-        "confirmation_items: pending proposals",
+        "Classify source commitment before placement",
+        "Each fact appears once",
+        "action_items: accepted tasks with owner/deadline",
+        "decisions: agreed outcomes/plans/dates, never a task already stated in action_items",
+        (
+            "confirmation_items: a proposal with its pending status, including no acceptance, "
+            "owner or implementation"
+        ),
+        "Rejection or deferral needs explicit agreement",
         "open_questions: distinct unanswered questions",
-        "key_topics: distinct discussion/rationale",
-        "overview: purpose/context (at most 3)",
-        (
-            "A pending proposal and its lack of acceptance, owner or implementation are one "
-            "confirmation item, never a decision"
-        ),
-        "Explicit rejection or deferral needs source agreement",
-        "Keep task, owner and deadline together",
-        "Do not repeat them elsewhere",
-        "Preserve every distinct supported fact",
-        "Neither drafts nor domain knowledge are evidence",
-        "Cite complete source context for each claim",
-        (
-            "Preserve tense and modality: a planned discussion or future examination is not a "
-            "completed event"
-        ),
-        "Omit unsupported details of noisy terms or procedures instead of reconstructing them",
-        "Compare complete claims and remove semantic repetitions before returning.",
+        "key_topics: reasoning that no other item states",
+        "overview: purpose/context only, at most 3 items",
+        "Compare every item with every other",
+        "Remove broad restatements of detailed facts without dropping distinct facts",
+        "Preserve proposal/conditional framing in text, not just section names",
+        "Drafts and domain knowledge are not evidence",
+        "Cite complete context",
+        "Preserve tense and certainty: future discussion/examination is not completion",
+        "Omit unsupported names, numbers, qualifiers, specificity and procedures",
+        "Never reconstruct noise.",
     ),
     "vi": (
         "Viết mỗi mục theo kiểu ghi chú: dùng cụm từ ngắn thay câu",
@@ -1156,25 +1153,23 @@ _RULE_MARKERS = {
             "Văn phong ghi chú không bao giờ được bỏ các chi tiết quan trọng: ai, việc gì, số "
             "liệu, ngày tháng, hạn chót và lý do được nêu"
         ),
-        "Phân loại mức cam kết trong nguồn trước khi chọn một nhóm cho mỗi ý",
-        (
-            "Dùng action_items cho việc đã cam kết; decisions cho kết quả, kế hoạch và ngày đã "
-            "thống nhất; confirmation_items cho đề xuất đang chờ; open_questions cho câu hỏi riêng "
-            "chưa có trả lời; key_topics cho thảo luận/lý do riêng; overview cho mục đích/bối cảnh "
-            "(tối đa 3)"
-        ),
-        (
-            "Đề xuất cùng trạng thái chưa chấp nhận, chưa có người nhận hay chưa triển khai là một "
-            "mục cần xác nhận, không phải quyết định"
-        ),
-        "Bác bỏ hay hoãn cần thỏa thuận rõ trong nguồn",
-        "Giữ việc, người nhận và hạn cùng nhau, không lặp ở mục khác",
-        "Giữ mọi ý riêng có nguồn",
+        "Phân loại cam kết trong nguồn trước khi chọn nhóm",
+        "Mỗi ý chỉ xuất hiện một lần",
+        "action_items: việc đã nhận cùng người/hạn",
+        ("decisions: kết quả/kế hoạch/ngày đã thống nhất, không nhắc lại việc trong action_items"),
+        "confirmation_items: đề xuất cùng trạng thái chưa chốt/chưa có người/chưa triển khai",
+        "Bác bỏ hay hoãn cần thỏa thuận rõ",
+        "open_questions: câu hỏi riêng chưa có trả lời",
+        "key_topics: lý do mà mục khác chưa nêu",
+        "overview: chỉ mục đích/bối cảnh, tối đa 3 mục",
+        "So từng mục với mọi mục khác",
+        "Bỏ ý khái quát lặp chi tiết nhưng giữ mọi ý riêng",
+        "Giữ tính đề xuất/điều kiện trong nội dung, không chỉ ở tên nhóm",
         "Bản nháp và kiến thức miền không phải bằng chứng",
-        "Trích đủ ngữ cảnh cho mỗi khẳng định",
-        ("Giữ thì và mức chắc chắn: dự kiến thảo luận hay khám sau không phải sự kiện đã diễn ra"),
-        "Bỏ chi tiết nhiễu không có căn cứ, không tự khôi phục thuật ngữ/thủ thuật",
-        "So sánh toàn bộ khẳng định và bỏ ý trùng trước khi trả lời.",
+        "Trích đủ ngữ cảnh",
+        "Giữ thì và mức chắc chắn: dự kiến thảo luận/khám không phải đã diễn ra",
+        "Bỏ tên, số, định ngữ, mức cụ thể và thủ thuật không có nguồn",
+        "Không khôi phục đoạn nhiễu.",
     ),
 }
 
@@ -1202,14 +1197,14 @@ def test_primary_prompts_are_byte_identical_to_those_before_output_recovery(snap
             digests[f"{language}-{name}"] = hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
     assert digests == {
-        "en-single": "e52d59d3ec73b3d8",
-        "en-chunk": "03b9c17cd669008c",
-        "en-reduce": "e7c8bfef6900e032",
-        "en-final": "5c0a3226a932fdfb",
-        "vi-single": "57abdd070b12ac19",
-        "vi-chunk": "df706b45c908f5ba",
-        "vi-reduce": "780c13cc47388ae6",
-        "vi-final": "e46868133f9550ec",
+        "en-single": "436e6d75e46af676",
+        "en-chunk": "1fee989204c19ad2",
+        "en-reduce": "954a02a7be089e87",
+        "en-final": "89ac3e0d41d14ecf",
+        "vi-single": "2b208635c1afeb3f",
+        "vi-chunk": "2d127c5eea931fb7",
+        "vi-reduce": "c19a020bd4dca166",
+        "vi-final": "acc244d3e2fa3f0c",
     }
 
 

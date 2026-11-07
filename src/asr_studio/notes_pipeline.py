@@ -552,7 +552,7 @@ def generate_notes_document(
             budget=single_budget,
         )
         coverage["chunks"][0]["provider_call_index"] = accepted_call_index
-        if single_budget.uses_token_estimate:
+        if single_budget.uses_token_estimate and provider == "chatgpt":
             draft = document
 
             def audit_prompt(invalid_output: str | None = None) -> str:
@@ -588,6 +588,10 @@ def generate_notes_document(
                     "provider_call_index": audit_call_index,
                 }
                 progress("merging", 1, 1, "calls")
+        elif single_budget.uses_token_estimate:
+            # Keep the validated draft where the extra audit has not demonstrated fidelity.
+            # The public Antigravity control gained an unsupported claim during its audit.
+            coverage["source_audit"] = {"status": "skipped", "reason": "provider_policy"}
         document = restore_final_document(
             document,
             stage="audit"
