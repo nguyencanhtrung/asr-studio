@@ -152,8 +152,12 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    stat = Path(f"/proc/{pid}/stat")
-    return not stat.exists() or stat.read_text().split(")")[-1].split()[0] != "Z"
+    if not Path("/proc").is_dir():
+        return True
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] != "Z"
+    except (FileNotFoundError, ProcessLookupError):
+        return False
 
 
 # -- AC-05: one job per model -----------------------------------------------------------------
