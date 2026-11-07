@@ -1,0 +1,380 @@
+{
+  "gold_version": "notes-compact-gold-v1",
+  "contract": {
+    "schema_version": 1,
+    "prompt_version": "notes-hierarchical-v8",
+    "output_language": {
+      "mixed": "vi",
+      "proposal": "en",
+      "antecedent": "en"
+    },
+    "matcher_note": "Mixed checks use semantic matching. Vietnamese paraphrases are allowed and examples are illustrative, not translation-exact requirements."
+  },
+  "fixtures": {
+    "mixed": {
+      "snapshot": "mixed.json",
+      "checks": [
+        {
+          "id": "M1-final-deadline-and-action",
+          "kind": "decision_and_action",
+          "matcher": "semantic",
+          "expected": {
+            "decision": {
+              "status": "confirmed",
+              "meaning": "The agreed delivery deadline changes from Thursday to Wednesday at noon.",
+              "allowed_vi_examples": [
+                "Đã thống nhất gửi vào trưa thứ Tư thay cho thứ Năm.",
+                "Chốt hạn gửi test data là trưa thứ Tư, không còn thứ Năm."
+              ]
+            },
+            "action": {
+              "status": "confirmed",
+              "meaning": "Send the test data to QA.",
+              "allowed_vi_examples": [
+                "Lan gửi test data cho QA.",
+                "Gửi dữ liệu kiểm thử cho QA — Lan."
+              ],
+              "owner": "Lan",
+              "deadline_text": {
+                "mode": "semantic",
+                "source_phrase": "Wednesday noon instead of Thursday",
+                "meaning": "Wednesday at noon, replacing Thursday",
+                "allowed_vi_examples": [
+                  "trưa thứ Tư, thay cho thứ Năm",
+                  "hạn chót: trưa thứ Tư"
+                ]
+              },
+              "deadline_date": null
+            }
+          },
+          "source_witnesses": [
+            {
+              "source_id": "a0000000000000000000000000000014",
+              "quote": "Lan, can you send the test data to QA? Let's aim for Thursday."
+            },
+            {
+              "source_id": "a0000000000000000000000000000018",
+              "quote": "I can send the test data by Wednesday noon instead of Thursday."
+            },
+            {
+              "source_id": "a0000000000000000000000000000019",
+              "quote": "Agreed. Lan sends the test data by Wednesday noon; this replaces Thursday."
+            }
+          ],
+          "citation_policy": "pooled_union",
+          "forbidden_promotions": [
+            {
+              "field": "deadline_text",
+              "meaning": "Treat Thursday as the active deadline"
+            },
+            {
+              "field": "owner",
+              "value": "Minh",
+              "reason": "presenter is not the named assignee"
+            }
+          ]
+        },
+        {
+          "id": "M2-demo-stays-confirmation",
+          "kind": "confirmation",
+          "matcher": "semantic",
+          "expected": {
+            "status": "unconfirmed",
+            "text": {
+              "meaning": "A customer demo on Friday afternoon is proposed but not confirmed.",
+              "allowed_vi_examples": [
+                "Đề xuất demo khách hàng vào chiều thứ Sáu, chưa chốt.",
+                "Thời gian demo chiều thứ Sáu vẫn cần xác nhận."
+              ]
+            },
+            "owner": null,
+            "deadline_text": {
+              "mode": "semantic",
+              "meaning": "No deadline or confirmed demo time",
+              "allowed_vi_examples": [
+                "chưa xác định",
+                "chưa chốt thời gian demo"
+              ]
+            },
+            "deadline_date": null
+          },
+          "source_witnesses": [
+            {
+              "source_id": "a0000000000000000000000000000016",
+              "quote": "I suggest a customer demo on Friday afternoon."
+            },
+            {
+              "source_id": "a0000000000000000000000000000017",
+              "quote": "That demo time is still a proposal; we will confirm it after QA."
+            },
+            {
+              "source_id": "a0000000000000000000000000000020",
+              "quote": "Chốt vậy nhé. We will decide the demo time after QA."
+            }
+          ],
+          "citation_policy": "pooled_union",
+          "forbidden_promotions": [
+            {
+              "kind": "decision",
+              "meaning": "Friday afternoon is confirmed as the demo time",
+              "forbidden_vi_examples": ["Đã chốt demo vào chiều thứ Sáu."]
+            },
+            {
+              "kind": "action",
+              "owner_must_be_null": true
+            },
+            {
+              "field": "deadline_text",
+              "meaning": "Use Friday afternoon as an agreed deadline"
+            }
+          ]
+        },
+        {
+          "id": "M3-presenter-is-not-assignee",
+          "kind": "speaker_assignee_separation",
+          "matcher": "entity_exact",
+          "expected": {
+            "presenter": "Minh",
+            "assignee": "Lan",
+            "status": "confirmed"
+          },
+          "source_witnesses": [
+            {
+              "source_id": "a0000000000000000000000000000014",
+              "quote": "Lan, can you send the test data to QA? Let's aim for Thursday."
+            },
+            {
+              "source_id": "a0000000000000000000000000000019",
+              "quote": "Agreed. Lan sends the test data by Wednesday noon; this replaces Thursday."
+            }
+          ],
+          "citation_policy": "pooled_union",
+          "forbidden_promotions": [
+            {
+              "field": "owner",
+              "value": "Minh"
+            }
+          ]
+        },
+        {
+          "id": "M4-omar-offer-stays-uncommitted",
+          "kind": "confirmation",
+          "matcher": "semantic",
+          "expected": {
+            "status": "unconfirmed",
+            "text": {
+              "meaning": "Omar may review the export flow, but he explicitly makes no commitment.",
+              "allowed_vi_examples": [
+                "Omar có thể xem lại luồng export nhưng chưa cam kết.",
+                "Khả năng Omar review export vẫn chưa được chốt."
+              ]
+            },
+            "owner": null,
+            "deadline_text": null,
+            "deadline_date": null
+          },
+          "source_witnesses": [
+            {
+              "source_id": "a0000000000000000000000000000013",
+              "quote": "I might be able to review the export flow today, but I have not committed to it."
+            }
+          ],
+          "citation_policy": "single_witness",
+          "forbidden_promotions": [
+            {
+              "kind": "action",
+              "owner_must_be_null": true
+            },
+            {
+              "field": "deadline_text",
+              "meaning": "Invent today as a committed deadline"
+            }
+          ]
+        }
+      ]
+    },
+    "proposal": {
+      "snapshot": "proposal.json",
+      "checks": [
+        {
+          "id": "P1-open-cache-idea",
+          "kind": "confirmation",
+          "matcher": "semantic",
+          "expected": {
+            "status": "unconfirmed",
+            "text_contains": ["CSV cache"],
+            "owner": null,
+            "deadline_text": null,
+            "deadline_date": null
+          },
+          "source_witnesses": [
+            {
+              "source_id": "b0000000000000000000000000000013",
+              "quote": "We could add a CSV cache next sprint, but no one owns that work yet."
+            },
+            {
+              "source_id": "b0000000000000000000000000000014",
+              "quote": "That sounds useful, but let's check the storage cost before we commit."
+            }
+          ],
+          "citation_policy": "pooled_union",
+          "forbidden_promotions": [
+            {
+              "kind": "decision",
+              "text_contains": ["CSV cache"]
+            },
+            {
+              "kind": "action",
+              "owner_must_be_null": true
+            },
+            {
+              "field": "deadline_text",
+              "value": "next sprint"
+            }
+          ]
+        },
+        {
+          "id": "P2-priya-confirmed-action",
+          "kind": "action",
+          "matcher": "semantic",
+          "expected": {
+            "status": "confirmed",
+            "text_contains": ["update", "export error message"],
+            "owner": "Priya",
+            "deadline_text": "tomorrow",
+            "deadline_date": "2026-11-11"
+          },
+          "source_witnesses": [
+            {
+              "source_id": "b0000000000000000000000000000015",
+              "quote": "Separately, Priya will update the export error message by tomorrow."
+            },
+            {
+              "source_id": "b0000000000000000000000000000016",
+              "quote": "Confirmed. Priya owns the error-message update, and we will track it."
+            }
+          ],
+          "citation_policy": "pooled_union",
+          "forbidden_promotions": [
+            {
+              "field": "owner",
+              "value": "Ava"
+            },
+            {
+              "field": "owner",
+              "value": "Chen"
+            }
+          ]
+        }
+      ]
+    },
+    "antecedent": {
+      "snapshot": "antecedent.json",
+      "checks": [
+        {
+          "id": "A1-named-jordan-assignment",
+          "kind": "action",
+          "matcher": "semantic",
+          "expected": {
+            "status": "confirmed",
+            "text_contains": ["security review", "finish"],
+            "owner": "Jordan",
+            "deadline_text": "by Friday",
+            "deadline_date": null
+          },
+          "source_witnesses": [
+            {
+              "source_id": "c0000000000000000000000000000012",
+              "quote": "Jordan owns the security review and will finish it by Friday."
+            }
+          ],
+          "citation_policy": "single_witness",
+          "forbidden_promotions": [
+            {
+              "field": "owner",
+              "value": "Leo"
+            },
+            {
+              "field": "deadline_date",
+              "value": "2026-11-13",
+              "reason": "Friday is not an exact date in this source"
+            }
+          ]
+        },
+        {
+          "id": "A2-jordan-pronoun-antecedent",
+          "kind": "action",
+          "matcher": "semantic",
+          "expected": {
+            "status": "confirmed",
+            "text_contains": ["Jordan", "signed approval memo", "send"],
+            "owner": "Jordan",
+            "deadline_text": "after that",
+            "deadline_date": null
+          },
+          "source_witnesses": [
+            {
+              "source_id": "c0000000000000000000000000000012",
+              "quote": "Jordan owns the security review and will finish it by Friday."
+            },
+            {
+              "source_id": "c0000000000000000000000000000013",
+              "quote": "Jordan will send the signed approval memo after that."
+            },
+            {
+              "source_id": "c0000000000000000000000000000014",
+              "quote": "He will send it to me, and I will update the tracker when it arrives."
+            }
+          ],
+          "citation_policy": "pooled_union",
+          "citation_note": "The witness union resolves He to Jordan and it to the approval memo; no single citation must support every clause.",
+          "forbidden_promotions": [
+            {
+              "field": "owner",
+              "value": "Leo",
+              "reason": "Leo is the speaker of the pronoun continuation, not its antecedent"
+            },
+            {
+              "field": "deadline_text",
+              "value": "by Friday"
+            }
+          ]
+        },
+        {
+          "id": "A3-leo-self-assignment",
+          "kind": "action",
+          "matcher": "semantic",
+          "expected": {
+            "status": "confirmed",
+            "text_contains": ["update", "tracker"],
+            "owner": "Leo",
+            "deadline_text": "when it arrives",
+            "deadline_date": null
+          },
+          "source_witnesses": [
+            {
+              "source_id": "c0000000000000000000000000000013",
+              "quote": "Jordan will send the signed approval memo after that."
+            },
+            {
+              "source_id": "c0000000000000000000000000000014",
+              "quote": "He will send it to me, and I will update the tracker when it arrives."
+            }
+          ],
+          "citation_policy": "pooled_union",
+          "citation_note": "The witness union resolves it to the approval memo while I resolves to Leo.",
+          "forbidden_promotions": [
+            {
+              "field": "owner",
+              "value": "Jordan"
+            },
+            {
+              "field": "deadline_text",
+              "value": "by Friday"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

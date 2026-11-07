@@ -1,0 +1,75 @@
+{
+  "id": "c0000000000000000000000000000001",
+  "meeting_id": "c0000000000000000000000000000002",
+  "generation_id": "c0000000000000000000000000000003",
+  "source_version": 1,
+  "notes_source_version": 1,
+  "metadata_version": 1,
+  "meeting_date": "2026-11-11",
+  "speakers": [
+    {
+      "speaker_id": "SPEAKER_00",
+      "display_name": "Maya",
+      "first_seen_seconds": 300.0,
+      "last_seen_seconds": 353.0
+    },
+    {
+      "speaker_id": "SPEAKER_01",
+      "display_name": "Leo",
+      "first_seen_seconds": 309.0,
+      "last_seen_seconds": 344.0
+    }
+  ],
+  "segments": [
+    {
+      "id": "c0000000000000000000000000000011",
+      "sequence": 0,
+      "start_seconds": 300.0,
+      "end_seconds": 307.0,
+      "text": "We need the vendor onboarding pack before the audit.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Maya"
+    },
+    {
+      "id": "c0000000000000000000000000000012",
+      "sequence": 1,
+      "start_seconds": 309.0,
+      "end_seconds": 319.0,
+      "text": "Jordan owns the security review and will finish it by Friday.",
+      "original_speaker_id": "SPEAKER_01",
+      "speaker_id": "SPEAKER_01",
+      "speaker_name": "Leo"
+    },
+    {
+      "id": "c0000000000000000000000000000013",
+      "sequence": 2,
+      "start_seconds": 321.0,
+      "end_seconds": 331.0,
+      "text": "Jordan will send the signed approval memo after that.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Maya"
+    },
+    {
+      "id": "c0000000000000000000000000000014",
+      "sequence": 3,
+      "start_seconds": 333.0,
+      "end_seconds": 344.0,
+      "text": "He will send it to me, and I will update the tracker when it arrives.",
+      "original_speaker_id": "SPEAKER_01",
+      "speaker_id": "SPEAKER_01",
+      "speaker_name": "Leo"
+    },
+    {
+      "id": "c0000000000000000000000000000015",
+      "sequence": 4,
+      "start_seconds": 346.0,
+      "end_seconds": 353.0,
+      "text": "Good, that closes the onboarding item.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Maya"
+    }
+  ]
+}

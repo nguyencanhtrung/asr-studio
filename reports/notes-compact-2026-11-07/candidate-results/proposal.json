@@ -1,0 +1,72 @@
+{
+  "case": "proposal",
+  "mode": "cached-document-validation",
+  "baseline_sha256": "c0347c864d1e022bf7accd13ce7ce2d0e67467fd58f341eaea69534f305cb27c",
+  "request_sha256": "d12b7a21eed55808e06439cf1ffa9db0dcc69bc631ffe834df9b51b6e021b6ab",
+  "new_provider_calls": 0,
+  "document": {
+    "schema_version": 1,
+    "overview": [
+      {
+        "text": "Customer export revisit before close",
+        "source_ids": [
+          "b0000000000000000000000000000011"
+        ]
+      }
+    ],
+    "key_topics": [
+      {
+        "text": "Current export slow for accounts with more than ten thousand rows",
+        "source_ids": [
+          "b0000000000000000000000000000012"
+        ]
+      }
+    ],
+    "decisions": [],
+    "open_questions": [
+      {
+        "text": "CSV cache storage cost before commitment",
+        "source_ids": [
+          "b0000000000000000000000000000014"
+        ]
+      }
+    ],
+    "action_items": [
+      {
+        "text": "Update export error message",
+        "source_ids": [
+          "b0000000000000000000000000000015",
+          "b0000000000000000000000000000016"
+        ],
+        "owner": "Priya",
+        "deadline_text": "by tomorrow",
+        "deadline_date": "2026-11-11"
+      },
+      {
+        "text": "Track error-message update",
+        "source_ids": [
+          "b0000000000000000000000000000016"
+        ],
+        "owner": null,
+        "deadline_text": null,
+        "deadline_date": null
+      }
+    ],
+    "confirmation_items": [
+      {
+        "text": "Possible CSV cache next sprint; no owner yet",
+        "source_ids": [
+          "b0000000000000000000000000000013"
+        ]
+      }
+    ]
+  },
+  "changes": [
+    {
+      "owner": "Priya",
+      "field": "deadline_date",
+      "before": null,
+      "after": "2026-11-11"
+    }
+  ]
+}

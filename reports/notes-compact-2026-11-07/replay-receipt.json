@@ -1,0 +1,49 @@
+{
+  "mode": "cached-document-validation",
+  "new_provider_calls": 0,
+  "cases": [
+    {
+      "case": "long",
+      "mode": "cached-document-validation",
+      "baseline_sha256": "78429b6672107edabbacc037f04861420c5dd5399b203cca41237c1cffcbbae5",
+      "request_sha256": "9266c4b467cdd5ffec9c76aaec974edbf2c57afc48d77be79ffb23a6431a1a86",
+      "new_provider_calls": 0,
+      "changes": [],
+      "candidate_sha256": "2ba1340bae143ed9d5b0bfc8bf0655c076cf29c8abdf097de18b5eef71bf6111"
+    },
+    {
+      "case": "mixed",
+      "mode": "cached-document-validation",
+      "baseline_sha256": "755eef82db6a2d9874f64f97906b8044be34637e0c232e370c9c43f49fc34917",
+      "request_sha256": "d3e56a2aa77e2548f40c6af0513243a245c69ea7fc1310f05b5db3462dcbb1a7",
+      "new_provider_calls": 0,
+      "changes": [],
+      "candidate_sha256": "89886133aa58a8a82a2f26a56c0c4356a213ca01007b6a7b0525ac85df11dbd0"
+    },
+    {
+      "case": "proposal",
+      "mode": "cached-document-validation",
+      "baseline_sha256": "c0347c864d1e022bf7accd13ce7ce2d0e67467fd58f341eaea69534f305cb27c",
+      "request_sha256": "d12b7a21eed55808e06439cf1ffa9db0dcc69bc631ffe834df9b51b6e021b6ab",
+      "new_provider_calls": 0,
+      "changes": [
+        {
+          "owner": "Priya",
+          "field": "deadline_date",
+          "before": null,
+          "after": "2026-11-11"
+        }
+      ],
+      "candidate_sha256": "60c59d9bcec89782f137fced8d7c7a3c65c210b92489f25ae37b16e3161002e3"
+    },
+    {
+      "case": "antecedent",
+      "mode": "cached-document-validation",
+      "baseline_sha256": "aff6546aee83b7884bf4ce15a45b9e749cc066bc6f018000d41732668cbf38d6",
+      "request_sha256": "de61092af5d65a06eb4b62ce2a5a56e9e324c73da8c465d382535c29f1a13a7b",
+      "new_provider_calls": 0,
+      "changes": [],
+      "candidate_sha256": "968fadc40c0512aee41db045b5cf9f9b262309379b09265a30c21b5c25298ca8"
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "case": "antecedent",
+  "mode": "cached-document-validation",
+  "baseline_sha256": "aff6546aee83b7884bf4ce15a45b9e749cc066bc6f018000d41732668cbf38d6",
+  "request_sha256": "de61092af5d65a06eb4b62ce2a5a56e9e324c73da8c465d382535c29f1a13a7b",
+  "new_provider_calls": 0,
+  "document": {
+    "schema_version": 1,
+    "overview": [
+      {
+        "text": "Vendor onboarding pack needed before audit",
+        "source_ids": [
+          "c0000000000000000000000000000011"
+        ]
+      }
+    ],
+    "key_topics": [],
+    "decisions": [
+      {
+        "text": "Onboarding item closed",
+        "source_ids": [
+          "c0000000000000000000000000000015"
+        ]
+      }
+    ],
+    "open_questions": [],
+    "action_items": [
+      {
+        "text": "Complete security review",
+        "source_ids": [
+          "c0000000000000000000000000000012"
+        ],
+        "owner": "Jordan",
+        "deadline_text": "by Friday",
+        "deadline_date": null
+      },
+      {
+        "text": "Send signed approval memo to Leo",
+        "source_ids": [
+          "c0000000000000000000000000000013",
+          "c0000000000000000000000000000014"
+        ],
+        "owner": "Jordan",
+        "deadline_text": "after that",
+        "deadline_date": null
+      },
+      {
+        "text": "Update tracker",
+        "source_ids": [
+          "c0000000000000000000000000000014"
+        ],
+        "owner": "Leo",
+        "deadline_text": "when it arrives",
+        "deadline_date": null
+      }
+    ],
+    "confirmation_items": []
+  },
+  "changes": []
+}

@@ -1,0 +1,65 @@
+{
+  "case": "mixed",
+  "mode": "cached-document-validation",
+  "baseline_sha256": "755eef82db6a2d9874f64f97906b8044be34637e0c232e370c9c43f49fc34917",
+  "request_sha256": "d3e56a2aa77e2548f40c6af0513243a245c69ea7fc1310f05b5db3462dcbb1a7",
+  "new_provider_calls": 0,
+  "document": {
+    "schema_version": 1,
+    "overview": [
+      {
+        "text": "Mục tiêu: xác nhận kế hoạch rollout billing dashboard",
+        "source_ids": [
+          "a0000000000000000000000000000011"
+        ]
+      }
+    ],
+    "key_topics": [
+      {
+        "text": "API sẵn sàng; QA còn cần export flow",
+        "source_ids": [
+          "a0000000000000000000000000000012"
+        ]
+      }
+    ],
+    "decisions": [
+      {
+        "text": "Thời điểm demo: quyết định sau QA",
+        "source_ids": [
+          "a0000000000000000000000000000017",
+          "a0000000000000000000000000000020"
+        ]
+      }
+    ],
+    "open_questions": [],
+    "action_items": [
+      {
+        "text": "Gửi test data cho QA; thay hạn thứ Năm",
+        "source_ids": [
+          "a0000000000000000000000000000015",
+          "a0000000000000000000000000000018",
+          "a0000000000000000000000000000019"
+        ],
+        "owner": "Lan",
+        "deadline_text": "Wednesday noon",
+        "deadline_date": null
+      }
+    ],
+    "confirmation_items": [
+      {
+        "text": "Omar có thể review export flow today; chưa cam kết",
+        "source_ids": [
+          "a0000000000000000000000000000013"
+        ]
+      },
+      {
+        "text": "Đề xuất chưa thống nhất: customer demo Friday afternoon",
+        "source_ids": [
+          "a0000000000000000000000000000016",
+          "a0000000000000000000000000000017"
+        ]
+      }
+    ]
+  },
+  "changes": []
+}

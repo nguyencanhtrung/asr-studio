@@ -1,0 +1,101 @@
+{
+  "case": "antecedent",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "ef2241153ac3bfdb9d9b4c3ccff7bf8a9bcb52c236e197a743fe7e938c1362e3",
+  "source_segments": 5,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [
+      {
+        "text": "Vendor onboarding pack needed before audit",
+        "source_ids": [
+          "c0000000000000000000000000000011"
+        ]
+      }
+    ],
+    "key_topics": [],
+    "decisions": [
+      {
+        "text": "Onboarding item closed",
+        "source_ids": [
+          "c0000000000000000000000000000015"
+        ]
+      }
+    ],
+    "open_questions": [],
+    "action_items": [
+      {
+        "text": "Complete security review",
+        "source_ids": [
+          "c0000000000000000000000000000012"
+        ],
+        "owner": "Jordan",
+        "deadline_text": "by Friday",
+        "deadline_date": null
+      },
+      {
+        "text": "Send signed approval memo to Leo",
+        "source_ids": [
+          "c0000000000000000000000000000013",
+          "c0000000000000000000000000000014"
+        ],
+        "owner": "Jordan",
+        "deadline_text": "after that",
+        "deadline_date": null
+      },
+      {
+        "text": "Update tracker",
+        "source_ids": [
+          "c0000000000000000000000000000014"
+        ],
+        "owner": "Leo",
+        "deadline_text": "when it arrives",
+        "deadline_date": null
+      }
+    ],
+    "confirmation_items": []
+  },
+  "elapsed_seconds": 14.719,
+  "coverage": {
+    "version": 1,
+    "segment_count": 5,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          5
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "progress": [
+    {
+      "stage": "preparing_source",
+      "current": 1,
+      "total": 1,
+      "unit": "phase"
+    },
+    {
+      "stage": "generating",
+      "current": 0,
+      "total": 1,
+      "unit": "calls"
+    },
+    {
+      "stage": "generating",
+      "current": 1,
+      "total": 1,
+      "unit": "calls"
+    }
+  ]
+}
