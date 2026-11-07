@@ -6,7 +6,9 @@ import copy
 import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import suppress
+from threading import Lock
 from typing import Any, Protocol
 
 # Limits are read through the module at call time so tests can lower them.
@@ -182,15 +184,27 @@ def generate_notes_document(
     )
     nd.verify_coverage(snapshot, plan)  # before any provider call
     synthesis_budget = nd.conservative_notes_budget(provider)
+    if provider in {"chatgpt", "antigravity"}:
+        synthesis_budget = nd.notes_budget(provider, model)
+    chunk_output_bytes = nd.notes_chunk_output_bytes(synthesis_budget)
     coverage = copy.deepcopy(plan.manifest)
     call_count = 0
     repair_used = False
     output_recoveries = 0
     last_successful_response: tuple[int, str, str] | None = None
+    ledger_lock = Lock()
+    progress_lock = Lock()
+    progress_high_water: dict[tuple[str, str], int] = {}
 
     def progress(stage: str, current: int, total: int | None, unit: str) -> None:
         if on_progress is not None:
-            on_progress({"stage": stage, "current": current, "total": total, "unit": unit})
+            with progress_lock:
+                key = (stage, unit)
+                current = max(current, progress_high_water.get(key, 0))
+                if total is not None:
+                    current = min(current, total)
+                progress_high_water[key] = current
+                on_progress({"stage": stage, "current": current, "total": total, "unit": unit})
 
     progress("preparing_source", 1, 1, "phase")
 
@@ -202,23 +216,27 @@ def generate_notes_document(
         stage: str,
         attempt: str,
         budget: nd.NotesBudget,
-    ) -> str:
+    ) -> tuple[str, int]:
         nonlocal call_count
-        if call_count >= nd.MAX_PROVIDER_CALLS:
-            raise limit_error("This transcript exceeds the bounded notes synthesis request limit.")
-        call_count += 1
+        with ledger_lock:
+            if call_count >= nd.MAX_PROVIDER_CALLS:
+                raise limit_error(
+                    "This transcript exceeds the bounded notes synthesis request limit."
+                )
+            call_count += 1
+            provider_call_index = call_count
         transport_kwargs: dict[str, object] = {
             "allowed_source_ids": allowed_source_ids,
             "max_output_bytes": max_output_bytes,
             "stage": stage,
             "attempt": attempt,
-            "provider_call_index": call_count,
+            "provider_call_index": provider_call_index,
             "prompt_bytes": len(prompt.encode("utf-8")),
             "budget": budget,
         }
         if max_unit_size > 1:
             transport_kwargs["max_unit_size"] = max_unit_size
-        return transport(prompt, **transport_kwargs)
+        return transport(prompt, **transport_kwargs), provider_call_index
 
     def invalid_output(
         validation_error: Exception,
@@ -294,6 +312,7 @@ def generate_notes_document(
                 ),
                 max_unit_size=max_unit_size,
             )
+            document = nd.coalesce_exact_duplicate_items(document, max_unit_size=max_unit_size)
             return nd.validate_document(
                 document,
                 citation_scope,
@@ -315,8 +334,6 @@ def generate_notes_document(
         """Yield the lower-target prompts one request may still send, within both budgets."""
         nonlocal output_recoveries
         for _ in range(nd.MAX_OUTPUT_RECOVERY_ATTEMPTS):
-            if output_recoveries >= nd.MAX_OUTPUT_RECOVERY_CALLS:
-                return
             target = nd.lower_output_target(target)
             try:
                 lowered = nd.build_recovery_prompt(
@@ -329,7 +346,10 @@ def generate_notes_document(
                 )
             except nd.NotesDocumentError:
                 return  # the request budget has no room for the lower-target prompt
-            output_recoveries += 1
+            with ledger_lock:
+                if output_recoveries >= nd.MAX_OUTPUT_RECOVERY_CALLS:
+                    return
+                output_recoveries += 1
             yield lowered
 
     def request_document(
@@ -340,7 +360,7 @@ def generate_notes_document(
         stage: str,
         repair_prompt: Callable[[str], str],
         budget: nd.NotesBudget,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], int]:
         nonlocal last_successful_response, repair_used
         allowed_source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in citation_scope["segments"])
@@ -355,7 +375,7 @@ def generate_notes_document(
         attempt, sent = "primary", prompt
         while True:
             try:
-                raw_output = request(
+                raw_output, provider_call_index = request(
                     sent,
                     allowed_source_ids=allowed_source_ids,
                     max_output_bytes=max_output_bytes,
@@ -370,20 +390,28 @@ def generate_notes_document(
                 lowered = next(recoveries, None)
                 if lowered is None:
                     raise
-                progress("repairing", max(0, output_recoveries - 1), None, "recoveries")
+                with ledger_lock:
+                    recovery_count = output_recoveries
+                progress("repairing", max(0, recovery_count - 1), None, "recoveries")
                 attempt, sent = "recovery", lowered
                 continue
-            provider_call_index = call_count
             try:
                 validated = parse_and_validate(
                     raw_output,
                     citation_scope,
                     max_output_bytes=max_output_bytes,
                 )
-                last_successful_response = (provider_call_index, attempt, raw_output)
+                with ledger_lock:
+                    if (
+                        last_successful_response is None
+                        or provider_call_index >= last_successful_response[0]
+                    ):
+                        last_successful_response = (provider_call_index, attempt, raw_output)
                 if attempt == "recovery":
-                    progress("repairing", output_recoveries, None, "recoveries")
-                return validated
+                    with ledger_lock:
+                        recovery_count = output_recoveries
+                    progress("repairing", recovery_count, None, "recoveries")
+                return validated, provider_call_index
             except (nd.NotesDocumentError, TypeError) as validation_error:
                 # OMP ignores the response cap, so its overflow is a size failure here.
                 if getattr(validation_error, "reason_code", None) == "size":
@@ -391,7 +419,11 @@ def generate_notes_document(
                     if lowered is not None:
                         attempt, sent = "recovery", lowered
                         continue
-                if repair_used:
+                with ledger_lock:
+                    can_repair = not repair_used
+                    if can_repair:
+                        repair_used = True
+                if not can_repair:
                     raise invalid_output(
                         validation_error,
                         stage=stage,
@@ -402,7 +434,6 @@ def generate_notes_document(
                         prompt_bytes=len(sent.encode("utf-8")),
                         response_limit=max_output_bytes,
                     ) from None
-                repair_used = True
                 progress("repairing", 0, 1, "repairs")
                 try:
                     bounded_repair_prompt = repair_prompt(raw_output)
@@ -417,7 +448,7 @@ def generate_notes_document(
                         prompt_bytes=len(sent.encode("utf-8")),
                         response_limit=max_output_bytes,
                     ) from None
-                repaired_output = request(
+                repaired_output, repair_call_index = request(
                     bounded_repair_prompt,
                     allowed_source_ids=allowed_source_ids,
                     max_output_bytes=max_output_bytes,
@@ -425,16 +456,24 @@ def generate_notes_document(
                     attempt="repair",
                     budget=budget,
                 )
-                repair_call_index = call_count
                 try:
                     validated = parse_and_validate(
                         repaired_output,
                         citation_scope,
                         max_output_bytes=max_output_bytes,
                     )
-                    last_successful_response = (repair_call_index, "repair", repaired_output)
+                    with ledger_lock:
+                        if (
+                            last_successful_response is None
+                            or repair_call_index >= last_successful_response[0]
+                        ):
+                            last_successful_response = (
+                                repair_call_index,
+                                "repair",
+                                repaired_output,
+                            )
                     progress("repairing", 1, 1, "repairs")
-                    return validated
+                    return validated, repair_call_index
                 except (nd.NotesDocumentError, TypeError) as repair_error:
                     raise invalid_output(
                         repair_error,
@@ -450,10 +489,13 @@ def generate_notes_document(
     def restore_final_document(document: dict[str, Any], *, stage: str) -> dict[str, Any]:
         restored = nd.restore_source_refs(document, projection.alias_to_original)
         try:
+            restored = nd.coalesce_exact_duplicate_items(restored)
             return nd.validate_document(restored, snapshot, max_output_bytes=nd.MAX_OUTPUT_BYTES)
         except (nd.NotesDocumentError, TypeError) as validation_error:
-            response = last_successful_response
-            call_index = response[0] if response is not None else max(call_count, 1)
+            with ledger_lock:
+                response = last_successful_response
+                latest_call_count = call_count
+            call_index = response[0] if response is not None else max(latest_call_count, 1)
             try:
                 expanded_bytes = len(
                     json.dumps(
@@ -476,8 +518,9 @@ def generate_notes_document(
             ) from None
 
     def finish(document: dict[str, Any]) -> dict[str, Any]:
-        coverage["provider_calls"] = call_count
-        coverage["output_recoveries"] = output_recoveries
+        with ledger_lock:
+            coverage["provider_calls"] = call_count
+            coverage["output_recoveries"] = output_recoveries
         if on_coverage is not None:
             on_coverage(coverage)
         return document
@@ -487,7 +530,7 @@ def generate_notes_document(
             tuple(segment["id"] for segment in projected_snapshot["segments"])
         )
         progress("generating", 0, 1, "calls")
-        document = request_document(
+        document, accepted_call_index = request_document(
             nd.build_prompt(
                 projected_snapshot,
                 allowed_source_ids=source_ids,
@@ -510,13 +553,11 @@ def generate_notes_document(
         )
         document = restore_final_document(document, stage="single")
         progress("generating", 1, 1, "calls")
-        coverage["chunks"][0]["provider_call_index"] = call_count
+        coverage["chunks"][0]["provider_call_index"] = accepted_call_index
         return finish(document)
 
-    summaries: list[dict[str, Any]] = []
-    previous_document: dict[str, Any] | None = None
+    prepared_chunks: list[tuple[dict[str, Any], str, Callable[[str], str]]] = []
     for index, chunk in enumerate(plan.chunks, start=1):
-        progress("chunking", index - 1, len(plan.chunks), "chunks")
         projected_chunk = projection.project_chunk(chunk)
         source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in projected_chunk["segments"])
@@ -529,6 +570,7 @@ def generate_notes_document(
             output_language=output_language,
             budget=synthesis_budget,
             max_unit_size=max_unit_size,
+            max_output_bytes=chunk_output_bytes,
         )
 
         def repair_chunk(
@@ -547,20 +589,71 @@ def generate_notes_document(
                 output_language=output_language,
                 budget=synthesis_budget,
                 max_unit_size=max_unit_size,
+                max_output_bytes=chunk_output_bytes,
             )
 
-        document = request_document(
-            prompt,
-            projected_chunk,
-            max_output_bytes=nd.MAX_CHUNK_OUTPUT_BYTES,
-            stage="chunk",
-            repair_prompt=repair_chunk,
-            budget=synthesis_budget,
-        )
-        progress("chunking", index, len(plan.chunks), "chunks")
-        coverage["chunks"][index - 1]["provider_call_index"] = call_count
+        prepared_chunks.append((projected_chunk, prompt, repair_chunk))
+
+    map_results: list[tuple[dict[str, Any], int] | None] = [None] * len(prepared_chunks)
+    parallel_maps = (
+        provider in {"chatgpt", "antigravity"}
+        and synthesis_budget.uses_token_estimate
+        and len(prepared_chunks) > 1
+    )
+    if parallel_maps:
+        for index in range(len(prepared_chunks)):
+            progress("chunking", index, len(prepared_chunks), "chunks")
+        executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="notes-map")
+        futures: dict[Future[tuple[dict[str, Any], int]], int] = {}
+        try:
+            for index, (projected_chunk, prompt, repair_chunk) in enumerate(prepared_chunks):
+                futures[
+                    executor.submit(
+                        request_document,
+                        prompt,
+                        projected_chunk,
+                        max_output_bytes=chunk_output_bytes,
+                        stage="chunk",
+                        repair_prompt=repair_chunk,
+                        budget=synthesis_budget,
+                    )
+                ] = index
+            for future in as_completed(futures):
+                map_results[futures[future]] = future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=True, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
+    else:
+        for index, (projected_chunk, prompt, repair_chunk) in enumerate(prepared_chunks):
+            progress("chunking", index, len(prepared_chunks), "chunks")
+            map_results[index] = request_document(
+                prompt,
+                projected_chunk,
+                max_output_bytes=chunk_output_bytes,
+                stage="chunk",
+                repair_prompt=repair_chunk,
+                budget=synthesis_budget,
+            )
+            progress("chunking", index + 1, len(prepared_chunks), "chunks")
+
+    summaries: list[dict[str, Any]] = []
+    previous_document: dict[str, Any] | None = None
+    for index, ((projected_chunk, _prompt, _repair), result) in enumerate(
+        zip(prepared_chunks, map_results, strict=True), start=1
+    ):
+        if result is None:
+            raise limit_error("The notes map did not return a document for every source part.")
+        document, accepted_call_index = result
+        if parallel_maps:
+            progress("chunking", index, len(prepared_chunks), "chunks")
+        coverage["chunks"][index - 1]["provider_call_index"] = accepted_call_index
         if previous_document is not None:
-            # The previous chunk read the overlap in full, so its items win over repeats.
+            # The previous chunk read the overlap in full, so an exact repeat can be removed;
+            # paraphrases and metadata/source differences remain for final reconciliation.
             overlap_ids = [
                 segment["id"] for segment in projected_chunk["segments"] if segment.get("overlap")
             ]
@@ -581,6 +674,7 @@ def generate_notes_document(
             invalid_output=invalid_output,
             output_language=output_language,
             budget=synthesis_budget,
+            max_unit_size=max_unit_size,
         )
 
     def fits(group: list[dict[str, Any]]) -> bool:
@@ -596,7 +690,7 @@ def generate_notes_document(
             raise limit_error("This transcript exceeds the bounded notes reduction limit.")
         progress("merging", reduction_calls, None, "calls")
         reduction_calls += 1
-        result = request_document(
+        result, _accepted_call_index = request_document(
             reduction_prompt(group, final=False),
             nd._prompt_citation_scope(projected_snapshot, group),
             max_output_bytes=nd.MAX_REDUCTION_OUTPUT_BYTES,
@@ -621,15 +715,19 @@ def generate_notes_document(
     documents = summaries
     for _level in range(nd.MAX_REDUCTION_LEVELS):
         final_prompt = None
-        final_scope = nd._prompt_citation_scope(projected_snapshot, documents)
         with suppress(nd.NotesDocumentError):
             final_prompt = reduction_prompt(documents, final=True)
         if final_prompt is not None:
+            final_scope = (
+                projected_snapshot
+                if nd.reduction_prompt_includes_source(final_prompt)
+                else nd._prompt_citation_scope(projected_snapshot, documents)
+            )
             if reduction_calls >= nd.MAX_REDUCTION_CALLS:
                 raise limit_error("This transcript exceeds the bounded notes reduction limit.")
             progress("merging", reduction_calls, None, "calls")
             reduction_calls += 1
-            final_document = request_document(
+            final_document, _accepted_call_index = request_document(
                 final_prompt,
                 final_scope,
                 max_output_bytes=nd.MAX_OUTPUT_BYTES,

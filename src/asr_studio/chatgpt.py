@@ -476,7 +476,24 @@ class ChatGPTHTTPAdapter:
         self._transport = transport
         self._discovery_document: dict[str, Any] | None = None
         self._discovery_lock = threading.Lock()
-        self.last_notes_usage: dict[str, int] = {}
+        self._notes_usage_local = threading.local()
+
+    @property
+    def last_notes_usage(self) -> dict[str, int]:
+        """Return usage isolated to the current notes transport thread."""
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        usage = getattr(self._notes_usage_local, "value", None)
+        if not isinstance(usage, dict):
+            usage = {}
+            self._notes_usage_local.value = usage
+        return usage
+
+    @last_notes_usage.setter
+    def last_notes_usage(self, value: object) -> None:
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        self._notes_usage_local.value = value if isinstance(value, dict) else {}
 
     @contextmanager
     def _client(self, *, read_timeout: float | None = None) -> Iterator[httpx.Client]:

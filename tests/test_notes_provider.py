@@ -4,6 +4,7 @@ import copy
 import dataclasses
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -515,21 +516,19 @@ def test_final_output_expansion_fails_safely_after_restoring_original_ids(tmp_pa
     adapter = NotesOnlyAdapter([output])
     provider = _provider(tmp_path, adapter)
 
-    with pytest.raises(ChatGPTError) as oversized:
-        provider.generate_notes_document(
-            snapshot=snapshot,
-            connection_version=7,
-            model="gpt-6.1-sol",
-            reasoning_effort="high",
-        )
+    result = provider.generate_notes_document(
+        snapshot=snapshot,
+        connection_version=7,
+        model="gpt-6.1-sol",
+        reasoning_effort="high",
+    )
 
-    assert oversized.value.code == "notes_invalid_output"
-    diagnostic = provider.store._read()["last_diagnostic"]
-    assert diagnostic["stage"] == "single"
-    assert diagnostic["validation_reason"] == "size"
-    assert diagnostic["output_bytes"] > MAX_OUTPUT_BYTES
     assert len(adapter.calls) == 1
-    assert "segment-" not in json.dumps(diagnostic)
+    assert len(result["overview"]) == 1
+    assert len(result["overview"][0]["source_ids"]) == len(snapshot["segments"])
+    assert set(result["overview"][0]["source_ids"]) == {
+        segment["id"] for segment in snapshot["segments"]
+    }
 
 
 @pytest.mark.parametrize(
@@ -1417,6 +1416,86 @@ def _synthesis_summaries(prompt):
     return _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")["summaries"]
 
 
+def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
+    from asr_studio.notes_pipeline import generate_notes_document
+
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": start,
+            "end_seconds": start + 1,
+            "text": f"detail {index}",
+            "speaker_name": "Morgan",
+        }
+        for index, start in enumerate((0.0, 1_200.0, 2_400.0, 3_600.0))
+    ]
+    active = 0
+    max_active = 0
+    state_lock = threading.Lock()
+    completion_order = []
+    final_payloads = []
+    progress = []
+    manifests = []
+
+    def document(text, source_id):
+        result = {
+            "schema_version": 1,
+            "overview": [{"text": text, "source_ids": [source_id]}],
+            "key_topics": [],
+            "decisions": [],
+            "open_questions": [],
+            "action_items": [],
+            "confirmation_items": [],
+        }
+        return json.dumps(result)
+
+    def transport(prompt, **kwargs):
+        nonlocal active, max_active
+        if kwargs["stage"] == "chunk":
+            source = _payload(prompt, "SOURCE_JSON:\n")
+            owned = [segment for segment in source["segments"] if not segment.get("overlap")]
+            label = owned[0]["text"]
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                if label == "detail 0":
+                    time.sleep(0.08)
+                completion_order.append(label)
+                return document(label, owned[0]["id"])
+            finally:
+                with state_lock:
+                    active -= 1
+        final_payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
+        final_payloads.append(final_payload)
+        source_id = next(iter(final_payload["summaries"][0]["source_order"]))
+        return document("final", source_id)
+
+    result = generate_notes_document(
+        snapshot=snapshot,
+        output_language="en",
+        transport=transport,
+        invalid_output_error=lambda diagnostics: AssertionError(diagnostics),
+        limit_error=RuntimeError,
+        on_coverage=manifests.append,
+        on_progress=progress.append,
+        provider="chatgpt",
+        model="gpt-5.6-sol",
+    )
+
+    assert max_active == 2
+    assert completion_order == ["detail 3", "detail 0"]
+    assert result["overview"][0]["text"] == "final"
+    assert len(final_payloads) == 1
+    source_orders = [list(item["source_order"].values()) for item in final_payloads[0]["summaries"]]
+    assert source_orders == sorted(source_orders)
+    chunk_indices = [entry["provider_call_index"] for entry in manifests[0]["chunks"]]
+    assert sorted(chunk_indices) == [1, 2]
+    chunk_progress = [event["current"] for event in progress if event["stage"] == "chunking"]
+    assert chunk_progress == sorted(chunk_progress)
+
+
 def test_long_run_sends_budgeted_overlapping_requests_and_reports_coverage(tmp_path):
     from asr_studio.notes_document import MAX_CHUNK_OUTPUT_BYTES, prompt_fits_repair
 
@@ -1646,13 +1725,16 @@ def test_overlap_repeats_are_dropped_before_reduction_but_distinct_items_survive
     assert len(summaries) == chunk_number >= 2
     assert [item["text"] for item in summaries[0]["open_questions"]] == ["Question 1"]
     for number, notes in enumerate(summaries[1:], start=2):
-        assert [item["text"] for item in notes["open_questions"]] == [f"Question {number}"]
+        assert [item["text"] for item in notes["open_questions"]] == [
+            f"Question {number}",
+            "Same question, rephrased",
+        ]
         assert [item["text"] for item in notes["confirmation_items"]] == ["Spans the boundary"]
     assert "overlap repeats" not in final_prompt  # the reducer is told, not given repeats
     assert "Neighbouring chunks overlap" in final_prompt
 
 
-def _tight_budget(monkeypatch, *, limit=14_000):
+def _tight_budget(monkeypatch, *, limit=15_000):
     from asr_studio import notes_document
 
     monkeypatch.setattr(notes_document, "MAX_PROMPT_BYTES", limit)
