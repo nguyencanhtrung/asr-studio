@@ -20,7 +20,8 @@ The default app URL is `http://127.0.0.1:8765`. Compose publishes the port on lo
 the app checks the exact configured Host and Origin. For a browser on another machine, keep the
 Compose bind on loopback, terminate TLS at a reverse proxy, and set `ASR_PUBLIC_URL` to the exact
 public HTTPS origin (for example, `https://asr.example.test`). Proxy that origin to
-`127.0.0.1:8765`; do not enable forwarded-header trust or expose the Compose port directly.
+`127.0.0.1:8765` and preserve the public Host header; do not enable forwarded-header trust or expose
+the Compose port directly.
 
 ### Start modes
 

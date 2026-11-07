@@ -965,3 +965,5 @@ Mỗi view có store và runner riêng (phụ thuộc khác nhau), nên hai tin 
 **Ngoại lệ còn lại** (ADR 0010): `i18n.js` công bố `t` và `UI_LOCALE` chỉ-đọc, `theme.js` đặt theme trước lần vẽ đầu; cả hai là script thường vì phải chạy trước mọi module.
 
 Phản hồi hết phiên từ middleware (`401`, `detail: "Authentication required"`) dừng poll transcription/notes và chuyển tới `/access`; các lỗi 401 có code của provider giữ luồng khôi phục provider. Khi nhận thông báo giữa tab, history đọc cuộc họp chính thức rồi notes đọc một lần theo context mới; vẽ lại cùng object context không thêm request notes. Bản nháp và pending request vẫn được giữ trong state khi phát effect điều hướng.
+
+Callback ChatGPT: khi hủy, bỏ request callback đang chạy và vô hiệu hóa phản hồi cũ; nếu hủy lỗi, cho phép gửi URL mới. Đóng Settings xóa ô callback nhưng giữ phiên đăng nhập để tiếp tục. Kết thúc phiên xóa ô nhập và focus thông báo trạng thái. Thao tác tạo lại registration trả trạng thái bắt đầu, chỉ callback thành công mới xác nhận registration mới.

@@ -1334,7 +1334,11 @@ Thao tác GUI tạo registration mới yêu cầu xác nhận, thu hồi quyền
 bảo toàn host ID và chỉ xóa state cũ sau khi adapter revoke xác nhận; nếu revoke thất bại,
 connection và registration cũ được giữ nguyên. Sau khi thu hồi thành công, connection version tăng
 và lựa chọn notes provider cũ bị vô hiệu hóa. URL sai mã hóa hoặc state không phải ASCII bị từ chối
-trước khi claim session.
+trước khi claim session. GUI bỏ effect callback và phản hồi cũ khi hủy; nếu yêu cầu hủy lỗi,
+người dùng vẫn gửi lại được URL. Đóng Settings xóa ô nhập; kết thúc đăng nhập focus thông báo
+trạng thái. Khi server xác nhận thu hồi, GUI cập nhật trạng thái chưa kết nối ngay và báo lại
+trạng thái đã kết nối sau callback. Phản hồi tạo lại chỉ báo bắt đầu lượt cấp quyền mới, không
+báo registration mới đã hoàn tất trước consent.
 
 #### Đánh đổi, phương án đã loại và follow-up
 

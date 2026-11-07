@@ -231,7 +231,7 @@ def test_registration_recreation_is_explicit_and_normal_login_reuses_registratio
 
     recreated = provider.recreate_registration(display_name="My ASR Studio")
     query = parse_qs(urlsplit(recreated["authorization_url"]).query)
-    assert recreated["registration_recreated"] is True
+    assert recreated["registration_recreation_started"] is True
     assert query["client_id"] == [DYNAMIC_CLIENT_ID]
     assert query["agent_name_hint"] == ["My ASR Studio"]
     state = provider.store._read()

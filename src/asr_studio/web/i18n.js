@@ -986,7 +986,7 @@ const { t, UI_LOCALE } = (() => {
       "Đang gửi URL callback…": "Sending the callback URL…",
       "URL callback chưa được chấp nhận. Hãy kiểm tra và dán lại URL đầy đủ.": "The callback URL was not accepted. Check it and paste the complete URL again.",
       "Đã gửi URL callback. Đang chờ máy chủ xác nhận…": "The callback URL was sent. Waiting for the server to confirm…",
-      "Đăng ký cũ đã được thu hồi. Hãy tiếp tục trong cửa sổ ChatGPT mới.": "The old registration was revoked. Continue in the new ChatGPT window.",
+      "Quyền kết nối cũ đã được thu hồi. Hãy tiếp tục trong cửa sổ ChatGPT mới.": "The old connection permission was revoked. Continue in the new ChatGPT window.",
       "Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT.": "The ASR Studio registration was recreated and the ChatGPT account was authenticated.",
       "Đang tạo lại đăng ký…": "Recreating the registration…",
       "Tạo lại đăng ký ChatGPT": "Recreate ChatGPT registration",

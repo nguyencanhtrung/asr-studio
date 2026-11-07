@@ -113,6 +113,7 @@ class MockProviderApi:
         self.sessions: dict[str, dict[str, str]] = {}
         self.session_count = 0
         self.callback_urls: list[str] = []
+        self.callback_error: str | None = None
         self.registration_names: list[str] = []
         self.antigravity_status = "disconnected"
         self.antigravity_session = None
@@ -346,7 +347,7 @@ class MockProviderApi:
                     "status": "pending",
                     "authorization_url": "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&state=ui-recreate-state",
                     "expires_at": expires.isoformat(),
-                    "registration_recreated": True,
+                    "registration_recreation_started": True,
                 },
                 status=201,
             )
@@ -369,6 +370,9 @@ class MockProviderApi:
                     },
                     status=404,
                 )
+                return
+            if self.callback_error:
+                self.fulfill(route, {"detail": {"code": self.callback_error}}, status=400)
                 return
             self.callback_urls.append(body["callback_url"])
             session["status"] = "connected"
@@ -667,33 +671,66 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
     context.close()
 
 
-def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(browser_runtime):
+@pytest.mark.parametrize("language", ["vi", "en"])
+def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
+    browser_runtime, language
+):
     live, browser = browser_runtime
     api = MockProviderApi()
+    api.poll_statuses = []
     context, page, _ = signed_in_page(
         browser, live, api=api, viewport={"width": 1280, "height": 900}
     )
+    if language == "en":
+        page.evaluate("localStorage.setItem('asr-studio:lang', 'en')")
+        page.reload(wait_until="domcontentloaded")
     open_connection_dialog(page)
 
     page.get_by_role("button", name="Continue with ChatGPT").click()
     expect(page.locator("#connection-callback")).to_be_visible()
+    page.locator("#connection-callback-input").fill("unfinished callback")
+    page.locator("#connections-close").click()
+    open_connection_dialog(page)
+    expect(page.locator("#connection-callback-input")).to_have_value("")
+    api.callback_error = "invalid_callback_url"
+    page.locator("#connection-callback-input").fill("invalid callback")
+    page.locator("#connection-callback-submit").click()
+    expect(page.locator("#connection-error")).to_be_visible()
+    expect(page.locator("#connection-error")).to_have_attribute("data-code", "invalid_callback_url")
+    expect(page.locator("#connection-status")).to_have_text(
+        "Chưa kết nối" if language == "vi" else "Not connected"
+    )
+    assert page.evaluate("document.activeElement.id") == "connection-callback-input"
+    api.callback_error = None
     pasted = "http://127.0.0.1:8765/auth/chatgpt/callback?state=ui-test-state&code=fake-code&client_id=oaiapp_test-123456"
     page.locator("#connection-callback-input").fill(pasted)
-    page.get_by_role("button", name="Gửi URL callback").click()
-    expect(page.locator("#connection-status")).to_have_text("Đã kết nối")
+    page.locator("#connection-callback-submit").click()
+    expect(page.locator("#connection-status")).to_have_text(
+        "Đã kết nối" if language == "vi" else "Connected"
+    )
+    assert page.evaluate("document.activeElement.id") == "connection-message"
     expect(page.locator("#connection-callback-input")).to_have_value("")
     assert api.callback_urls == [pasted]
     assert pasted not in (page.evaluate("sessionStorage.getItem('asr.chatgpt.pendingLogin')") or "")
 
-    page.get_by_role("button", name="Tạo lại đăng ký ChatGPT").click()
+    page.locator("#connection-registration-trigger").click()
     expect(page.locator("#connection-registration-confirm")).to_be_visible()
     page.locator("#connection-registration-name").fill("My ASR Studio")
-    page.get_by_role("button", name="Thu hồi và đăng nhập lại").click()
+    expect(page.locator("#connection-registration-confirm-button")).to_have_text(
+        "Thu hồi và đăng nhập lại" if language == "vi" else "Revoke and sign in again"
+    )
+    page.locator("#connection-registration-confirm-button").click()
     expect(page.locator("#connection-callback")).to_be_visible()
+    expect(page.locator("#connection-status")).to_have_text(
+        "Chưa kết nối" if language == "vi" else "Not connected"
+    )
     second = "http://127.0.0.1:8765/auth/chatgpt/callback?state=ui-recreate-state&code=fake-code-2&client_id=oaiapp_test-123456"
     page.locator("#connection-callback-input").fill(second)
-    page.get_by_role("button", name="Gửi URL callback").click()
-    expect(page.locator("#connection-status")).to_have_text("Đã kết nối")
+    page.locator("#connection-callback-submit").click()
+    expect(page.locator("#connection-status")).to_have_text(
+        "Đã kết nối" if language == "vi" else "Connected"
+    )
+    assert page.evaluate("document.activeElement.id") == "connection-message"
     assert api.registration_names == ["My ASR Studio"]
     assert api.callback_urls == [pasted, second]
     context.close()

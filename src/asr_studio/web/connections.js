@@ -141,7 +141,8 @@ export function renderSection(section, d, s) {
   }
   if (section.callback) {
     setProp(section.callback, "hidden", !s.login);
-    setProp(section.callbackSubmit, "disabled", s.callbackPending);
+    setProp(section.callbackSubmit, "disabled", s.callbackPending || s.cancelling);
+    setProp(section.callbackInput, "disabled", s.callbackPending || s.cancelling);
   }
   if (section.registration) {
     setProp(section.registration, "hidden", view.registrationHidden);
@@ -348,7 +349,7 @@ function render(state) {
   setProp(els.pendingActions, "hidden", view.pendingHidden);
   setProp(els.cancelSignIn, "disabled", view.cancelDisabled);
   if (s.ui) {
-    if (s.ui === "clear-callback-input") els.callbackInput.value = "";
+    if (s.ui.startsWith("clear-callback-input")) els.callbackInput.value = "";
     if (s.ui === "focus:registration-name") els.registrationName.value = s.recreateName;
     const focus = {
       "focus:sign-in": els.signIn,
@@ -357,6 +358,7 @@ function render(state) {
       "focus:callback-input": els.callbackInput,
       "focus:registration-name": els.registrationName,
       "focus:registration-trigger": els.registrationTrigger,
+      "clear-callback-input:focus-message": els.message,
     }[s.ui];
     if (focus) focus.focus();
     dispatch({ type: "provider/ui-handled", provider: CHATGPT.id });

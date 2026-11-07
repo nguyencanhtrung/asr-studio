@@ -1618,7 +1618,7 @@ class ChatGPTProvider:
                 force_dynamic_registration=True,
                 registration_name=registration_name,
             )
-            response["registration_recreated"] = True
+            response["registration_recreation_started"] = True
             return response
 
     def _start_login(

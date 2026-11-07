@@ -211,10 +211,11 @@ export const CHATGPT = {
     disconnect: t("Ngắt kết nối"),
     disconnectedRemote: t("Đã xóa thông tin đăng nhập trong không gian làm việc và xác nhận thu hồi quyền truy cập từ xa."),
     disconnectedLocal: t("Đã ngắt kết nối trong không gian làm việc. ChatGPT chưa xác nhận thu hồi quyền từ xa; hãy kiểm tra ChatGPT → Cài đặt → Mức sử dụng."),
-    recreateStarted: t("Đăng ký cũ đã được thu hồi. Hãy tiếp tục trong cửa sổ ChatGPT mới."),
+    recreateStarted: t("Quyền kết nối cũ đã được thu hồi. Hãy tiếp tục trong cửa sổ ChatGPT mới."),
     recreateConnected: t("Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT."),
     recreateSubmitting: t("Đang tạo lại đăng ký…"),
     recreate: t("Tạo lại đăng ký ChatGPT"),
+    recreateConfirm: t("Thu hồi và đăng nhập lại"),
   },
 };
 
@@ -671,7 +672,7 @@ function finishLogin(d, s, status, payload) {
     signInDisabled: false,
     loginLink: null,
     inputOpen: false,
-    ui: "clear-callback-input",
+    ui: d.id === "chatgpt" ? "clear-callback-input:focus-message" : s.ui,
     pending: { ...s.pending, recreate: false },
   };
   const effects = [...stopPoll(d), persist(d, null)];
@@ -746,7 +747,10 @@ function loginStarted(d, s, session, now, recreation = false) {
     pending: { ...s.pending, recreate: false },
     signInDisabled: false,
   };
-  if (recreation) next = { ...next, message: d.copy.recreateStarted };
+  if (recreation) {
+    next = applyProvider(d, clearModels(d, next), { ...(next.info || {}), id: d.id, status: "disconnected", account: null, verification: null });
+    next = { ...next, message: d.copy.recreateStarted };
+  }
   else if (session.replaced_previous === true) next = { ...next, message: d.copy.replaced };
   if (loginExpired(next.login, now)) {
     const finished = finishLogin(d, next, "expired");
@@ -754,6 +758,7 @@ function loginStarted(d, s, session, now, recreation = false) {
   }
   return done(next, [
     ...applied.effects,
+    ...(recreation ? [CHOICE_CHANGED] : []),
     windowEffect(d, "navigate", { url: checked.url, closed: "provider/window-closed" }),
     pollWait(d, d.login.firstPoll, next.loginGen),
   ]);
@@ -793,8 +798,9 @@ function pollFailed(d, s, meta, error, effects = []) {
 function cancelLogin(d, s) {
   if (!s.login) return done(s);
   const gen = s.loginGen + 1;
-  const next = { ...s, loginGen: gen, cancelling: d.login.cancelDisables, ...(d.login.clearOnFinish ? { error: null } : {}) };
-  return done(next, [...stopPoll(d), call(d, "login-cancel", "cancel", loginUrl(d, s.login.id), { method: "DELETE", extra: { gen } })]);
+  const next = { ...s, loginGen: gen, cancelling: d.login.cancelDisables, ...(d.login.clearOnFinish ? { error: null } : {}), ...(d.id === "chatgpt" ? { callbackPending: false, callbackRequest: s.callbackRequest + 1 } : {}) };
+  const effects = d.id === "chatgpt" ? [{ type: "cancel", key: `${d.id}/callback` }] : [];
+  return done(next, [...stopPoll(d), ...effects, call(d, "login-cancel", "cancel", loginUrl(d, s.login.id), { method: "DELETE", extra: { gen } })]);
 }
 
 function cancelOk(d, s, meta, session) {
@@ -812,7 +818,7 @@ function cancelFailed(d, s, meta, error) {
 
 function submitCallback(d, s, value) {
   const text = typeof value === "string" ? value.trim() : "";
-  if (d.id !== "chatgpt" || !s.login || s.callbackPending || !text) return done(s);
+  if (d.id !== "chatgpt" || !s.login || s.cancelling || s.callbackPending || !text) return done(s);
   const request = s.callbackRequest + 1;
   const next = {
     ...s,
@@ -1047,6 +1053,8 @@ function reduceProvider(d, state, action) {
       const next = d.clearMessages ? { ...state, message: null } : state;
       return startLoad(d, next);
     }
+    case "provider/dialog-closed":
+      return d.id === "chatgpt" ? done({ ...state, ui: "clear-callback-input" }) : done(state);
     case "provider/response":
     case "provider/request-failed": {
       if (meta.op === "header") return headerLoaded(d, state, action.type === "provider/response" ? action.response.body : null);
@@ -1489,7 +1497,7 @@ export function selectView(d, s) {
       || Boolean(s.login),
     registrationConfirming: d.id === "chatgpt" && s.recreateConfirming,
     registrationDisabled: inUse || s.pending.recreate,
-    registrationLabel: d.copy.recreate,
+    registrationLabel: d.copy.recreateConfirm,
     registrationSubmitting: d.copy.recreateSubmitting,
   };
   if (d.exclusive) {

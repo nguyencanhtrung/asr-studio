@@ -717,7 +717,7 @@
                 </div>
               </dl>
 
-              <p class="connection-message" id="connection-message" role="status" aria-live="polite"></p>
+              <p class="connection-message" id="connection-message" role="status" aria-live="polite" tabindex="-1"></p>
               <p class="connection-mutation-status" id="connection-mutation-reason" role="status" aria-live="polite" hidden></p>
               <div class="connection-error" id="connection-error" role="alert" hidden>
                 <span id="connection-error-message"></span>
@@ -736,7 +736,7 @@
                 <p>
                   Sau khi đăng nhập ChatGPT, nếu trang 127.0.0.1 không mở được, hãy sao chép toàn bộ địa chỉ trên thanh địa chỉ và dán vào đây để hoàn tất kết nối.
                 </p>
-                <form id="connection-callback-form">
+                <form id="connection-callback-form" method="post">
                   <div class="connection-field">
                     <label for="connection-callback-input">URL callback sau khi đăng nhập ChatGPT</label>
                     <textarea id="connection-callback-input" name="callback_url" rows="3" maxlength="16000" autocomplete="off" spellcheck="false" inputmode="url" required></textarea>

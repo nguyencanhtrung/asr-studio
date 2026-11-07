@@ -580,7 +580,7 @@ test("ChatGPT: pasted callback is transient, session-bound and stale replies are
   await env.answer(env.is("POST", "/login-sessions/s1/input"), 200, { status: "connected" });
   assert.equal(own(env, CHATGPT).login.id, "s1");
   assert.equal(own(env, CHATGPT).loginGen, gen + 1);
-  assert.equal(own(env, CHATGPT).callbackPending, true);
+  assert.equal(own(env, CHATGPT).callbackPending, false);
   await env.answer(env.is("DELETE", "/login-sessions/s1"), 200, { status: "cancelled" });
   assert.equal(own(env, CHATGPT).login, null);
 });
@@ -596,10 +596,13 @@ test("ChatGPT: explicit registration recreation uses its own endpoint and keeps 
   assert.equal(own(env, CHATGPT).pending.recreate, true);
   await env.answer(env.is("POST", "/api/providers/chatgpt/registration/recreate"), 201, SESSION);
   assert.equal(own(env, CHATGPT).recreatingRegistration, true);
+  assert.equal(own(env, CHATGPT).info.status, "disconnected");
+  assert.equal(own(env, CHATGPT).info.account, null);
+  assert.deepEqual(env.events, ["provider.choice-changed"]);
   env.fire(500);
   await env.answer(env.is("GET", "/login-sessions/s1"), 200, { status: "connected" });
   assert.equal(own(env, CHATGPT).message.text, "Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT.");
-  assert.deepEqual(env.events, ["provider.choice-changed"]);
+  assert.deepEqual(env.events, ["provider.choice-changed", "provider.choice-changed"]);
 });
 
 test("ChatGPT: recreation failure leaves the confirmation available", async () => {
@@ -1431,4 +1434,31 @@ test("the page behind Settings hears of a saved default and of Settings closing,
   const meta = { mutation: chosen.asr.defaultMutation };
   assert.equal(named(reduce(chosen, { type: "provider/asr-default-saved", meta })), 1);
   assert.equal(named(reduce(chosen, { type: "provider/asr-default-refused", meta, error: { body: { detail: { code: "not_prepared" } } } })), 0);
+});
+
+test("ChatGPT: failed cancel releases callback submission and rejects stale replies", () => {
+  let state = { ...initialState, chatgpt: { ...initialState.chatgpt, login: { id: "s1", expiresAt: SOON }, loginGen: 1 } };
+  const send = (type, extra = {}) => reduce(state, { type: `provider/${type}`, provider: "chatgpt", ...extra });
+  const first = send("login-callback-submitted", { value: "http://127.0.0.1:8765/auth/chatgpt/callback?code=fake&state=fake" });
+  state = first.state;
+  const stale = first.effects.find((effect) => effect.meta?.op === "callback").meta;
+  const cancel = send("login-cancel-requested");
+  state = cancel.state;
+  assert.equal(state.chatgpt.callbackPending, false);
+  assert.ok(cancel.effects.some((effect) => effect.type === "cancel" && effect.key === "chatgpt/callback"));
+  assert.equal(send("login-callback-submitted", { value: "corrected" }).effects.length, 0);
+  state = send("request-failed", { meta: { provider: "chatgpt", op: "cancel", gen: state.chatgpt.loginGen }, error: { status: 500, body: {} } }).state;
+  state = send("request-failed", { meta: stale, error: { status: 400, body: {} } }).state;
+  state = send("response", { meta: { provider: "chatgpt", op: "poll", gen: state.chatgpt.loginGen }, response: { body: { status: "pending" } } }).state;
+  assert.equal(state.chatgpt.callbackPending, false);
+  const retry = send("login-callback-submitted", { value: "corrected" });
+  assert.equal(retry.effects.filter((effect) => effect.meta?.op === "callback").length, 1);
+  assert.equal(retry.state.chatgpt.callbackPending, true);
+});
+
+test("ChatGPT: closing Settings clears an unsubmitted callback without cancelling sign-in", () => {
+  const state = { ...initialState, chatgpt: { ...initialState.chatgpt, login: { id: "s1", expiresAt: SOON } } };
+  const closed = reduce(state, { type: "provider/dialog-closed" });
+  assert.equal(closed.state.chatgpt.ui, "clear-callback-input");
+  assert.equal(closed.state.chatgpt.login.id, "s1");
 });
