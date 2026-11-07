@@ -267,8 +267,7 @@ def test_unknown_id_in_large_single_pass_uses_the_existing_repair(provider, mode
 
     assert result == empty
     expected = [("single", "primary"), ("single", "repair")]
-    if provider == "antigravity":
-        expected.append(("audit", "primary"))
+    expected.append(("audit", "primary"))
     assert [(call["stage"], call["attempt"]) for call in calls] == expected
     assert all(call["budget"].uses_token_estimate for call in calls)
     assert len(calls[0]["allowed_source_ids"]) == 853
@@ -297,7 +296,11 @@ def test_grouped_citation_limit_accepts_100_units_expanding_to_200(provider, mod
         document = _empty_document()
         if kwargs["stage"] == "audit":
             payload = json.loads(_prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
-            text = payload["audit_catalog"]["draft_candidates"][0]["ref"]
+            text = (
+                payload["audit_catalog"]["draft_candidates"][0]["ref"]
+                if provider == "antigravity"
+                else payload["summaries"][0]["notes"]["overview"][0]["text"]
+            )
         else:
             text = "one hundred units"
         document["overview"] = [{"text": text, "source_ids": list(unit_ids[:100])}]
@@ -369,7 +372,7 @@ def test_grouped_citation_limit_rejects_101_units_at_ingress_and_repairs(provide
         ("antigravity", "gemini-3.8-flash"),
     ],
 )
-def test_short_owner_pipeline_runs_one_reference_source_audit(provider, model):
+def test_short_owner_pipeline_runs_one_qualified_source_audit(provider, model):
     snapshot = _many_segment_snapshot(count=10)
     calls: list[dict[str, object]] = []
     coverage: list[dict[str, object]] = []
@@ -391,7 +394,11 @@ def test_short_owner_pipeline_runs_one_reference_source_audit(provider, model):
         )
         assert payload["summaries"][0]["notes"]["overview"][0]["text"] == "Draft"
         document = _empty_document()
-        ref = payload["audit_catalog"]["draft_candidates"][0]["ref"]
+        if provider == "antigravity":
+            ref = payload["audit_catalog"]["draft_candidates"][0]["ref"]
+        else:
+            assert "audit_catalog" not in payload
+            ref = "Draft"
         document["overview"] = [
             {"text": ref, "source_ids": [payload["source"]["segments"][0]["id"]]}
         ]
@@ -411,7 +418,11 @@ def test_short_owner_pipeline_runs_one_reference_source_audit(provider, model):
     assert result["overview"][0]["text"] == "Draft"
     assert [call["stage"] for call in calls] == ["single", "audit"]
     assert coverage[0]["provider_calls"] == 2
-    assert coverage[0]["source_audit"] == {"status": "applied", "provider_call_index": 2}
+    assert coverage[0]["source_audit"] == {
+        "status": "applied",
+        "provider_call_index": 2,
+        "mode": "references" if provider == "antigravity" else "rewrite",
+    }
     assert coverage[0]["output_recoveries"] == 0
 
 
@@ -1222,8 +1233,8 @@ def test_budgeted_single_pipeline_inspects_the_large_chatgpt_body():
         limit_error=RuntimeError,
     )
 
-    assert len(calls) == len(requests) == 1
-    assert [call["stage"] for call in calls] == ["single"]
+    assert len(calls) == len(requests) == 2
+    assert [call["stage"] for call in calls] == ["single", "audit"]
     assert all(call["budget"].uses_token_estimate is True for call in calls)
     for request in requests:
         body = json.loads(request.content)

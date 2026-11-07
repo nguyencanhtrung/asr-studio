@@ -542,10 +542,14 @@ def generate_notes_document(
 
     def audit_request_parts(
         draft: dict[str, Any],
-    ) -> tuple[Callable[[str | None], str], Callable[[dict[str, Any]], dict[str, Any]]]:
+    ) -> tuple[Callable[[str | None], str], Callable[[dict[str, Any]], dict[str, Any]] | None]:
         """Build one source-audit prompt and its boundary resolver for one accepted draft."""
-        catalog = AuditCatalog.from_documents(projected_snapshot, draft)
-        catalog_payload = catalog.prompt_payload()
+        catalog = (
+            AuditCatalog.from_documents(projected_snapshot, draft)
+            if provider == "antigravity"
+            else None
+        )
+        catalog_payload = catalog.prompt_payload() if catalog is not None else None
 
         def audit_prompt(invalid_output: str | None = None) -> str:
             return nd.build_reduction_prompt(
@@ -562,6 +566,7 @@ def generate_notes_document(
             )
 
         def audit_validator(document: dict[str, Any]) -> dict[str, Any]:
+            assert catalog is not None
             return catalog.apply(
                 document,
                 max_output_bytes=nd.MAX_OUTPUT_BYTES,
@@ -569,7 +574,7 @@ def generate_notes_document(
                 output_language=output_language,
             )
 
-        return audit_prompt, audit_validator
+        return audit_prompt, audit_validator if catalog is not None else None
 
     if not plan.chunked:
         source_ids = nd._unique_source_ids(
@@ -621,6 +626,7 @@ def generate_notes_document(
                 coverage["source_audit"] = {
                     "status": "applied",
                     "provider_call_index": audit_call_index,
+                    "mode": "references" if provider == "antigravity" else "rewrite",
                 }
                 progress("merging", 1, 1, "calls")
         document = restore_final_document(
@@ -811,45 +817,12 @@ def generate_notes_document(
                 ),
                 budget=synthesis_budget,
             )
-            source_aware_final = nd.reduction_prompt_includes_source(final_prompt)
             if synthesis_budget.uses_token_estimate:
-                if not source_aware_final:
-                    coverage["source_audit"] = {
-                        "status": "skipped",
-                        "reason": "prompt_budget",
-                    }
-                else:
-                    audit_prompt, audit_validator = audit_request_parts(final_document)
-                    try:
-                        source_audit_prompt = audit_prompt()
-                    except nd.NotesDocumentError:
-                        coverage["source_audit"] = {
-                            "status": "skipped",
-                            "reason": "prompt_budget",
-                        }
-                    else:
-                        audited_document, audit_call_index = request_document(
-                            source_audit_prompt,
-                            projected_snapshot,
-                            max_output_bytes=nd.MAX_OUTPUT_BYTES,
-                            stage="audit",
-                            repair_prompt=audit_prompt,
-                            budget=synthesis_budget,
-                            extra_validator=audit_validator,
-                        )
-                        final_document = audited_document
-                        coverage["source_audit"] = {
-                            "status": "applied",
-                            "provider_call_index": audit_call_index,
-                        }
-            final_document = restore_final_document(
-                final_document,
-                stage=(
-                    "audit"
-                    if coverage.get("source_audit", {}).get("status") == "applied"
-                    else "final"
-                ),
-            )
+                coverage["source_audit"] = {
+                    "status": "skipped",
+                    "reason": "quality_not_qualified",
+                }
+            final_document = restore_final_document(final_document, stage="final")
             progress("merging", reduction_calls, None, "calls")
             return finish(final_document)
 

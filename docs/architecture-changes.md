@@ -1503,7 +1503,7 @@ Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `
 Map tuần tự theo ngân sách và final chỉ đọc các bản nháp có thể giữ trạng thái cũ, bỏ cam kết
 qua ranh giới hoặc thiếu ngữ cảnh trích dẫn. Chống lặp chỉ bằng prompt cũng chưa có bước đối chiếu
 riêng. Hợp đồng nền dùng `notes-hierarchical-v16`; bản audit-only hiện tại dùng
-`notes-hierarchical-v17`, schema công khai vẫn là `1`.
+`notes-hierarchical-v18`, schema công khai vẫn là `1`.
 
 Độ dài là `max(end_seconds) - min(start_seconds)`. Khi span lớn hơn `3_600` giây, planner
 chia phần sở hữu xấp xỉ một giờ, giữ segment nguyên vẹn và overlap tối đa `2_000` byte; phần quá
@@ -1520,28 +1520,20 @@ hướng dẫn dùng đúng `SYNTHESIS_INPUT_JSON.source` và cho phép khôi ph
 draft bỏ sót. Giới hạn “chỉ đọc draft” chỉ áp dụng cho fallback không có transcript.
 Prompt yêu cầu giữ các nhóm liệt kê, số lượng, điều kiện và ý kiến riêng với quyết định;
 không thay nhiều chi tiết bằng một câu tổng quát để rút ngắn tài liệu. Nếu không vừa, fallback phân tầng dùng
-các draft từ đầy đủ coverage và nói rõ giới hạn. Với owner model đã biết, một draft đơn hoặc final
-phân cấp được kiểm tra rồi có tối đa một lượt đối chiếu bổ sung với toàn bộ nguồn và draft. Audit
-trả về mã catalog trong `item.text`, không được viết lại tự do: `dN` là mục draft nguyên vẹn,
-`dNpEND` là tiền tố an toàn, còn `sN` là một đoạn nguồn nguyên văn. Runtime giải mã mã trước khi
-publication; quote `sN` chỉ vào `key_topics`/`confirmation_items`, giữ ngôn ngữ gốc và thêm nhãn
-ngôn ngữ đầu ra, đồng thời nhận đúng source ID theo vị trí segment. Bản audit-only v17 đối chiếu
-toàn bộ source với draft trước khi chọn mã, tìm fact hoặc speaker position quan trọng bị bỏ sót;
-chỉ nhắc cùng topic không giữ được position riêng. Với cùng confirmed work, ưu tiên action chi tiết
-hơn và chỉ xóa decision khi không mất outcome hoặc constraint có căn cứ riêng; shared citation,
-topic hoặc wording không đủ để xóa. Sau khi gộp phải giữ constraint, qualification, status,
-temporal/modality và support/opposition; nếu mã draft không giữ được thì dùng source ref được phép.
-Model chỉ trả ref ID, không viết source prose hay label; runtime mở rộng ref, giữ quote chính xác và
-thêm label. Quote `sN` chỉ vào `key_topics`/`confirmation_items`, không ép quote và không chép toàn
-bộ transcript. Guard cấm mã lạ, lặp origin, đổi section, metadata action mới và làm mất phủ định/tình
-thái ở tiền tố. Audit-specific prompt yêu cầu kiểm tra thì và tình thái: thảo luận/khám về sau không
-phải đã diễn ra. Reference-only selection ngăn prose mới trong audit, nhưng không phải bằng chứng
-semantic rằng mọi claim draft được giữ là đúng; kiểm chứng này vẫn cần source và người duyệt. Nếu
-full-source audit không vừa, trả draft hợp lệ và
-ghi `source_audit.status=skipped`, `reason=prompt_budget`; model/budget chưa biết giữ đường
-conservative hiện có. Audit không tự lặp. Lỗi audit sau repair/recovery chung giữ nguyên transcript
-và Notes cũ, không công bố một phần. Lượt audit thêm vào global call ceiling nhưng không đổi
-prompt/schema/model/caps của các primary request.
+các draft từ đầy đủ coverage và nói rõ giới hạn. Với nguồn đơn, ChatGPT dùng audit hợp nhất
+schema 1 đã có bằng chứng; Antigravity dùng audit chọn catalog tham chiếu, có guard chặn prose
+mới, đổi nhóm, lặp origin và metadata action mới. Cả hai chỉ chạy khi toàn nguồn và draft vừa
+ngân sách, dùng cùng provider/model và có tối đa một logical audit. Tham chiếu giữ nguyên mục
+hoặc tiền tố được phép; source quote chỉ ở key_topics/confirmation_items, runtime giữ ngôn ngữ
+gốc, source ID và thêm nhãn. Guard không chứng minh mọi claim draft là đúng. Đường ChatGPT có
+thể viết lại prose và cần source review. Không audit đệ quy; lỗi sau repair/recovery chung giữ
+Notes cũ. Nếu audit không vừa, ghi `prompt_budget`.
+
+Final phân cấp không chạy audit bổ sung: các lần thử chưa đạt lợi ích chất lượng nên ghi
+`quality_not_qualified`. Chính sách phụ thuộc provider/dạng planner, không phụ thuộc dataset,
+source text hay đáp án. Primary prompt/schema/model/caps không đổi. Các output đã có request
+fingerprint giống hệt có thể tái dùng làm regression; phải khai báo đó là replay, không phải một
+lượt inference hay đo latency mới.
 
 Đối chiếu phân biệt chưa có đồng thuận với quyết định bác bỏ/hoãn; đề xuất chưa cam kết chỉ
 ở một mục cần xác nhận, không lặp lại trạng thái chờ trong quyết định và câu hỏi mở.
@@ -1572,10 +1564,10 @@ chẩn đoán lỗi audit đã lọc nội dung riêng tư. Nguồn:
 `tests/test_notes_provider.py`, `tests/test_chatgpt_transport.py`,
 `tests/test_antigravity_provider.py`, `tests/test_omp_contract.py`.
 
-Lượt đối chiếu có thêm chi phí/quota và thời gian. Bản cập nhật v17 này chỉ làm rõ lựa chọn mã
-audit; không có đánh giá model mới và không tuyên bố cải thiện semantic quality hoặc latency.
-Kiểm thử offline không chứng minh lợi ích ngữ nghĩa hoặc latency; nghiệm thu compact phải so draft thật với kết quả sau đối chiếu, giữ cả
-lỗi và giới hạn. Không dùng nó để công nhận lại các điểm số cohort riêng tư hoặc thời gian ASR/
-diarization/người duyệt chưa đo. #88 tiếp tục theo dõi bộ audio đại diện và duyệt của người dùng.
+Lượt đối chiếu có thêm chi phí/quota và thời gian. v18 thu hẹp về các đường nguồn đơn đã đạt;
+không mở thêm vòng thử prompt. Kiểm tra routing bằng request fingerprint và replay giữ nguyên
+output thực đã được chấm, không công bố điểm inference mới. Nguồn dài còn thiếu một checkpoint
+nội dung nên #79 vẫn mở. Các ngưỡng cohort riêng tư và thời gian ASR/diarization/người duyệt chưa
+đo vẫn chưa được công nhận; #88 theo dõi audio đại diện và duyệt của người dùng.
 
 Tag: kiến trúc, chất lượng Notes. Tài liệu đích: `docs/specification.md`, báo cáo nghiệm thu.

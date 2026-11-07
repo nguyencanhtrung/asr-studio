@@ -61,27 +61,21 @@ Pending semantics được giữ rõ ràng:
   khóa các overlap này.
 
 Role migration không đổi hợp đồng prompt đã lưu trên task. Khi nâng cấp đồng thời sang
-`notes-hierarchical-v16`, task Notes đã nhận bằng prompt cũ có thể kết thúc với
+`notes-hierarchical-v18`, task Notes đã nhận bằng prompt cũ có thể kết thúc với
 `notes_contract_changed`; không được mô tả kiểm tra role-only như bằng chứng tự chạy lại
 hợp đồng prompt cũ. Hoàn tất hàng đợi trước upgrade, hoặc dùng GUI tạo lại Notes từ transcript
 đã giữ sau upgrade. Guard này tránh ghi phiên bản prompt cũ cho kết quả dùng prompt mới
 ([`notes_runner.py`](../../src/asr_studio/notes_runner.py)).
 
-Notes audit ở prompt v17 là một lượt tùy chọn có giới hạn sau draft đơn hoặc final phân cấp khi
-full-source payload vừa ngân sách. Model chỉ chọn mã catalog trong trường `item.text`; trước khi
-chọn phải đối chiếu toàn bộ source với draft để tìm fact, speaker position, constraint,
-qualification, status và temporal/modality bị bỏ sót. Chỉ nhắc cùng topic không giữ được position
-riêng. Với cùng confirmed work, ưu tiên action chi tiết hơn và chỉ bỏ decision khi không mất
-outcome hoặc constraint có căn cứ riêng; shared citation/topic/wording không đủ để xóa. Sau khi
-gộp phải giữ ý riêng, còn nếu mã draft không giữ được thì dùng source ref được phép. Runtime
-giải mã mọi ref, kể cả ref được thêm vào, giữ đúng quote nguồn và thêm label; model không viết source
-prose hoặc label. Quote nguồn chỉ được đặt ở context/confirmation, không ép quote hay chép toàn
-bộ transcript. Audit không được sinh prose mới hay metadata action mới. Guard này không chứng minh
-semantic correctness của mọi claim draft được giữ; nó chỉ chặn ref lạ, đổi nhóm, lặp origin,
-metadata mới và các tiền tố làm mất phủ định/tình thái. Kiểm tra audit phải giữ phân biệt thì/tình
-thái: thảo luận hoặc khám về sau không phải việc đã thực hiện. Audit dùng cùng repair/recovery
-budget; nếu payload không vừa, ghi `prompt_budget`, còn audit lỗi là terminal để không công bố bản
-chưa kiểm tra. Các primary prompt/schema/model/caps và adapter ngoài boundary không đổi.
+Notes audit ở prompt v18 chỉ giữ các đường đã có bằng chứng cho nguồn đơn: ChatGPT hợp nhất
+lại schema 1, còn Antigravity chọn tham chiếu từ catalog. Reference guard của Antigravity chặn mã
+lạ, đổi nhóm, lặp origin và metadata mới; runtime giải mã quote và thêm nhãn. ChatGPT có thể viết
+lại prose và phải qua validator/source review. Cả hai dùng cùng provider/model đã chọn và tối đa
+một logical audit với repair/recovery chung. Không thêm audit sau final phân cấp vì các thử nghiệm
+chưa đạt lợi ích chất lượng; coverage ghi `quality_not_qualified`. Không dùng dữ liệu/gold để chọn
+đường chạy. Những phép thử model cũ được giữ cùng các lần không đạt; replay không được mô tả là
+inference hoặc latency mới. Độ đầy đủ nội dung vẫn còn follow-up #79; #88 giữ nhu cầu audio/người
+duyệt. Thay đổi này không sửa primary prompt/schema/model/caps hay adapter ngoài boundary.
 
 Upgrade được thực hiện bởi `initialize()` trong transaction và ghi migration v16 sau
 khi thêm cột. Không sửa tay `owner_role` hoặc xóa migration record để rollback. Bản

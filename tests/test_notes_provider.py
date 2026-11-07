@@ -2469,7 +2469,8 @@ def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tm
     )
     assert result["overview"]
     assert len(adapter.refresh_calls) == 1
-    assert len(adapter.calls) == coverage[0]["provider_calls"] == 4
+    assert len(adapter.calls) == coverage[0]["provider_calls"] == 3
+    assert coverage[0]["source_audit"] == {"status": "skipped", "reason": "quality_not_qualified"}
     assert {call.access_token for call in adapter.calls} == {"fake-refreshed-access-1"}
     state = provider.store._read()
     assert state["connection_status"] == "connected"

@@ -1017,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v17"
+    assert PROMPT_VERSION == "notes-hierarchical-v18"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1054,8 +1054,8 @@ def test_source_audit_prompt_carries_full_source_and_one_draft(snapshot, documen
     assert payload["summaries"][0]["notes"] == document
     assert "one bounded source audit" in prompt
     assert "semantic duplicates across sections" in prompt
-    assert "later discussion or examination is not an examination already performed" in prompt
-    assert "Reference-only selection prevents new audit prose" in prompt
+    assert "audit_catalog" not in payload
+    assert "Every item.text must be exactly one reference" not in prompt
     assert "Do not run another audit" in prompt
 
 
