@@ -1495,3 +1495,50 @@ adapter giả lập; test giả không chứng minh consent thật, tên hiển 
 
 Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `docs/user-guide.md`,
 `docs/frontend-design.md`, `src/asr_studio/config.py`.
+
+### #77/#78/#79/#107/#108/#110 — Notes synthesis phân tầng có giới hạn và giữ bằng chứng
+
+#### Vấn đề và quyết định
+
+Notes dùng `PROMPT_VERSION = notes-hierarchical-v10` và vẫn giữ schema công khai phiên bản `1`.
+Độ dài nguồn được tính bằng `max(end_seconds) - min(start_seconds)`, không dùng mốc kết thúc
+tuyệt đối. Nguồn có span không quá `MAX_RETAINED_SOURCE_SPAN_SECONDS` (`3_600.0`) và vừa
+ngân sách tiếp tục đi qua đúng một request; một utterance ngắn bắt đầu ở giây `3_661` không bị
+xem là cuộc họp dài. Nguồn dài được chia theo thứ tự nguồn thành các phần sở hữu xấp xỉ một giờ,
+lặp các segment nguyên vẹn trong giới hạn `NOTES_OVERLAP_BYTES` (`2_000`); segment quá lớn vẫn
+đi qua đường tách part theo byte hiện có, không nội suy timestamp.
+
+Map của hai provider đã biết dùng tối đa `2` worker khi budget owner có token estimate; transport
+không biết hoặc fake vẫn tuần tự. Kết quả map được ghép lại theo thứ tự nguồn. Call index được
+reserve nguyên tử cho từng attempt và coverage ghi index của attempt đã được chấp nhận, bao gồm
+repair/recovery. Giới hạn chunk, reduction, recovery và tổng provider calls vẫn lấy trực tiếp từ
+`MAX_NOTES_CHUNKS`, `MAX_REDUCTION_CALLS`, `MAX_OUTPUT_RECOVERY_ATTEMPTS`,
+`MAX_OUTPUT_RECOVERY_CALLS` và `MAX_PROVIDER_CALLS` trong `notes_document.py`.
+
+Ở final, khi toàn bộ `provider_source(...)` đã sanitize cùng các draft theo thứ tự nguồn vừa
+budget owner, request mang cả source và draft để đối chiếu quyết định sau cùng, request/acceptance
+qua ranh giới, câu hỏi đã được trả lời, antecedent, owner và uncertainty. Nếu không vừa, pipeline
+giữ fallback phân tầng bounded và nói rõ rằng final chỉ dùng các draft đã sinh từ toàn bộ coverage;
+không đưa raw source không giới hạn vào request. Sau generation, chỉ các item có full content trùng
+khớp mới được coalesce; citation refs được union trong giới hạn, còn fact khác citation, owner,
+deadline, phủ định hay metadata khác nhau đều giữ riêng. Không dùng shared source ID, fuzzy
+similarity, bỏ phủ định hay topic overlap làm điều kiện xóa.
+
+Usage của ChatGPT HTTP adapter và OMP adapter được cô lập theo thread/call. OMP vẫn prepare storage
+atomically, khởi tạo process mới, set model/thinking level trước prompt và giữ deadline/cancellation
+hiện có.
+
+#### Kiểm chứng và giới hạn
+
+Regression offline: `tests/test_notes_document.py` và `tests/test_notes_provider.py` đạt `141 passed`
+(command `UV_CACHE_DIR=/tmp/asr-uv-cache timeout 180 .venv/bin/python -m pytest -q ...`), adapter
+tests đạt `95 passed`, hai thread-isolation tests đạt `2 passed`, và contract OMP v18.5.0 đạt
+`8 passed` với `ASR_RUN_OMP_CONTRACT=1`. Các test này không phải bằng chứng cho chất lượng ngữ nghĩa
+hoặc latency model. Semantic gold, compact live cases và acceptance gate thực tế vẫn cần được chạy
+ở bước nghiệm thu provider; không có inference hay network call trong các kiểm chứng này.
+
+Nguồn: `src/asr_studio/notes_document.py`, `src/asr_studio/notes_pipeline.py`,
+`src/asr_studio/chatgpt.py`, `src/asr_studio/antigravity.py`,
+`tests/test_notes_document.py`, `tests/test_notes_provider.py`,
+`tests/test_chatgpt_transport.py`, `tests/test_antigravity_provider.py`,
+`tests/test_omp_contract.py`.

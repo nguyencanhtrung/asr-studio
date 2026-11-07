@@ -439,11 +439,29 @@ class OmpRpcAdapter:
     def __init__(self, directory: Path, *, executable: str = "omp") -> None:
         self.directory = Path(directory)
         self.executable = executable
-        self.last_notes_usage: dict[str, int] = {}
+        self._notes_usage_local = threading.local()
+        self._prepare_lock = threading.Lock()
         self.agent_dir = self.directory / "agent"
         self.home_dir = self.directory / "home"
         self.workspace_dir = self.directory / "workspace"
         self.config_path = self.directory / "runner-config.yml"
+
+    @property
+    def last_notes_usage(self) -> dict[str, int]:
+        """Return usage isolated to the current fresh OMP call thread."""
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        usage = getattr(self._notes_usage_local, "value", None)
+        if not isinstance(usage, dict):
+            usage = {}
+            self._notes_usage_local.value = usage
+        return usage
+
+    @last_notes_usage.setter
+    def last_notes_usage(self, value: object) -> None:
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        self._notes_usage_local.value = value if isinstance(value, dict) else {}
 
     @property
     def command(self) -> list[str]:
@@ -486,6 +504,10 @@ class OmpRpcAdapter:
         return environment
 
     def prepare(self) -> None:
+        with self._prepare_lock:
+            self._prepare_unlocked()
+
+    def _prepare_unlocked(self) -> None:
         for directory in (
             self.directory,
             self.agent_dir,

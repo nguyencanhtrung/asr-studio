@@ -979,7 +979,7 @@ def test_chatgpt_invalid_output_logs_bounded_codes_without_text(caplog, tmp_path
     assert failure.value.diagnostics["validation_reason"] == "source_ids"
 
 
-def test_budgeted_oversize_pipeline_uses_conservative_chatgpt_transport_caps():
+def test_budgeted_oversize_pipeline_uses_the_pinned_chatgpt_owner_budget():
     requests: list[httpx.Request] = []
     calls: list[dict[str, object]] = []
 
@@ -1029,16 +1029,17 @@ def test_budgeted_oversize_pipeline_uses_conservative_chatgpt_transport_caps():
     )
 
     assert result == _empty_document()
-    assert any(call["stage"] == "reduce" for call in calls)
-    assert all(call["budget"].uses_token_estimate is False for call in calls)
+    assert calls
+    assert all(call["budget"].uses_token_estimate is True for call in calls)
     assert all(
-        json.loads(request.content)["max_output_tokens"] == nd.NOTES_MAX_OUTPUT_TOKENS
+        json.loads(request.content)["max_output_tokens"]
+        == nd.CHATGPT_GPT_5_6_SOL_OUTPUT_RESERVE_TOKENS
         for request in requests
     )
-    assert all(len(request.content) <= 128 * 1024 for request in requests)
+    assert all(len(request.content) <= 1 * 1024 * 1024 for request in requests)
 
 
-def test_chunk_recovery_prompt_uses_the_conservative_budget(monkeypatch):
+def test_chunk_recovery_prompt_uses_the_pinned_owner_budget(monkeypatch):
     recovery_budgets: list[nd.NotesBudget] = []
     calls: list[dict[str, object]] = []
     real_recovery_prompt = nd.build_recovery_prompt
@@ -1070,7 +1071,7 @@ def test_chunk_recovery_prompt_uses_the_conservative_budget(monkeypatch):
     )
 
     assert recovery_budgets
-    assert recovery_budgets[0].uses_token_estimate is False
+    assert recovery_budgets[0].uses_token_estimate is True
     assert calls[0]["stage"] == calls[1]["stage"] == "chunk"
     assert calls[1]["attempt"] == "recovery"
 
@@ -1498,7 +1499,7 @@ def test_antigravity_owner_sends_large_scope_schema_in_one_message(tmp_path):
     ] == list(scope)
 
 
-def test_antigravity_conservative_pipeline_sends_a_frame_above_chatgpt_limit(tmp_path):
+def test_antigravity_unknown_model_stays_within_its_conservative_frame_limit(tmp_path):
     snapshot = _snapshot(0)
     snapshot["segments"][0]["text"] = "\x7f" * 21_200
     adapter = _ProviderNotesAdapter()
@@ -1524,11 +1525,11 @@ def test_antigravity_conservative_pipeline_sends_a_frame_above_chatgpt_limit(tmp
         )
         + 1
     )
-    assert 128 * 1024 < frame_bytes < 1_048_576
+    assert frame_bytes <= 1_048_576
     assert coverage[0]["provider_calls"] >= 1
 
 
-def test_chatgpt_provider_passes_conservative_budget_to_real_adapter_for_oversize_owner(
+def test_chatgpt_provider_passes_the_pinned_owner_budget_to_real_adapter(
     tmp_path,
 ):
     requests: list[httpx.Request] = []
@@ -1566,10 +1567,11 @@ def test_chatgpt_provider_passes_conservative_budget_to_real_adapter_for_oversiz
         for request in requests
     )
     assert all(
-        json.loads(request.content)["max_output_tokens"] == nd.NOTES_MAX_OUTPUT_TOKENS
+        json.loads(request.content)["max_output_tokens"]
+        == nd.CHATGPT_GPT_5_6_SOL_OUTPUT_RESERVE_TOKENS
         for request in requests
     )
-    assert all(len(request.content) <= 128 * 1024 for request in requests)
+    assert all(len(request.content) <= 1 * 1024 * 1024 for request in requests)
 
 
 def test_chatgpt_planner_body_matches_real_adapter_and_keeps_builder_fields():

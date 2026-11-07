@@ -33,6 +33,7 @@ from asr_studio.notes_document import (
     build_prompt,
     build_recovery_prompt,
     build_reduction_prompt,
+    coalesce_exact_duplicate_items,
     drop_overlap_duplicates,
     lower_output_target,
     normalize_duplicate_source_refs,
@@ -44,6 +45,7 @@ from asr_studio.notes_document import (
     provider_source,
     render_markdown,
     restore_source_refs,
+    retained_source_span,
     validate_document,
     verify_coverage,
 )
@@ -883,13 +885,80 @@ def test_overlap_duplicates_drop_only_exact_repeats_of_the_previous_chunk():
 
     result = drop_overlap_duplicates(previous, current, ["a", "b"])
 
-    assert [item["text"] for item in result["decisions"]] == ["Ship Tuesday, Mai owns it"]
+    assert [item["text"] for item in result["decisions"]] == [
+        "We ship on Tuesday",
+        "Ship Tuesday, Mai owns it",
+    ]
     assert [item["text"] for item in result["overview"]] == ["Intro again"]
     assert [item["text"] for item in result["confirmation_items"]] == ["Budget"]
     assert [item["text"] for item in result["key_topics"]] == ["Launch"]
     assert current == before
     # Ids outside the overlap belong to the later chunk, so identical sets there are kept.
     assert drop_overlap_duplicates(previous, current, ["z"]) == current
+
+
+def test_exact_duplicate_coalescing_unions_refs_but_keeps_distinct_metadata_and_facts():
+    def notes(**sections):
+        return {"schema_version": 1, **{key: [] for key, _ in SECTIONS}, **sections}
+
+    document = notes(
+        decisions=[
+            {"text": "Ship Tuesday", "source_ids": ["a"]},
+            {"text": "Ship Tuesday", "source_ids": ["b"]},
+            {"text": "Do not ship Tuesday", "source_ids": ["a"]},
+        ],
+        action_items=[
+            {
+                "text": "Send report",
+                "source_ids": ["c"],
+                "owner": "Mai",
+                "deadline_text": "Friday",
+                "deadline_date": None,
+            },
+            {
+                "text": "Send report",
+                "source_ids": ["d"],
+                "owner": "Minh",
+                "deadline_text": "Friday",
+                "deadline_date": None,
+            },
+        ],
+        overview=[{"text": "Ship Tuesday", "source_ids": ["e"]}],
+    )
+
+    result = coalesce_exact_duplicate_items(document)
+
+    assert [item["text"] for item in result["decisions"]] == [
+        "Ship Tuesday",
+        "Do not ship Tuesday",
+    ]
+    assert result["decisions"][0]["source_ids"] == ["a", "b", "e"]
+    assert result["overview"] == []
+    assert len(result["action_items"]) == 2
+    assert {item["owner"] for item in result["action_items"]} == {"Mai", "Minh"}
+
+
+def test_retained_span_uses_relative_source_times_and_exact_hour_boundary(snapshot):
+    assert retained_source_span(snapshot) == pytest.approx(8.1)
+
+    snapshot["segments"] = [
+        {"id": "a", "start_seconds": 0.0, "end_seconds": 1.0, "text": "first"},
+        {"id": "b", "start_seconds": 3599.0, "end_seconds": 3600.0, "text": "last"},
+    ]
+    assert retained_source_span(snapshot) == 3600.0
+    assert plan_source(snapshot).hourly is False
+
+    snapshot["segments"][1]["start_seconds"] = 3600.0
+    snapshot["segments"][1]["end_seconds"] = 3601.0
+    assert retained_source_span(snapshot) == 3601.0
+    plan = plan_source(snapshot)
+    assert plan.hourly is True
+    assert [entry["owned"] for entry in plan.manifest["chunks"]] == [[0, 1], [1, 2]]
+    assert [segment["id"] for chunk in plan.chunks for segment in chunk["segments"]] == [
+        "a",
+        "a",
+        "b",
+    ]
 
 
 def test_source_plan_rejects_oversized_total_and_chunk_count(snapshot, monkeypatch):
@@ -927,9 +996,26 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v8"
+    assert PROMPT_VERSION == "notes-hierarchical-v10"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
+
+
+def test_source_aware_final_prompt_carries_sanitized_source_and_chronological_drafts(
+    snapshot, document
+):
+    prompt = build_reduction_prompt(
+        snapshot,
+        [document],
+        final=True,
+        budget=notes_budget("chatgpt", "gpt-5.6-sol"),
+    )
+    payload = json.loads(prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
+
+    assert payload["source"] == provider_source(snapshot)
+    assert payload["summaries"][0]["source_order"] == {snapshot["segments"][0]["id"]: 0}
+    assert "private/audio" not in prompt
+    assert "Private title" not in prompt
 
 
 def test_budgeted_single_pass_pins_the_full_completeness_clause_in_both_languages(snapshot):
@@ -1066,14 +1152,14 @@ def test_primary_prompts_are_byte_identical_to_those_before_output_recovery(snap
             digests[f"{language}-{name}"] = hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
     assert digests == {
-        "en-single": "54a88e983dc2b8d0",
-        "en-chunk": "6a0bbe86fdf81a20",
+        "en-single": "69f25e3f4b1c3d0f",
+        "en-chunk": "128a6353fbabe44e",
         "en-reduce": "a748b416c809803d",
-        "en-final": "c6214212d48b23b4",
-        "vi-single": "7393a66ef4100b56",
-        "vi-chunk": "35cc655ea1ea3ffb",
+        "en-final": "b1551424c490429d",
+        "vi-single": "467791450948f69c",
+        "vi-chunk": "a79b76e1355829c9",
         "vi-reduce": "e802ebec55c431dc",
-        "vi-final": "2beca0621b7453f6",
+        "vi-final": "6f29bb952eade6dc",
     }
 
 
