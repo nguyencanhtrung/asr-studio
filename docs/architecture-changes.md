@@ -1510,6 +1510,9 @@ lớn vẫn được tách theo ngân sách byte, không nội suy timestamp. Ha
 đa `2` map worker. Kết quả được hợp nhất theo thứ tự nguồn; tiến độ tăng khi từng map hoàn tất,
 không tăng trước khi có kết quả. Call index, một lượt repair chung, recovery và tổng số request
 vẫn có giới hạn nguyên tử. Usage được cô lập theo thread/call; OMP prepare được serialize.
+ChatGPT serialize phần đọc/làm mới/lưu token trong cùng provider instance, nên các map không
+đồng thời xoay cùng refresh token. Kiểm tra chống ghi đè khi kết nối thật sự đổi vẫn giữ nguyên;
+mutex không bao phần request model nên map vẫn chạy song song.
 
 Final dùng nguồn đã lọc và các bản nháp khi vừa ngân sách. Khi có transcript đầy đủ,
 hướng dẫn dùng đúng `SYNTHESIS_INPUT_JSON.source` và cho phép khôi phục chi tiết/mã nguồn mà

@@ -6,6 +6,7 @@ import json
 import re
 import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 
 import pytest
@@ -2389,3 +2390,58 @@ def test_source_audit_invalid_output_retains_stage_and_redacts_private_source_id
     assert diagnostic["provider_call_index"] == 3
     assert diagnostic["attempt"] == "repair"
     assert "private-unknown-source-id" not in json.dumps(diagnostic)
+
+
+def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tmp_path):
+    class RotatingAdapter(NotesOnlyAdapter):
+        def __init__(self):
+            super().__init__(responder=lambda prompt, _limit: _document_for_prompt(prompt))
+            self.refresh_barrier = threading.Barrier(2)
+            self.refresh_counter_lock = threading.Lock()
+
+        def refresh(self, *, client_id, refresh_token):
+            with self.refresh_counter_lock:
+                self.refresh_calls.append({"client_id": client_id, "refresh_token": refresh_token})
+                count = len(self.refresh_calls)
+            # One serialized refresh completes without a second request after the barrier timeout.
+            with suppress(threading.BrokenBarrierError):
+                self.refresh_barrier.wait(timeout=1)
+            return {
+                "access_token": f"fake-refreshed-access-{count}",
+                "refresh_token": f"fake-rotated-refresh-{count}",
+                "token_type": "Bearer",
+                "expires_in": 3_600,
+                "scope": DIRECT_SCOPE,
+            }
+
+    adapter = RotatingAdapter()
+    clock = MutableClock()
+    provider = _provider(tmp_path, adapter, clock=clock)
+    with provider.store.locked(write=True) as state:
+        state["registrations"]["oaiapp_test-123456"]["expires_at"] = clock.value + 60
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": start,
+            "end_seconds": start + 1,
+            "text": f"detail {index}",
+            "speaker_name": "Morgan",
+        }
+        for index, start in ((1, 0.0), (2, 3_601.0))
+    ]
+    coverage = []
+    result = provider.generate_notes_document(
+        snapshot=snapshot,
+        connection_version=7,
+        model="gpt-5.6-sol",
+        reasoning_effort="medium",
+        on_coverage=coverage.append,
+    )
+    assert result["overview"]
+    assert len(adapter.refresh_calls) == 1
+    assert len(adapter.calls) == coverage[0]["provider_calls"] == 3
+    assert {call.access_token for call in adapter.calls} == {"fake-refreshed-access-1"}
+    state = provider.store._read()
+    assert state["connection_status"] == "connected"
+    assert state["connection_version"] == 7

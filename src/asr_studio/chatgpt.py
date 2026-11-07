@@ -1444,6 +1444,7 @@ class ChatGPTProvider:
         self.store = ProviderStore(directory)
         self.callback_url = callback_url
         self.adapter: ChatGPTAdapter = adapter or ChatGPTHTTPAdapter()
+        self._token_refresh_lock = threading.Lock()
         self._clock = clock
         self._sleep = sleeper
         self._active_task_guard = active_task_guard
@@ -2239,6 +2240,12 @@ class ChatGPTProvider:
     def _access_token(
         self, *, minimum_lifetime_seconds: float = ACCESS_REFRESH_MARGIN_SECONDS
     ) -> str:
+        # One generation holds the store operation across its parallel map transports.
+        # Serialize token rotation inside that operation, while model requests stay parallel.
+        with self._token_refresh_lock:
+            return self._access_token_locked(minimum_lifetime_seconds=minimum_lifetime_seconds)
+
+    def _access_token_locked(self, *, minimum_lifetime_seconds: float) -> str:
         client_id, registration = self._active_registration()
         expires_at = registration.get("expires_at")
         refresh_token = registration.get("refresh_token")
