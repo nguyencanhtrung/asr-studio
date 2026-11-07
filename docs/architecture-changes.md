@@ -1542,3 +1542,25 @@ Nguồn: `src/asr_studio/notes_document.py`, `src/asr_studio/notes_pipeline.py`,
 `tests/test_notes_document.py`, `tests/test_notes_provider.py`,
 `tests/test_chatgpt_transport.py`, `tests/test_antigravity_provider.py`,
 `tests/test_omp_contract.py`.
+
+#### Bổ sung — một lượt audit nguồn cho notes ngắn
+
+Với transcript vừa ngân sách của đúng cấu hình provider/model đã biết, pipeline giữ lượt sinh
+bản nháp hiện có rồi thực hiện tối đa một lượt audit nguồn. Prompt audit chứa toàn bộ nguồn đã
+lọc và bản nháp, dùng nguồn làm bằng chứng duy nhất để loại bỏ khẳng định không có căn cứ và lặp
+ý giữa các nhóm, nhưng giữ mọi sự việc, cam kết, trạng thái cuối và điểm không chắc chắn có căn
+cứ. Audit không gọi lại chính nó. Nếu prompt nguồn đầy đủ không vừa ngân sách, pipeline trả bản
+nháp đã kiểm tra và ghi `source_audit.status=skipped` cùng lý do `prompt_budget` trong manifest.
+Model hoặc budget không thuộc cấu hình owner đã biết giữ hành vi cũ.
+
+Hợp đồng prompt tăng từ `notes-hierarchical-v10` lên `notes-hierarchical-v11`; schema công khai
+vẫn là phiên bản `1`.
+
+Phân loại transcript dài dùng span thời lượng tương đối `max(end_seconds) - min(start_seconds)`.
+Span lớn hơn 3.600 giây đi qua phân vùng theo giờ với overlap và fallback hợp nhất có giới hạn.
+Logic coalesce chỉ gộp bản ghi trùng chính xác trong cùng nhóm hoặc giữa `overview` và
+`key_topics`; các khác biệt về mức chắc chắn hoặc loại mục được giữ cho audit nguồn quyết định.
+
+Đây là thay đổi về đường kiểm tra chất lượng, không phải bằng chứng về chất lượng ngữ nghĩa,
+latency hoặc quota thực tế. Kiểm thử offline chỉ kiểm tra routing, payload, giới hạn, manifest và
+không gọi provider thật.

@@ -17,7 +17,7 @@ from asr_studio import notes_document as nd
 # The code a transport gives a response over its output cap.
 _OUTPUT_TOO_LARGE = "provider_output_too_large"
 _LOGGER = logging.getLogger(__name__)
-_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final"})
+_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit"})
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
 
@@ -551,9 +551,47 @@ def generate_notes_document(
             ),
             budget=single_budget,
         )
-        document = restore_final_document(document, stage="single")
-        progress("generating", 1, 1, "calls")
         coverage["chunks"][0]["provider_call_index"] = accepted_call_index
+        if single_budget.uses_token_estimate:
+            draft = document
+
+            def audit_prompt(invalid_output: str | None = None) -> str:
+                return nd.build_reduction_prompt(
+                    projected_snapshot,
+                    [draft],
+                    final=True,
+                    invalid_output=invalid_output,
+                    output_language=output_language,
+                    budget=single_budget,
+                    max_unit_size=max_unit_size,
+                    require_source=True,
+                    audit=True,
+                )
+
+            try:
+                source_audit_prompt = audit_prompt()
+            except nd.NotesDocumentError:
+                coverage["source_audit"] = {"status": "skipped", "reason": "prompt_budget"}
+            else:
+                progress("merging", 0, 1, "calls")
+                audited_document, audit_call_index = request_document(
+                    source_audit_prompt,
+                    projected_snapshot,
+                    max_output_bytes=nd.MAX_OUTPUT_BYTES,
+                    stage="audit",
+                    repair_prompt=audit_prompt,
+                    budget=single_budget,
+                )
+                document = audited_document
+                coverage["source_audit"] = {
+                    "status": "applied",
+                    "provider_call_index": audit_call_index,
+                }
+                progress("merging", 1, 1, "calls")
+        document = restore_final_document(
+            document, stage="audit" if single_budget.uses_token_estimate else "single"
+        )
+        progress("generating", 1, 1, "calls")
         return finish(document)
 
     prepared_chunks: list[tuple[dict[str, Any], str, Callable[[str], str]]] = []

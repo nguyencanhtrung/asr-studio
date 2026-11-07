@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v10"
+PROMPT_VERSION = "notes-hierarchical-v11"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -681,8 +681,7 @@ def _item_content_key(item: object) -> tuple[object, ...] | None:
     if not isinstance(item, dict) or not isinstance(item.get("text"), str):
         return None
     # Action metadata is part of the content. Missing fields in non-action sections are treated
-    # as null only so an action with no stated metadata can coalesce with an exact cross-section
-    # repeat; a stated owner/deadline never merges with a metadata-conflicting item.
+    # as null so same-section actions with identical content can coalesce safely.
     key = (
         item["text"],
         item.get("owner"),
@@ -696,8 +695,13 @@ def _item_content_key(item: object) -> tuple[object, ...] | None:
     return key
 
 
+def _sections_can_coalesce(first: str, second: str) -> bool:
+    """Return whether identical content can safely cross the two section boundaries."""
+    return first == second or {first, second} == {"overview", "key_topics"}
+
+
 def coalesce_exact_duplicate_items(document: object, *, max_unit_size: int = 1) -> object:
-    """Coalesce only exact item content, unioning citations without dropping details."""
+    """Coalesce exact content only within a category or compatible context categories."""
     if not isinstance(document, dict):
         return document
     try:
@@ -706,7 +710,6 @@ def coalesce_exact_duplicate_items(document: object, *, max_unit_size: int = 1) 
     except (NotesDocumentError, TypeError, ValueError, copy.Error):
         return document
 
-    # Prefer the semantically stronger section when an exact item appears in multiple sections.
     section_order = (
         "action_items",
         "decisions",
@@ -715,7 +718,7 @@ def coalesce_exact_duplicate_items(document: object, *, max_unit_size: int = 1) 
         "key_topics",
         "overview",
     )
-    kept: dict[tuple[object, ...], list[dict[str, Any]]] = {}
+    kept: dict[tuple[object, ...], list[tuple[str, dict[str, Any]]]] = {}
     for section in section_order:
         items = result.get(section)
         if not isinstance(items, list):
@@ -732,7 +735,9 @@ def coalesce_exact_duplicate_items(document: object, *, max_unit_size: int = 1) 
                 retained.append(item)
                 continue
             duplicate = None
-            for candidate in kept.get(key, []):
+            for candidate_section, candidate in kept.get(key, []):
+                if not _sections_can_coalesce(section, candidate_section):
+                    continue
                 candidate_refs = candidate["source_ids"]
                 merged = list(dict.fromkeys([*candidate_refs, *references]))
                 if len(merged) <= source_ref_limit:
@@ -740,7 +745,7 @@ def coalesce_exact_duplicate_items(document: object, *, max_unit_size: int = 1) 
                     break
             if duplicate is None:
                 retained.append(item)
-                kept.setdefault(key, []).append(item)
+                kept.setdefault(key, []).append((section, item))
                 continue
             candidate, merged = duplicate
             candidate["source_ids"] = merged
@@ -760,7 +765,7 @@ def drop_overlap_duplicates(
     overlap = set(overlap_ids)
     result = dict(document)
     previous_items = [
-        item
+        (section, item)
         for section, _ in SECTIONS
         for item in previous.get(section, [])
         if isinstance(item, dict)
@@ -773,7 +778,8 @@ def drop_overlap_duplicates(
                 isinstance(item, dict)
                 and _item_content_key(item) is not None
                 and any(
-                    _item_content_key(item) == _item_content_key(previous_item)
+                    _sections_can_coalesce(section, previous_section)
+                    and _item_content_key(item) == _item_content_key(previous_item)
                     and (
                         not item.get("source_ids")
                         and not previous_item.get("source_ids")
@@ -784,7 +790,7 @@ def drop_overlap_duplicates(
                             )
                         )
                     )
-                    for previous_item in previous_items
+                    for previous_section, previous_item in previous_items
                 )
             )
         ]
@@ -2016,7 +2022,7 @@ def plan_source(
 
 
 def _reduction_instructions(
-    *, final: bool, output_language: str = "en", source_aware: bool = False
+    *, final: bool, output_language: str = "en", source_aware: bool = False, audit: bool = False
 ) -> str:
     output_language = validate_output_language(output_language)
     if output_language == "en":
@@ -2109,6 +2115,27 @@ def _reduction_instructions(
                 "được trích dẫn, nếu không thì giữ nguyên sự không chắc chắn hoặc null. Không tự "
                 "khôi phục tên riêng hay quy trình miền ngoài nguồn.\n"
             )
+        if audit:
+            if output_language == "en":
+                instructions += (
+                    "This is one bounded source audit of one valid draft. Return the complete "
+                    "corrected JSON, not a review. Remove unsupported claims and semantic "
+                    "duplicates across sections. Keep every distinct source-supported fact, "
+                    "commitment, final state and uncertainty. Do not choose a confirmed "
+                    "decision, tentative confirmation, open question or action item from "
+                    "identical wording alone. Use explicit certainty and source chronology. "
+                    "Do not run another audit.\n"
+                )
+            else:
+                instructions += (
+                    "Đây là một lượt audit nguồn có giới hạn cho một bản nháp đã hợp lệ. Trả về "
+                    "toàn bộ JSON đã sửa, không trả về nhận xét. Xóa khẳng định không có căn cứ "
+                    "và ý trùng về nghĩa giữa các nhóm. Giữ mọi sự việc, cam kết, trạng thái cuối "
+                    "và điểm không chắc chắn có căn cứ từ nguồn. Không chọn quyết định đã xác "
+                    "nhận, đề xuất cần xác nhận, câu hỏi còn mở hoặc hành động chỉ vì câu chữ "
+                    "giống nhau. Dùng mức chắc chắn được nói rõ và thứ tự thời gian của nguồn. "
+                    "Không chạy audit thêm.\n"
+                )
     elif final:
         if output_language == "en":
             instructions += (
@@ -2185,11 +2212,12 @@ def _reduction_prompt(
     final: bool,
     output_language: str = "en",
     source_aware: bool = False,
+    audit: bool = False,
 ) -> str:
     payload = _reduction_payload(snapshot, documents, include_source=source_aware)
     return (
         _reduction_instructions(
-            final=final, output_language=output_language, source_aware=source_aware
+            final=final, output_language=output_language, source_aware=source_aware, audit=audit
         )
         + "SYNTHESIS_INPUT_JSON:\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
@@ -2205,8 +2233,10 @@ def build_reduction_prompt(
     output_language: str = "en",
     budget: NotesBudget | None = None,
     max_unit_size: int = 1,
+    require_source: bool = False,
+    audit: bool = False,
 ) -> str:
-    """Build a bounded chronological reduction request with an optional repair payload."""
+    """Build a bounded reduction request, optionally requiring a full-source audit payload."""
     output_language = validate_output_language(output_language)
     citation_scope = _prompt_citation_scope(snapshot, documents)
     allowed_source_ids = tuple(segment["id"] for segment in citation_scope["segments"])
@@ -2230,10 +2260,13 @@ def build_reduction_prompt(
                     final=True,
                     output_language=output_language,
                     source_aware=True,
+                    audit=audit,
                 ),
                 full_scope,
             )
         except NotesDocumentError:
+            if require_source:
+                raise
             # All raw source windows were already covered by the bounded map path; keep this
             # fallback explicit instead of pretending summaries are transcript evidence.
             pass

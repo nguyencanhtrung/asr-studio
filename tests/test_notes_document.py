@@ -877,6 +877,7 @@ def test_overlap_duplicates_drop_only_exact_repeats_of_the_previous_chunk():
         overview=[{"text": "Intro again", "source_ids": []}],
         confirmation_items=[
             {"text": "Maybe later", "source_ids": ["b"]},
+            {"text": "Ship Tuesday", "source_ids": ["a"]},
             {"text": "Budget", "source_ids": ["c"]},
         ],
         key_topics=[{"text": "Launch", "source_ids": ["a", "b"]}],
@@ -890,7 +891,10 @@ def test_overlap_duplicates_drop_only_exact_repeats_of_the_previous_chunk():
         "Ship Tuesday, Mai owns it",
     ]
     assert [item["text"] for item in result["overview"]] == ["Intro again"]
-    assert [item["text"] for item in result["confirmation_items"]] == ["Budget"]
+    assert [item["text"] for item in result["confirmation_items"]] == [
+        "Ship Tuesday",
+        "Budget",
+    ]
     assert [item["text"] for item in result["key_topics"]] == ["Launch"]
     assert current == before
     # Ids outside the overlap belong to the later chunk, so identical sets there are kept.
@@ -932,10 +936,27 @@ def test_exact_duplicate_coalescing_unions_refs_but_keeps_distinct_metadata_and_
         "Ship Tuesday",
         "Do not ship Tuesday",
     ]
-    assert result["decisions"][0]["source_ids"] == ["a", "b", "e"]
-    assert result["overview"] == []
+    assert result["decisions"][0]["source_ids"] == ["a", "b"]
+    assert result["overview"] == [{"text": "Ship Tuesday", "source_ids": ["e"]}]
     assert len(result["action_items"]) == 2
     assert {item["owner"] for item in result["action_items"]} == {"Mai", "Minh"}
+
+
+def test_exact_duplicate_coalescing_preserves_certainty_category_conflicts():
+    def notes(**sections):
+        return {"schema_version": 1, **{key: [] for key, _ in SECTIONS}, **sections}
+
+    document = notes(
+        decisions=[{"text": "Enable tracking", "source_ids": ["a"]}],
+        confirmation_items=[{"text": "Enable tracking", "source_ids": ["b"]}],
+        open_questions=[{"text": "Enable tracking", "source_ids": ["c"]}],
+    )
+
+    result = coalesce_exact_duplicate_items(document)
+
+    assert result["decisions"] == [{"text": "Enable tracking", "source_ids": ["a"]}]
+    assert result["confirmation_items"] == [{"text": "Enable tracking", "source_ids": ["b"]}]
+    assert result["open_questions"] == [{"text": "Enable tracking", "source_ids": ["c"]}]
 
 
 def test_retained_span_uses_relative_source_times_and_exact_hour_boundary(snapshot):
@@ -996,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v10"
+    assert PROMPT_VERSION == "notes-hierarchical-v11"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1016,6 +1037,24 @@ def test_source_aware_final_prompt_carries_sanitized_source_and_chronological_dr
     assert payload["summaries"][0]["source_order"] == {snapshot["segments"][0]["id"]: 0}
     assert "private/audio" not in prompt
     assert "Private title" not in prompt
+
+
+def test_source_audit_prompt_carries_full_source_and_one_draft(snapshot, document):
+    prompt = build_reduction_prompt(
+        snapshot,
+        [document],
+        final=True,
+        budget=notes_budget("chatgpt", "gpt-5.6-sol"),
+        require_source=True,
+        audit=True,
+    )
+    payload = json.loads(prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
+
+    assert payload["source"] == provider_source(snapshot)
+    assert payload["summaries"][0]["notes"] == document
+    assert "one bounded source audit" in prompt
+    assert "semantic duplicates across sections" in prompt
+    assert "Do not run another audit" in prompt
 
 
 def test_budgeted_single_pass_pins_the_full_completeness_clause_in_both_languages(snapshot):
