@@ -42,6 +42,16 @@ const els = {
   pendingActions: document.querySelector("#connection-pending-actions"),
   pendingCopy: document.querySelector("#connection-pending-copy"),
   cancelSignIn: document.querySelector("#connection-cancel-sign-in"),
+  callback: document.querySelector("#connection-callback"),
+  callbackForm: document.querySelector("#connection-callback-form"),
+  callbackInput: document.querySelector("#connection-callback-input"),
+  callbackSubmit: document.querySelector("#connection-callback-submit"),
+  registration: document.querySelector("#connection-registration"),
+  registrationTrigger: document.querySelector("#connection-registration-trigger"),
+  registrationConfirm: document.querySelector("#connection-registration-confirm"),
+  registrationName: document.querySelector("#connection-registration-name"),
+  registrationKeep: document.querySelector("#connection-registration-keep"),
+  registrationConfirmButton: document.querySelector("#connection-registration-confirm-button"),
   disconnect: document.querySelector("#connection-disconnect"),
   disconnectTrigger: document.querySelector("#connection-disconnect-trigger"),
   disconnectConfirm: document.querySelector("#connection-disconnect-confirm"),
@@ -128,6 +138,19 @@ export function renderSection(section, d, s) {
   if (section.disconnectConfirmButton) {
     setProp(section.disconnectConfirmButton, "disabled", view.disconnectDisabled);
     setProp(section.disconnectConfirmButton, "textContent", tr(view.disconnectLabel));
+  }
+  if (section.callback) {
+    setProp(section.callback, "hidden", !s.login);
+    setProp(section.callbackSubmit, "disabled", s.callbackPending || s.cancelling);
+    setProp(section.callbackInput, "disabled", s.callbackPending || s.cancelling);
+  }
+  if (section.registration) {
+    setProp(section.registration, "hidden", view.registrationHidden);
+    setProp(section.registrationConfirm, "hidden", !view.registrationConfirming);
+    setProp(section.registrationTrigger, "hidden", view.registrationConfirming);
+    setProp(section.registrationTrigger, "disabled", view.registrationDisabled);
+    setProp(section.registrationConfirmButton, "disabled", view.registrationDisabled);
+    setProp(section.registrationConfirmButton, "textContent", tr(view.registrationSubmitting && s.pending.recreate ? view.registrationSubmitting : view.registrationLabel));
   }
   return view;
 }
@@ -326,7 +349,17 @@ function render(state) {
   setProp(els.pendingActions, "hidden", view.pendingHidden);
   setProp(els.cancelSignIn, "disabled", view.cancelDisabled);
   if (s.ui) {
-    const focus = { "focus:sign-in": els.signIn, "focus:disconnect-confirm": els.disconnectConfirmButton, "focus:disconnect-trigger": els.disconnectTrigger }[s.ui];
+    if (s.ui.startsWith("clear-callback-input")) els.callbackInput.value = "";
+    if (s.ui === "focus:registration-name") els.registrationName.value = s.recreateName;
+    const focus = {
+      "focus:sign-in": els.signIn,
+      "focus:disconnect-confirm": els.disconnectConfirmButton,
+      "focus:disconnect-trigger": els.disconnectTrigger,
+      "focus:callback-input": els.callbackInput,
+      "focus:registration-name": els.registrationName,
+      "focus:registration-trigger": els.registrationTrigger,
+      "clear-callback-input:focus-message": els.message,
+    }[s.ui];
     if (focus) focus.focus();
     dispatch({ type: "provider/ui-handled", provider: CHATGPT.id });
   }
@@ -433,6 +466,13 @@ asrEls.select.addEventListener("change", () => dispatch({ type: "provider/asr-de
 const chatgpt = (action) => dispatch({ ...action, provider: CHATGPT.id });
 els.signIn.addEventListener("click", () => chatgpt({ type: "provider/login-requested" }));
 els.cancelSignIn.addEventListener("click", () => chatgpt({ type: "provider/login-cancel-requested" }));
+els.callbackForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  chatgpt({ type: "provider/login-callback-submitted", value: els.callbackInput.value });
+});
+els.registrationTrigger.addEventListener("click", () => chatgpt({ type: "provider/registration-recreate-confirm-toggled", open: true }));
+els.registrationKeep.addEventListener("click", () => chatgpt({ type: "provider/registration-recreate-confirm-toggled", open: false }));
+els.registrationConfirmButton.addEventListener("click", () => chatgpt({ type: "provider/registration-recreate-requested", displayName: els.registrationName.value }));
 els.retryPoll.addEventListener("click", () => chatgpt({ type: "provider/poll-retry-requested" }));
 els.modelSelect.addEventListener("change", () => chatgpt({ type: "provider/choice-edited", field: "model", value: els.modelSelect.value }));
 els.effortSelect.addEventListener("change", () => chatgpt({ type: "provider/choice-edited", field: "effort", value: els.effortSelect.value }));

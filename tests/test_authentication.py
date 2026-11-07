@@ -5,6 +5,7 @@ import json
 import pytest
 
 from asr_studio.auth import AuthStore
+from asr_studio.config import Settings
 from asr_studio.routes import FONT_FILES, WEB_DIR
 
 pytestmark = pytest.mark.anyio
@@ -70,6 +71,32 @@ async def test_fragment_token_exchange_sets_generation_bound_cookie(client, sett
     assert "Domain" not in cookie
     assert (await client.get("/")).status_code == 200
     assert (await client.get("/assets/shell.css")).status_code == 200
+
+
+def test_public_gui_origin_requires_exact_https_origin_and_separate_callback(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="https://gui.example.test:8443",
+        chatgpt_callback_url="http://127.0.0.1:8765/auth/chatgpt/callback",
+    )
+    assert settings.public_url == "https://gui.example.test:8443"
+    assert settings.origin == ("https", "gui.example.test", 8443)
+    assert settings.chatgpt_callback_url == "http://127.0.0.1:8765/auth/chatgpt/callback"
+
+    for public_url in (
+        "http://gui.example.test",
+        "https://gui.example.test/path",
+        "https://gui.example.test?query=1",
+        "https://user:pass@gui.example.test",
+        "https://*.example.test",
+    ):
+        with pytest.raises(ValueError):
+            Settings(tmp_path / "bad-data", tmp_path / "bad-auth", public_url=public_url)
+
+    loopback = Settings(tmp_path / "loop-data", tmp_path / "loop-auth")
+    assert loopback.public_url == "http://127.0.0.1:8765"
+    assert loopback.chatgpt_callback_url == "http://127.0.0.1:8765/auth/chatgpt/callback"
 
 
 async def test_invalid_token_and_invalid_request_never_echo_submitted_value(client):

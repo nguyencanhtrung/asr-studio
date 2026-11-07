@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 from collections.abc import AsyncIterator
 from html import escape as escape_html
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -86,6 +88,7 @@ FONT_FILES = frozenset(
 _AUDIO_CHUNK_SIZE = 1024 * 1024
 _UPLOAD_IDLE_TIMEOUT_SECONDS = 60
 _MEDIA_VALIDATION_CONCURRENCY = 2
+_CHATGPT_CALLBACK_BODY_BYTES = 16 * 1024
 _RangeResult = tuple[int, int] | Literal["ignore", "unsatisfiable"]
 
 
@@ -177,6 +180,52 @@ async def _json_object(
 ) -> dict[str, Any]:
     try:
         payload = await request.json()
+    except (UnicodeDecodeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_json", "message": "Provide a valid JSON object."},
+        ) from None
+    allowed = required | (optional or set())
+    if (
+        not isinstance(payload, dict)
+        or not required.issubset(payload)
+        or not set(payload).issubset(allowed)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_request", "message": "The JSON fields are invalid."},
+        )
+    return payload
+
+
+async def _bounded_json_object(
+    request: Request,
+    *,
+    required: set[str],
+    optional: set[str] | None = None,
+    max_bytes: int,
+) -> dict[str, Any]:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "request_too_large", "message": "The request body is too large."},
+            )
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "request_too_large", "message": "The request body is too large."},
+            )
+        body.extend(chunk)
+    try:
+        payload = json.loads(bytes(body))
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(
             status_code=400,
@@ -557,9 +606,50 @@ def install_routes(
     async def get_chatgpt_login(session_id: str) -> dict[str, Any]:
         return await provider_json(lambda: chatgpt_provider.login_session(session_id))
 
+    @app.post("/api/providers/chatgpt/login-sessions/{session_id}/input")
+    async def answer_chatgpt_login(session_id: str, request: Request) -> dict[str, Any]:
+        payload = await _bounded_json_object(
+            request,
+            required={"callback_url"},
+            max_bytes=_CHATGPT_CALLBACK_BODY_BYTES,
+        )
+        if not isinstance(payload["callback_url"], str):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_callback_url",
+                    "message": "Provide the ChatGPT callback URL from the browser.",
+                },
+            )
+        return await provider_json(
+            lambda: chatgpt_provider.submit_callback(session_id, payload["callback_url"])
+        )
+
     @app.delete("/api/providers/chatgpt/login-sessions/{session_id}")
     async def cancel_chatgpt_login(session_id: str) -> dict[str, Any]:
         return await provider_json(lambda: chatgpt_provider.cancel_login(session_id))
+
+    @app.post("/api/providers/chatgpt/registration/recreate", status_code=201)
+    async def recreate_chatgpt_registration(request: Request) -> dict[str, Any]:
+        payload = await _bounded_json_object(
+            request,
+            required=set(),
+            optional={"display_name"},
+            max_bytes=_CHATGPT_CALLBACK_BODY_BYTES,
+        )
+        if "display_name" in payload and not isinstance(payload["display_name"], str):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_registration_name",
+                    "message": "Choose a valid ChatGPT registration name.",
+                },
+            )
+        return await provider_json(
+            lambda: chatgpt_provider.recreate_registration(
+                display_name=payload.get("display_name", "ASR Studio")
+            )
+        )
 
     @app.get("/api/providers/chatgpt/models")
     async def list_chatgpt_models() -> dict[str, Any]:
@@ -1127,7 +1217,7 @@ def install_routes(
             key=SESSION_COOKIE,
             value=create_session_cookie(state),
             httponly=True,
-            secure=settings.cookie_secure,
+            secure=settings.cookie_secure or urlsplit(settings.public_url).scheme == "https",
             samesite="strict",
             path="/",
         )

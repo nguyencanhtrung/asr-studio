@@ -717,7 +717,7 @@
                 </div>
               </dl>
 
-              <p class="connection-message" id="connection-message" role="status" aria-live="polite"></p>
+              <p class="connection-message" id="connection-message" role="status" aria-live="polite" tabindex="-1"></p>
               <p class="connection-mutation-status" id="connection-mutation-reason" role="status" aria-live="polite" hidden></p>
               <div class="connection-error" id="connection-error" role="alert" hidden>
                 <span id="connection-error-message"></span>
@@ -730,6 +730,36 @@
               <div class="connection-pending-actions" id="connection-pending-actions" hidden>
                 <p id="connection-pending-copy" role="status" aria-live="polite">Đang chờ đăng nhập ChatGPT…</p>
                 <button class="secondary-button" id="connection-cancel-sign-in" type="button">Hủy đăng nhập</button>
+              </div>
+
+              <div class="connection-callback" id="connection-callback" hidden>
+                <p>
+                  Sau khi đăng nhập ChatGPT, nếu trang 127.0.0.1 không mở được, hãy sao chép toàn bộ địa chỉ trên thanh địa chỉ và dán vào đây để hoàn tất kết nối.
+                </p>
+                <form id="connection-callback-form" method="post">
+                  <div class="connection-field">
+                    <label for="connection-callback-input">URL callback sau khi đăng nhập ChatGPT</label>
+                    <textarea id="connection-callback-input" name="callback_url" rows="3" maxlength="16000" autocomplete="off" spellcheck="false" inputmode="url" required></textarea>
+                  </div>
+                  <button class="primary-button" id="connection-callback-submit" type="submit">Gửi URL callback</button>
+                </form>
+              </div>
+
+              <div class="connection-registration" id="connection-registration" hidden>
+                <button class="text-button connection-registration-trigger" id="connection-registration-trigger" type="button">Tạo lại đăng ký ChatGPT</button>
+                <div class="connection-registration-confirm" id="connection-registration-confirm" hidden>
+                  <p>
+                    Tên đăng ký được lưu tại ChatGPT. Thao tác này thu hồi quyền kết nối hiện tại và yêu cầu đăng nhập lại. Tên gợi ý cho đăng ký mới là ASR Studio; bạn có thể sửa trước khi cấp quyền.
+                  </p>
+                  <div class="connection-field">
+                    <label for="connection-registration-name">Tên đăng ký mới</label>
+                    <input id="connection-registration-name" name="registration_name" type="text" value="ASR Studio" maxlength="200" autocomplete="off" />
+                  </div>
+                  <div class="connection-registration-actions">
+                    <button class="secondary-button" id="connection-registration-keep" type="button">Giữ kết nối</button>
+                    <button class="primary-button" id="connection-registration-confirm-button" type="button">Thu hồi và đăng nhập lại</button>
+                  </div>
+                </div>
               </div>
 
               <div class="connection-disconnect" id="connection-disconnect" hidden>

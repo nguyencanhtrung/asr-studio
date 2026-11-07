@@ -532,6 +532,13 @@ Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không
 | Google có login | `login-input-submitted` (đã cắt khoảng trắng, không rỗng) | | `fetch login-input` |
 | Google | `login-input` ok | ô nhập xóa và đóng, áp phiên mới | |
 | Google | `login-input` lỗi | lỗi hiện ra, ô nhập giữ | |
+| ChatGPT có login | `login-callback-submitted` (chuỗi callback chỉ nằm trong action/effect) | `callbackPending`, tăng `callbackRequest`, xóa ô nhập qua one-shot UI action | `fetch POST /login-sessions/<id>/input` với JSON `{callback_url}`; không storage, URL query hoặc fetch URL |
+| ChatGPT có callback request | `callback` ok, đúng `loginGen` và `callbackRequest` | áp trạng thái phiên; kết thúc thì xóa login/storage và tải lại provider | `schedule poll-wait` nếu còn pending |
+| ChatGPT có callback request | `callback` lỗi hoặc reply cũ | giữ login; hết `callbackPending`, hiện lỗi không chứa URL, focus ô callback | không retry tự động |
+| ChatGPT connected/reconnect-required, không login | `registration-recreate-confirm-toggled` | mở/đóng xác nhận; mở thì gợi ý tên `ASR Studio` và focus tên | |
+| Xác nhận tạo lại | `registration-recreate-requested {displayName}` | `pending.recreate`; không xóa state local ở reducer | reserve popup, rồi `fetch POST /registration/recreate` JSON tên; backend chỉ xóa registration sau revoke đã xác nhận |
+| Đang tạo lại | `registration-recreate` trả phiên | `recreatingRegistration`, login mới; callback/poll dùng cùng generation rules | `open-window navigate`, `schedule poll-wait` |
+| Tạo lại lỗi hoặc popup bị chặn | lỗi, hết `pending.recreate`, xác nhận mở lại | giữ trạng thái hiển thị để thử lại | không mở lại registration âm thầm |
 | bất kỳ | kết quả poll, hủy với `loginGen` cũ | không đổi (gồm poll bay trước khi hủy) | |
 
 **Khôi phục sau tải lại** (`boot-restored` mang chuỗi sessionStorage thô):
@@ -545,6 +552,8 @@ Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không
 | không login | Google hết hạn | không đổi | xóa sessionStorage, không gọi mạng |
 
 Khác bản trước pha 2 (đầy đủ trong mục #123 của `architecture-changes.md`): Google cũng bỏ poll trả lời muộn sau hủy hoặc kết thúc (có `loginGen`) và tải trạng thái có `loadId`; bấm đăng nhập lặp bị bỏ; lỗi có câu riêng của nó (cửa sổ đã đóng, URL không an toàn) hiện câu đó ở cả hai ngôn ngữ; một dòng chữ giống hệt không ghi lại vào vùng `aria-live`; cuộn tới mục Google không bị hủy bởi lượt tải mới hơn.
+
+Callback remote là một effect nhập liệu có giới hạn, không phải một trạng thái dài hạn: reducer chỉ giữ cờ đang gửi và bộ đếm generation; sessionStorage chỉ giữ `id` và `expiresAt` như trước. View xóa textarea sau khi submit và đưa focus về đó khi server từ chối để người dùng dán lại. Không ghi callback vào lỗi, log hay URL của trang. Tạo lại registration là hành động riêng có xác nhận; ordinary sign-in tiếp tục gửi issued client hiện có và không thêm `agent_name_hint`.
 
 ### 11.7. Notes: tab Meeting notes
 
@@ -956,3 +965,5 @@ Mỗi view có store và runner riêng (phụ thuộc khác nhau), nên hai tin 
 **Ngoại lệ còn lại** (ADR 0010): `i18n.js` công bố `t` và `UI_LOCALE` chỉ-đọc, `theme.js` đặt theme trước lần vẽ đầu; cả hai là script thường vì phải chạy trước mọi module.
 
 Phản hồi hết phiên từ middleware (`401`, `detail: "Authentication required"`) dừng poll transcription/notes và chuyển tới `/access`; các lỗi 401 có code của provider giữ luồng khôi phục provider. Khi nhận thông báo giữa tab, history đọc cuộc họp chính thức rồi notes đọc một lần theo context mới; vẽ lại cùng object context không thêm request notes. Bản nháp và pending request vẫn được giữ trong state khi phát effect điều hướng.
+
+Callback ChatGPT: khi hủy, bỏ request callback đang chạy và vô hiệu hóa phản hồi cũ; nếu hủy lỗi, cho phép gửi URL mới. Đóng Settings xóa ô callback nhưng giữ phiên đăng nhập để tiếp tục. Kết thúc phiên xóa ô nhập và focus thông báo trạng thái. Thao tác tạo lại registration trả trạng thái bắt đầu, chỉ callback thành công mới xác nhận registration mới.

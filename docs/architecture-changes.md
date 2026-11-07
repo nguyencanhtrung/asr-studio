@@ -1307,3 +1307,46 @@ Nguồn: `tests/test_media.py`, `tests/test_browser_layout_details.py`; fixture 
 MP3/raw AAC không dùng duration ước lượng để phát hiện phần thiếu; decode có giới hạn vẫn bảo vệ policy thời lượng. Loại phương án nới dung sai toàn bộ vì sẽ làm yếu kiểm tra M4A bị cắt. Scroll padding giữ nguyên cách cuộn/sidebar thay vì che bớt nội dung hoặc đổi thứ tự keyboard. Không có follow-up bắt buộc.
 
 Issue #85, #86. Tag: kiến trúc, accessibility. Tài liệu đích: `docs/backend-contract.md`, `docs/frontend-design.md`.
+
+### #177 — callback ChatGPT từ GUI remote và tạo lại registration ASR Studio
+
+#### Vấn đề và nguyên nhân
+
+Khi ASR Studio chạy trên một máy nhưng trình duyệt ở máy khác, callback OAuth
+`http://127.0.0.1/...` trỏ về máy trình duyệt và không thể hoàn tất phiên trên server. Các
+registration ChatGPT cũ cũng tiếp tục mang metadata tên cũ dù sản phẩm đã dùng tên ASR Studio.
+
+#### Thay đổi thiết kế
+
+GUI có ô dán toàn bộ callback URL trong phiên đăng nhập ChatGPT. Endpoint đã xác thực nhận URL
+chỉ trong POST JSON, giới hạn body bằng cách đọc stream trước khi parse JSON, kiểm tra đúng callback
+HTTP `127.0.0.1` đã cấu hình và session được gán, rồi dùng lại toàn bộ state/PKCE/nonce/client-id/
+expiry/one-time checks. URL không được fetch, lưu trong reducer/browser storage, ghi vào lỗi hay log.
+Callback GET loopback hiện có vẫn giữ nguyên.
+
+`ASR_PUBLIC_URL` giờ cho phép loopback HTTP/HTTPS như trước hoặc một HTTPS public origin được cấu
+hình chính xác; public HTTP, credentials, path, query, fragment và wildcard bị từ chối. Host và
+Origin vẫn khớp tuyệt đối, cookie được ép `Secure` khi GUI là HTTPS, Compose vẫn bind loopback và
+không tin forwarded headers. Callback OAuth là cấu hình riêng, luôn HTTP `127.0.0.1`.
+
+Registration động mới gợi ý `ASR Studio`. Đăng nhập bình thường vẫn reuse issued registration.
+Thao tác GUI tạo registration mới yêu cầu xác nhận, thu hồi quyền kết nối cũ dưới operation lock,
+bảo toàn host ID và chỉ xóa state cũ sau khi adapter revoke xác nhận; nếu revoke thất bại,
+connection và registration cũ được giữ nguyên. Sau khi thu hồi thành công, connection version tăng
+và lựa chọn notes provider cũ bị vô hiệu hóa. URL sai mã hóa hoặc state không phải ASCII bị từ chối
+trước khi claim session. GUI bỏ effect callback và phản hồi cũ khi hủy; nếu yêu cầu hủy lỗi,
+người dùng vẫn gửi lại được URL. Đóng Settings xóa ô nhập; kết thúc đăng nhập focus thông báo
+trạng thái. Khi server xác nhận thu hồi, GUI cập nhật trạng thái chưa kết nối ngay và báo lại
+trạng thái đã kết nối sau callback. Phản hồi tạo lại chỉ báo bắt đầu lượt cấp quyền mới, không
+báo registration mới đã hoàn tất trước consent.
+
+#### Đánh đổi, phương án đã loại và follow-up
+
+Public HTTPS origin tăng khả năng truy cập qua Internet nhưng không mở rộng bind hoặc tin host tùy
+ý; reverse proxy phải được quản trị riêng. Callback thủ công giúp GUI remote mà không biến callback
+thành public redirect, đổi lại người dùng phải dán URL sau khi cấp quyền. Không có measurement
+performance được thu thập và thay đổi này không tuyên bố một measurement. Kiểm thử OAuth dùng
+adapter giả lập; test giả không chứng minh consent thật, tên hiển thị thật hoặc entitlement thật.
+
+Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `docs/user-guide.md`,
+`docs/frontend-design.md`, `src/asr_studio/config.py`.

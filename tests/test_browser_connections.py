@@ -112,6 +112,9 @@ class MockProviderApi:
         self.remote_revocation_confirmed = False
         self.sessions: dict[str, dict[str, str]] = {}
         self.session_count = 0
+        self.callback_urls: list[str] = []
+        self.callback_error: str | None = None
+        self.registration_names: list[str] = []
         self.antigravity_status = "disconnected"
         self.antigravity_session = None
         self.antigravity_polls = ["pending", "connected"]
@@ -329,6 +332,61 @@ class MockProviderApi:
             if pending_sessions:
                 started["replaced_previous"] = True
             self.fulfill(route, started)
+            return
+        if method == "POST" and path == "/api/providers/chatgpt/registration/recreate":
+            self.registration_names.append(body["display_name"])
+            self.status = "disconnected"
+            self.session_count += 1
+            session_id = f"test-session-{self.session_count}"
+            expires = datetime.now(UTC) + timedelta(seconds=600)
+            self.sessions[session_id] = {"status": "pending", "expires_at": expires.isoformat()}
+            self.fulfill(
+                route,
+                {
+                    "id": session_id,
+                    "status": "pending",
+                    "authorization_url": "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&state=ui-recreate-state",
+                    "expires_at": expires.isoformat(),
+                    "registration_recreation_started": True,
+                },
+                status=201,
+            )
+            return
+        if (
+            method == "POST"
+            and path.startswith("/api/providers/chatgpt/login-sessions/")
+            and path.endswith("/input")
+        ):
+            session_id = path.rsplit("/", 2)[-2]
+            session = self.sessions.get(session_id)
+            if not session:
+                self.fulfill(
+                    route,
+                    {
+                        "detail": {
+                            "code": "SESSION_NOT_FOUND",
+                            "message": "Không tìm thấy phiên đăng nhập.",
+                        }
+                    },
+                    status=404,
+                )
+                return
+            if self.callback_error:
+                self.fulfill(route, {"detail": {"code": self.callback_error}}, status=400)
+                return
+            self.callback_urls.append(body["callback_url"])
+            session["status"] = "connected"
+            self.status = "connected"
+            self.preferences["provider"] = "chatgpt"
+            self.fulfill(
+                route,
+                {
+                    "id": session_id,
+                    "status": "connected",
+                    "expires_at": session["expires_at"],
+                    "error": None,
+                },
+            )
             return
         if path.startswith("/api/providers/chatgpt/login-sessions/"):
             session_id = path.rsplit("/", 1)[-1]
@@ -610,6 +668,71 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
         method == "DELETE" and path == "/api/providers/chatgpt/connection"
         for method, path, _ in api.calls
     )
+    context.close()
+
+
+@pytest.mark.parametrize("language", ["vi", "en"])
+def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
+    browser_runtime, language
+):
+    live, browser = browser_runtime
+    api = MockProviderApi()
+    api.poll_statuses = []
+    context, page, _ = signed_in_page(
+        browser, live, api=api, viewport={"width": 1280, "height": 900}
+    )
+    if language == "en":
+        page.evaluate("localStorage.setItem('asr-studio:lang', 'en')")
+        page.reload(wait_until="domcontentloaded")
+    open_connection_dialog(page)
+
+    page.get_by_role("button", name="Continue with ChatGPT").click()
+    expect(page.locator("#connection-callback")).to_be_visible()
+    page.locator("#connection-callback-input").fill("unfinished callback")
+    page.locator("#connections-close").click()
+    open_connection_dialog(page)
+    expect(page.locator("#connection-callback-input")).to_have_value("")
+    api.callback_error = "invalid_callback_url"
+    page.locator("#connection-callback-input").fill("invalid callback")
+    page.locator("#connection-callback-submit").click()
+    expect(page.locator("#connection-error")).to_be_visible()
+    expect(page.locator("#connection-error")).to_have_attribute("data-code", "invalid_callback_url")
+    expect(page.locator("#connection-status")).to_have_text(
+        "Chưa kết nối" if language == "vi" else "Not connected"
+    )
+    assert page.evaluate("document.activeElement.id") == "connection-callback-input"
+    api.callback_error = None
+    pasted = "http://127.0.0.1:8765/auth/chatgpt/callback?state=ui-test-state&code=fake-code&client_id=oaiapp_test-123456"
+    page.locator("#connection-callback-input").fill(pasted)
+    page.locator("#connection-callback-submit").click()
+    expect(page.locator("#connection-status")).to_have_text(
+        "Đã kết nối" if language == "vi" else "Connected"
+    )
+    assert page.evaluate("document.activeElement.id") == "connection-message"
+    expect(page.locator("#connection-callback-input")).to_have_value("")
+    assert api.callback_urls == [pasted]
+    assert pasted not in (page.evaluate("sessionStorage.getItem('asr.chatgpt.pendingLogin')") or "")
+
+    page.locator("#connection-registration-trigger").click()
+    expect(page.locator("#connection-registration-confirm")).to_be_visible()
+    page.locator("#connection-registration-name").fill("My ASR Studio")
+    expect(page.locator("#connection-registration-confirm-button")).to_have_text(
+        "Thu hồi và đăng nhập lại" if language == "vi" else "Revoke and sign in again"
+    )
+    page.locator("#connection-registration-confirm-button").click()
+    expect(page.locator("#connection-callback")).to_be_visible()
+    expect(page.locator("#connection-status")).to_have_text(
+        "Chưa kết nối" if language == "vi" else "Not connected"
+    )
+    second = "http://127.0.0.1:8765/auth/chatgpt/callback?state=ui-recreate-state&code=fake-code-2&client_id=oaiapp_test-123456"
+    page.locator("#connection-callback-input").fill(second)
+    page.locator("#connection-callback-submit").click()
+    expect(page.locator("#connection-status")).to_have_text(
+        "Đã kết nối" if language == "vi" else "Connected"
+    )
+    assert page.evaluate("document.activeElement.id") == "connection-message"
+    assert api.registration_names == ["My ASR Studio"]
+    assert api.callback_urls == [pasted, second]
     context.close()
 
 

@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fake_chatgpt import FakeChatGPTAdapter
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncByteStream, AsyncClient
 
 from asr_studio.app import create_app
 
@@ -315,3 +315,72 @@ async def test_unconfigured_https_callback_rejects_untrusted_host(tmp_path):
         )
     assert response.status_code == 400
     assert response.text == "Invalid host"
+
+
+class OversizedJsonStream(AsyncByteStream):
+    async def __aiter__(self):
+        yield b"{" + b'"callback_url":"' + (b"x" * (16 * 1024)) + b'"}'
+
+
+async def test_public_https_origin_imports_fake_callback_and_keeps_callback_loopback(tmp_path):
+    from asr_studio.config import Settings
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="https://gui.example.test",
+        chatgpt_callback_url="http://127.0.0.1:8765/auth/chatgpt/callback",
+    )
+    adapter = FakeChatGPTAdapter()
+    app = create_app(settings, chatgpt_adapter=adapter)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as client,
+    ):
+        session = await client.post(
+            "/api/access/session",
+            headers={"Origin": settings.public_url},
+            json={"token": app.state.auth_store.load().token},
+        )
+        assert session.status_code == 204
+        assert "Secure" in session.headers["set-cookie"]
+        started = await client.post(
+            "/api/providers/chatgpt/login-sessions",
+            headers={"Origin": settings.public_url},
+            json={},
+        )
+        assert started.status_code == 201
+        auth_query = parse_qs(urlsplit(started.json()["authorization_url"]).query)
+        pasted = (
+            "http://127.0.0.1:8765/auth/chatgpt/callback?"
+            f"state={auth_query['state'][0]}&code=one-time-code&client_id=oaiapp_test-123456"
+        )
+        imported = await client.post(
+            f"/api/providers/chatgpt/login-sessions/{started.json()['id']}/input",
+            headers={"Origin": settings.public_url},
+            json={"callback_url": pasted},
+        )
+        assert imported.status_code == 200
+        assert imported.json()["status"] == "connected"
+        assert pasted not in imported.text
+        assert adapter.exchange_calls[0]["code"] == "one-time-code"
+
+        wrong_host = await client.post(
+            "/api/providers/chatgpt/login-sessions/not-a-session/input",
+            headers={"Host": "evil.example", "Origin": settings.public_url},
+            json={"callback_url": pasted},
+        )
+        assert wrong_host.status_code == 400
+        wrong_origin = await client.post(
+            "/api/providers/chatgpt/login-sessions/not-a-session/input",
+            headers={"Origin": "https://evil.example"},
+            json={"callback_url": pasted},
+        )
+        assert wrong_origin.status_code == 403
+
+        oversized = await client.post(
+            "/api/providers/chatgpt/login-sessions/not-a-session/input",
+            headers={"Origin": settings.public_url, "Content-Type": "application/json"},
+            content=OversizedJsonStream(),
+        )
+        assert oversized.status_code == 413
