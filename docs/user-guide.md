@@ -151,6 +151,61 @@ report to the output directory.
   status `failed` with code `provider_unavailable`, no change to saved notes, and no outbound
   calls.
 
+#### Egress check
+
+Use `--check-egress` for the first real transcription when you need a metadata-only check while
+the app and worker have network access:
+
+```sh
+./scripts/offline-smoke.py \
+  --image "$ASR_IMAGE" \
+  --models "$ASR_MODEL_HOST_PATH" \
+  --audio ./authorized-two-voice-long.wav \
+  --output /tmp/asr-egress-smoke-evidence \
+  --mode offline \
+  --check-egress
+```
+
+The egress path accepts a WAV from 2 to 1800 seconds and keeps the existing 25 MiB byte limit. The
+guard requires more than 8 seconds between the first and last actual `diarizing` API observations.
+Late `complete` polls and cleanup time do not increase this lower-bound measurement. Use a longer
+authorized recording when the observed interval is too short. These limits and the acceptance
+requirements are tracked in [issue #92](https://github.com/nguyencanhtrung/asr-studio/issues/92).
+
+The smoke starts one disposable observer for `app` and one for `worker`. Each observer shares only
+the target container's network and PID namespaces. It uses a root UID with `NET_RAW`, `SYS_PTRACE`
+and `DAC_READ_SEARCH` after dropping all other capabilities. It does not use privileged mode, host
+PID, or host filesystem mounts. The observer reads the shared `/proc` namespace to map socket
+inodes to process metadata. The approved proc access means this helper must not be described as
+unable to read target files exposed through `/proc`.
+
+The policy records IP, port, exact owned-stack or resolver name, SNI, direction and process
+metadata. It never records packet payloads. The external allowlist is empty for this smoke because
+the run makes no provider request. Loopback, the verified app/worker addresses, the exact resolver
+addresses and exact `app`, `worker` and `localhost` names are internal. A Docker DNS query is
+identified by the verified resolver IP even when its destination port was translated before
+capture; the response from source port 53 is kept as inbound UDP without a guessed name. Incoming
+client traffic and app responses on the app listener are not treated as initiated egress. Worker
+incoming traffic still has to match an exact owned or resolver endpoint. Every other TCP or UDP
+endpoint, including unowned private addresses and `mobile.events.data.microsoft.com`, fails the
+check.
+
+Before the task, each observer must see both sides of a known `app:8765` connection: a packet and
+a socket record with a non-null process PID. The observer queries AF_PACKET drop statistics and
+fails closed on a drop, malformed evidence or helper failure. TLS inspection is limited to a
+ClientHello SNI when the handshake is visible. Encrypted payloads, later TLS names and certificate
+content are not inspected.
+
+At shutdown the helper drains queued packets and sends a final capture marker while it is still
+running. The controller acknowledges that marker before the helper exits to confirm it consumed
+all preceding metadata. Missing acknowledgement, an early stop or
+missing final health evidence fails the smoke. Every signal or forced cleanup first verifies the
+helper's project ownership labels.
+
+Socket samples omit `TIME_WAIT` rows, which have no owning process; packet observation retains
+their connection attempts. Reader-size or queue failures remain fatal and keep their specific
+reason even if cleanup also fails.
+
 ### Troubleshooting
 
 | Message            | Check                                                               |

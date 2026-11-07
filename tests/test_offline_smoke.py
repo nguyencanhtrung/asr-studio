@@ -626,6 +626,69 @@ def test_input_validation_requires_prepared_models_and_short_local_wav(tmp_path)
     )
 
 
+@pytest.mark.parametrize(
+    ("check_egress", "duration", "accepted"),
+    [
+        (False, 90, True),
+        (False, 91, False),
+        (True, 1200, True),
+        (True, 1800, True),
+        (True, 1801, False),
+    ],
+)
+def test_egress_long_workload_preserves_normal_duration_limit(
+    tmp_path, check_egress, duration, accepted
+):
+    models = tmp_path / "models"
+    _write_prepared_models(models)
+    audio = tmp_path / "duration.wav"
+    with wave.open(str(audio), "wb") as recording:
+        recording.setnchannels(1)
+        recording.setsampwidth(1)
+        recording.setframerate(8000)
+        recording.writeframes(bytes(duration * 8000))
+    options = offline_smoke.SmokeOptions(
+        image="asr-studio:local",
+        models=models,
+        audio=audio,
+        output=tmp_path / "output",
+        mode="offline",
+        project_prefix="asr-offline-smoke",
+        task_timeout=60,
+        startup_timeout=30,
+        check_egress=check_egress,
+    )
+
+    if accepted:
+        assert offline_smoke.validate_inputs(options)[2] == duration * 1000
+    else:
+        with pytest.raises(offline_smoke.SmokeFailure, match="seconds long"):
+            offline_smoke.validate_inputs(options)
+
+
+@pytest.mark.parametrize("check_egress", [False, True])
+def test_egress_mode_preserves_the_input_byte_limit(tmp_path, monkeypatch, check_egress):
+    models = tmp_path / "models"
+    _write_prepared_models(models)
+    audio = tmp_path / "synthetic.wav"
+    _write_short_wav(audio)
+    monkeypatch.setattr(offline_smoke, "MAX_AUDIO_BYTES", audio.stat().st_size - 1)
+    options = offline_smoke.SmokeOptions(
+        image="asr-studio:local",
+        models=models,
+        audio=audio,
+        output=tmp_path / "output",
+        mode="offline",
+        project_prefix="asr-offline-smoke",
+        task_timeout=60,
+        startup_timeout=30,
+        check_egress=check_egress,
+    )
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="25 MiB"):
+        offline_smoke.validate_inputs(options)
+
+
 def test_pull_mode_rejects_nonpublic_registry_reference(tmp_path):
     options = offline_smoke.SmokeOptions(
         image="registry.example.invalid/asr-studio:v0.1.0-rc.1",
@@ -938,3 +1001,356 @@ def test_offline_notes_outcome_accepts_a_failed_provider_unavailable_task(tmp_pa
 def test_offline_notes_outcome_rejects_any_other_result(tmp_path, after, providers, message):
     with pytest.raises(offline_smoke.SmokeFailure, match=message):
         _offline_outcome(tmp_path, after, providers)
+
+
+def _egress_observer(tmp_path, service="worker"):
+    policy = offline_smoke.egress_observer.CapturePolicy(
+        service=service,
+        local_ips=frozenset({"10.0.0.3"}),
+        owned_ips=frozenset({"10.0.0.2", "10.0.0.3"}),
+        resolver_ips=frozenset({"127.0.0.11"}),
+        allowed_dns_names=frozenset({"app", "worker", "localhost"}),
+    )
+    return offline_smoke.EgressObserverProcess(
+        image="asr-studio:issue92-preflight",
+        project="asr-offline-smoke-test",
+        service=service,
+        container_id="a" * 12,
+        environment={},
+        log=lambda _message: None,
+        policy=policy,
+    )
+
+
+@pytest.mark.parametrize(
+    ("last_diarizing", "expected"),
+    [(12.0, 8.0), (12.1, 8.1)],
+    ids=["exact-boundary", "over-boundary"],
+)
+def test_egress_stage_uses_first_to_last_diarizing_observation_lower_bound(
+    monkeypatch, tmp_path, last_diarizing, expected
+):
+    observer = _egress_observer(tmp_path)
+    clock = iter((0.0, 4.0, last_diarizing, 40.0, 90.0))
+    monkeypatch.setattr(offline_smoke.time, "monotonic", lambda: next(clock))
+
+    observer.begin_task()
+    observer.record_task_stage("diarizing")
+    observer.record_task_stage("diarizing")
+    observer.record_task_stage("complete")
+    observer.finish_task()
+
+    assert observer.diarization_stage_seconds() == pytest.approx(expected)
+    measured = observer.diarization_stage_seconds()
+    if expected == 8.0:
+        assert measured <= 8.0
+    else:
+        assert measured > 8.0
+
+
+def test_egress_selftest_rejects_packet_only_or_unknown_socket_owner(tmp_path):
+    observer = _egress_observer(tmp_path)
+    observer.configure_selftest({"10.0.0.2"})
+    observer.ready = True
+    observer.stopped = True
+    observer._handle_event(
+        {
+            "type": "sample",
+            "at": 1.0,
+            "connections": [
+                {
+                    "protocol": "tcp",
+                    "local_ip": "10.0.0.3",
+                    "local_port": 41000,
+                    "remote_ip": "10.0.0.2",
+                    "remote_port": 8765,
+                    "direction": "outbound",
+                    "process": {
+                        "pid": None,
+                        "comm": "unknown",
+                        "executable": "unknown",
+                        "role": "unknown",
+                    },
+                }
+            ],
+            "dropped": 0,
+        }
+    )
+    observer._handle_event(
+        {
+            "type": "packet",
+            "at": 1.0,
+            "protocol": "tcp",
+            "direction": "outbound",
+            "local_ip": "10.0.0.3",
+            "local_port": 41000,
+            "remote_ip": "10.0.0.2",
+            "remote_port": 8765,
+            "kind": "syn",
+        }
+    )
+
+    assert observer.selftest_packet_seen is True
+    assert observer.selftest_socket_seen is False
+    with pytest.raises(offline_smoke.SmokeFailure, match="known-connection selftest"):
+        observer.validate_task()
+
+
+def test_egress_selftest_requires_non_null_socket_owner_pid(tmp_path):
+    observer = _egress_observer(tmp_path)
+    observer.configure_selftest({"10.0.0.2"})
+    observer._handle_event(
+        {
+            "type": "sample",
+            "at": 1.0,
+            "connections": [
+                {
+                    "protocol": "tcp",
+                    "local_ip": "10.0.0.3",
+                    "local_port": 41000,
+                    "remote_ip": "10.0.0.2",
+                    "remote_port": 8765,
+                    "direction": "outbound",
+                    "process": {
+                        "pid": 123,
+                        "comm": "python",
+                        "executable": "python",
+                        "role": "unknown",
+                    },
+                }
+            ],
+            "dropped": 0,
+        }
+    )
+
+    assert observer.selftest_socket_seen is True
+
+
+def test_egress_observer_poll_fails_when_helper_dies_before_task(tmp_path):
+    class DeadProcess:
+        def poll(self):
+            return 17
+
+    observer = _egress_observer(tmp_path)
+    observer.process = DeadProcess()
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="exited before the task ended"):
+        observer.poll()
+
+
+def test_egress_observer_start_reports_missing_helper_without_installing_anything(
+    monkeypatch, tmp_path
+):
+    observer = _egress_observer(tmp_path)
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("docker unavailable")
+
+    monkeypatch.setattr(offline_smoke.subprocess, "Popen", unavailable)
+    with pytest.raises(offline_smoke.SmokeFailure, match="capability is unavailable"):
+        observer.start()
+
+
+def test_egress_cleanup_reports_helper_stop_failure_and_drops_reference(tmp_path):
+    harness = object.__new__(offline_smoke.SmokeHarness)
+    harness.egress_task_active = True
+
+    class BrokenObserver:
+        def stop(self):
+            raise offline_smoke.SmokeFailure("helper cleanup failed")
+
+    harness.egress_observers = {"worker": BrokenObserver()}
+    with pytest.raises(offline_smoke.SmokeFailure, match="helper cleanup failed"):
+        harness._stop_egress_observers()
+    assert harness.egress_observers == {}
+
+
+def test_egress_observer_stop_drains_final_event_after_process_exit(monkeypatch, tmp_path):
+    observer = _egress_observer(tmp_path)
+
+    class ExitedProcess:
+        returncode = 0
+
+        def __init__(self):
+            self.poll_count = 0
+
+        def poll(self):
+            self.poll_count += 1
+            if self.poll_count == 2:
+                observer.events.put(b'{"type":"stopped","at":1.0}\n')
+            return 0
+
+    observer.process = ExitedProcess()
+    monkeypatch.setattr(
+        offline_smoke.subprocess,
+        "run",
+        lambda *args, **kwargs: offline_smoke.subprocess.CompletedProcess(args[0], 0),
+    )
+
+    observer.stop()
+
+    assert observer.stopped is True
+
+
+def test_capture_shutdown_is_acknowledged_only_after_the_barrier(monkeypatch, tmp_path):
+    observer = _egress_observer(tmp_path)
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    observer.process = Process()
+    commands = []
+
+    def control(action, signal):
+        commands.append((action, signal))
+        if signal == "--signal=SIGTERM":
+            observer.events.put(b'{"type":"stopped","at":1.0}\n')
+        else:
+            assert observer.stopped
+            assert signal == "--signal=SIGUSR1"
+            observer.process.returncode = 0
+            observer.events.put(None)
+        return True
+
+    monkeypatch.setattr(observer, "_control_owned_helper", control)
+
+    observer.stop()
+
+    assert commands == [("kill", "--signal=SIGTERM"), ("kill", "--signal=SIGUSR1")]
+    assert observer.stdout_done
+
+
+def test_clean_exit_without_capture_barrier_still_fails(monkeypatch, tmp_path):
+    observer = _egress_observer(tmp_path)
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    observer.process = Process()
+    commands = []
+
+    def control(action, signal):
+        commands.append((action, signal))
+        observer.process.returncode = 0
+        observer.events.put(None)
+        return True
+
+    monkeypatch.setattr(observer, "_control_owned_helper", control)
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="before its final capture marker"):
+        observer.stop()
+
+    assert commands == [("kill", "--signal=SIGTERM")]
+
+
+@pytest.mark.parametrize("stopping", [False, True])
+def test_capture_cannot_stop_before_the_task_finishes(tmp_path, stopping):
+    observer = _egress_observer(tmp_path)
+    observer.stopping = stopping
+    observer.task_finished_at = 10.0
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="before the task ended"):
+        observer._handle_event({"type": "stopped", "at": 9.0})
+
+
+def test_helper_control_refuses_foreign_ownership_labels(monkeypatch, tmp_path):
+    observer = _egress_observer(tmp_path)
+    commands = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return offline_smoke.subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps({"com.asr.offline-smoke.project": "someone-else"})
+        )
+
+    monkeypatch.setattr(offline_smoke.subprocess, "run", run)
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="Refusing to control an unowned"):
+        observer._control_owned_helper("rm", "-f")
+
+    assert len(commands) == 1
+    assert commands[0][:3] == ["docker", "container", "inspect"]
+
+
+def test_egress_metadata_covers_all_assigned_ipv4_and_ipv6_addresses(monkeypatch):
+    harness = object.__new__(offline_smoke.SmokeHarness)
+    harness.project = "asr-offline-smoke-test"
+    metadata = {
+        "Config": {"Labels": {"com.docker.compose.project": harness.project}},
+        "State": {"Status": "running", "Pid": 123},
+        "NetworkSettings": {
+            "Networks": {
+                "default": {"IPAddress": "10.0.0.2", "GlobalIPv6Address": "fd00::2"},
+                "second": {"IPAddress": "10.1.0.2"},
+            }
+        },
+    }
+    monkeypatch.setattr(
+        harness,
+        "compose",
+        lambda *_args, **_kwargs: offline_smoke.subprocess.CompletedProcess([], 0, stdout="a" * 64),
+    )
+    monkeypatch.setattr(
+        harness,
+        "run_command",
+        lambda *_args, **_kwargs: offline_smoke.subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps([metadata])
+        ),
+    )
+    monkeypatch.setattr(
+        harness, "container_python", lambda *_args, **_kwargs: {"nameservers": ["127.0.0.11"]}
+    )
+
+    result = harness._egress_container_metadata("worker")
+
+    assert set(result["ips"]) == {"10.0.0.2", "fd00::2", "10.1.0.2"}
+
+
+def test_reader_bound_failure_keeps_its_specific_reason(tmp_path):
+    observer = _egress_observer(tmp_path)
+
+    class Process:
+        stdout = io.BytesIO(bytes(offline_smoke.egress_observer.MAX_EVENT_LINE_BYTES + 1) + b"\n")
+
+        def poll(self):
+            return None
+
+    observer.process = Process()
+    observer._queue_stdout()
+
+    with pytest.raises(offline_smoke.SmokeFailure, match="output line exceeded the bound"):
+        observer.poll()
+
+
+@pytest.mark.parametrize("task_fails", [False, True])
+def test_transcription_failure_is_not_masked_by_observer_cleanup(monkeypatch, task_fails):
+    harness = object.__new__(offline_smoke.SmokeHarness)
+    harness.options = type("Options", (), {"check_egress": True})()
+    messages = []
+    primary = offline_smoke.SmokeFailure("primary capture failure")
+    secondary = offline_smoke.SmokeFailure("secondary cleanup failure")
+    monkeypatch.setattr(harness, "_start_egress_check", lambda: None)
+    monkeypatch.setattr(harness, "log", messages.append)
+
+    def transcribe(*_args):
+        if task_fails:
+            raise primary
+        return {"generation": {}}
+
+    def cleanup():
+        raise secondary
+
+    monkeypatch.setattr(harness, "_start_transcription", transcribe)
+    monkeypatch.setattr(harness, "_finish_egress_check", cleanup)
+
+    with pytest.raises(offline_smoke.SmokeFailure) as error:
+        harness._transcribe_with_egress(object(), "meeting", "request")
+
+    assert error.value is (primary if task_fails else secondary)
+    assert bool(messages) is task_fails

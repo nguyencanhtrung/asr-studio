@@ -14,8 +14,11 @@ import argparse
 import contextlib
 import hashlib
 import http.cookiejar
+import importlib.util
 import json
+import math
 import os
+import queue
 import re
 import secrets
 import select
@@ -48,6 +51,13 @@ MAX_STDERR_DIAGNOSTIC_CHARS = 1200
 OFFLINE_NOTES_STATUS_TEXT = "tạm thời không khả dụng"
 OFFLINE_NOTES_TIMEOUT_MS = 120_000
 MIN_AUDIO_SECONDS = 2
+MAX_AUDIO_SECONDS = 90
+EGRESS_MAX_AUDIO_SECONDS = 1800
+EGRESS_MIN_DIARIZATION_SECONDS = 8.0
+EGRESS_SAMPLE_INTERVAL = 0.2
+EGRESS_OBSERVER_START_TIMEOUT = 15
+EGRESS_OBSERVER_SELFTEST_TIMEOUT = 8
+EGRESS_OBSERVER_STOP_TIMEOUT = 20
 ASR_MODEL_NAME = "qwen3-asr-1.7b"
 DIARIZATION_MODEL_NAME = "speaker-diarization-community-1"
 ASR_REQUIRED_FILES = (
@@ -69,6 +79,15 @@ DIARIZATION_REQUIRED_FILES = (
 IMAGE_REVISION_LABEL = "org.opencontainers.image.revision"
 ACCESS_LINK_RE = re.compile(r"/access#([A-Za-z0-9_-]{40,512})")
 SAFE_PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,34}\Z")
+EGRESS_OBSERVER_PATH = ROOT / "scripts" / "egress_observer.py"
+_EGRESS_OBSERVER_SPEC = importlib.util.spec_from_file_location(
+    "asr_studio_egress_observer", EGRESS_OBSERVER_PATH
+)
+if _EGRESS_OBSERVER_SPEC is None or _EGRESS_OBSERVER_SPEC.loader is None:
+    raise RuntimeError("The egress observer module could not be imported.")
+egress_observer = importlib.util.module_from_spec(_EGRESS_OBSERVER_SPEC)
+sys.modules[_EGRESS_OBSERVER_SPEC.name] = egress_observer
+_EGRESS_OBSERVER_SPEC.loader.exec_module(egress_observer)
 
 
 # One bootstrap for every container script that opens the provider store without network access.
@@ -110,6 +129,7 @@ class SmokeOptions:
     task_timeout: int
     startup_timeout: int
     state_ref: str | None = None
+    check_egress: bool = False
 
 
 class Redactor:
@@ -347,8 +367,14 @@ def validate_inputs(options: SmokeOptions) -> tuple[Path, Path, int, str]:
     try:
         with wave.open(str(audio), "rb") as wav:
             duration = wav.getnframes() / wav.getframerate()
-            if wav.getnframes() < 1 or not MIN_AUDIO_SECONDS <= duration <= 90:
-                raise SmokeFailure("The smoke WAV must be between 2 and 90 seconds long.")
+            max_audio_seconds = (
+                EGRESS_MAX_AUDIO_SECONDS if options.check_egress else MAX_AUDIO_SECONDS
+            )
+            if wav.getnframes() < 1 or not MIN_AUDIO_SECONDS <= duration <= max_audio_seconds:
+                raise SmokeFailure(
+                    f"The smoke WAV must be between {MIN_AUDIO_SECONDS} and "
+                    f"{max_audio_seconds} seconds long."
+                )
     except (wave.Error, OSError, ZeroDivisionError):
         raise SmokeFailure(
             "The requested WAV is unreadable or has invalid audio metadata."
@@ -507,6 +533,467 @@ class LoopbackRelay:
         self.thread.join(timeout=2)
 
 
+EGRESS_OBSERVER_SOURCE = EGRESS_OBSERVER_PATH.read_text(encoding="utf-8")
+
+
+class EgressObserverProcess:
+    """Own one disposable namespace observer and its bounded evidence stream."""
+
+    def __init__(
+        self,
+        *,
+        image: str,
+        project: str,
+        service: str,
+        container_id: str,
+        environment: dict[str, str],
+        log: Callable[[str], None],
+        policy: Any | None = None,
+    ) -> None:
+        self.image = image
+        self.project = project
+        self.service = service
+        self.container_id = container_id
+        self.environment = environment
+        self.log = log
+        self.policy = policy or egress_observer.CapturePolicy(
+            service=service,
+            allowed_dns_names=egress_observer.KNOWN_INTERNAL_DNS_NAMES,
+        )
+        self.process: subprocess.Popen[bytes] | None = None
+        self.events: queue.Queue[bytes | None | BaseException] = queue.Queue(maxsize=4096)
+        self.stdout_done = False
+        self.stderr_seen = False
+        self.reader_threads: list[threading.Thread] = []
+        self.ready = False
+        self.stopped = False
+        self.stopping = False
+        self.failure: str | None = None
+        self.event_count = 0
+        self.sample_count = 0
+        self.last_sample_at: float | None = None
+        self.selftest_expected_ips: set[str] = set()
+        self.selftest_expected_port = 8765
+        self.selftest_socket_seen = False
+        self.selftest_packet_seen = False
+        self.task_started_at: float | None = None
+        self.task_finished_at: float | None = None
+        self.first_diarizing_at: float | None = None
+        self.last_diarizing_at: float | None = None
+        self.policy_violation_reason: str | None = None
+        self.endpoints: dict[tuple[Any, ...], dict[str, Any]] = {}
+        self.command = egress_observer.observer_command(
+            image,
+            container_id,
+            project=project,
+            service=service,
+            sample_interval=EGRESS_SAMPLE_INTERVAL,
+            local_ips=tuple(sorted(self.policy.local_ips)),
+            owned_ips=tuple(sorted(self.policy.owned_ips)),
+            resolver_ips=tuple(sorted(self.policy.resolver_ips)),
+            listener_ports=tuple(sorted(self.policy.listener_ports)),
+            allowed_dns_names=tuple(sorted(self.policy.allowed_dns_names)),
+        )
+
+    def _queue_stdout(self) -> None:
+        assert self.process is not None and self.process.stdout is not None
+        try:
+            while True:
+                line = self.process.stdout.readline()
+                if not line:
+                    break
+                if len(line) > egress_observer.MAX_EVENT_LINE_BYTES:
+                    self.failure = "observer output line exceeded the bound"
+                    with contextlib.suppress(queue.Full):
+                        self.events.put_nowait(egress_observer.ObserverError(self.failure))
+                    break
+                try:
+                    self.events.put_nowait(line)
+                except queue.Full:
+                    self.failure = "observer output queue overflowed"
+                    break
+        except BaseException as error:
+            self.failure = self.failure or "observer stdout reader failed"
+            with contextlib.suppress(queue.Full):
+                self.events.put_nowait(error)
+        finally:
+            with contextlib.suppress(queue.Full):
+                self.events.put_nowait(None)
+
+    def _drain_stderr(self) -> None:
+        assert self.process is not None and self.process.stderr is not None
+        try:
+            while self.process.stderr.readline():
+                self.stderr_seen = True
+        except OSError:
+            self.stderr_seen = True
+
+    def _record_process(self, value: object) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return egress_observer._unknown_process()
+        pid = value.get("pid")
+        return {
+            "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
+            "comm": value.get("comm") if isinstance(value.get("comm"), str) else "unknown",
+            "executable": (
+                value.get("executable") if isinstance(value.get("executable"), str) else "unknown"
+            ),
+            "role": value.get("role") if isinstance(value.get("role"), str) else "unknown",
+        }
+
+    def _endpoint_key(self, event: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            event.get("protocol"),
+            event.get("local_ip"),
+            event.get("local_port"),
+            event.get("remote_ip"),
+            event.get("remote_port"),
+        )
+
+    def _record_endpoint(
+        self,
+        event: dict[str, Any],
+        *,
+        observed_at: float,
+        process: dict[str, Any] | None = None,
+    ) -> None:
+        remote_ip = event.get("remote_ip")
+        remote_port = event.get("remote_port")
+        if not isinstance(remote_ip, str) or not isinstance(remote_port, int):
+            raise SmokeFailure(f"{self.service} observer emitted an endpoint without IP/port.")
+        normalized_process = process or egress_observer._unknown_process()
+        key = self._endpoint_key(event)
+        entry = self.endpoints.get(key)
+        if entry is None:
+            entry = {
+                "protocol": event.get("protocol", "unknown"),
+                "local_ip": event.get("local_ip", "unknown"),
+                "local_port": event.get("local_port", 0),
+                "remote_ip": remote_ip,
+                "remote_port": remote_port,
+                "dns_names": [],
+                "sni_names": [],
+                "kinds": [],
+                "process": egress_observer._unknown_process(),
+                "first_seen": observed_at,
+                "last_seen": observed_at,
+            }
+            self.endpoints[key] = entry
+        entry["last_seen"] = observed_at
+        kind = event.get("kind", "socket")
+        if isinstance(kind, str) and kind not in entry["kinds"]:
+            entry["kinds"].append(kind)
+        for field, output in (("dns_name", "dns_names"), ("sni", "sni_names")):
+            name = event.get(field)
+            if isinstance(name, str):
+                normalized = egress_observer.normalize_dns_name(name)
+                if normalized not in entry[output]:
+                    entry[output].append(normalized)
+        if normalized_process.get("pid") is not None:
+            entry["process"] = normalized_process
+        reason = egress_observer.policy_violation(event, policy=self.policy)
+        if reason and self.policy_violation_reason is None:
+            self.policy_violation_reason = reason
+
+    def _matches_selftest(self, event: dict[str, Any]) -> bool:
+        return (
+            event.get("remote_port") == self.selftest_expected_port
+            and event.get("remote_ip") in self.selftest_expected_ips
+        )
+
+    def _handle_event(self, event: dict[str, Any]) -> None:
+        event = egress_observer.validate_event(event)
+        event_type = event["type"]
+        if event_type == "ready":
+            if event.get("service") != self.service or event.get("version") != 1:
+                raise SmokeFailure(f"{self.service} observer readiness evidence is invalid.")
+            self.ready = True
+            return
+        if event_type == "error":
+            error_name = event.get("error")
+            self.failure = error_name if isinstance(error_name, str) else "unknown_error"
+            raise SmokeFailure(f"{self.service} egress observer failed closed ({self.failure}).")
+        if event_type == "stopped":
+            if not self.stopping or (
+                self.task_finished_at is not None and event["at"] < self.task_finished_at
+            ):
+                raise SmokeFailure(f"The {self.service} capture stopped before the task ended.")
+            self.stopped = True
+            return
+        if event_type == "sample":
+            at = event.get("at")
+            connections = event.get("connections")
+            if (
+                isinstance(at, bool)
+                or not isinstance(at, (int, float))
+                or not math.isfinite(float(at))
+                or not isinstance(connections, list)
+                or event.get("dropped") != 0
+            ):
+                raise SmokeFailure(f"{self.service} observer emitted malformed sample evidence.")
+            self.sample_count += 1
+            self.last_sample_at = float(at)
+            for connection in connections:
+                if not isinstance(connection, dict):
+                    raise SmokeFailure(
+                        f"{self.service} observer emitted malformed connection data."
+                    )
+                process = self._record_process(connection.get("process"))
+                normalized = {
+                    "type": "socket",
+                    "protocol": connection.get("protocol"),
+                    "local_ip": connection.get("local_ip"),
+                    "local_port": connection.get("local_port"),
+                    "remote_ip": connection.get("remote_ip"),
+                    "remote_port": connection.get("remote_port"),
+                    "process": process,
+                    "direction": connection.get("direction"),
+                }
+                self._record_endpoint(normalized, observed_at=float(at), process=process)
+                if self._matches_selftest(normalized) and process["pid"] is not None:
+                    self.selftest_socket_seen = True
+            return
+        if event_type == "packet":
+            at = event.get("at")
+            if isinstance(at, bool) or not isinstance(at, (int, float)):
+                raise SmokeFailure(f"{self.service} observer emitted malformed packet time.")
+            normalized = dict(event)
+            self._record_endpoint(normalized, observed_at=float(at))
+            if self._matches_selftest(normalized) and normalized.get("kind") == "syn":
+                self.selftest_packet_seen = True
+            return
+        raise SmokeFailure(f"{self.service} observer emitted unsupported evidence.")
+
+    def poll(self) -> None:
+        if self.process is None:
+            raise SmokeFailure(f"{self.service} egress observer was not started.")
+        if self.failure is not None:
+            raise SmokeFailure(f"{self.service} observer stream failed closed: {self.failure}.")
+        while True:
+            try:
+                raw = self.events.get_nowait()
+            except queue.Empty:
+                break
+            if raw is None:
+                self.stdout_done = True
+                continue
+            if isinstance(raw, BaseException):
+                raise SmokeFailure(f"{self.service} observer stream failed closed.") from raw
+            try:
+                value = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise SmokeFailure(
+                    f"{self.service} observer emitted malformed JSON evidence."
+                ) from error
+            self.event_count += 1
+            if self.event_count > 100_000:
+                raise SmokeFailure(f"{self.service} observer evidence exceeded the bound.")
+            if not isinstance(value, dict):
+                raise SmokeFailure(f"{self.service} observer emitted non-object evidence.")
+            self._handle_event(value)
+        return_code = self.process.poll()
+        if return_code is not None and not self.stopping and not self.stopped:
+            raise SmokeFailure(
+                f"{self.service} egress observer exited before the task ended (status {return_code})."
+            )
+
+    def start(self) -> None:
+        try:
+            self.process = subprocess.Popen(
+                self.command,
+                cwd=ROOT,
+                env=self.environment,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as error:
+            raise SmokeFailure(
+                f"Could not start the {self.service} egress observer. "
+                "Docker helper capability is unavailable."
+            ) from error
+        assert self.process.stdin is not None
+        try:
+            self.process.stdin.write(EGRESS_OBSERVER_SOURCE.encode("utf-8"))
+            self.process.stdin.close()
+        except OSError as error:
+            raise SmokeFailure(f"The {self.service} observer input stream failed.") from error
+        stdout_thread = threading.Thread(target=self._queue_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self.reader_threads = [stdout_thread, stderr_thread]
+        stdout_thread.start()
+        stderr_thread.start()
+        deadline = time.monotonic() + EGRESS_OBSERVER_START_TIMEOUT
+        while time.monotonic() < deadline:
+            self.poll()
+            if self.ready:
+                return
+            if self.process.poll() is not None:
+                raise SmokeFailure(f"The {self.service} observer exited before readiness.")
+            time.sleep(0.02)
+        raise SmokeFailure(f"The {self.service} observer did not become ready in time.")
+
+    def configure_selftest(self, expected_ips: set[str]) -> None:
+        self.selftest_expected_ips = set(expected_ips)
+
+    def wait_for_selftest(self) -> None:
+        deadline = time.monotonic() + EGRESS_OBSERVER_SELFTEST_TIMEOUT
+        while time.monotonic() < deadline:
+            self.poll()
+            if self.selftest_socket_seen and self.selftest_packet_seen:
+                return
+            time.sleep(0.05)
+        raise SmokeFailure(
+            f"The {self.service} egress observer failed its known app:8765 selftest. "
+            "Capture may be blind."
+        )
+
+    def begin_task(self) -> None:
+        self.task_started_at = time.monotonic()
+        self.first_diarizing_at = None
+        self.last_diarizing_at = None
+
+    def record_task_stage(self, stage: object) -> None:
+        if self.task_started_at is None:
+            return
+        now = time.monotonic()
+        if stage == "diarizing":
+            if self.first_diarizing_at is None:
+                self.first_diarizing_at = now
+            self.last_diarizing_at = now
+
+    def finish_task(self) -> None:
+        self.task_finished_at = time.monotonic()
+
+    def diarization_stage_seconds(self) -> float:
+        if self.first_diarizing_at is None or self.last_diarizing_at is None:
+            return 0.0
+        return max(0.0, self.last_diarizing_at - self.first_diarizing_at)
+
+    def _control_owned_helper(self, action: str, *arguments: str) -> bool:
+        """Never signal or remove a container without checking its ownership labels."""
+        name = egress_observer.observer_name(self.project, self.service)
+        inspected = subprocess.run(
+            ["docker", "container", "inspect", "--format", "{{json .Config.Labels}}", name],
+            cwd=ROOT,
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            timeout=EGRESS_OBSERVER_STOP_TIMEOUT,
+            check=False,
+        )
+        if inspected.returncode != 0:
+            if self.process is not None and self.process.poll() is not None:
+                return False
+            raise SmokeFailure(f"Could not verify {self.service} observer ownership.")
+        try:
+            labels = json.loads(inspected.stdout)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise SmokeFailure(f"Could not verify {self.service} observer ownership.") from error
+        if not isinstance(labels, dict) or (
+            labels.get("com.asr.offline-smoke.project") != self.project
+            or labels.get("com.asr.offline-smoke.helper") != "egress-observer"
+        ):
+            raise SmokeFailure(f"Refusing to control an unowned {self.service} observer container.")
+        result = subprocess.run(
+            ["docker", action, *arguments, name],
+            cwd=ROOT,
+            env=self.environment,
+            capture_output=True,
+            timeout=EGRESS_OBSERVER_STOP_TIMEOUT,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def stop(self) -> None:
+        if self.process is None:
+            return
+        self.stopping = True
+        try:
+            self.poll()
+            if self.process.poll() is None and not self._control_owned_helper(
+                "kill", "--signal=SIGTERM"
+            ):
+                raise SmokeFailure(f"Could not request {self.service} observer shutdown.")
+            deadline = time.monotonic() + EGRESS_OBSERVER_STOP_TIMEOUT
+            while not self.stopped and time.monotonic() < deadline:
+                self.poll()
+                if self.stdout_done and not self.stopped:
+                    raise SmokeFailure(
+                        f"The {self.service} observer stream ended before its final capture marker."
+                    )
+                if self.process.poll() is not None:
+                    break
+                time.sleep(0.02)
+            # The helper stays alive after its final capture marker. Acknowledge
+            # only after the marker and all preceding events reached this reader.
+            if (
+                self.stopped
+                and self.process.poll() is None
+                and not self._control_owned_helper("kill", "--signal=SIGUSR1")
+            ):
+                raise SmokeFailure(f"Could not acknowledge {self.service} capture shutdown.")
+            while self.process.poll() is None and time.monotonic() < deadline:
+                self.poll()
+                time.sleep(0.02)
+            if self.process.poll() is None:
+                raise SmokeFailure(f"The {self.service} observer did not exit after shutdown.")
+            for thread in self.reader_threads:
+                thread.join(timeout=2)
+            self.poll()
+            if not self.stopped:
+                raise SmokeFailure(
+                    f"The {self.service} observer stopped without a final health event "
+                    f"(status={self.process.returncode}, stdout_eof={self.stdout_done}, "
+                    f"stderr_seen={self.stderr_seen})."
+                )
+            if self.process.returncode != 0:
+                raise SmokeFailure(f"The {self.service} observer exited during cleanup.")
+        finally:
+            if self.process.poll() is None:
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired, SmokeFailure):
+                    self._control_owned_helper("rm", "-f")
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+
+    def validate_task(self) -> None:
+        if self.policy_violation_reason:
+            raise SmokeFailure(
+                f"Unallowed egress from {self.service}: {self.policy_violation_reason}."
+            )
+        if not self.ready or not self.stopped or self.sample_count == 0:
+            raise SmokeFailure(f"The {self.service} observer did not provide complete evidence.")
+        if not self.selftest_socket_seen or not self.selftest_packet_seen:
+            raise SmokeFailure(
+                f"The {self.service} observer did not pass its known-connection selftest."
+            )
+
+    def evidence(self) -> dict[str, Any]:
+        evidence = {
+            "service": self.service,
+            "selftest": {
+                "socket_seen": self.selftest_socket_seen,
+                "packet_seen": self.selftest_packet_seen,
+            },
+            "sample_count": self.sample_count,
+            "endpoint_count": len(self.endpoints),
+            "endpoints": sorted(
+                self.endpoints.values(),
+                key=lambda item: (
+                    item.get("remote_ip", ""),
+                    item.get("remote_port", 0),
+                    item.get("local_port", 0),
+                ),
+            ),
+            "diarization_stage_measurement": "first_to_last_actual_diarizing_observations",
+            "diarization_stage_seconds": self.diarization_stage_seconds(),
+        }
+        if self.failure is not None:
+            evidence["failure"] = self.failure
+        return evidence
+
+
 def open_undated_history_meeting(
     page: Any, meeting_id: str, *, on_stage: Callable[[str], None]
 ) -> None:
@@ -600,6 +1087,8 @@ class SmokeHarness:
         self.isolated_config_path: Path | None = None
         self.relay: LoopbackRelay | None = None
         self.owned_project_started = False
+        self.egress_observers: dict[str, EgressObserverProcess] = {}
+        self.egress_task_active = False
 
     def log(self, message: str) -> None:
         if self.log_handle is None:
@@ -755,6 +1244,16 @@ class SmokeHarness:
         }
         self.evidence["startup_timeout_seconds"] = self.options.startup_timeout
         self.evidence["task_timeout_seconds"] = self.options.task_timeout
+        if self.options.check_egress:
+            self.evidence["egress"] = {
+                "enabled": True,
+                "policy": "strict external deny",
+                "allowed_external_endpoints": [],
+                "payload_recorded": False,
+                "minimum_diarization_stage_seconds": EGRESS_MIN_DIARIZATION_SECONDS,
+                "diarization_stage_measurement": "first_to_last_actual_diarizing_observations",
+                "audio_duration_limit_seconds": EGRESS_MAX_AUDIO_SECONDS,
+            }
         self.log("preflight input paths, model artifacts and short WAV: pass")
 
     def _assert_project_unused(self) -> None:
@@ -1050,9 +1549,12 @@ class SmokeHarness:
         deadline = time.monotonic() + self.options.task_timeout
         last_status = "accepted"
         while time.monotonic() < deadline:
+            self._poll_egress_observers()
             task = client.json("GET", f"/api/tasks/{task_id}", timeout=20)
             last_status = str(task.get("status", "unknown"))
+            self._record_egress_task_stage(task)
             if last_status == "succeeded":
+                self._record_egress_task_stage({"stage": "complete"})
                 meeting = client.json("GET", f"/api/meetings/{meeting_id}")
                 transcription = meeting.get("transcription")
                 generation = (
@@ -1076,10 +1578,11 @@ class SmokeHarness:
                 )
                 return {"task": task, "meeting": meeting, "generation": generation}
             if last_status in {"failed", "canceled", "interrupted"}:
+                self._record_egress_task_stage({"stage": last_status})
                 code = task.get("error_code")
                 suffix = f" (code {code})" if isinstance(code, str) else ""
                 raise SmokeFailure(f"Transcription task ended with {last_status}{suffix}.")
-            time.sleep(2)
+            time.sleep(0.25 if self.egress_task_active else 2)
         raise SmokeFailure(
             f"Transcription task exceeded the {self.options.task_timeout}-second deadline "
             f"(last status {last_status})."
@@ -1531,6 +2034,207 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             raise SmokeFailure("The internal app container has no address for the loopback relay.")
         return ip
 
+    def _egress_container_metadata(self, service: str) -> dict[str, Any]:
+        result = self.compose(
+            "ps",
+            "-q",
+            service,
+            label=f"identify owned {service} container for egress observation",
+            timeout=30,
+        )
+        container_id = result.stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{12,64}", container_id):
+            raise SmokeFailure(f"Could not identify the owned {service} container for observation.")
+        inspected = self.run_command(
+            ["docker", "inspect", container_id],
+            label=f"inspect owned {service} namespace for egress observation",
+            timeout=30,
+        )
+        try:
+            details = json.loads(inspected.stdout)[0]
+            labels = details.get("Config", {}).get("Labels") or {}
+            state = details.get("State") or {}
+            networks = details.get("NetworkSettings", {}).get("Networks", {})
+            ips = sorted(
+                {
+                    item[key]
+                    for item in networks.values()
+                    for key in ("IPAddress", "GlobalIPv6Address")
+                    if item.get(key)
+                }
+            )
+        except (json.JSONDecodeError, IndexError, AttributeError, TypeError):
+            raise SmokeFailure(f"Could not read the owned {service} namespace metadata.") from None
+        if labels.get("com.docker.compose.project") != self.project:
+            raise SmokeFailure(f"The {service} container does not carry this run's project label.")
+        host_pid = state.get("Pid")
+        if state.get("Status") != "running" or not isinstance(host_pid, int) or host_pid <= 0:
+            raise SmokeFailure(f"The owned {service} container is not running for observation.")
+        if not ips or any(not egress_observer._is_ip(value) for value in ips):
+            raise SmokeFailure(f"The owned {service} container has no network address.")
+        resolver_result = self.container_python(
+            service,
+            (
+                "import json\n"
+                "nameservers = []\n"
+                "with open('/etc/resolv.conf', encoding='ascii') as source:\n"
+                "    for line in source:\n"
+                "        fields = line.split()\n"
+                "        if len(fields) == 2 and fields[0] == 'nameserver':\n"
+                "            nameservers.append(fields[1])\n"
+                "print(json.dumps({'nameservers': nameservers}))\n"
+            ),
+            label=f"read exact {service} resolver addresses",
+            timeout=30,
+        )
+        resolver_ips = resolver_result.get("nameservers")
+        if (
+            not isinstance(resolver_ips, list)
+            or not resolver_ips
+            or any(
+                not isinstance(value, str) or not egress_observer._is_ip(value)
+                for value in resolver_ips
+            )
+        ):
+            raise SmokeFailure(f"The {service} container did not report valid resolver addresses.")
+        return {
+            "id": container_id,
+            "host_pid": host_pid,
+            "ips": ips,
+            "resolver_ips": sorted(set(resolver_ips)),
+        }
+
+    def _run_egress_selftest(self, service: str) -> None:
+        target = "127.0.0.1" if service == "app" else "app"
+        script = (
+            "import socket, time\n"
+            f"with socket.create_connection(({target!r}, 8765), timeout=5):\n"
+            "    time.sleep(3)\n"
+        )
+        self.compose(
+            "exec",
+            "-d",
+            "-T",
+            service,
+            "python",
+            "-c",
+            script,
+            label=f"start {service} namespace app:8765 egress selftest",
+            timeout=30,
+            sensitive_output=True,
+        )
+
+    def _start_egress_check(self) -> None:
+        if not self.options.check_egress:
+            return
+        metadata = {
+            service: self._egress_container_metadata(service) for service in ("app", "worker")
+        }
+        owned_ips = tuple(sorted({ip for item in metadata.values() for ip in item["ips"]}))
+        for service in ("app", "worker"):
+            policy = egress_observer.CapturePolicy(
+                service=service,
+                local_ips=frozenset(metadata[service]["ips"]),
+                owned_ips=frozenset(owned_ips),
+                resolver_ips=frozenset(metadata[service]["resolver_ips"]),
+                listener_ports=(egress_observer.APP_LISTENER_PORT,) if service == "app" else (),
+                allowed_dns_names=egress_observer.KNOWN_INTERNAL_DNS_NAMES,
+            )
+            observer = EgressObserverProcess(
+                image=self.options.image,
+                project=self.project,
+                service=service,
+                container_id=metadata[service]["id"],
+                environment=self._environment(),
+                log=self.log,
+                policy=policy,
+            )
+            self.egress_observers[service] = observer
+            observer.start()
+        for service, expected_ips in (
+            ("app", {"127.0.0.1"}),
+            ("worker", set(metadata["app"]["ips"])),
+        ):
+            observer = self.egress_observers[service]
+            observer.configure_selftest(expected_ips)
+            self._run_egress_selftest(service)
+            observer.wait_for_selftest()
+            self.log(f"{service} egress observer known app:8765 selftest: pass")
+        for observer in self.egress_observers.values():
+            observer.begin_task()
+        self.egress_task_active = True
+        self.evidence["egress"]["selftest"] = "pass"
+        self.log("app and worker metadata-only egress observers: ready")
+
+    def _poll_egress_observers(self) -> None:
+        if not self.egress_task_active:
+            return
+        for observer in self.egress_observers.values():
+            observer.poll()
+            if observer.policy_violation_reason:
+                raise SmokeFailure(
+                    f"Unallowed egress from {observer.service}: {observer.policy_violation_reason}."
+                )
+
+    def _record_egress_task_stage(self, task: dict[str, Any]) -> None:
+        if not self.egress_task_active:
+            return
+        stage = task.get("stage")
+        for observer in self.egress_observers.values():
+            observer.record_task_stage(stage)
+
+    def _finish_egress_check(self) -> None:
+        if not self.egress_observers:
+            return
+        self.egress_task_active = False
+        for observer in self.egress_observers.values():
+            observer.finish_task()
+        stop_errors: list[str] = []
+        for observer in self.egress_observers.values():
+            try:
+                observer.stop()
+            except SmokeFailure as error:
+                stop_errors.append(str(error))
+            try:
+                observer.validate_task()
+            except SmokeFailure as error:
+                stop_errors.append(str(error))
+        for observer in self.egress_observers.values():
+            self.evidence.setdefault("egress", {}).setdefault("observers", {})[observer.service] = (
+                observer.evidence()
+            )
+        self.egress_observers = {}
+        if stop_errors:
+            raise SmokeFailure("; ".join(stop_errors))
+        worker_data = self.evidence["egress"]["observers"].get("worker", {})
+        duration = worker_data.get("diarization_stage_seconds", 0.0)
+        if not isinstance(duration, (int, float)) or duration <= EGRESS_MIN_DIARIZATION_SECONDS:
+            raise SmokeFailure(
+                "The monitored transcription was too short for egress validation: "
+                f"the API diarizing stage was observed for {duration:.3f}s, but it must exceed "
+                f"{EGRESS_MIN_DIARIZATION_SECONDS:.1f}s. Use a longer WAV; no delay was added."
+            )
+        self.evidence["egress"]["checks"] = {
+            "worker_diarization_stage_over_8s": True,
+            "external_deny": True,
+            "payload_recorded": False,
+        }
+        self.log(f"egress check: pass; API diarizing stage observed for {duration:.3f}s")
+
+    def _stop_egress_observers(self) -> None:
+        if not self.egress_observers:
+            return
+        self.egress_task_active = False
+        errors: list[str] = []
+        for observer in self.egress_observers.values():
+            try:
+                observer.stop()
+            except SmokeFailure as error:
+                errors.append(str(error))
+        self.egress_observers = {}
+        if errors:
+            raise SmokeFailure("; ".join(errors))
+
     def _verify_egress_blocked(self, config_path: Path) -> None:
         probe = (
             "import json, socket\n"
@@ -1848,6 +2552,23 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             self.log(f"browser stage failed: {current_stage}; exception={type(error).__name__}")
             raise
 
+    def _transcribe_with_egress(
+        self, client: ApiClient, meeting_id: str, request_id: str
+    ) -> dict[str, Any]:
+        self._start_egress_check()
+        try:
+            result = self._start_transcription(client, meeting_id, request_id)
+        except BaseException:
+            if self.options.check_egress:
+                try:
+                    self._finish_egress_check()
+                except Exception as cleanup_error:
+                    self.log(f"egress cleanup after task failure: {cleanup_error}")
+            raise
+        if self.options.check_egress:
+            self._finish_egress_check()
+        return result
+
     def _run_acceptance(self) -> None:
         self.evidence["source_commit"] = self._source_commit()
         self.evidence["image_reference"] = self.options.image
@@ -1880,7 +2601,7 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
 
         self._seed_provider_fixture()
         first_meeting = self._create_meeting(self.api, "GPU smoke input")
-        first_run = self._start_transcription(
+        first_run = self._transcribe_with_egress(
             self.api, first_meeting, f"{self.project}-transcript-1"
         )
         self._edit_generation(self.api, first_meeting, first_run["generation"])
@@ -1986,6 +2707,11 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             raise SmokeFailure("A Docker resource did not carry this run's exact project label.")
 
     def cleanup(self) -> None:
+        if self.egress_observers:
+            try:
+                self._stop_egress_observers()
+            except SmokeFailure as error:
+                self.evidence["cleanup"]["errors"].append(str(error))
         if self.relay is not None:
             with contextlib.suppress(Exception):
                 self.relay.close()
@@ -2137,7 +2863,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Authorized local two-voice WAV, 2–90 seconds, at most 25 MiB; "
-            "synthetic audio is recommended."
+            "--check-egress permits a longer input within the same byte limit."
         ),
     )
     parser.add_argument(
@@ -2159,6 +2885,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--startup-timeout", type=int, default=180, help="Bound service readiness in seconds."
+    )
+    parser.add_argument(
+        "--check-egress",
+        action="store_true",
+        help=(
+            "Opt in to metadata-only app/worker egress observation around the first real "
+            "transcription. External endpoints are denied because no provider call is made."
+        ),
     )
     parser.add_argument(
         "--state-ref", help="Optional caller-supplied correlation id recorded in the evidence."
@@ -2184,6 +2918,7 @@ def main(argv: list[str] | None = None) -> int:
             task_timeout=arguments.task_timeout,
             startup_timeout=arguments.startup_timeout,
             state_ref=arguments.state_ref,
+            check_egress=arguments.check_egress,
         )
         harness = SmokeHarness(options)
         harness.run()

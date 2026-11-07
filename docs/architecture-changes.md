@@ -4,6 +4,28 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #97 — Attribute quadratic clustering memory and document the RAM budget
+
+**Problem and measured cause.** The historical four-hour composite reached 4.93 GiB runner RSS
+([historical source](release/archive/v0.1.0/performance-v0.1.0.md)). Current phase instrumentation
+on a public repeated four-hour waveform reaches 4.561 GiB: kernel HWM rises
+inside centroid `fast_linkage` after `pdist` creates the condensed distance vector. The
+[measurement report](release/diarization-memory.md) links raw per-phase results, model/runtime
+hashes and the exact public input recipe. The fixtures differ, so these are not before/after
+optimization scores.
+
+**Decision.** Take the issue's documentation alternative and keep speaker clustering unchanged.
+Publish provisional budgets of 8 GiB installed RAM and 6 GiB available to the worker for the
+four-hour cap; larger ASR footprints or other processes can need more. These are provisioning
+decisions, not certified minima for every recording. The report distinguishes cumulative kernel
+HWM from sampled RSS and contains no private recording or transcript.
+
+**Trade-offs and follow-up.** Windowed clustering or subsampling would need a speaker identity/merge
+design and speaker-quality acceptance. This change adds read-only reproduction tools rather than
+altering assignments. Full app/ASR/notes acceptance and representative real-meeting data remain
+separate from these memory measurements. Issue [#97](https://github.com/nguyencanhtrung/asr-studio/issues/97).
+Tag: performance, operations. Target: `docs/release/diarization-memory.md`, README hardware guidance.
+
 ## Documentation policy
 
 The [release process](release/process.md) defines checks and evidence reuse for new releases.
@@ -52,6 +74,94 @@ notes — chia chunk → trích xuất → hợp nhất → kiểm tra → rende
 ### #74 / PR #91 — Tắt telemetry ONNX Runtime trong tiến trình con của worker
 
 Đã chuyển nguyên mục: [Quyền riêng tư](release/privacy-v0.1.0.md).
+
+### #92 — Kiểm tra egress metadata trong offline smoke
+
+#### Vấn đề
+
+Issue #92 cần một bước smoke có mạng để phát hiện telemetry hoặc đích kết nối ngoài trong lúc
+ASR và diarization chạy. Mục đích của bước này là bắt lại kiểu kết nối đã được nêu trong #74 mà
+không ghi payload hay gọi provider.
+
+#### Thay đổi thiết kế
+
+- `scripts/offline-smoke.py --check-egress` theo dõi lần phiên âm thật đầu tiên trong network
+  namespace của `app` và `worker`. WAV của bước này giữ trần 25 MiB và cho phép thời lượng tới
+  1800 giây. Guard yêu cầu khoảng thời gian lớn hơn 8 giây từ quan sát `diarizing` đầu tiên tới
+  quan sát `diarizing` cuối cùng. Poll chuyển stage muộn và thời gian dọn helper không được tính.
+- `scripts/egress_observer.py` lấy mẫu `/proc/net/tcp*` và `/proc/net/udp*`, kèm PID/process
+  metadata khi đọc được, và thu packet metadata bằng AF_PACKET. Nó giữ IP, port, DNS qname, TLS
+  SNI, hướng và process metadata trong bộ nhớ hoặc evidence, không giữ payload.
+- Policy chỉ tin exact IP của các service thuộc Compose project, exact resolver IP của từng
+  container và loopback. Policy không coi mọi private, link-local, reserved, `.local` hoặc
+  `.internal` là nội bộ. App listener response được phân biệt với initiated egress.
+- DNS request được nhận diện khi đi tới resolver đã xác minh, kể cả khi Docker DNAT đổi port đích
+  trước khi packet tới AF_PACKET. DNS response được giữ là inbound UDP. Mọi UDP khác, gồm UDP
+  443, vẫn tạo endpoint metadata và đi qua deny policy.
+- Mỗi observer chạy trong helper disposable với `--cap-drop ALL` và chỉ thêm `NET_RAW`,
+  `SYS_PTRACE` và `DAC_READ_SEARCH`. Helper dùng network/PID namespace của đúng container đích,
+  không dùng privileged mode, host PID hoặc host filesystem mount. Vì helper có proc access,
+  thiết kế không tuyên bố rằng nó không thể đọc file đích qua `/proc`.
+- Khi dừng, helper đọc hết packet đang chờ tới một lần đọc yên lặng, rồi gửi barrier health và
+  chờ controller ACK trước khi thoát để chứng minh toàn bộ metadata trước barrier đã tới nơi.
+  Capture dừng trước khi task kết thúc hoặc thiếu ACK đều fail.
+  Mọi signal và xóa cưỡng bức kiểm tra nhãn ownership của helper trước khi thực hiện.
+  Nguồn regression: `tests/test_offline_smoke.py`, `tests/test_egress_observer.py`.
+- Bộ lấy mẫu bỏ `TIME_WAIT` đã đóng, không còn process sở hữu; packet capture vẫn giữ SYN.
+  Các hàng đã đóng từng làm sample vượt giới hạn reader khi có nhiều HTTP poll. Lỗi stream giữ
+  lý do cụ thể và không bị lỗi cleanup che mất. Regression có bảng nhiều hàng `TIME_WAIT`, một
+  socket đang hoạt động và trường hợp task/cleanup cùng lỗi.
+
+#### Số giới hạn và nguồn
+
+Các con số dưới đây là guard hoặc giao thức quan sát, không phải benchmark hiệu năng.
+
+| Hạng mục | Giá trị | Nguồn |
+| --- | ---: | --- |
+| WAV tối thiểu | 2 giây | [`MIN_AUDIO_SECONDS`](../scripts/offline-smoke.py) |
+| WAV tối đa của egress path | 1800 giây | [`EGRESS_MAX_AUDIO_SECONDS`](../scripts/offline-smoke.py) |
+| Trần file WAV | 25 MiB | [`MAX_AUDIO_BYTES`](../scripts/offline-smoke.py) |
+| Diarization stage tối thiểu | lớn hơn 8 giây | [`EGRESS_MIN_DIARIZATION_SECONDS`](../scripts/offline-smoke.py) |
+| Chu kỳ lấy mẫu mặc định | 0,2 giây | [`DEFAULT_SAMPLE_INTERVAL`](../scripts/egress_observer.py) |
+| App listener của selftest | port 8765 | [`APP_LISTENER_PORT`](../scripts/egress_observer.py) |
+
+Nguồn yêu cầu và giới hạn: [Issue #92](https://github.com/nguyencanhtrung/asr-studio/issues/92),
+[`offline-smoke.py`](../scripts/offline-smoke.py), và
+[`egress_observer.py`](../scripts/egress_observer.py). Không có số đo throughput, latency hoặc
+độ chính xác được suy ra từ bước smoke này.
+
+#### Đánh đổi và phương án đã loại
+
+- Đọc socket table cho process ownership và AF_PACKET cho SYN/DNS/SNI: giữ được attribution và
+  kiểm tra capture có nhìn thấy traffic, nhưng vẫn chỉ cung cấp metadata.
+- Helper root với đúng ba capability được thêm: đáp ứng proc ownership trong shared PID namespace
+  mà không cấp privileged, host PID hoặc host mount. Proc access là một giới hạn bảo mật cần ghi
+  rõ, không được che bằng tuyên bố helper chỉ đọc network.
+- Strict external deny với allowlist rỗng: phù hợp với smoke không gọi provider và không tạo
+  quyết định allowlist động từ DNS hoặc private address. Provider traffic nằm ngoài bước này.
+- First-to-last actual `diarizing` observation: số đo là lower bound. Không dùng poll terminal
+  hoặc `finish_task` vì chúng có thể kéo dài số đo sau khi diarization đã kết thúc.
+
+#### Giới hạn
+
+TLS chỉ cho phép đọc ClientHello SNI khi handshake và segment cần thiết đều được capture. Observer
+không kiểm tra payload mã hóa, certificate hoặc tên phát sinh sau ClientHello. Packet drop,
+malformed packet, malformed evidence, process ownership không chứng minh được hoặc helper chết
+đều làm smoke fail closed.
+
+#### Liên kết issue/PR
+
+[Issue #92](https://github.com/nguyencanhtrung/asr-studio/issues/92).
+
+#### Tag
+
+Kiến trúc | Quyền riêng tư
+
+#### Tài liệu đích
+
+- `docs/user-guide.md` — invocation, policy, capability và TLS limitation.
+- `scripts/offline-smoke.py` — lifecycle và diarization lower-bound guard.
+- `scripts/egress_observer.py` — capture, parsing và policy protocol.
 
 ### #72 / PR #94 — Phục hồi notes khi đầu ra của provider vượt trần
 
