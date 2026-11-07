@@ -1,0 +1,68 @@
+{
+  "issue": 180,
+  "product_revision": "705f706fcddb44d83131aae12948d1163c9068c5",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "prompt_version": "notes-hierarchical-v8",
+  "cases": [
+    {
+      "id": "long",
+      "source": "long-input/source.json",
+      "gold": "long-input/gold.json",
+      "output_language": "en",
+      "hard_deadline_seconds": 630,
+      "source_sha256": "73617d680f4d947a9ebbd27d54919eae5a728e247067d03a1c328915ac66fd93",
+      "gold_sha256": "75c5ca6f8579ac5d20e345f4163663bbcc096aa3990773724b866a1f4228416e"
+    },
+    {
+      "id": "mixed",
+      "source": "controls/mixed.json",
+      "gold": "controls/gold.json",
+      "output_language": "vi",
+      "hard_deadline_seconds": 180,
+      "source_sha256": "2927f1d29b31fa0db256d87b960b4619d64e904bee09d8c7e37d22bb6ea11248",
+      "gold_sha256": "fea6d46e8e176944c7593c7cf742d4b8a9eed58d562f8819f34e15425e423877"
+    },
+    {
+      "id": "proposal",
+      "source": "controls/proposal.json",
+      "gold": "controls/gold.json",
+      "output_language": "en",
+      "hard_deadline_seconds": 180,
+      "source_sha256": "f817d6325acdece14a398532feca93d92ac6872ec9becc11bbebc7adb4bc860b",
+      "gold_sha256": "fea6d46e8e176944c7593c7cf742d4b8a9eed58d562f8819f34e15425e423877"
+    },
+    {
+      "id": "antecedent",
+      "source": "controls/antecedent.json",
+      "gold": "controls/gold.json",
+      "output_language": "en",
+      "hard_deadline_seconds": 180,
+      "source_sha256": "ef2241153ac3bfdb9d9b4c3ccff7bf8a9bcb52c236e197a743fe7e938c1362e3",
+      "gold_sha256": "fea6d46e8e176944c7593c7cf742d4b8a9eed58d562f8819f34e15425e423877"
+    }
+  ],
+  "module_sha256": {
+    "chatgpt.py": "5a5ec1375340e6d92a647c1a57251bbcde9e05941051bc1f98c6763e1b51798b",
+    "notes_document.py": "2fb4c6837f990f47f7812145d06c2d3db1a4dddce7357a90810c1c332817fae7",
+    "notes_pipeline.py": "32f6deeced109c8d88a57eea2ddd8ef24c4ff43def82b75705cc0b02e54f3e9a"
+  },
+  "gate": {
+    "required_critical": 7,
+    "minimum_found_total": 10,
+    "total": 12,
+    "material_fabricated_owner_deadline_or_promoted_proposal": 0,
+    "citation_ids_must_resolve": true,
+    "notes_only_time_budget_seconds": 600,
+    "latency_scope": "Notes from provided transcript only; does not measure ASR/diarization or original end-to-endAC13."
+  },
+  "publication": "Long source/output/gold local only; publish fixedprotocol+provenance+hashes+assessmentmetrics and syntheticcases.",
+  "reused_regression": {
+    "path": "reports/notes-chatgpt-public-2026-11-07/results/vietmed-noise-1.json",
+    "result_sha256": "5ee282d061406c9d58937e8aa8b7d5d8d3e9b4ff3176ba3b6100047b1de4b907",
+    "claim": "No invented concrete examination/procedure in sameproduct/model/effort/source; only this direct bounded observation is reused, not provisional screening accuracy."
+  },
+  "max_new_generation_cases": 4,
+  "repeat_rule": "No automatic rerun. Repeat only on actualfailure needingdiagnosis or changedcandidate, with new frozenplan."
+}

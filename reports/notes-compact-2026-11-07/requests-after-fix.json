@@ -1,0 +1,22 @@
+{
+  "long": {
+    "request_sha256": "9266c4b467cdd5ffec9c76aaec974edbf2c57afc48d77be79ffb23a6431a1a86",
+    "request_bytes": 190870,
+    "prompt_version": "notes-hierarchical-v8"
+  },
+  "mixed": {
+    "request_sha256": "d3e56a2aa77e2548f40c6af0513243a245c69ea7fc1310f05b5db3462dcbb1a7",
+    "request_bytes": 7754,
+    "prompt_version": "notes-hierarchical-v8"
+  },
+  "proposal": {
+    "request_sha256": "d12b7a21eed55808e06439cf1ffa9db0dcc69bc631ffe834df9b51b6e021b6ab",
+    "request_bytes": 6046,
+    "prompt_version": "notes-hierarchical-v8"
+  },
+  "antecedent": {
+    "request_sha256": "de61092af5d65a06eb4b62ce2a5a56e9e324c73da8c465d382535c29f1a13a7b",
+    "request_bytes": 5806,
+    "prompt_version": "notes-hierarchical-v8"
+  }
+}

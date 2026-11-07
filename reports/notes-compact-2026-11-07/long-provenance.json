@@ -1,0 +1,23 @@
+{
+  "meeting_id": "SeattleCityCouncil_06102019",
+  "duration_seconds": 7231,
+  "selection_rule": "Select nearest duration>=7200sec and<=8100sec among meetings with>=5 reference agenda items; ties by meeting_id. Selection occurs before modeloutput.",
+  "source_url": "https://zenodo.org/records/7989108/files/MeetingBank.zip?download=1",
+  "zip_member": {
+    "name": "Audio&Transcripts/Seattle/transcripts/council_061019_2021945V.mp3.transcript.json",
+    "method": 8,
+    "compressed_size": 276110,
+    "size": 1608694,
+    "offset": 107559043,
+    "crc32": 79240647
+  },
+  "metadata_sha256": "10516004e6ba41c7007b75d996a803e9ab89b9010af06d6d18910f22d643b26b",
+  "transcript_sha256": "d715c879260047cf12685ae6878d4016c2816e9693990754bef55165e61380a5",
+  "official_urls": {
+    "Webpage": "http://www.seattlechannel.org/videos?videoid=x104832&Mode2=Video",
+    "Video": "video.seattle.gov/media/council/council_061019_2021945V.mp4",
+    "MeetingDetail": "https://seattle.legistar.com/MeetingDetail.aspx?ID=705828&GUID=87D85115-9C1E-4F31-9886-1C64ECFB0B3E&Options=info|&Search="
+  },
+  "license_file_title": "Attribution-NonCommercial-NoDerivatives4.0International",
+  "publication": "Publish provenance, hashes and assessment metrics only; retain upstream transcript and derived meeting Notes in local evaluation artifacts."
+}

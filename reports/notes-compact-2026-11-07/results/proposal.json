@@ -1,0 +1,106 @@
+{
+  "case": "proposal",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "f817d6325acdece14a398532feca93d92ac6872ec9becc11bbebc7adb4bc860b",
+  "source_segments": 6,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [
+      {
+        "text": "Customer export revisit before close",
+        "source_ids": [
+          "b0000000000000000000000000000011"
+        ]
+      }
+    ],
+    "key_topics": [
+      {
+        "text": "Current export slow for accounts with more than ten thousand rows",
+        "source_ids": [
+          "b0000000000000000000000000000012"
+        ]
+      }
+    ],
+    "decisions": [],
+    "open_questions": [
+      {
+        "text": "CSV cache storage cost before commitment",
+        "source_ids": [
+          "b0000000000000000000000000000014"
+        ]
+      }
+    ],
+    "action_items": [
+      {
+        "text": "Update export error message",
+        "source_ids": [
+          "b0000000000000000000000000000015",
+          "b0000000000000000000000000000016"
+        ],
+        "owner": "Priya",
+        "deadline_text": "by tomorrow",
+        "deadline_date": null
+      },
+      {
+        "text": "Track error-message update",
+        "source_ids": [
+          "b0000000000000000000000000000016"
+        ],
+        "owner": null,
+        "deadline_text": null,
+        "deadline_date": null
+      }
+    ],
+    "confirmation_items": [
+      {
+        "text": "Possible CSV cache next sprint; no owner yet",
+        "source_ids": [
+          "b0000000000000000000000000000013"
+        ]
+      }
+    ]
+  },
+  "elapsed_seconds": 12.063,
+  "coverage": {
+    "version": 1,
+    "segment_count": 6,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          6
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "progress": [
+    {
+      "stage": "preparing_source",
+      "current": 1,
+      "total": 1,
+      "unit": "phase"
+    },
+    {
+      "stage": "generating",
+      "current": 0,
+      "total": 1,
+      "unit": "calls"
+    },
+    {
+      "stage": "generating",
+      "current": 1,
+      "total": 1,
+      "unit": "calls"
+    }
+  ]
+}

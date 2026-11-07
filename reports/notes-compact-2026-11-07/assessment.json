@@ -1,0 +1,531 @@
+{
+  "indexing": "1-based document locations",
+  "scope": "12 long checkpoints, 9 frozen short gold checks, cited decision/action owner-deadline/proposal audit",
+  "baseline_result": "FAIL",
+  "baseline_long": {
+    "critical_pass": 7,
+    "total_pass": 12,
+    "checks": [
+      {
+        "id": "L01",
+        "critical": true,
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[5]",
+          "document.decisions[6]"
+        ],
+        "cited_source_ids": [
+          "0422f635b8b91a4df81e1f7c20218ad5",
+          "1238041e1177c8bfda0fa20f21eb25e1",
+          "561698cd40389b362a8cc9896a1a564d",
+          "18bd6f8205c3c956ae0998aa4f3822e2",
+          "092505e091b1e8955fcb43fcdda58333"
+        ],
+        "support_excerpt_sha256": [
+          "149245ce0150fc6e52490323756e94a7c69a5a831e8eb2145b6b68b109db40c3",
+          "2e5b339327409cd2e48c80f590ca613ab758874b18bc70e1be71422518fe2c35",
+          "da34bcaf59210aba56b89ba430e5f10ddd1ff232e8c90480e662ba87312ba0e4"
+        ]
+      },
+      {
+        "id": "L02",
+        "critical": true,
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[7]"
+        ],
+        "cited_source_ids": [
+          "13dcb728d9232e5b452200aa76206d7e",
+          "b230c435d26c1ec6886dce8719715f3e",
+          "22f5d224c2e51334f75e335066b0227e",
+          "2baf69b5c59c586fb8754932da7a3e1a",
+          "3cffa42b37c2041be277446969a43b68"
+        ],
+        "support_excerpt_sha256": [
+          "0e77cf4d927b112d0eed64bcea27de4cee143590e837bb41ac9dcce2c96b883d",
+          "e2fb39014905fb64cb73537ff15991c80f60b51c6f97ccf9a3d8365dd05ad874"
+        ]
+      },
+      {
+        "id": "L03",
+        "critical": true,
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[8]"
+        ],
+        "cited_source_ids": [
+          "49a7b1a00036fc7793865a1cf62ade22",
+          "709b51f0b516c00a40ad54400ec3502c",
+          "c0a58d0e1d08a1544d4fad83ce5d8161",
+          "549d1d2e7c3d8a464968b76d48f612c7",
+          "aada58d491f4e1fab379f91ffa42de92"
+        ],
+        "support_excerpt_sha256": [
+          "20469cea1e627523f0da58250f20e25ff2c2dc5a77dd5d382cc52f1f5a73ec08",
+          "c571b6de99bf30e4ec10572a38a7e35946fb038c53872849a78bf8acf6e12710",
+          "392a3a9e7e5d2090be57d9062df8f78a92b5b5f6fa37f9fb4deca78815a29014"
+        ]
+      },
+      {
+        "id": "L04",
+        "critical": true,
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[9]",
+          "document.decisions[10]",
+          "document.decisions[11]"
+        ],
+        "cited_source_ids": [
+          "053647958ca41824ed1dc626234905ab",
+          "9f5db637f459cc0aa54010cee86fcb94",
+          "d5996e8774c69e355edb2d05df3e91ad",
+          "9d85364ee005fcbc58bc35715933803e",
+          "555014727e362d8a6d115e65c7e93da1",
+          "b705c7ad50b5a69bfeed3be14de3638e"
+        ],
+        "support_excerpt_sha256": [
+          "0461243786835745c6bdb26cdf8910d714404ecad4ee5dc057ab632dbb26b127",
+          "94ecd5263d4893a2f9685b1e4ccdc4e284ccf9a15bc6a64f7a910aab5b3f43ae",
+          "392a3a9e7e5d2090be57d9062df8f78a92b5b5f6fa37f9fb4deca78815a29014"
+        ]
+      },
+      {
+        "id": "L05",
+        "critical": true,
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[15]"
+        ],
+        "cited_source_ids": [
+          "545a6e082b07b8ab7e3e25268c4437ab",
+          "11c0228231fa93c4289fbf6cb9270ecc",
+          "f7c5c3d298c66405f69f0d1bb40fd8a1",
+          "9ef73d06022fb35de858715b99251aab",
+          "c20faa459352e4a719da259da1c2c8d5"
+        ],
+        "support_excerpt_sha256": [
+          "e500e26fd7def3941663356fb5c2ab85e9caa38137210d683e2b8faafdc261f9",
+          "34d068a409a864188ea175625e94008c46355d00f847951bec48632a9f55a5d8"
+        ]
+      },
+      {
+        "id": "L06",
+        "critical": true,
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[16]"
+        ],
+        "cited_source_ids": [
+          "a1d322574b1a63e791b8a763fb539d09",
+          "5447917fe79da3a8bc977ae1a32dd130",
+          "e6871e744363841d53b0407af7433a63",
+          "3ee4f91672d71261651ac52f5bc4845a",
+          "74520c3e96b2c74be77f83193849e0f5",
+          "08816ac13d590396ca0dfce582b643f3"
+        ],
+        "support_excerpt_sha256": [
+          "09ebc426e20731e8e5611f5d6d16132bdf2e08b34ea79e0c42d0efb53cfa1d76",
+          "34d068a409a864188ea175625e94008c46355d00f847951bec48632a9f55a5d8"
+        ]
+      },
+      {
+        "id": "L07",
+        "critical": true,
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[17]"
+        ],
+        "cited_source_ids": [
+          "23308e0d3f6422080fe4bfe28bafc08a",
+          "d8ca22c1799842246f45f608baad4109",
+          "c192b0f048e932f1752e7e3be429d0f9",
+          "3523e6c5cd510fa40a9a1a1f669967f7",
+          "e7744a86f3fb458428f1aeff6509d178"
+        ],
+        "support_excerpt_sha256": [
+          "6cfe4e193612eab4c15a25e46db524796939be761a493cd707c535b85ea34f4d",
+          "34d068a409a864188ea175625e94008c46355d00f847951bec48632a9f55a5d8"
+        ]
+      },
+      {
+        "id": "L08",
+        "critical": false,
+        "outcome": "pass",
+        "output_locations": [
+          "document.key_topics[12]"
+        ],
+        "cited_source_ids": [
+          "4155b6dbc81da9ee2a1400a9e4aff749",
+          "c225bb771bfa0fb602ff63e84574e968",
+          "494c3bf396649134f9e44bd6bec27666",
+          "761b3c80c2bf02687d93a56913682eb1",
+          "36e6c56e982217748946d6b1162337d3"
+        ],
+        "support_excerpt_sha256": [
+          "de63cd9e5c6f369d847f71620fbe6bea4c3c107d5ec4946e73d8ce3ac684fb7f",
+          "db2dde784e811672852391efcfb3b8ced7b12f631f307bf38e03d8ce5449f319",
+          "6393780a06c9dc6a288ee9963aca7591a2af98d4d8f6fe64da408695b8a29968"
+        ]
+      },
+      {
+        "id": "L09",
+        "critical": false,
+        "outcome": "pass",
+        "output_locations": [
+          "document.key_topics[13]"
+        ],
+        "cited_source_ids": [
+          "ed6c8c3b2d9c81abccc2883c1c9ce015",
+          "f71762a399cd15fe31a13b4ee9346618",
+          "69297d7e61476a64346b8d190b61f8c6",
+          "a71d9c6431635a06006f06e7da2fc00f",
+          "438da6e95c1c92cb0c8cec653aefcef5"
+        ],
+        "support_excerpt_sha256": [
+          "4481e64c7f71f6656dcb60603f7389db0eb07c24aaeccb2f3dfeb5fd09920750",
+          "8e14e85743d915ca367db62385e378d41de2448b1dde4803588e32d90bc55b2a"
+        ]
+      },
+      {
+        "id": "L10",
+        "critical": false,
+        "outcome": "pass",
+        "output_locations": [
+          "document.key_topics[11]",
+          "document.open_questions[6]",
+          "document.action_items[6]"
+        ],
+        "cited_source_ids": [
+          "04e05e65c44f1712bf0e392a174ae503",
+          "ff5e76df74e8cde5402dc2309ab72e9a",
+          "112bfdd39309e6e6fa9b91627117aaba"
+        ],
+        "support_excerpt_sha256": [
+          "da8ff37382bba5b27a02edf15bcf6b03746ebfe9a01ab3d6dc3a105aac5f8b92",
+          "6122b70a5028222de82cfb96febdd75ace85edd3092c590153599f090926bbf8",
+          "cc8c2e88304c0e5ffdcbce02074fc12d22b278b5af9f27b19786455435eafcb3"
+        ]
+      },
+      {
+        "id": "L11",
+        "critical": false,
+        "outcome": "pass",
+        "output_locations": [
+          "document.key_topics[1]"
+        ],
+        "cited_source_ids": [
+          "2e42ae131ca3fe8215f57070008a6c07",
+          "fb0d00f597e7da535be37a333751d041",
+          "e2654d4ac88b5971e2324d2d930df998",
+          "e710751d80a2c9f45eb35be2bc2746fd",
+          "28a1abb2bfc47c3b363f755473967aa0",
+          "726fa20bfbe149360f8b355364ac1c5d",
+          "845f1c8ef83f11a84b928e59be02deec",
+          "7a183a2682d530309fb1759754d06ebf",
+          "30691c889931096b22a322c6e0232e54",
+          "3a0487e17d20dc51768851b358a2375c"
+        ],
+        "support_excerpt_sha256": [
+          "3e8802df13a9e78763d6219ae068aa7185447590bfb8e0ddd0e41f736de76e72",
+          "689322aba796ef7d287abaeefa34508575417c393412d7d841d1fbd714276e26"
+        ]
+      },
+      {
+        "id": "L12",
+        "critical": false,
+        "outcome": "pass",
+        "output_locations": [
+          "document.key_topics[21]",
+          "document.open_questions[9]"
+        ],
+        "cited_source_ids": [
+          "7c89fed4eb3141b73731247c6f1693e5",
+          "a6a6f19da48bfcff53ad5c33110d3495",
+          "8620e5ad401b49717329f24b1eb8863c",
+          "596afa55bf40d199bad40fabdaabdf78",
+          "488c903768d73d3f25175b3e7c5704d2",
+          "3ae1f38141c25a29fd9301de5975cbb4"
+        ],
+        "support_excerpt_sha256": [
+          "303e671fb3c8edc2643c2bd076e90d4b5ce6476ce6cbe09875469b85836e183c",
+          "75f9dcef6a26c60d736d59e39da2bb8ba4e032e90af14096c0d8ab7eca7909f9"
+        ]
+      }
+    ]
+  },
+  "baseline_short": {
+    "pass": 8,
+    "fail": 1,
+    "total": 9,
+    "checks": [
+      {
+        "id": "M1-final-deadline-and-action",
+        "case": "mixed",
+        "outcome": "pass",
+        "output_locations": [
+          "document.action_items[1]"
+        ],
+        "cited_source_ids": [
+          "a0000000000000000000000000000015",
+          "a0000000000000000000000000000018",
+          "a0000000000000000000000000000019"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "a0000000000000000000000000000018",
+            "excerpt": "I can send the test data by Wednesday noon instead of Thursday."
+          },
+          {
+            "source_id": "a0000000000000000000000000000019",
+            "excerpt": "Agreed. Lan sends the test data by Wednesday noon; this replaces Thursday."
+          }
+        ],
+        "semantic_result": {
+          "status": "confirmed",
+          "owner": "Lan",
+          "deadline_text": "Wednesday noon",
+          "deadline_date": null
+        }
+      },
+      {
+        "id": "M2-demo-stays-confirmation",
+        "case": "mixed",
+        "outcome": "pass",
+        "output_locations": [
+          "document.decisions[1]",
+          "document.confirmation_items[2]"
+        ],
+        "cited_source_ids": [
+          "a0000000000000000000000000000016",
+          "a0000000000000000000000000000017",
+          "a0000000000000000000000000000020"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "a0000000000000000000000000000016",
+            "excerpt": "I suggest a customer demo on Friday afternoon."
+          },
+          {
+            "source_id": "a0000000000000000000000000000017",
+            "excerpt": "That demo time is still a proposal; we will confirm it after QA."
+          },
+          {
+            "source_id": "a0000000000000000000000000000020",
+            "excerpt": "We will decide the demo time after QA."
+          }
+        ],
+        "semantic_result": {
+          "status": "unconfirmed",
+          "owner": null,
+          "deadline_text": null,
+          "deadline_date": null
+        }
+      },
+      {
+        "id": "M3-presenter-is-not-assignee",
+        "case": "mixed",
+        "outcome": "pass",
+        "output_locations": [
+          "document.action_items[1]"
+        ],
+        "cited_source_ids": [
+          "a0000000000000000000000000000015",
+          "a0000000000000000000000000000018",
+          "a0000000000000000000000000000019"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "a0000000000000000000000000000019",
+            "excerpt": "Agreed. Lan sends the test data by Wednesday noon."
+          }
+        ],
+        "semantic_result": {
+          "status": "confirmed",
+          "assignee": "Lan",
+          "presenter_not_promoted": true
+        }
+      },
+      {
+        "id": "M4-omar-offer-stays-uncommitted",
+        "case": "mixed",
+        "outcome": "pass",
+        "output_locations": [
+          "document.confirmation_items[1]"
+        ],
+        "cited_source_ids": [
+          "a0000000000000000000000000000013"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "a0000000000000000000000000000013",
+            "excerpt": "I might be able to review the export flow today, but I have not committed to it."
+          }
+        ],
+        "semantic_result": {
+          "status": "unconfirmed",
+          "owner": null,
+          "deadline_text": null,
+          "deadline_date": null
+        }
+      },
+      {
+        "id": "P1-open-cache-idea",
+        "case": "proposal",
+        "outcome": "pass",
+        "output_locations": [
+          "document.confirmation_items[1]",
+          "document.open_questions[1]"
+        ],
+        "cited_source_ids": [
+          "b0000000000000000000000000000013",
+          "b0000000000000000000000000000014"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "b0000000000000000000000000000013",
+            "excerpt": "We could add a CSV cache next sprint, but no one owns that work yet."
+          },
+          {
+            "source_id": "b0000000000000000000000000000014",
+            "excerpt": "Let's check the storage cost before we commit."
+          }
+        ],
+        "semantic_result": {
+          "status": "unconfirmed",
+          "owner": null,
+          "deadline_text": null,
+          "deadline_date": null
+        }
+      },
+      {
+        "id": "P2-priya-confirmed-action",
+        "case": "proposal",
+        "outcome": "fail",
+        "output_locations": [
+          "document.action_items[1]"
+        ],
+        "cited_source_ids": [
+          "b0000000000000000000000000000015",
+          "b0000000000000000000000000000016"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "b0000000000000000000000000000015",
+            "excerpt": "Priya will update the export error message by tomorrow."
+          },
+          {
+            "source_id": "b0000000000000000000000000000016",
+            "excerpt": "Confirmed. Priya owns the error-message update."
+          }
+        ],
+        "output_fields": {
+          "status": "confirmed",
+          "owner": "Priya",
+          "deadline_text": "by tomorrow",
+          "deadline_date": null
+        },
+        "expected_fields": {
+          "status": "confirmed",
+          "owner": "Priya",
+          "deadline_text": "tomorrow",
+          "deadline_date": "2026-11-11"
+        },
+        "failure": "Anchored tomorrow was not normalized to the required ISO date 2026-11-11; the date field is null."
+      },
+      {
+        "id": "A1-named-jordan-assignment",
+        "case": "antecedent",
+        "outcome": "pass",
+        "output_locations": [
+          "document.action_items[1]"
+        ],
+        "cited_source_ids": [
+          "c0000000000000000000000000000012"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "c0000000000000000000000000000012",
+            "excerpt": "Jordan owns the security review and will finish it by Friday."
+          }
+        ],
+        "semantic_result": {
+          "status": "confirmed",
+          "owner": "Jordan",
+          "deadline_text": "by Friday",
+          "deadline_date": null
+        }
+      },
+      {
+        "id": "A2-jordan-pronoun-antecedent",
+        "case": "antecedent",
+        "outcome": "pass",
+        "output_locations": [
+          "document.action_items[2]"
+        ],
+        "cited_source_ids": [
+          "c0000000000000000000000000000013",
+          "c0000000000000000000000000000014"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "c0000000000000000000000000000013",
+            "excerpt": "Jordan will send the signed approval memo after that."
+          },
+          {
+            "source_id": "c0000000000000000000000000000014",
+            "excerpt": "He will send it to me, and I will update the tracker when it arrives."
+          }
+        ],
+        "semantic_result": {
+          "status": "confirmed",
+          "owner": "Jordan",
+          "deadline_text": "after that",
+          "deadline_date": null,
+          "antecedent_resolution": "He=Jordan; it=signed approval memo"
+        }
+      },
+      {
+        "id": "A3-leo-self-assignment",
+        "case": "antecedent",
+        "outcome": "pass",
+        "output_locations": [
+          "document.action_items[3]"
+        ],
+        "cited_source_ids": [
+          "c0000000000000000000000000000014"
+        ],
+        "actual_source_evidence": [
+          {
+            "source_id": "c0000000000000000000000000000014",
+            "excerpt": "I will update the tracker when it arrives."
+          }
+        ],
+        "semantic_result": {
+          "status": "confirmed",
+          "owner": "Leo",
+          "deadline_text": "when it arrives",
+          "deadline_date": null,
+          "antecedent_resolution": "I=Leo; it=signed approval memo"
+        }
+      }
+    ]
+  },
+  "decision_action_audit": {
+    "reviewed_entries": 40,
+    "material_fabricated_owner_deadline_or_promoted_proposal": "none found",
+    "citation_context_warning_count": 3,
+    "warning_scope": "Some owner names require nearby retained source context outside the action citation; these are not fabricated facts and remain a citation-locality limitation."
+  },
+  "candidate_replay": {
+    "result": "PASS",
+    "long_document_unchanged": true,
+    "short_pass": 9,
+    "short_total": 9,
+    "only_change": "proposal Priya deadline_date: null -> 2026-11-11",
+    "new_provider_calls": 0
+  },
+  "limitations": [
+    "This does not validate original private-cohort counts or end-to-end ASR/diarization performance.",
+    "This does not claim full 30-minute ASR performance or perform exhaustive grading of all generated bullets."
+  ]
+}

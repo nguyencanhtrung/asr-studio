@@ -1,0 +1,39 @@
+{
+  "manifest_version": 1,
+  "task": "notes-compact-controls",
+  "state_ref": "f184ab5a419393e65605659ae17ce0a657cffe20+a8a7f4f952a5606f52e1aa9fea57ad7f00ab9df9c2ea291d63d9ba598ce5971d",
+  "hash_algorithm": "sha256",
+  "timestamps_note": "All fixture timestamps are designed source coordinates, not real audio duration.",
+  "sources": [
+    {
+      "fixture": "mixed",
+      "path": "mixed.json",
+      "sha256": "2927f1d29b31fa0db256d87b960b4619d64e904bee09d8c7e37d22bb6ea11248",
+      "turns": 10,
+      "output_language": "vi"
+    },
+    {
+      "fixture": "proposal",
+      "path": "proposal.json",
+      "sha256": "f817d6325acdece14a398532feca93d92ac6872ec9becc11bbebc7adb4bc860b",
+      "turns": 6,
+      "output_language": "en"
+    },
+    {
+      "fixture": "antecedent",
+      "path": "antecedent.json",
+      "sha256": "ef2241153ac3bfdb9d9b4c3ccff7bf8a9bcb52c236e197a743fe7e938c1362e3",
+      "turns": 5,
+      "output_language": "en"
+    }
+  ],
+  "gold": {
+    "path": "gold.json",
+    "sha256": "fea6d46e8e176944c7593c7cf742d4b8a9eed58d562f8819f34e15425e423877",
+    "checks": {
+      "mixed": 4,
+      "proposal": 2,
+      "antecedent": 3
+    }
+  }
+}

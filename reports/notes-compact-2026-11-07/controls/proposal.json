@@ -1,0 +1,91 @@
+{
+  "id": "b0000000000000000000000000000001",
+  "meeting_id": "b0000000000000000000000000000002",
+  "generation_id": "b0000000000000000000000000000003",
+  "source_version": 1,
+  "notes_source_version": 1,
+  "metadata_version": 1,
+  "meeting_date": "2026-11-10",
+  "speakers": [
+    {
+      "speaker_id": "SPEAKER_00",
+      "display_name": "Ava",
+      "first_seen_seconds": 200.0,
+      "last_seen_seconds": 251.0
+    },
+    {
+      "speaker_id": "SPEAKER_01",
+      "display_name": "Ben",
+      "first_seen_seconds": 209.0,
+      "last_seen_seconds": 217.0
+    },
+    {
+      "speaker_id": "SPEAKER_02",
+      "display_name": "Chen",
+      "first_seen_seconds": 231.0,
+      "last_seen_seconds": 261.0
+    }
+  ],
+  "segments": [
+    {
+      "id": "b0000000000000000000000000000011",
+      "sequence": 0,
+      "start_seconds": 200.0,
+      "end_seconds": 207.0,
+      "text": "Before we close, I want to revisit the customer export.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Ava"
+    },
+    {
+      "id": "b0000000000000000000000000000012",
+      "sequence": 1,
+      "start_seconds": 209.0,
+      "end_seconds": 217.0,
+      "text": "The current export is slow for accounts with more than ten thousand rows.",
+      "original_speaker_id": "SPEAKER_01",
+      "speaker_id": "SPEAKER_01",
+      "speaker_name": "Ben"
+    },
+    {
+      "id": "b0000000000000000000000000000013",
+      "sequence": 2,
+      "start_seconds": 219.0,
+      "end_seconds": 229.0,
+      "text": "We could add a CSV cache next sprint, but no one owns that work yet.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Ava"
+    },
+    {
+      "id": "b0000000000000000000000000000014",
+      "sequence": 3,
+      "start_seconds": 231.0,
+      "end_seconds": 239.0,
+      "text": "That sounds useful, but let's check the storage cost before we commit.",
+      "original_speaker_id": "SPEAKER_02",
+      "speaker_id": "SPEAKER_02",
+      "speaker_name": "Chen"
+    },
+    {
+      "id": "b0000000000000000000000000000015",
+      "sequence": 4,
+      "start_seconds": 241.0,
+      "end_seconds": 251.0,
+      "text": "Separately, Priya will update the export error message by tomorrow.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Ava"
+    },
+    {
+      "id": "b0000000000000000000000000000016",
+      "sequence": 5,
+      "start_seconds": 253.0,
+      "end_seconds": 261.0,
+      "text": "Confirmed. Priya owns the error-message update, and we will track it.",
+      "original_speaker_id": "SPEAKER_02",
+      "speaker_id": "SPEAKER_02",
+      "speaker_name": "Chen"
+    }
+  ]
+}

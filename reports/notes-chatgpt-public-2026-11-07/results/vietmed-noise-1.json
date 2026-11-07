@@ -1,0 +1,46 @@
+{
+  "case": "vietmed-noise-1",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "effort": "medium",
+  "output_language": "en",
+  "prompt_version": "notes-hierarchical-v8",
+  "source_sha256": "d2a41fef7ad85247a22f1930e5e7230c3741bcd1a8e33fa90f33830d99bd9eaf",
+  "source_segments": 1,
+  "status": "succeeded",
+  "document": {
+    "schema_version": 1,
+    "overview": [],
+    "key_topics": [],
+    "decisions": [],
+    "open_questions": [
+      {
+        "text": "Unknown cause; unclear fragment about later stopping/removing “nạp” (loading/top-up) and “due to…”",
+        "source_ids": [
+          "c0308753e444bd84a988eb04ef6012d7"
+        ]
+      }
+    ],
+    "action_items": [],
+    "confirmation_items": []
+  },
+  "coverage": {
+    "version": 1,
+    "segment_count": 1,
+    "chunks": [
+      {
+        "index": 1,
+        "owned": [
+          0,
+          1
+        ],
+        "overlap": null,
+        "parts": [],
+        "provider_call_index": 1
+      }
+    ],
+    "provider_calls": 1,
+    "output_recoveries": 0
+  },
+  "elapsed_seconds": 7.802
+}

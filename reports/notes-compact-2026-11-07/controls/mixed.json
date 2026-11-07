@@ -1,0 +1,131 @@
+{
+  "id": "a0000000000000000000000000000001",
+  "meeting_id": "a0000000000000000000000000000002",
+  "generation_id": "a0000000000000000000000000000003",
+  "source_version": 1,
+  "notes_source_version": 1,
+  "metadata_version": 1,
+  "meeting_date": "2026-11-09",
+  "speakers": [
+    {
+      "speaker_id": "SPEAKER_00",
+      "display_name": "Minh",
+      "first_seen_seconds": 100.0,
+      "last_seen_seconds": 191.0
+    },
+    {
+      "speaker_id": "SPEAKER_01",
+      "display_name": "Lan",
+      "first_seen_seconds": 110.0,
+      "last_seen_seconds": 179.0
+    },
+    {
+      "speaker_id": "SPEAKER_02",
+      "display_name": "Omar",
+      "first_seen_seconds": 120.0,
+      "last_seen_seconds": 201.0
+    }
+  ],
+  "segments": [
+    {
+      "id": "a0000000000000000000000000000011",
+      "sequence": 0,
+      "start_seconds": 100.0,
+      "end_seconds": 108.0,
+      "text": "Let's confirm the rollout plan for the billing dashboard.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Minh"
+    },
+    {
+      "id": "a0000000000000000000000000000012",
+      "sequence": 1,
+      "start_seconds": 110.0,
+      "end_seconds": 118.0,
+      "text": "The API is ready, but QA still needs the export flow.",
+      "original_speaker_id": "SPEAKER_01",
+      "speaker_id": "SPEAKER_01",
+      "speaker_name": "Lan"
+    },
+    {
+      "id": "a0000000000000000000000000000013",
+      "sequence": 2,
+      "start_seconds": 120.0,
+      "end_seconds": 127.0,
+      "text": "I might be able to review the export flow today, but I have not committed to it.",
+      "original_speaker_id": "SPEAKER_02",
+      "speaker_id": "SPEAKER_02",
+      "speaker_name": "Omar"
+    },
+    {
+      "id": "a0000000000000000000000000000014",
+      "sequence": 3,
+      "start_seconds": 129.0,
+      "end_seconds": 138.0,
+      "text": "Lan, can you send the test data to QA? Let's aim for Thursday.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Minh"
+    },
+    {
+      "id": "a0000000000000000000000000000015",
+      "sequence": 4,
+      "start_seconds": 140.0,
+      "end_seconds": 148.0,
+      "text": "Được, tôi sẽ gửi test data cho QA vào thứ Năm.",
+      "original_speaker_id": "SPEAKER_01",
+      "speaker_id": "SPEAKER_01",
+      "speaker_name": "Lan"
+    },
+    {
+      "id": "a0000000000000000000000000000016",
+      "sequence": 5,
+      "start_seconds": 150.0,
+      "end_seconds": 158.0,
+      "text": "I suggest a customer demo on Friday afternoon.",
+      "original_speaker_id": "SPEAKER_02",
+      "speaker_id": "SPEAKER_02",
+      "speaker_name": "Omar"
+    },
+    {
+      "id": "a0000000000000000000000000000017",
+      "sequence": 6,
+      "start_seconds": 160.0,
+      "end_seconds": 168.0,
+      "text": "That demo time is still a proposal; we will confirm it after QA.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Minh"
+    },
+    {
+      "id": "a0000000000000000000000000000018",
+      "sequence": 7,
+      "start_seconds": 170.0,
+      "end_seconds": 179.0,
+      "text": "I can send the test data by Wednesday noon instead of Thursday.",
+      "original_speaker_id": "SPEAKER_01",
+      "speaker_id": "SPEAKER_01",
+      "speaker_name": "Lan"
+    },
+    {
+      "id": "a0000000000000000000000000000019",
+      "sequence": 8,
+      "start_seconds": 181.0,
+      "end_seconds": 191.0,
+      "text": "Agreed. Lan sends the test data by Wednesday noon; this replaces Thursday.",
+      "original_speaker_id": "SPEAKER_00",
+      "speaker_id": "SPEAKER_00",
+      "speaker_name": "Minh"
+    },
+    {
+      "id": "a0000000000000000000000000000020",
+      "sequence": 9,
+      "start_seconds": 193.0,
+      "end_seconds": 201.0,
+      "text": "Chốt vậy nhé. We will decide the demo time after QA.",
+      "original_speaker_id": "SPEAKER_02",
+      "speaker_id": "SPEAKER_02",
+      "speaker_name": "Omar"
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "case": "long",
+      "status": "succeeded",
+      "output_language": "en",
+      "source_segments": 557,
+      "elapsed_seconds": 115.459,
+      "provider_calls": 1,
+      "output_recoveries": 0,
+      "bullets": 79,
+      "citation_refs": 265,
+      "distinct_cited_ids": 235,
+      "unresolved_ids": 0,
+      "result_sha256": "78429b6672107edabbacc037f04861420c5dd5399b203cca41237c1cffcbbae5"
+    },
+    {
+      "case": "mixed",
+      "status": "succeeded",
+      "output_language": "vi",
+      "source_segments": 10,
+      "elapsed_seconds": 20.789,
+      "provider_calls": 1,
+      "output_recoveries": 0,
+      "bullets": 6,
+      "citation_refs": 10,
+      "distinct_cited_ids": 9,
+      "unresolved_ids": 0,
+      "result_sha256": "755eef82db6a2d9874f64f97906b8044be34637e0c232e370c9c43f49fc34917"
+    },
+    {
+      "case": "proposal",
+      "status": "succeeded",
+      "output_language": "en",
+      "source_segments": 6,
+      "elapsed_seconds": 12.063,
+      "provider_calls": 1,
+      "output_recoveries": 0,
+      "bullets": 6,
+      "citation_refs": 7,
+      "distinct_cited_ids": 6,
+      "unresolved_ids": 0,
+      "result_sha256": "c0347c864d1e022bf7accd13ce7ce2d0e67467fd58f341eaea69534f305cb27c"
+    },
+    {
+      "case": "antecedent",
+      "status": "succeeded",
+      "output_language": "en",
+      "source_segments": 5,
+      "elapsed_seconds": 14.719,
+      "provider_calls": 1,
+      "output_recoveries": 0,
+      "bullets": 5,
+      "citation_refs": 6,
+      "distinct_cited_ids": 5,
+      "unresolved_ids": 0,
+      "result_sha256": "aff6546aee83b7884bf4ce15a45b9e749cc066bc6f018000d41732668cbf38d6"
+    }
+  ],
+  "total_provider_calls": 4,
+  "total_recoveries": 0,
+  "total_generation_seconds": 163.03,
+  "total_bullets": 96
+}
