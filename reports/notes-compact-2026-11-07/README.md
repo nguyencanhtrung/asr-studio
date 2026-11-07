@@ -60,7 +60,10 @@ Regression tại `tests/test_notes_document.py::test_deadlines_do_not_invent_dat
 - #78: phân biệt proposal/action, owner và hạn trên nguồn công khai/tổng hợp; chưa thay thế ngưỡng 28/38 của cohort cũ.
 - #79: nguồn dài có trích dẫn và kiểm tra các quyết định/action; tái sử dụng riêng quan sát VietMed không bịa thủ thuật ở cùng source/model/code trong báo cáo công khai trước (hash ở plan). Không tính sàng lọc cũ thành accuracy, không tuyên bố bản thử v9 đã được nghiệm thu.
 - #88: bổ sung nguồn họp thật dài và fixture Việt–Anh; chưa có cuộc họp Việt–Anh tự nhiên dài tương đương.
-- #107/#108/#110: có bằng chứng giới hạn về người nhận việc, trích dẫn/tiền ngữ và trạng thái cuối; không tự tick ngưỡng 69/75 hoặc các yêu cầu lượt lặp/cohort riêng tư cũ bằng dataset khác.
+- #107: ca mixed giữ deadline cuối đã chốt, không xếp lại thành proposal; chưa đo lại cohort cũ.
+- #108: ca dài giữ đủ nguồn trong một request; không kiểm chứng thiết kế chia phần chạy song song rồi hợp nhất.
+- #110: chưa đo lặp ý giữa các mục; không dùng kết quả checkpoint để đóng yêu cầu dedup.
+- Không tự tick ngưỡng 69/75 hoặc các yêu cầu lượt lặp/cohort riêng tư cũ bằng dataset khác.
 
 Bộ gọn là cổng nghiệm thu được người vận hành đồng ý cho đợt này. Các tiêu chí cũ chưa đo vẫn mở; không tự đóng các issue trên bằng kết quả thay thế. Không đánh giá mọi model hoặc chấm toàn bộ từng đoạn nguồn. PR không tự merge hoặc cập nhật production.
 
