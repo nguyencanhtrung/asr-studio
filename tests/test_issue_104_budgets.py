@@ -266,10 +266,9 @@ def test_unknown_id_in_large_single_pass_uses_the_existing_repair(provider, mode
     )
 
     assert result == empty
-    assert [(call["stage"], call["attempt"]) for call in calls] == [
-        ("single", "primary"),
-        ("single", "repair"),
-    ]
+    expected = [("single", "primary"), ("single", "repair")]
+    expected.append(("audit", "primary"))
+    assert [(call["stage"], call["attempt"]) for call in calls] == expected
     assert all(call["budget"].uses_token_estimate for call in calls)
     assert len(calls[0]["allowed_source_ids"]) == 853
 
@@ -295,7 +294,16 @@ def test_grouped_citation_limit_accepts_100_units_expanding_to_200(provider, mod
     def transport(_prompt: str, **kwargs: object) -> str:
         calls.append(kwargs)
         document = _empty_document()
-        document["overview"] = [{"text": "one hundred units", "source_ids": list(unit_ids[:100])}]
+        if kwargs["stage"] == "audit":
+            payload = json.loads(_prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
+            text = (
+                payload["audit_catalog"]["draft_candidates"][0]["ref"]
+                if provider == "antigravity"
+                else payload["summaries"][0]["notes"]["overview"][0]["text"]
+            )
+        else:
+            text = "one hundred units"
+        document["overview"] = [{"text": text, "source_ids": list(unit_ids[:100])}]
         return json.dumps(document)
 
     result = generate_notes_document(
@@ -310,8 +318,8 @@ def test_grouped_citation_limit_accepts_100_units_expanding_to_200(provider, mod
 
     assert projection.max_unit_size == 2
     assert source_refs["maxItems"] == nd.MAX_SOURCE_REFS_PER_ITEM // 2
-    assert len(calls) == 1
-    assert calls[0]["max_unit_size"] == 2
+    assert len(calls) == 2
+    assert all(call["max_unit_size"] == 2 for call in calls)
     assert result["overview"][0]["source_ids"] == [
         segment["id"] for segment in snapshot["segments"][:200]
     ]
@@ -351,10 +359,9 @@ def test_grouped_citation_limit_rejects_101_units_at_ingress_and_repairs(provide
     )
 
     assert result == _empty_document()
-    assert [(call["stage"], call["attempt"]) for call in calls] == [
-        ("single", "primary"),
-        ("single", "repair"),
-    ]
+    expected = [("single", "primary"), ("single", "repair")]
+    expected.append(("audit", "primary"))
+    assert [(call["stage"], call["attempt"]) for call in calls] == expected
     assert all(call["max_unit_size"] == 2 for call in calls)
 
 
@@ -365,16 +372,40 @@ def test_grouped_citation_limit_rejects_101_units_at_ingress_and_repairs(provide
         ("antigravity", "gemini-3.8-flash"),
     ],
 )
-def test_single_pass_pipeline_makes_exactly_one_provider_call(provider, model):
+def test_short_owner_pipeline_runs_one_qualified_source_audit(provider, model):
+    snapshot = _many_segment_snapshot(count=10)
     calls: list[dict[str, object]] = []
     coverage: list[dict[str, object]] = []
 
-    def transport(_prompt: str, **kwargs: object) -> str:
+    def transport(prompt: str, **kwargs: object) -> str:
         calls.append(kwargs)
-        return json.dumps(_empty_document())
+        if kwargs["stage"] == "single":
+            document = _empty_document()
+            source = json.loads(prompt.split("SOURCE_JSON:\n", 1)[1])
+            document["overview"] = [{"text": "Draft", "source_ids": [source["segments"][0]["id"]]}]
+            return json.dumps(document)
+
+        assert kwargs["stage"] == "audit"
+        payload = json.loads(prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
+        assert payload["source"] == nd.provider_source(
+            nd.select_notes_source_projection(
+                snapshot, budget=nd.notes_budget(provider, model)
+            ).snapshot
+        )
+        assert payload["summaries"][0]["notes"]["overview"][0]["text"] == "Draft"
+        document = _empty_document()
+        if provider == "antigravity":
+            ref = payload["audit_catalog"]["draft_candidates"][0]["ref"]
+        else:
+            assert "audit_catalog" not in payload
+            ref = "Draft"
+        document["overview"] = [
+            {"text": ref, "source_ids": [payload["source"]["segments"][0]["id"]]}
+        ]
+        return json.dumps(document)
 
     result = generate_notes_document(
-        snapshot=_many_segment_snapshot(),
+        snapshot=snapshot,
         output_language="en",
         provider=provider,
         model=model,
@@ -384,10 +415,100 @@ def test_single_pass_pipeline_makes_exactly_one_provider_call(provider, model):
         on_coverage=coverage.append,
     )
 
-    assert result == _empty_document()
-    assert len(calls) == 1
-    assert calls[0]["stage"] == "single"
+    assert result["overview"][0]["text"] == "Draft"
+    assert [call["stage"] for call in calls] == ["single", "audit"]
+    assert coverage[0]["provider_calls"] == 2
+    assert coverage[0]["source_audit"] == {
+        "status": "applied",
+        "provider_call_index": 2,
+        "mode": "references" if provider == "antigravity" else "rewrite",
+    }
+    assert coverage[0]["output_recoveries"] == 0
+
+
+def test_source_audit_failure_is_terminal_instead_of_publishing_an_unsupported_addition():
+    snapshot = _snapshot(0)
+    snapshot["segments"][0]["text"] = "A checklist is required for the rollout."
+    calls = []
+
+    def transport(_prompt, **kwargs):
+        calls.append(kwargs["stage"])
+        document = _empty_document()
+        text = "A checklist is required for the rollout."
+        if kwargs["stage"] == "audit":
+            text = "A biometric reader was installed for the rollout."
+        document["key_topics"] = [{"text": text, "source_ids": [kwargs["allowed_source_ids"][0]]}]
+        return json.dumps(document)
+
+    with pytest.raises(AssertionError) as failure:
+        generate_notes_document(
+            snapshot=snapshot,
+            output_language="en",
+            provider="antigravity",
+            model="gemini-3.8-flash",
+            transport=transport,
+            invalid_output_error=AssertionError,
+            limit_error=RuntimeError,
+        )
+
+    assert calls == ["single", "audit", "audit"]
+    assert failure.value.args[0]["stage"] == "audit"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("chatgpt", "gpt-5.6-sol"),
+        ("antigravity", "gemini-3.8-flash"),
+    ],
+)
+def test_short_owner_source_audit_reports_why_it_is_skipped(provider, model, monkeypatch):
+    snapshot = _snapshot(0)
+    real_budget = nd.notes_budget(provider, model)
+    projection = nd.select_notes_source_projection(snapshot, budget=real_budget)
+    scope = tuple(segment["id"] for segment in projection.snapshot["segments"])
+    single_prompt = nd._source_prompt(projection.snapshot, budget=real_budget)
+    single_repair = nd._repair_prompt(single_prompt, nd._worst_case_repair_output())
+    schema_bytes = nd.notes_schema_json_bytes(scope)
+    single_limit = (
+        nd.estimate_notes_tokens(len(single_repair.encode()) + schema_bytes, real_budget)
+        + real_budget.output_reserve_tokens
+        + nd.NOTES_CONTEXT_HEADROOM_TOKENS
+    )
+    constrained = replace(
+        real_budget,
+        context_window_tokens=single_limit,
+        usable_context_tokens=single_limit,
+    )
+    monkeypatch.setitem(nd.NOTES_BUDGETS, (provider, model), constrained)
+    calls: list[dict[str, object]] = []
+    coverage: list[dict[str, object]] = []
+
+    def transport(_prompt: str, **kwargs: object) -> str:
+        calls.append(kwargs)
+        assert "SOURCE_JSON:\n" in _prompt
+        document = _empty_document()
+        document["overview"] = [
+            {"text": ("x" * 10_000) + str(index), "source_ids": []} for index in range(10)
+        ]
+        return json.dumps(document)
+
+    result = generate_notes_document(
+        snapshot=snapshot,
+        output_language="en",
+        provider=provider,
+        model=model,
+        transport=transport,
+        invalid_output_error=AssertionError,
+        limit_error=RuntimeError,
+        on_coverage=coverage.append,
+    )
+
+    assert len(result["overview"]) == 10
+    assert result["overview"][0]["text"].startswith("x" * 10_000)
+    assert len(calls) == 1 and calls[0]["stage"] == "single"
     assert coverage[0]["provider_calls"] == 1
+    assert coverage[0]["source_audit"] == {"status": "skipped", "reason": "prompt_budget"}
 
 
 @pytest.mark.parametrize(
@@ -979,7 +1100,7 @@ def test_chatgpt_invalid_output_logs_bounded_codes_without_text(caplog, tmp_path
     assert failure.value.diagnostics["validation_reason"] == "source_ids"
 
 
-def test_budgeted_oversize_pipeline_uses_conservative_chatgpt_transport_caps():
+def test_budgeted_oversize_pipeline_uses_the_pinned_chatgpt_owner_budget():
     requests: list[httpx.Request] = []
     calls: list[dict[str, object]] = []
 
@@ -1029,16 +1150,17 @@ def test_budgeted_oversize_pipeline_uses_conservative_chatgpt_transport_caps():
     )
 
     assert result == _empty_document()
-    assert any(call["stage"] == "reduce" for call in calls)
-    assert all(call["budget"].uses_token_estimate is False for call in calls)
+    assert calls
+    assert all(call["budget"].uses_token_estimate is True for call in calls)
     assert all(
-        json.loads(request.content)["max_output_tokens"] == nd.NOTES_MAX_OUTPUT_TOKENS
+        json.loads(request.content)["max_output_tokens"]
+        == nd.CHATGPT_GPT_5_6_SOL_OUTPUT_RESERVE_TOKENS
         for request in requests
     )
-    assert all(len(request.content) <= 128 * 1024 for request in requests)
+    assert all(len(request.content) <= 1 * 1024 * 1024 for request in requests)
 
 
-def test_chunk_recovery_prompt_uses_the_conservative_budget(monkeypatch):
+def test_chunk_recovery_prompt_uses_the_pinned_owner_budget(monkeypatch):
     recovery_budgets: list[nd.NotesBudget] = []
     calls: list[dict[str, object]] = []
     real_recovery_prompt = nd.build_recovery_prompt
@@ -1070,7 +1192,7 @@ def test_chunk_recovery_prompt_uses_the_conservative_budget(monkeypatch):
     )
 
     assert recovery_budgets
-    assert recovery_budgets[0].uses_token_estimate is False
+    assert recovery_budgets[0].uses_token_estimate is True
     assert calls[0]["stage"] == calls[1]["stage"] == "chunk"
     assert calls[1]["attempt"] == "recovery"
 
@@ -1111,16 +1233,17 @@ def test_budgeted_single_pipeline_inspects_the_large_chatgpt_body():
         limit_error=RuntimeError,
     )
 
-    assert len(calls) == len(requests) == 1
-    assert calls[0]["stage"] == "single"
-    assert calls[0]["budget"].uses_token_estimate is True
-    body = json.loads(requests[0].content)
-    assert body["max_output_tokens"] == 65_536
-    assert body["text"]["format"]["schema"]["properties"]["overview"]["items"]["properties"][
-        "source_ids"
-    ]["items"] == {"$ref": "#/$defs/source_id"}
-    assert len(body["text"]["format"]["schema"]["$defs"]["source_id"]["enum"]) <= 999
-    assert len(requests[0].content) <= nd.notes_budget("chatgpt", "gpt-5.6-sol").request_guard_bytes
+    assert len(calls) == len(requests) == 2
+    assert [call["stage"] for call in calls] == ["single", "audit"]
+    assert all(call["budget"].uses_token_estimate is True for call in calls)
+    for request in requests:
+        body = json.loads(request.content)
+        assert body["max_output_tokens"] == 65_536
+        assert body["text"]["format"]["schema"]["properties"]["overview"]["items"]["properties"][
+            "source_ids"
+        ]["items"] == {"$ref": "#/$defs/source_id"}
+        assert len(body["text"]["format"]["schema"]["$defs"]["source_id"]["enum"]) <= 999
+        assert len(request.content) <= nd.notes_budget("chatgpt", "gpt-5.6-sol").request_guard_bytes
 
 
 def test_antigravity_frame_guard_reserves_non_ascii_repair_payload():
@@ -1489,16 +1612,18 @@ def test_antigravity_owner_sends_large_scope_schema_in_one_message(tmp_path):
     schema = nd.build_notes_schema(scope, max_unit_size=projection.max_unit_size)
     schema_json = json.dumps(schema, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
-    assert adapter.generate_calls == 1
-    assert adapter.generate_messages[0].endswith(schema_json)
-    assert json.loads(adapter.generate_messages[0].rsplit("\n", 1)[-1]) == schema
+    assert adapter.generate_calls == 2
+    assert all(message.endswith(schema_json) for message in adapter.generate_messages)
+    assert all(
+        json.loads(message.rsplit("\n", 1)[-1]) == schema for message in adapter.generate_messages
+    )
     assert len(scope) <= nd.MAX_SOURCE_IDS_PER_SCOPE
     assert json.loads(adapter.generate_messages[0].rsplit("\n", 1)[-1])["$defs"]["source_id"][
         "enum"
     ] == list(scope)
 
 
-def test_antigravity_conservative_pipeline_sends_a_frame_above_chatgpt_limit(tmp_path):
+def test_antigravity_unknown_model_stays_within_its_conservative_frame_limit(tmp_path):
     snapshot = _snapshot(0)
     snapshot["segments"][0]["text"] = "\x7f" * 21_200
     adapter = _ProviderNotesAdapter()
@@ -1524,11 +1649,11 @@ def test_antigravity_conservative_pipeline_sends_a_frame_above_chatgpt_limit(tmp
         )
         + 1
     )
-    assert 128 * 1024 < frame_bytes < 1_048_576
+    assert frame_bytes <= 1_048_576
     assert coverage[0]["provider_calls"] >= 1
 
 
-def test_chatgpt_provider_passes_conservative_budget_to_real_adapter_for_oversize_owner(
+def test_chatgpt_provider_passes_the_pinned_owner_budget_to_real_adapter(
     tmp_path,
 ):
     requests: list[httpx.Request] = []
@@ -1566,10 +1691,11 @@ def test_chatgpt_provider_passes_conservative_budget_to_real_adapter_for_oversiz
         for request in requests
     )
     assert all(
-        json.loads(request.content)["max_output_tokens"] == nd.NOTES_MAX_OUTPUT_TOKENS
+        json.loads(request.content)["max_output_tokens"]
+        == nd.CHATGPT_GPT_5_6_SOL_OUTPUT_RESERVE_TOKENS
         for request in requests
     )
-    assert all(len(request.content) <= 128 * 1024 for request in requests)
+    assert all(len(request.content) <= 1 * 1024 * 1024 for request in requests)
 
 
 def test_chatgpt_planner_body_matches_real_adapter_and_keeps_builder_fields():

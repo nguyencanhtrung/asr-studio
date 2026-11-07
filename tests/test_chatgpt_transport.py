@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import jwt
@@ -30,6 +32,21 @@ from asr_studio.notes_document import (
 )
 
 CLIENT_ID = "oaiapp_test-123456"
+
+
+def test_chatgpt_notes_usage_is_isolated_per_transport_thread():
+    adapter = ChatGPTHTTPAdapter()
+    barrier = threading.Barrier(2)
+
+    def observe(value):
+        adapter.last_notes_usage = {"output_tokens": value}
+        barrier.wait()
+        return dict(adapter.last_notes_usage)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        observed = list(executor.map(observe, (11, 22)))
+
+    assert observed == [{"output_tokens": 11}, {"output_tokens": 22}]
 
 
 class SlowByteStream(httpx.SyncByteStream):

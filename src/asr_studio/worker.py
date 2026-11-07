@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
+import fcntl  # noqa: F401 - retained for callers/tests that probe the worker lock
 import json
 import math
 import os
@@ -13,7 +13,6 @@ import signal
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -21,6 +20,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from asr_studio import service_runtime
 from asr_studio.alignment import AlignmentError, align_segments_to_speakers, validate_turns
 from asr_studio.asr_models import AUTO, engine_of
 from asr_studio.config import Settings
@@ -38,6 +38,19 @@ from asr_studio.runtime import (
     write_runtime_profile,
 )
 from asr_studio.safe_logging import emit_safe_log
+from asr_studio.service_runtime import (
+    LOCK_RETRY_INTERVAL_SECONDS,
+    LOCK_RETRY_SECONDS,
+    acquire_service_lock,
+    acquire_service_probe,
+    service_heartbeat_path,
+    service_is_active,
+    service_is_healthy,
+    service_lock_is_held,
+    service_lock_path,
+    service_role,
+    write_service_heartbeat,
+)
 from asr_studio.storage import initialize
 from asr_studio.tasks import (
     TASK_ERROR_MESSAGES,
@@ -53,7 +66,7 @@ from asr_studio.tasks import (
 )
 
 HEARTBEAT_INTERVAL_SECONDS = 5
-HEARTBEAT_MAX_AGE_SECONDS = 20
+HEARTBEAT_MAX_AGE_SECONDS = service_runtime.HEARTBEAT_MAX_AGE_SECONDS
 TASK_POLL_INTERVAL_SECONDS = 0.5
 TASK_PROGRESS_INTERVAL_SECONDS = 1.0
 RUNNER_TERM_GRACE_SECONDS = 5.0
@@ -62,8 +75,8 @@ RUNNER_POST_EOF_GRACE_SECONDS = 2.0
 NOTES_TASK_TIMEOUT_SECONDS = 3600.0
 MAX_CHILD_EVENT_LINE_BYTES = 1024 * 1024
 WORKER_LOCK_NAME = ".worker.lock"
-WORKER_LOCK_RETRY_SECONDS = 1.0
-WORKER_LOCK_RETRY_INTERVAL_SECONDS = 0.05
+WORKER_LOCK_RETRY_SECONDS = LOCK_RETRY_SECONDS
+WORKER_LOCK_RETRY_INTERVAL_SECONDS = LOCK_RETRY_INTERVAL_SECONDS
 _HEALTHY_STATES = frozenset({"idle", "running", "stopping"})
 
 
@@ -72,90 +85,81 @@ class WorkerAlreadyRunning(RuntimeError):
 
 
 def heartbeat_path(data_dir: Path) -> Path:
-    return Path(data_dir) / "worker.liveness"
+    return service_heartbeat_path(data_dir, "worker")
 
 
 def worker_lock_path(data_dir: Path) -> Path:
-    return Path(data_dir) / WORKER_LOCK_NAME
+    return service_lock_path(data_dir, "worker")
+
+
+def transcription_heartbeat_path(data_dir: Path) -> Path:
+    return service_heartbeat_path(data_dir, "transcription")
+
+
+def transcription_lock_path(data_dir: Path) -> Path:
+    return service_lock_path(data_dir, "transcription")
 
 
 def acquire_worker_lock(
     data_dir: Path, *, retry_seconds: float = WORKER_LOCK_RETRY_SECONDS
 ) -> int | None:
-    directory = Path(data_dir)
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(directory, 0o700)
-    path = worker_lock_path(directory)
-    descriptor = os.open(
-        path,
-        os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    os.fchmod(descriptor, 0o600)
-    # A health probe briefly holds a shared lock; retry so it cannot make startup exit.
-    deadline = time.monotonic() + retry_seconds
-    while True:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return descriptor
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                os.close(descriptor)
-                return None
-            time.sleep(WORKER_LOCK_RETRY_INTERVAL_SECONDS)
+    return acquire_service_lock(data_dir, "worker", retry_seconds=retry_seconds)
+
+
+def acquire_transcription_lock(
+    data_dir: Path, *, retry_seconds: float = WORKER_LOCK_RETRY_SECONDS
+) -> int | None:
+    return acquire_service_lock(data_dir, "transcription", retry_seconds=retry_seconds)
 
 
 def _worker_lock_is_held(data_dir: Path) -> bool:
-    path = worker_lock_path(data_dir)
-    try:
-        descriptor = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
-        return False
-    try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        return False
-    finally:
-        os.close(descriptor)
+    return service_lock_is_held(data_dir, "worker")
 
 
-def write_heartbeat(data_dir: Path, state: str = "idle") -> None:
-    if state not in {*_HEALTHY_STATES, "starting", "stopped"}:
-        raise ValueError("Unknown worker heartbeat state")
-    directory = Path(data_dir)
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(directory, 0o700)
-    path = heartbeat_path(directory)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=".worker-", dir=directory)
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="ascii") as temporary_file:
-            temporary_file.write(f"{state} {time.time_ns()}\n")
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.replace(temporary_name, path)
-        os.chmod(path, 0o600)
-    except OSError:
-        with suppress(FileNotFoundError):
-            os.unlink(temporary_name)
-        raise
+def write_heartbeat(data_dir: Path, state: str = "idle", *, role: str = "legacy") -> None:
+    write_service_heartbeat(data_dir, "worker", state, role=role)
 
 
-def is_healthy(data_dir: Path, *, now: float | None = None) -> bool:
-    path = heartbeat_path(data_dir)
-    try:
-        status = path.read_text(encoding="ascii").split(maxsplit=1)[0]
-        age = (time.time() if now is None else now) - path.stat().st_mtime
-    except (OSError, IndexError):
-        return False
-    return (
-        status in _HEALTHY_STATES
-        and -1 <= age <= HEARTBEAT_MAX_AGE_SECONDS
-        and _worker_lock_is_held(data_dir)
+def write_transcription_heartbeat(data_dir: Path, state: str = "idle") -> None:
+    write_service_heartbeat(data_dir, "transcription", state, role="transcription")
+
+
+def _service_for_role(role: str) -> str:
+    if role == "legacy":
+        return "worker"
+    if role == "transcription":
+        return "transcription"
+    raise ValueError(f"Unknown worker role: {role}")
+
+
+def is_healthy(data_dir: Path, *, now: float | None = None, role: str | None = None) -> bool:
+    if role is None:
+        return is_healthy(data_dir, now=now, role="legacy") or is_healthy(
+            data_dir, now=now, role="transcription"
+        )
+    return service_is_healthy(
+        data_dir,
+        _service_for_role(role),
+        now=now,
+        expected_roles={role},
     )
+
+
+def is_active(data_dir: Path, *, now: float | None = None, role: str | None = None) -> bool:
+    if role is None:
+        return is_active(data_dir, now=now, role="legacy") or is_active(
+            data_dir, now=now, role="transcription"
+        )
+    return service_is_active(
+        data_dir,
+        _service_for_role(role),
+        now=now,
+        expected_roles={role},
+    )
+
+
+def worker_role(data_dir: Path) -> str | None:
+    return service_role(data_dir, "worker")
 
 
 def _group_exists(process_group_id: int) -> bool:
@@ -304,7 +308,7 @@ def _notes_command(task: dict[str, Any], owner_id: str, data_dir: Path) -> list[
 
 def _run_child(
     settings: Settings,
-    lock_fd: int,
+    lock_fd: int | tuple[int, ...],
     task_id: str,
     owner_id: str,
     command: list[str],
@@ -314,6 +318,7 @@ def _run_child(
     on_event: Any,
     *,
     deadline: float | None = None,
+    heartbeat_writer: Any = write_heartbeat,
 ) -> dict[str, object]:
     """Run one isolated phase and return only after its process group is gone."""
     process: subprocess.Popen[bytes] | None = None
@@ -337,6 +342,7 @@ def _run_child(
         return result
 
     try:
+        pass_fds = (lock_fd,) if isinstance(lock_fd, int) else lock_fd
         process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
@@ -344,7 +350,7 @@ def _run_child(
             stderr=subprocess.PIPE,
             bufsize=0,
             close_fds=True,
-            pass_fds=(lock_fd,),
+            pass_fds=pass_fds,
             start_new_session=True,
             env={
                 **_safe_runner_environment(),
@@ -452,7 +458,7 @@ def _run_child(
                     break
                 last_progress_write = now
             if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
-                write_heartbeat(settings.data_dir, "running")
+                heartbeat_writer(settings.data_dir, "running")
                 last_heartbeat = now
             if process.poll() is not None and child_exit_time is None:
                 child_exit_time = now
@@ -481,16 +487,16 @@ def _run_child(
             result["protocol_error"] = True
 
         if result["stop_reason"] is not None or result["protocol_error"]:
-            write_heartbeat(settings.data_dir, "stopping")
+            heartbeat_writer(settings.data_dir, "stopping")
             while not terminate_and_reap_process_group(process):
                 if stop_event.wait(0.5):
                     pass
-                write_heartbeat(settings.data_dir, "stopping")
+                heartbeat_writer(settings.data_dir, "stopping")
         else:
             result["return_code"] = process.wait()
             if _group_exists(process.pid):
                 while not terminate_and_reap_process_group(process, term_grace_seconds=0.1):
-                    write_heartbeat(settings.data_dir, "stopping")
+                    heartbeat_writer(settings.data_dir, "stopping")
                     time.sleep(0.5)
                 result["protocol_error"] = True
         result["return_code"] = process.returncode
@@ -505,7 +511,7 @@ def _run_child(
         if process is not None:
             reaped = terminate_and_reap_process_group(process)
             while not reaped:
-                write_heartbeat(settings.data_dir, "stopping")
+                heartbeat_writer(settings.data_dir, "stopping")
                 reaped = terminate_and_reap_process_group(process, term_grace_seconds=0.1)
                 if not reaped:
                     time.sleep(0.5)
@@ -539,9 +545,11 @@ def _finish_after_child_stop(
 
 def _run_notes_task(
     settings: Settings,
-    lock_fd: int,
+    lock_fd: int | tuple[int, ...],
     task: dict[str, Any],
     stop_event: threading.Event,
+    *,
+    heartbeat_writer: Any = write_heartbeat,
 ) -> None:
     task_id = str(task["id"])
     owner_id = str(task["owner_id"])
@@ -671,6 +679,7 @@ def _run_notes_task(
             ),
             on_event,
             deadline=deadline,
+            heartbeat_writer=heartbeat_writer,
         )
         elapsed = time.monotonic() - started
         if child["stop_reason"] == "deadline":
@@ -730,12 +739,14 @@ def _run_notes_task(
 
 def _run_task(
     settings: Settings,
-    lock_fd: int,
+    lock_fd: int | tuple[int, ...],
     task: dict[str, Any],
     stop_event: threading.Event,
+    *,
+    heartbeat_writer: Any = write_heartbeat,
 ) -> None:
     if task.get("kind") == "notes":
-        _run_notes_task(settings, lock_fd, task, stop_event)
+        _run_notes_task(settings, lock_fd, task, stop_event, heartbeat_writer=heartbeat_writer)
         return
     task_id = str(task["id"])
     owner_id = str(task["owner_id"])
@@ -881,6 +892,7 @@ def _run_task(
             started,
             progress,
             handle_asr_event,
+            heartbeat_writer=heartbeat_writer,
         )
         if asr_result["stop_reason"] is not None:
             _finish_after_child_stop(
@@ -914,6 +926,7 @@ def _run_task(
             started,
             progress,
             handle_diarization_event,
+            heartbeat_writer=heartbeat_writer,
         )
         if diarization_result["stop_reason"] is not None:
             _finish_after_child_stop(
@@ -1014,37 +1027,71 @@ def _run_task(
             )
 
 
-def _worker_loop(settings: Settings, lock_fd: int, stop_event: threading.Event) -> None:
+def _worker_loop(
+    settings: Settings,
+    lock_fd: int | tuple[int, ...],
+    stop_event: threading.Event,
+    *,
+    role: str = "legacy",
+    heartbeat_writer: Any = write_heartbeat,
+) -> None:
     last_heartbeat = 0.0
     while not stop_event.is_set():
         now = time.monotonic()
         if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
-            write_heartbeat(settings.data_dir, "idle")
+            heartbeat_writer(settings.data_dir, "idle")
             last_heartbeat = now
-        task = claim_next_task(settings.data_dir, owner_id=uuid.uuid4().hex)
+        task = claim_next_task(
+            settings.data_dir,
+            owner_id=uuid.uuid4().hex,
+            role=role,
+        )
         if task is None:
             stop_event.wait(TASK_POLL_INTERVAL_SECONDS)
             continue
-        write_heartbeat(settings.data_dir, "running")
+        heartbeat_writer(settings.data_dir, "running")
         last_heartbeat = time.monotonic()
-        _run_task(settings, lock_fd, task, stop_event)
-        write_heartbeat(settings.data_dir, "idle")
+        _run_task(settings, lock_fd, task, stop_event, heartbeat_writer=heartbeat_writer)
+        heartbeat_writer(settings.data_dir, "idle")
         last_heartbeat = time.monotonic()
 
 
-def run_worker(settings: Settings) -> None:
+def run_worker(settings: Settings, *, role: str = "legacy") -> None:
+    if role not in {"legacy", "transcription"}:
+        raise ValueError(f"Unknown worker role: {role}")
     previous_umask = os.umask(0o077)
     stop_event = threading.Event()
     previous_handlers = {
         signum: signal.signal(signum, lambda *_: stop_event.set())
         for signum in (signal.SIGTERM, signal.SIGINT)
     }
-    lock_fd: int | None = None
+    own_lock_fd: int | None = None
+    legacy_gate_fd: int | None = None
+    executor_lock_fd: int | tuple[int, ...] | None = None
+
+    def heartbeat_writer(directory: Path, state: str) -> None:
+        if role == "legacy":
+            write_heartbeat(directory, state)
+        else:
+            write_transcription_heartbeat(directory, state)
+
     try:
         initialize(settings.data_dir)
-        lock_fd = acquire_worker_lock(settings.data_dir)
-        if lock_fd is None:
-            raise WorkerAlreadyRunning("Another worker still owns the local processing lock.")
+        if role == "legacy":
+            own_lock_fd = acquire_worker_lock(settings.data_dir)
+            if own_lock_fd is None:
+                raise WorkerAlreadyRunning("Another worker still owns the local processing lock.")
+            executor_lock_fd = own_lock_fd
+        else:
+            legacy_gate_fd = acquire_service_probe(settings.data_dir, "worker")
+            if legacy_gate_fd is None:
+                raise WorkerAlreadyRunning("The legacy worker still owns the processing lock.")
+            own_lock_fd = acquire_transcription_lock(settings.data_dir)
+            if own_lock_fd is None:
+                raise WorkerAlreadyRunning(
+                    "Another transcription worker still owns the local processing lock."
+                )
+            executor_lock_fd = (own_lock_fd, legacy_gate_fd)
         profile = select_runtime(settings)
         if profile.device == "cuda":
             _verify_torch_cuda()
@@ -1056,15 +1103,31 @@ def run_worker(settings: Settings) -> None:
                 f"{settings.diarization_model_path}: {error}"
             ) from error
         write_runtime_profile(settings.data_dir, profile)
-        write_heartbeat(settings.data_dir, "starting")
-        recover_abandoned_tasks(settings.data_dir)
-        write_heartbeat(settings.data_dir, "idle")
-        _worker_loop(settings, lock_fd, stop_event)
+        heartbeat_writer(settings.data_dir, "starting")
+        if role == "legacy":
+            recover_abandoned_tasks(settings.data_dir)
+        else:
+            recover_abandoned_tasks(settings.data_dir, role=role)
+        heartbeat_writer(settings.data_dir, "idle")
+        if role == "legacy":
+            _worker_loop(settings, executor_lock_fd, stop_event)
+        else:
+            _worker_loop(
+                settings,
+                executor_lock_fd,
+                stop_event,
+                role=role,
+                heartbeat_writer=heartbeat_writer,
+            )
     finally:
-        with suppress(OSError):
-            write_heartbeat(settings.data_dir, "stopped")
-        if lock_fd is not None:
-            os.close(lock_fd)
+        if own_lock_fd is not None:
+            with suppress(OSError):
+                heartbeat_writer(settings.data_dir, "stopped")
+        if legacy_gate_fd is not None:
+            with suppress(OSError):
+                os.close(legacy_gate_fd)
+        if own_lock_fd is not None:
+            os.close(own_lock_fd)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         os.umask(previous_umask)
@@ -1073,12 +1136,16 @@ def run_worker(settings: Settings) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="asr-studio-worker")
     parser.add_argument("--health-check", action="store_true")
+    parser.add_argument("--role", choices=("legacy", "transcription"), default="legacy")
     arguments = parser.parse_args()
     settings = Settings.from_env()
     if arguments.health_check:
-        return 0 if is_healthy(settings.data_dir) else 1
+        return 0 if is_healthy(settings.data_dir, role=arguments.role) else 1
     try:
-        run_worker(settings)
+        if arguments.role == "legacy":
+            run_worker(settings)
+        else:
+            run_worker(settings, role=arguments.role)
     except RuntimeConfigurationError:
         emit_safe_log(event="worker_error", stage="worker_startup", code="runtime_unavailable")
         return 1

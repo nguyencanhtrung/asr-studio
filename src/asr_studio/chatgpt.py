@@ -98,7 +98,7 @@ _CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{5,256}\Z")
 _SAFE_ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}\Z")
 _ALL_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 _POSITIVE_REASONING_EFFORTS = _ALL_REASONING_EFFORTS[1:]
-_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final"})
+_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit"})
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
 
@@ -476,7 +476,24 @@ class ChatGPTHTTPAdapter:
         self._transport = transport
         self._discovery_document: dict[str, Any] | None = None
         self._discovery_lock = threading.Lock()
-        self.last_notes_usage: dict[str, int] = {}
+        self._notes_usage_local = threading.local()
+
+    @property
+    def last_notes_usage(self) -> dict[str, int]:
+        """Return usage isolated to the current notes transport thread."""
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        usage = getattr(self._notes_usage_local, "value", None)
+        if not isinstance(usage, dict):
+            usage = {}
+            self._notes_usage_local.value = usage
+        return usage
+
+    @last_notes_usage.setter
+    def last_notes_usage(self, value: object) -> None:
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        self._notes_usage_local.value = value if isinstance(value, dict) else {}
 
     @contextmanager
     def _client(self, *, read_timeout: float | None = None) -> Iterator[httpx.Client]:
@@ -1427,6 +1444,7 @@ class ChatGPTProvider:
         self.store = ProviderStore(directory)
         self.callback_url = callback_url
         self.adapter: ChatGPTAdapter = adapter or ChatGPTHTTPAdapter()
+        self._token_refresh_lock = threading.Lock()
         self._clock = clock
         self._sleep = sleeper
         self._active_task_guard = active_task_guard
@@ -2222,6 +2240,12 @@ class ChatGPTProvider:
     def _access_token(
         self, *, minimum_lifetime_seconds: float = ACCESS_REFRESH_MARGIN_SECONDS
     ) -> str:
+        # One generation holds the store operation across its parallel map transports.
+        # Serialize token rotation inside that operation, while model requests stay parallel.
+        with self._token_refresh_lock:
+            return self._access_token_locked(minimum_lifetime_seconds=minimum_lifetime_seconds)
+
+    def _access_token_locked(self, *, minimum_lifetime_seconds: float) -> str:
         client_id, registration = self._active_registration()
         expires_at = registration.get("expires_at")
         refresh_token = registration.get("refresh_token")

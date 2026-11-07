@@ -68,7 +68,7 @@ services:
 
   worker:
     image: ${ASR_IMAGE:-asr-studio:local}
-    command: ["python", "-m", "asr_studio.worker"]
+    command: ["python", "-m", "asr_studio.worker", "--role", "transcription"]
     init: true
     restart: unless-stopped
     read_only: true
@@ -80,7 +80,6 @@ services:
       - ALL
     environment:
       ASR_DATA_DIR: /var/lib/asr-studio/data
-      ASR_PROVIDER_DIR: /var/lib/asr-studio/provider
       ASR_DEVICE: ${ASR_DEVICE:-auto}
       ASR_MODEL_PATH: ${ASR_MODEL_PATH:-}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-}
@@ -99,13 +98,51 @@ services:
       TRANSFORMERS_OFFLINE: "1"
     volumes:
       - data:/var/lib/asr-studio/data
-      - provider:/var/lib/asr-studio/provider
       - "${ASR_MODEL_HOST_PATH:-./models}:/models:ro"
+    networks:
+      - internal
     depends_on:
       app:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-m", "asr_studio.worker", "--health-check"]
+      test: ["CMD", "python", "-m", "asr_studio.worker", "--role", "transcription", "--health-check"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    stop_grace_period: 20s
+
+  notes-service:
+    image: ${ASR_IMAGE:-asr-studio:local}
+    command: ["python", "-m", "asr_studio.notes_service"]
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      ASR_DATA_DIR: /var/lib/asr-studio/data
+      ASR_PROVIDER_DIR: /var/lib/asr-studio/provider
+      DO_NOT_TRACK: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      PYANNOTE_METRICS_ENABLED: "0"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - data:/var/lib/asr-studio/data
+      - provider:/var/lib/asr-studio/provider
+    networks:
+      - default
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "asr_studio.notes_service", "--health-check"]
       interval: 10s
       timeout: 3s
       start_period: 10s
@@ -114,8 +151,9 @@ services:
 
   # The only service that downloads models and writes /models. It mounts neither data, auth nor
   # provider, so it sees no recording, transcript or credential; app asks it for a model through
-  # the small model-install volume (ADR 0012). All services share the default Docker network, with
-  # internet access: HF_HUB_OFFLINE stops the model hub libraries, not the network.
+  # the small model-install volume (ADR 0012). Services that need egress use the default network;
+  # the transcription worker is internal-only. HF_HUB_OFFLINE stops model-hub libraries, not the
+  # network.
   model-installer:
     image: ${ASR_IMAGE:-asr-studio:local}
     command: ["python", "-m", "asr_studio.model_installer"]
@@ -157,3 +195,10 @@ volumes:
   auth:
   provider:
   model-install:
+
+networks:
+  internal:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ASR_WORKER_NETWORK_SUBNET:-}

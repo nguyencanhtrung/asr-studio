@@ -33,6 +33,7 @@ from asr_studio.notes_document import (
     build_prompt,
     build_recovery_prompt,
     build_reduction_prompt,
+    coalesce_exact_duplicate_items,
     drop_overlap_duplicates,
     lower_output_target,
     normalize_duplicate_source_refs,
@@ -44,6 +45,7 @@ from asr_studio.notes_document import (
     provider_source,
     render_markdown,
     restore_source_refs,
+    retained_source_span,
     validate_document,
     verify_coverage,
 )
@@ -875,6 +877,7 @@ def test_overlap_duplicates_drop_only_exact_repeats_of_the_previous_chunk():
         overview=[{"text": "Intro again", "source_ids": []}],
         confirmation_items=[
             {"text": "Maybe later", "source_ids": ["b"]},
+            {"text": "Ship Tuesday", "source_ids": ["a"]},
             {"text": "Budget", "source_ids": ["c"]},
         ],
         key_topics=[{"text": "Launch", "source_ids": ["a", "b"]}],
@@ -883,13 +886,100 @@ def test_overlap_duplicates_drop_only_exact_repeats_of_the_previous_chunk():
 
     result = drop_overlap_duplicates(previous, current, ["a", "b"])
 
-    assert [item["text"] for item in result["decisions"]] == ["Ship Tuesday, Mai owns it"]
+    assert [item["text"] for item in result["decisions"]] == [
+        "We ship on Tuesday",
+        "Ship Tuesday, Mai owns it",
+    ]
     assert [item["text"] for item in result["overview"]] == ["Intro again"]
-    assert [item["text"] for item in result["confirmation_items"]] == ["Budget"]
+    assert [item["text"] for item in result["confirmation_items"]] == [
+        "Ship Tuesday",
+        "Budget",
+    ]
     assert [item["text"] for item in result["key_topics"]] == ["Launch"]
     assert current == before
     # Ids outside the overlap belong to the later chunk, so identical sets there are kept.
     assert drop_overlap_duplicates(previous, current, ["z"]) == current
+
+
+def test_exact_duplicate_coalescing_unions_refs_but_keeps_distinct_metadata_and_facts():
+    def notes(**sections):
+        return {"schema_version": 1, **{key: [] for key, _ in SECTIONS}, **sections}
+
+    document = notes(
+        decisions=[
+            {"text": "Ship Tuesday", "source_ids": ["a"]},
+            {"text": "Ship Tuesday", "source_ids": ["b"]},
+            {"text": "Do not ship Tuesday", "source_ids": ["a"]},
+        ],
+        action_items=[
+            {
+                "text": "Send report",
+                "source_ids": ["c"],
+                "owner": "Mai",
+                "deadline_text": "Friday",
+                "deadline_date": None,
+            },
+            {
+                "text": "Send report",
+                "source_ids": ["d"],
+                "owner": "Minh",
+                "deadline_text": "Friday",
+                "deadline_date": None,
+            },
+        ],
+        overview=[{"text": "Ship Tuesday", "source_ids": ["e"]}],
+    )
+
+    result = coalesce_exact_duplicate_items(document)
+
+    assert [item["text"] for item in result["decisions"]] == [
+        "Ship Tuesday",
+        "Do not ship Tuesday",
+    ]
+    assert result["decisions"][0]["source_ids"] == ["a", "b"]
+    assert result["overview"] == [{"text": "Ship Tuesday", "source_ids": ["e"]}]
+    assert len(result["action_items"]) == 2
+    assert {item["owner"] for item in result["action_items"]} == {"Mai", "Minh"}
+
+
+def test_exact_duplicate_coalescing_preserves_certainty_category_conflicts():
+    def notes(**sections):
+        return {"schema_version": 1, **{key: [] for key, _ in SECTIONS}, **sections}
+
+    document = notes(
+        decisions=[{"text": "Enable tracking", "source_ids": ["a"]}],
+        confirmation_items=[{"text": "Enable tracking", "source_ids": ["b"]}],
+        open_questions=[{"text": "Enable tracking", "source_ids": ["c"]}],
+    )
+
+    result = coalesce_exact_duplicate_items(document)
+
+    assert result["decisions"] == [{"text": "Enable tracking", "source_ids": ["a"]}]
+    assert result["confirmation_items"] == [{"text": "Enable tracking", "source_ids": ["b"]}]
+    assert result["open_questions"] == [{"text": "Enable tracking", "source_ids": ["c"]}]
+
+
+def test_retained_span_uses_relative_source_times_and_exact_hour_boundary(snapshot):
+    assert retained_source_span(snapshot) == pytest.approx(8.1)
+
+    snapshot["segments"] = [
+        {"id": "a", "start_seconds": 0.0, "end_seconds": 1.0, "text": "first"},
+        {"id": "b", "start_seconds": 3599.0, "end_seconds": 3600.0, "text": "last"},
+    ]
+    assert retained_source_span(snapshot) == 3600.0
+    assert plan_source(snapshot).hourly is False
+
+    snapshot["segments"][1]["start_seconds"] = 3600.0
+    snapshot["segments"][1]["end_seconds"] = 3601.0
+    assert retained_source_span(snapshot) == 3601.0
+    plan = plan_source(snapshot)
+    assert plan.hourly is True
+    assert [entry["owned"] for entry in plan.manifest["chunks"]] == [[0, 1], [1, 2]]
+    assert [segment["id"] for chunk in plan.chunks for segment in chunk["segments"]] == [
+        "a",
+        "a",
+        "b",
+    ]
 
 
 def test_source_plan_rejects_oversized_total_and_chunk_count(snapshot, monkeypatch):
@@ -927,9 +1017,46 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v8"
+    assert PROMPT_VERSION == "notes-hierarchical-v18"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
+
+
+def test_source_aware_final_prompt_carries_sanitized_source_and_chronological_drafts(
+    snapshot, document
+):
+    prompt = build_reduction_prompt(
+        snapshot,
+        [document],
+        final=True,
+        budget=notes_budget("chatgpt", "gpt-5.6-sol"),
+    )
+    payload = json.loads(prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
+
+    assert payload["source"] == provider_source(snapshot)
+    assert payload["summaries"][0]["source_order"] == {snapshot["segments"][0]["id"]: 0}
+    assert "private/audio" not in prompt
+    assert "Private title" not in prompt
+
+
+def test_source_audit_prompt_carries_full_source_and_one_draft(snapshot, document):
+    prompt = build_reduction_prompt(
+        snapshot,
+        [document],
+        final=True,
+        budget=notes_budget("chatgpt", "gpt-5.6-sol"),
+        require_source=True,
+        audit=True,
+    )
+    payload = json.loads(prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])
+
+    assert payload["source"] == provider_source(snapshot)
+    assert payload["summaries"][0]["notes"] == document
+    assert "one bounded source audit" in prompt
+    assert "semantic duplicates across sections" in prompt
+    assert "audit_catalog" not in payload
+    assert "Every item.text must be exactly one reference" not in prompt
+    assert "Do not run another audit" in prompt
 
 
 def test_budgeted_single_pass_pins_the_full_completeness_clause_in_both_languages(snapshot):
@@ -994,51 +1121,57 @@ _RULE_MARKERS = {
         "drop subjects, articles, filler words and connectives",
         "ungrammatical text is fine",
         "Keep names, product names, numbers and original deadline phrases exactly",
-        "Telegraph style never drops details that matter: who, what, numbers, dates, deadlines "
-        "and the stated reason",
-        "Put each fact in exactly one section in the whole document",
-        "Never put a fact in two sections or twice in one section",
-        "When a point fits several sections, use the first section that fits, in this order",
-        "action_items for a committed task",
-        "decisions for an agreed outcome, plan, schedule or planned date",
-        "open_questions for an unresolved question",
-        "confirmation_items for a proposal or tentative point that nobody agreed to",
-        "key_topics for discussion and rationale only",
-        "overview for at most 3 items of context and purpose",
-        "An action item must not restate its decision",
-        "the decision states the agreed outcome, and the action states the task, owner and "
-        "deadline",
-        "Before answering, compare each item with every other item and remove or rewrite any "
-        "restatement",
-        "key_topics keeps only reasoning that no other item states",
-        "Agreed plans, schedules and planned dates are decisions with source IDs",
-        "Only proposals that nobody agreed to go to confirmation_items",
+        (
+            "Telegraph style never drops details that matter: who, what, numbers, dates, deadlines "
+            "and the stated reason"
+        ),
+        "Classify source commitment before placement",
+        "Each fact appears once",
+        "action_items: accepted tasks with owner/deadline",
+        "decisions: agreed outcomes/plans/dates, never a task already stated in action_items",
+        (
+            "confirmation_items: a proposal with its pending status, including no acceptance, "
+            "owner or implementation"
+        ),
+        "Rejection or deferral needs explicit agreement",
+        "open_questions: distinct unanswered questions",
+        "key_topics: reasoning that no other item states",
+        "overview: purpose/context only, at most 3 items",
+        "Compare every item with every other",
+        "Remove broad restatements of detailed facts without dropping distinct facts",
+        "Preserve proposal/conditional framing in text, not just section names",
+        "Drafts and domain knowledge are not evidence",
+        "Cite complete context",
+        "Preserve tense and certainty: future discussion/examination is not completion",
+        "Omit unsupported names, numbers, qualifiers, specificity and procedures",
+        "Never reconstruct noise.",
     ),
     "vi": (
         "Viết mỗi mục theo kiểu ghi chú: dùng cụm từ ngắn thay câu",
         "bỏ chủ ngữ, mạo từ, từ thừa và từ nối",
         "câu không đúng ngữ pháp vẫn được",
         "Giữ nguyên tên riêng, tên sản phẩm, số liệu và cụm từ hạn chót gốc",
-        "Văn phong ghi chú không bao giờ được bỏ các chi tiết quan trọng: ai, việc gì, số liệu, "
-        "ngày tháng, hạn chót và lý do được nêu",
-        "Mỗi thông tin chỉ xuất hiện đúng một lần trong toàn bộ tài liệu",
-        "Không đặt một thông tin vào hai nhóm hoặc lặp lại thông tin đó hai lần trong cùng một "
-        "nhóm",
-        "Khi một ý phù hợp với nhiều nhóm, hãy dùng nhóm đầu tiên phù hợp theo thứ tự sau",
-        "action_items cho việc đã cam kết",
-        "decisions cho kết quả, kế hoạch, lịch trình hoặc ngày dự kiến đã thống nhất",
-        "open_questions cho câu hỏi chưa được giải quyết",
-        "confirmation_items cho đề xuất hoặc ý tạm thời chưa được ai thống nhất",
-        "key_topics chỉ cho phần thảo luận và lý do",
-        "overview cho tối đa 3 ý về bối cảnh và mục đích",
-        "Một action item không được nhắc lại quyết định của nó",
-        "quyết định nêu kết quả đã thống nhất, còn action nêu việc cần làm, người phụ trách và "
-        "hạn chót",
-        "Trước khi trả lời, hãy so sánh từng mục với mọi mục khác và xóa hoặc viết lại mọi ý "
-        "lặp lại",
-        "key_topics chỉ giữ lại phần lý giải mà không mục nào khác nêu",
-        "Kế hoạch, lịch trình và ngày dự kiến đã thống nhất là decisions và phải có mã nguồn",
-        "Chỉ đề xuất mà chưa ai thống nhất mới được đưa vào confirmation_items",
+        (
+            "Văn phong ghi chú không bao giờ được bỏ các chi tiết quan trọng: ai, việc gì, số "
+            "liệu, ngày tháng, hạn chót và lý do được nêu"
+        ),
+        "Phân loại cam kết trong nguồn trước khi chọn nhóm",
+        "Mỗi ý chỉ xuất hiện một lần",
+        "action_items: việc đã nhận cùng người/hạn",
+        ("decisions: kết quả/kế hoạch/ngày đã thống nhất, không nhắc lại việc trong action_items"),
+        "confirmation_items: đề xuất cùng trạng thái chưa chốt/chưa có người/chưa triển khai",
+        "Bác bỏ hay hoãn cần thỏa thuận rõ",
+        "open_questions: câu hỏi riêng chưa có trả lời",
+        "key_topics: lý do mà mục khác chưa nêu",
+        "overview: chỉ mục đích/bối cảnh, tối đa 3 mục",
+        "So từng mục với mọi mục khác",
+        "Bỏ ý khái quát lặp chi tiết nhưng giữ mọi ý riêng",
+        "Giữ tính đề xuất/điều kiện trong nội dung, không chỉ ở tên nhóm",
+        "Bản nháp và kiến thức miền không phải bằng chứng",
+        "Trích đủ ngữ cảnh",
+        "Giữ thì và mức chắc chắn: dự kiến thảo luận/khám không phải đã diễn ra",
+        "Bỏ tên, số, định ngữ, mức cụ thể và thủ thuật không có nguồn",
+        "Không khôi phục đoạn nhiễu.",
     ),
 }
 
@@ -1066,14 +1199,14 @@ def test_primary_prompts_are_byte_identical_to_those_before_output_recovery(snap
             digests[f"{language}-{name}"] = hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
     assert digests == {
-        "en-single": "54a88e983dc2b8d0",
-        "en-chunk": "6a0bbe86fdf81a20",
-        "en-reduce": "a748b416c809803d",
-        "en-final": "c6214212d48b23b4",
-        "vi-single": "7393a66ef4100b56",
-        "vi-chunk": "35cc655ea1ea3ffb",
-        "vi-reduce": "e802ebec55c431dc",
-        "vi-final": "2beca0621b7453f6",
+        "en-single": "436e6d75e46af676",
+        "en-chunk": "1fee989204c19ad2",
+        "en-reduce": "954a02a7be089e87",
+        "en-final": "89ac3e0d41d14ecf",
+        "vi-single": "2b208635c1afeb3f",
+        "vi-chunk": "2d127c5eea931fb7",
+        "vi-reduce": "c19a020bd4dca166",
+        "vi-final": "acc244d3e2fa3f0c",
     }
 
 
@@ -1095,7 +1228,7 @@ def test_each_recovery_aims_at_three_quarters_of_the_last_in_whole_hundreds():
     assert 1 <= MAX_OUTPUT_RECOVERY_ATTEMPTS <= MAX_OUTPUT_RECOVERY_CALLS
     assert (MAX_OUTPUT_RECOVERY_ATTEMPTS, MAX_OUTPUT_RECOVERY_CALLS) == (2, 4)  # as documented
     assert MAX_PROVIDER_CALLS == (
-        MAX_NOTES_CHUNKS + MAX_REDUCTION_CALLS + 1 + MAX_OUTPUT_RECOVERY_CALLS
+        MAX_NOTES_CHUNKS + MAX_REDUCTION_CALLS + 2 + MAX_OUTPUT_RECOVERY_CALLS
     )
 
 
@@ -1183,3 +1316,22 @@ def test_source_planning_uses_selected_language_prompt_size(snapshot, monkeypatc
     assert english.chunked is False
     assert vietnamese.chunked is True
     assert len(vietnamese.chunks) == 2
+
+
+@pytest.mark.parametrize("language", ["en", "vi"])
+def test_full_source_reduction_does_not_restrict_evidence_to_drafts(snapshot, document, language):
+    prompt = build_reduction_prompt(
+        snapshot,
+        [document],
+        final=True,
+        output_language=language,
+        budget=notes_budget("chatgpt", "gpt-5.6-sol"),
+        require_source=True,
+    )
+    payload = json.JSONDecoder().raw_decode(prompt.split("SYNTHESIS_INPUT_JSON:\n", 1)[1])[0]
+    assert payload["source"] == provider_source(snapshot)
+    assert "SYNTHESIS_INPUT_JSON.source" in prompt
+    assert "Use only the source IDs cited by input summaries" not in prompt
+    assert "The reducer sees summaries, not the transcript" not in prompt
+    assert "Chỉ dùng mã nguồn được trích dẫn trong các bản tóm tắt" not in prompt
+    assert "gọn chỉ thấy các bản tóm tắt, không thấy transcript" not in prompt

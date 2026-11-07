@@ -535,9 +535,9 @@ def accept_notes_task(
                 "model_name, device, compute_type, language_hint, status, stage, result_scope, "
                 "audio_duration_seconds, segment_count, notes_provider, notes_connection_version, "
                 "notes_model, notes_reasoning_effort, notes_prompt_version, notes_schema_version, "
-                "notes_source_id, notes_output_language) "
+                "notes_source_id, notes_output_language, owner_role) "
                 "VALUES (?, ?, ?, ?, 'notes', '', ?, 'auto', 'provider', ?, "
-                "'accepted', 'accepted', 'notes_only', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "'accepted', 'accepted', 'notes_only', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'notes')",
                 (
                     task_id,
                     normalized_request_id,

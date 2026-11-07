@@ -35,3 +35,18 @@ Explicit diagnostics can display local data.
 Keep tokens, recording content, and private paths outside public evidence.
 See the [user guide](../user-guide.md) for operating commands.
 Use the [release process](process.md) to select new privacy checks.
+
+## Service boundary for issue #166
+
+The transcription worker is now an internal-network service without the provider volume. The
+notes service owns provider access and uses the default network. The model preparation override
+retains default-network access for its one-shot model-hub download; this is a deployment contract,
+not evidence that a runtime stack or provider call was exercised here. See
+[`compose.yaml`](../../compose.yaml), [`compose.model-prepare.yaml`](../../compose.model-prepare.yaml)
+and [ADR 0013](../adr/0013-notes-service-boundary.md).
+
+The notes service still mounts the shared `data` volume. Current SQLite, recording and publication
+paths therefore remain visible to that service at filesystem level; splitting provider egress does
+not prove audio filesystem isolation. The notes adapter sends transcript/source material selected
+for notes, not recording bytes, but this document does not claim that a mount boundary prevents
+recording reads. Runtime network/provider verification remains an independent check.
