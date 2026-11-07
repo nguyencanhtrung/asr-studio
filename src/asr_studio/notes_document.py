@@ -788,6 +788,8 @@ def _deadline(raw: str | None, meeting_date: str | None) -> str | None:
     if raw is None:
         return None
     text = raw.strip().casefold()
+    if text.startswith("by "):
+        text = text[3:].strip()
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
         try:
             return date.fromisoformat(text).isoformat()
