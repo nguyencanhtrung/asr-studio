@@ -1017,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v13"
+    assert PROMPT_VERSION == "notes-hierarchical-v14"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1119,51 +1119,62 @@ _RULE_MARKERS = {
         "drop subjects, articles, filler words and connectives",
         "ungrammatical text is fine",
         "Keep names, product names, numbers and original deadline phrases exactly",
-        "Telegraph style never drops details that matter: who, what, numbers, dates, deadlines "
-        "and the stated reason",
-        "Put each fact in exactly one section in the whole document",
-        "Never put a fact in two sections or twice in one section",
-        "When a point fits several sections, use the first section that fits, in this order",
-        "action_items for a committed task",
-        "decisions for an agreed outcome, plan, schedule or planned date",
-        "open_questions for an unresolved question",
-        "confirmation_items for a proposal or tentative point that nobody agreed to",
-        "key_topics for discussion and rationale only",
-        "overview for at most 3 items of context and purpose",
-        "An action item must not restate its decision",
-        "the decision states the agreed outcome, and the action states the task, owner and "
-        "deadline",
-        "Before answering, compare each item with every other item and remove or rewrite any "
-        "restatement",
-        "key_topics keeps only reasoning that no other item states",
-        "Agreed plans, schedules and planned dates are decisions with source IDs",
-        "Only proposals that nobody agreed to go to confirmation_items",
+        (
+            "Telegraph style never drops details that matter: who, what, numbers, dates, deadlines "
+            "and the stated reason"
+        ),
+        "Classify source commitment before choosing one section per fact",
+        "action_items: committed tasks",
+        "decisions: agreed outcomes, plans and dates",
+        "confirmation_items: pending proposals",
+        "open_questions: distinct unanswered questions",
+        "key_topics: distinct discussion/rationale",
+        "overview: purpose/context (at most 3)",
+        (
+            "A pending proposal and its lack of acceptance, owner or implementation are one "
+            "confirmation item, never a decision"
+        ),
+        "Explicit rejection or deferral needs source agreement",
+        "Keep task, owner and deadline together",
+        "Do not repeat them elsewhere",
+        "Preserve every distinct supported fact",
+        "Neither drafts nor domain knowledge are evidence",
+        "Cite complete source context for each claim",
+        (
+            "Preserve tense and modality: a planned discussion or future examination is not a "
+            "completed event"
+        ),
+        "Omit unsupported details of noisy terms or procedures instead of reconstructing them",
+        "Compare complete claims and remove semantic repetitions before returning.",
     ),
     "vi": (
         "Viết mỗi mục theo kiểu ghi chú: dùng cụm từ ngắn thay câu",
         "bỏ chủ ngữ, mạo từ, từ thừa và từ nối",
         "câu không đúng ngữ pháp vẫn được",
         "Giữ nguyên tên riêng, tên sản phẩm, số liệu và cụm từ hạn chót gốc",
-        "Văn phong ghi chú không bao giờ được bỏ các chi tiết quan trọng: ai, việc gì, số liệu, "
-        "ngày tháng, hạn chót và lý do được nêu",
-        "Mỗi thông tin chỉ xuất hiện đúng một lần trong toàn bộ tài liệu",
-        "Không đặt một thông tin vào hai nhóm hoặc lặp lại thông tin đó hai lần trong cùng một "
-        "nhóm",
-        "Khi một ý phù hợp với nhiều nhóm, hãy dùng nhóm đầu tiên phù hợp theo thứ tự sau",
-        "action_items cho việc đã cam kết",
-        "decisions cho kết quả, kế hoạch, lịch trình hoặc ngày dự kiến đã thống nhất",
-        "open_questions cho câu hỏi chưa được giải quyết",
-        "confirmation_items cho đề xuất hoặc ý tạm thời chưa được ai thống nhất",
-        "key_topics chỉ cho phần thảo luận và lý do",
-        "overview cho tối đa 3 ý về bối cảnh và mục đích",
-        "Một action item không được nhắc lại quyết định của nó",
-        "quyết định nêu kết quả đã thống nhất, còn action nêu việc cần làm, người phụ trách và "
-        "hạn chót",
-        "Trước khi trả lời, hãy so sánh từng mục với mọi mục khác và xóa hoặc viết lại mọi ý "
-        "lặp lại",
-        "key_topics chỉ giữ lại phần lý giải mà không mục nào khác nêu",
-        "Kế hoạch, lịch trình và ngày dự kiến đã thống nhất là decisions và phải có mã nguồn",
-        "Chỉ đề xuất mà chưa ai thống nhất mới được đưa vào confirmation_items",
+        (
+            "Văn phong ghi chú không bao giờ được bỏ các chi tiết quan trọng: ai, việc gì, số "
+            "liệu, ngày tháng, hạn chót và lý do được nêu"
+        ),
+        "Phân loại mức cam kết trong nguồn trước khi chọn một nhóm cho mỗi ý",
+        (
+            "Dùng action_items cho việc đã cam kết; decisions cho kết quả, kế hoạch và ngày đã "
+            "thống nhất; confirmation_items cho đề xuất đang chờ; open_questions cho câu hỏi riêng "
+            "chưa có trả lời; key_topics cho thảo luận/lý do riêng; overview cho mục đích/bối cảnh "
+            "(tối đa 3)"
+        ),
+        (
+            "Đề xuất cùng trạng thái chưa chấp nhận, chưa có người nhận hay chưa triển khai là một "
+            "mục cần xác nhận, không phải quyết định"
+        ),
+        "Bác bỏ hay hoãn cần thỏa thuận rõ trong nguồn",
+        "Giữ việc, người nhận và hạn cùng nhau, không lặp ở mục khác",
+        "Giữ mọi ý riêng có nguồn",
+        "Bản nháp và kiến thức miền không phải bằng chứng",
+        "Trích đủ ngữ cảnh cho mỗi khẳng định",
+        ("Giữ thì và mức chắc chắn: dự kiến thảo luận hay khám sau không phải sự kiện đã diễn ra"),
+        "Bỏ chi tiết nhiễu không có căn cứ, không tự khôi phục thuật ngữ/thủ thuật",
+        "So sánh toàn bộ khẳng định và bỏ ý trùng trước khi trả lời.",
     ),
 }
 
@@ -1191,14 +1202,14 @@ def test_primary_prompts_are_byte_identical_to_those_before_output_recovery(snap
             digests[f"{language}-{name}"] = hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
     assert digests == {
-        "en-single": "69f25e3f4b1c3d0f",
-        "en-chunk": "128a6353fbabe44e",
-        "en-reduce": "a748b416c809803d",
-        "en-final": "887b141c70b69267",
-        "vi-single": "467791450948f69c",
-        "vi-chunk": "a79b76e1355829c9",
-        "vi-reduce": "e802ebec55c431dc",
-        "vi-final": "2a55c63bc570dce1",
+        "en-single": "e52d59d3ec73b3d8",
+        "en-chunk": "03b9c17cd669008c",
+        "en-reduce": "e7c8bfef6900e032",
+        "en-final": "5c0a3226a932fdfb",
+        "vi-single": "57abdd070b12ac19",
+        "vi-chunk": "df706b45c908f5ba",
+        "vi-reduce": "780c13cc47388ae6",
+        "vi-final": "e46868133f9550ec",
     }
 
 

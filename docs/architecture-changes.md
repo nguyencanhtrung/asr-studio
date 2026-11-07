@@ -1502,7 +1502,7 @@ Issue #177. Tag: kiến trúc, bảo mật, accessibility. Tài liệu đích: `
 
 Map tuần tự theo ngân sách và final chỉ đọc các bản nháp có thể giữ trạng thái cũ, bỏ cam kết
 qua ranh giới hoặc thiếu ngữ cảnh trích dẫn. Chống lặp chỉ bằng prompt cũng chưa có bước đối chiếu
-riêng. Hợp đồng mới dùng `notes-hierarchical-v13`, schema công khai vẫn là `1`.
+riêng. Hợp đồng mới dùng `notes-hierarchical-v14`, schema công khai vẫn là `1`.
 
 Độ dài là `max(end_seconds) - min(start_seconds)`. Khi span lớn hơn `3_600` giây, planner
 chia phần sở hữu xấp xỉ một giờ, giữ segment nguyên vẹn và overlap tối đa `2_000` byte; phần quá
@@ -1528,6 +1528,13 @@ lặp. Lỗi audit giữ nguyên transcript và Notes cũ, không công bố m�
 
 Đối chiếu phân biệt chưa có đồng thuận với quyết định bác bỏ/hoãn; đề xuất chưa cam kết chỉ
 ở một mục cần xác nhận, không lặp lại trạng thái chờ trong quyết định và câu hỏi mở.
+Quy tắc dùng chung phân loại mức cam kết trong nguồn trước khi chọn nhóm, thay thứ tự ưu tiên
+section cũ. Đề xuất và các trạng thái chưa chấp nhận/chưa có người nhận/chưa triển khai là
+cùng một thông tin đang chờ; quyết định bác bỏ/hoãn cần thỏa thuận tường minh riêng. Quy tắc
+này áp dụng từ source/map, không chỉ tại final audit, để tránh giữ nhãn sai từ bản nháp.
+Quy tắc cũng giữ thì và mức chắc chắn: dự kiến thảo luận/khám không trở thành sự kiện đã xảy ra.
+Bản nháp và kiến thức miền không phải bằng chứng; chi tiết nhiễu không có căn cứ bị bỏ, không
+được tự khôi phục thành thuật ngữ hoặc thủ thuật.
 
 Đối chiếu giữ trạng thái cuối, nối request/acceptance, đóng câu hỏi đã có câu trả lời và không
 suy diễn owner, deadline, thuật ngữ hoặc thủ thuật từ đoạn nhiễu. Nó là bước xử lý chất lượng,
