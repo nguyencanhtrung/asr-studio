@@ -199,3 +199,6 @@ volumes:
 networks:
   internal:
     internal: true
+    ipam:
+      config:
+        - subnet: ${ASR_WORKER_NETWORK_SUBNET:-}

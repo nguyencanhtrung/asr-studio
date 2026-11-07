@@ -242,6 +242,11 @@ The app, notes service and model installer use the default Docker network. The t
 worker uses an internal-only network and has no provider mount. Nothing is published except the
 app's port on the host's loopback address.
 
+If Docker cannot allocate the worker network from its address pools, set
+`ASR_WORKER_NETWORK_SUBNET` in `.env` to an unused CIDR after checking Docker networks and
+host routes. An empty value keeps automatic allocation. The custom subnet keeps the
+worker network internal.
+
 | Service | Why it needs the network | Holds |
 | --- | --- | --- |
 | `app` | Sign-in and provider connection management. | Recordings, transcripts, sign-in data. |
