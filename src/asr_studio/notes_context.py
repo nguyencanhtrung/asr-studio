@@ -64,6 +64,9 @@ MAX_FORWARD_SEGMENTS = 4
 MAX_FORWARD_SECONDS = 120.0
 MAX_STRUCTURED_SEGMENTS = 32
 MAX_STRUCTURED_SECONDS = 360.0
+# Exact organization names can precede a long turn; never bridge or cross an agenda header.
+MAX_ORG_BACK_SEGMENTS = 32
+MAX_ORG_BACK_SECONDS = 600.0
 
 _ROLES = ("councilmember", "council member", "chair", "president", "mayor", "commissioner")
 _HONORIFIC = r"(?:Mr|Mrs|Ms|Dr|Judge|Councilmember|Council member|President|Mayor|Commissioner)"
@@ -461,6 +464,26 @@ def _binding_links(
     return links
 
 
+def _organization_before(value: str, segments: list[dict[str, Any]], start: int) -> int | None:
+    """Nearest exact full organization name in the bounded current-agenda window."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - MAX_ORG_BACK_SEGMENTS, 0) - 1, -1):
+        text = segments[back]["text"]
+        if start_time - float(segments[back]["start_seconds"]) > MAX_ORG_BACK_SECONDS:
+            return None
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            return None
+        if _match("org", value, text) == "exact":
+            # Keep the original complete-bridge admission for names in the old window.
+            if (
+                start - back <= MAX_BACK_SEGMENTS
+                and start_time - float(segments[back]["start_seconds"]) <= MAX_BACK_SECONDS
+            ):
+                return None
+            return back
+    return None
+
+
 def _provenance_links(
     item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]], *, overview: bool
 ) -> list[set[int]]:
@@ -490,6 +513,17 @@ def _provenance_links(
         }
         if found - {None}:
             links.append(found - {None})
+    if not overview:
+        for organization in dict.fromkeys(_CONNECTED_ORG.findall(text)):
+            if any(_match("org", organization, segments[i]["text"]) == "exact" for i in cited):
+                continue
+            candidates = [
+                (run[0] - back, back)
+                for run in _runs(cited)
+                if (back := _organization_before(organization, segments, run[0])) is not None
+            ]
+            if candidates:
+                links.append({min(candidates)[1]})
     return links
 
 

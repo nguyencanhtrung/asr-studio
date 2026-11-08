@@ -273,3 +273,55 @@ def test_new_links_never_displace_prior_links_or_exceed_the_cap():
     # The generic link no longer fits; the complete duration link still does, never truncated.
     assert _link(snapshot, text, [11], section="key_topics", max_refs=11) == [*range(1, 12)]
     assert _link(snapshot, text, [11], section="key_topics", max_refs=10) == [11]
+
+
+ORG_NAME = "Department of Harbor Infrastructure"
+ORG_ITEM = f"{ORG_NAME} study commenced in January"
+
+
+def _far_named_org(distance=28, gap=15.5):
+    return _snapshot(
+        [
+            f"The {ORG_NAME} will conduct the study.",
+            *[FILLER] * (distance - 1),
+            "The department began the study in January.",
+        ],
+        gap=gap,
+    )
+
+
+def test_exact_named_organization_gets_one_bounded_context_id():
+    source = _far_named_org()
+    assert _link(source, ORG_ITEM, [28]) == [0, 28]
+    assert _link(source, ORG_ITEM, [28], strict=False) == [28]
+    assert _link(source, ORG_ITEM, [28], section="overview") == [28]
+
+
+@pytest.mark.parametrize("distance,expected", [(32, [0, 32]), (33, [33])])
+def test_named_organization_context_respects_the_segment_window(distance, expected):
+    assert _link(_far_named_org(distance, gap=10), ORG_ITEM, [distance]) == expected
+
+
+@pytest.mark.parametrize("gap,expected", [(600 / 28, [0, 28]), (600.1 / 28, [28])])
+def test_named_organization_context_respects_its_time_window(gap, expected):
+    assert _link(_far_named_org(gap=gap), ORG_ITEM, [28]) == expected
+
+
+def test_named_organization_context_never_crosses_an_agenda_header():
+    source = _far_named_org()
+    source["segments"][20]["text"] = "Agenda item seven. Council Bill 304998 relating to parks."
+    assert _link(source, ORG_ITEM, [28]) == [28]
+
+
+def test_named_organization_context_requires_exact_name_and_whole_admission():
+    source = _far_named_org()
+    source["segments"][0]["text"] = source["segments"][0]["text"].replace(
+        "Infrastructure", "Infrastructurs"
+    )
+    assert _link(source, ORG_ITEM, [28]) == [28]
+    source = _far_named_org()
+    assert _link(source, ORG_ITEM, [28], max_refs=1) == [28]
+    assert _link(source, ORG_ITEM, [28], max_refs=2) == [0, 28]
+    source, text = _generic_plus_header(12)
+    source["segments"][1]["text"] = f"The {ORG_NAME} will conduct the study."
+    assert _link(source, text + "; " + ORG_ITEM, [25]) == list(range(13, 26))

@@ -463,6 +463,115 @@ def mark_approximate_quantities(
     return text, len(spans)
 
 
+# ----- confirmation-item evidence guards (official roles, modified record IDs) ----------------
+
+# Canonical official roles and their literal cues; "chủ tịch" reads as president or chair.
+_ROLE_CUES = {
+    "president": r"president|chủ\s+tịch",
+    "chair": r"chair(?:man|woman|person)?|chủ\s+tịch|chủ\s+tọa",
+    "mayor": r"mayor|thị\s+trưởng",
+    "councilmember": r"council\s*-?\s*(?:member|woman|man)|nghị\s+viên",
+    "commissioner": r"commissioner|ủy\s+viên",
+    "director": r"director|giám\s+đốc",
+}
+_ROLE_RE = {
+    role: re.compile(rf"(?<!\w)(?:{cue})s?(?!\w)", re.IGNORECASE | re.UNICODE)
+    for role, cue in _ROLE_CUES.items()
+}
+
+
+def unverified_roles(text: str, cited_text: str) -> set[str]:
+    """The official-role words of the text whose role no cited segment literally states.
+
+    A literal cue is necessary, not sufficient; speaker labels and other mentions of the same
+    person never count, and full entailment stays with the model audit.
+    """
+    stated = {role for role, cue in _ROLE_RE.items() if cue.search(cited_text)}
+    words = {m.group(0).lower() for cue in _ROLE_RE.values() for m in cue.finditer(text)}
+    # A word shared by two roles (chủ tịch) is supported by either one.
+    return {
+        word
+        for word in words
+        if not any(cue.fullmatch(word) and role in stated for role, cue in _ROLE_RE.items())
+    }
+
+
+_RECORD_KINDS = {
+    "ordinance": r"ordinance|sắc\s+lệnh",
+    "resolution": r"resolution|nghị\s+quyết",
+    "bill": r"(?:council\s+)?bill|dự\s+luật",
+}
+_MODIFY = r"amend\w*|repeal\w*|replac\w*|supersed\w*|sửa\s+đổi|bãi\s+bỏ|thay\s+thế"
+# A plain or 3-digit-grouped integer ("480210", "480 216", "480,216"); never a plural label.
+_RECORD_NUMBER = r"(?<![\w.,])(?P<n>\d{1,3}(?:[ ,]\d{3})+|\d{4,})(?![\w]|[.,]\d)"
+_MODIFIED_RECORD_RE = {
+    kind: re.compile(
+        rf"(?<!\w)(?:{_MODIFY})\s+(?:(?:to|of|the|existing)\s+){{0,2}}(?:{label})\s+"
+        rf"(?:(?:no\.?|number|số)\s*|#\s*)?{_RECORD_NUMBER}",
+        re.IGNORECASE | re.UNICODE,
+    )
+    for kind, label in _RECORD_KINDS.items()
+}
+# "Ordinance 480210 and 480216": one label, further IDs of the same list.
+_LIST_CONTINUES_RE = re.compile(
+    r"\s*(?:,\s*(?:(?:and|or|và|hoặc)\s*)?|\s+(?:and|or|through|to|và|hoặc|đến)\s*|&\s*)"
+    r"(?:(?:no\.?|number|số)\s*|#\s*)?\d",
+    re.IGNORECASE | re.UNICODE,
+)
+_LABELLED_RECORD_RE = {
+    kind: re.compile(
+        rf"(?<!\w)(?:{label})s?\s+(?:(?:no\.?|number|số)\s*|#\s*)?{_RECORD_NUMBER}",
+        re.IGNORECASE | re.UNICODE,
+    )
+    for kind, label in _RECORD_KINDS.items()
+}
+
+
+def _digits(number: str) -> str:
+    return re.sub(r"[ ,]", "", number)
+
+
+def _close(a: str, b: str) -> bool:
+    """One ID family: same length and leading half, at most two differing trailing digits."""
+    half = len(a) // 2
+    return (
+        len(a) == len(b)
+        and a[:half] == b[:half]
+        and sum(x != y for x, y in zip(a, b, strict=True)) <= 2
+    )
+
+
+def mark_conflicting_modified_records(
+    text: str, cited_text: str, output_language: str = "en"
+) -> tuple[str, int]:
+    """Mark a modified (secondary) record's digits when its pool states close variants of it.
+
+    Only an ID right after amend/repeal/replace and a record label counts; the modifying
+    record, every other word and a pool with one variant stay byte-for-byte. An item that
+    itself lists several modified records of one kind is an explicit list and is untouched.
+    """
+    marker = _REFERENCE_UNCLEAR[nd.validate_output_language(output_language)]
+    spans: list[tuple[int, int]] = []
+    for kind, pattern in _MODIFIED_RECORD_RE.items():
+        claims = list(pattern.finditer(text))
+        if len(claims) != 1:
+            continue
+        claim = claims[0]
+        if len(list(_LABELLED_RECORD_RE[kind].finditer(text, claim.start()))) > 1:
+            continue  # "amending Ordinance A and Ordinance B": an explicit list of targets
+        if _LIST_CONTINUES_RE.match(text, claim.end("n")):
+            continue  # "amending Ordinance A and B": the same list under one label
+        number = _digits(claim["n"])
+        variants = {
+            _digits(m["n"]) for m in pattern.finditer(cited_text) if _close(_digits(m["n"]), number)
+        }
+        if len(variants) > 1:
+            spans.append(claim.span("n"))
+    for start, end in sorted(spans, reverse=True):
+        text = text[:start] + marker + text[end:]
+    return text, len(spans)
+
+
 @dataclass(frozen=True, slots=True)
 class _Item:
     ref: str
@@ -813,6 +922,17 @@ class SemanticAudit:
             counts["quantity_unclear"] += marks
             if unverified_vote_names(published, segments, position):
                 forced.add(item.ref)
+            elif item.section == "confirmation_items":
+                # Uncertainty guards only: an uncited official role is quarantined, and close
+                # conflicting variants of a modified record keep a marker on its digits.
+                cited = self._cited(published)
+                if unverified_roles(published["text"], cited):
+                    forced.add(item.ref)
+                    continue
+                published["text"], marks = mark_conflicting_modified_records(
+                    published["text"], cited, output_language
+                )
+                counts["reference_unclear"] += marks
         # Remove by original position after every change, so no index shifts under another.
         quarantined = [item for item in self.items if item.ref in unresolved or item.ref in forced]
         removed = {(item.section, item.position) for item in quarantined}
