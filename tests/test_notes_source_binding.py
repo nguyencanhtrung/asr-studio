@@ -240,3 +240,85 @@ def test_cut_sentence_continuations_respect_the_forward_time_window(gap, expecte
     )
     linked, _ = link_antecedent_context(document, source, max_refs_per_item=24, strict=True)
     assert (_sid(1) in linked["key_topics"][0]["source_ids"]) is expected
+
+
+@pytest.mark.parametrize(
+    "ack",
+    [
+        "Thanks to Chair Velto for supporting the project.",
+        "Thank you to Chair Velto for supporting the project.",
+        "Thank you for Chair Velto's work on this.",
+        "Thanks To Chair Velto.",
+        "Thank you, Councilmember Ames. Any other comments?",
+    ],
+)
+def test_a_third_party_thanks_does_not_recognize_the_voter(ack):
+    assert _names((STATEMENT, ack), [0, 1], "Bill pending; Velto voting no") == ["Velto"]
+
+
+@pytest.mark.parametrize(
+    "ack",
+    [
+        "Thank you, Councilmember Velto. Any other comments?",
+        "Thanks, Velto.",
+        "Thank you Councilmember Velto.",
+        "Thank you, Chair Velto, that concludes this item.",
+    ],
+)
+def test_only_the_direct_acknowledgment_address_recognizes_the_voter(ack):
+    assert _names((STATEMENT, ack), [0, 1], "Bill pending; Velto voting no") == []
+
+
+@pytest.mark.parametrize("gap,verified", [(180, True), (181, False)])
+def test_voter_handoffs_respect_the_backward_time_window(gap, verified):
+    source = _source(HANDOFF, STATEMENT)
+    source["segments"][1].update(start_seconds=gap, end_seconds=gap + 1)
+    segments = source["segments"]
+    names = unverified_vote_names(
+        {"text": "Velto voting no", "source_ids": [_sid(0), _sid(1)]},
+        segments,
+        {s["id"]: i for i, s in enumerate(segments)},
+    )
+    assert names == ([] if verified else ["Velto"])
+
+
+@pytest.mark.parametrize("distance,verified", [(4, True), (5, False)])
+def test_voter_acknowledgments_respect_the_segment_window(distance, verified):
+    texts = (STATEMENT, *["The speaker continues."] * (distance - 1), ACK)
+    assert _names(texts, [0, distance], "Velto voting no") == ([] if verified else ["Velto"])
+
+
+@pytest.mark.parametrize("gap,verified", [(120, True), (121, False)])
+def test_voter_acknowledgments_respect_the_time_window(gap, verified):
+    source = _source(STATEMENT, ACK)
+    source["segments"][1].update(start_seconds=3 + gap, end_seconds=4 + gap)
+    segments = source["segments"]
+    names = unverified_vote_names(
+        {"text": "Velto voting no", "source_ids": [_sid(0), _sid(1)]},
+        segments,
+        {s["id"]: i for i, s in enumerate(segments)},
+    )
+    assert names == ([] if verified else ["Velto"])
+
+
+@pytest.mark.parametrize("distance,linked", [(4, True), (5, False)])
+def test_cut_sentence_continuations_respect_the_segment_window(distance, linked):
+    source = _source(
+        "The agency requires review of the",
+        *["continuing discussion"] * (distance - 1),
+        "regional habitat plan.",
+    )
+    document = _doc(
+        "key_topics", {"text": "Agency requires regional habitat review", "source_ids": [_sid(0)]}
+    )
+    result, _ = link_antecedent_context(document, source, max_refs_per_item=24, strict=True)
+    assert (_sid(distance) in result["key_topics"][0]["source_ids"]) is linked
+
+
+def test_default_context_does_not_enable_strict_continuation_links():
+    source = _source("The agency requires review of the", "regional habitat plan.")
+    document = _doc(
+        "key_topics", {"text": "Agency requires regional habitat review", "source_ids": [_sid(0)]}
+    )
+    result, _ = link_antecedent_context(document, source, max_refs_per_item=24)
+    assert result == document

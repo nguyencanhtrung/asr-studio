@@ -99,6 +99,11 @@ _FIRST_PERSON_VOTE = re.compile(
     r"\bI(?:\s+will|\s+am|\s+plan\s+to|\s+intend\s+to|['’]ll|['’]m)?\s+(?:be\s+)?vot(?:e|ing)\b"
 )
 _ACK = re.compile(r"^\s*(?:thank\s+you|thanks)\b[^.!?]*", re.IGNORECASE)
+_DIRECT_ACK = re.compile(
+    r"^\s*(?i:thank\s+you|thanks)\s*[,!:]?\s*"
+    r"(?P<address>(?:[A-Z][\w'’-]*\.?\s+){0,3}[A-Z][\w'’-]*\.?)(?:[,;.!?]|$)"
+)
+_NOT_AN_ADDRESSEE = {"to", "for", "all", "both", "everyone", "everybody", "the", "our"}
 _SENTENCE_END = re.compile(r"[.!?…][\"'”’)]*\s*$")
 _ATTRIBUTION_VERBS = (
     "said|says|stated|asked|requested|urged|noted|proposed|argued|supported|opposed|described|"
@@ -306,8 +311,12 @@ def _recognized(name: str, index: int, segments: list[dict[str, Any]], cited: se
     if back in cited and _match("word", name, _vocative(segments[back]["text"]) or ""):
         return True
     ahead = _ack_after(index, segments)
-    ack = _ACK.match(segments[ahead]["text"]) if ahead in cited else None
-    return ack is not None and _match("word", name, ack.group(0)) is not None
+    ack = _DIRECT_ACK.match(segments[ahead]["text"]) if ahead in cited else None
+    return (
+        ack is not None
+        and ack["address"].split()[0].casefold().rstrip(".") not in _NOT_AN_ADDRESSEE
+        and _match("word", name, ack["address"]) is not None
+    )
 
 
 def _reports_vote(name: str, text: str) -> bool:
