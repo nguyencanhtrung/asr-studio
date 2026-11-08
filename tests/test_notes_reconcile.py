@@ -798,19 +798,6 @@ def test_reconcile_prompt_budget_failure_is_a_bounded_limit(monkeypatch):
     assert "reconcile" not in [c["stage"] for c in calls]
 
 
-def test_long_antigravity_keeps_its_previous_policy():
-    calls: list[dict] = []
-    coverage: list[dict] = []
-    _run(
-        _long_transport(calls, lambda _p, _k: pytest.fail("no reconcile call")),
-        provider="antigravity",
-        model="gemini-3.8-flash",
-        coverage=coverage,
-    )
-    assert "reconcile" not in [c["stage"] for c in calls]
-    assert coverage[0]["source_audit"] == {"status": "skipped", "reason": "quality_not_qualified"}
-
-
 # --- compat: redundant merge echo and optional superseded target ---
 
 

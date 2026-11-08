@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v24"
+PROMPT_VERSION = "notes-hierarchical-v28"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -1195,7 +1195,7 @@ _PLACEMENT_RULE = {
 }
 
 
-# Map-stage only, for the long known-ChatGPT path; other prompts never carry it.
+# Map-stage only, for the long known-budget path; other prompts never carry it.
 _FACT_INVENTORY_RULE = {
     "en": (
         "Fact inventory: this output is a lossless fact list for a later structured merge, not "
@@ -1215,6 +1215,38 @@ _FACT_INVENTORY_RULE = {
         "thành số lượng chính xác; giữ thông tin rõ và ghi phần chưa rõ là chưa rõ.\n"
     ),
 }
+
+
+# Source prompts (single and map) for a registered Gemini budget only, so ChatGPT and unknown
+# models keep their request bytes. The explicit change of plan is a decision distinct from the
+# task it creates; the task itself still appears once.
+_KNOWN_GEMINI_RULE = {
+    "en": (
+        "State a count, tally or vote split only when a cited segment states it; an outcome "
+        "statement alone gives the outcome, not a count. Name a person, role holder or owner "
+        "only when a cited segment names them: cite the naming segment or keep them unnamed. A "
+        "generic speaker label is not a name. An explicit agreement that changes an earlier "
+        "plan, date or deadline is a decision stating old -> new, even when the resulting task "
+        "is an action item; do not repeat the task itself in decisions.\n"
+    ),
+    "vi": (
+        "Chỉ nêu số lượng, kết quả kiểm phiếu hoặc tỉ lệ phiếu khi segment được trích nói rõ; "
+        "câu nêu kết quả chỉ cho biết kết quả, không cho biết số. Chỉ nêu tên người, người giữ "
+        "vai trò hoặc người phụ trách khi segment được trích nêu tên: trích segment nêu tên hoặc "
+        "để ẩn danh. Nhãn người nói chung chung không phải tên. Thỏa thuận rõ ràng thay đổi kế "
+        "hoạch, ngày hoặc hạn chót trước đó là một quyết định nêu cũ -> mới, kể cả khi việc phát "
+        "sinh là action item; không lặp lại chính việc đó trong decisions.\n"
+    ),
+}
+
+
+def _is_known_gemini(budget: NotesBudget | None) -> bool:
+    return (
+        budget is not None
+        and budget.provider == "antigravity"
+        and budget.uses_token_estimate
+        and ("antigravity", budget.model) in NOTES_BUDGETS
+    )
 
 
 def _style_rules(output_language: str) -> str:
@@ -1283,6 +1315,8 @@ def _source_instructions(
             "Không xuất URL, đường dẫn audio, Markdown hay thuộc tính bổ sung.\n"
         )
     instructions += _style_rules(output_language)
+    if _is_known_gemini(budget):
+        instructions += _KNOWN_GEMINI_RULE[output_language]
     chunk_output_limit = MAX_CHUNK_OUTPUT_BYTES if max_output_bytes is None else max_output_bytes
     if chunk_index is None and budget is not None and budget.uses_token_estimate:
         if output_language == "en":
@@ -2008,9 +2042,12 @@ def plan_source(
     hourly_partition = (
         retained_span is not None and retained_span > MAX_RETAINED_SOURCE_SPAN_SECONDS
     )
-    # Only a known-ChatGPT budget gets quarter-hour fact parts; others keep hourly parts.
+    # Known ChatGPT and Gemini budgets get quarter-hour fact parts; unknown models keep hourly
+    # parts and their previous final.
     fact_inventory = (
-        hourly_partition and provider == "chatgpt" and selected_budget.uses_token_estimate
+        hourly_partition
+        and provider in {"chatgpt", "antigravity"}
+        and selected_budget.uses_token_estimate
     )
     part_span = FACT_PART_SPAN_SECONDS if fact_inventory else MAX_RETAINED_SOURCE_SPAN_SECONDS
     full_prompt = _source_prompt(

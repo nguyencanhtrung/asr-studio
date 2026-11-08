@@ -10,6 +10,21 @@ text, owner, deadline or existing citations, and stays local: it looks back from
 each cited run at most `MAX_BACK_SEGMENTS` segments and `MAX_BACK_SECONDS` seconds, and adds at
 most `MAX_ADDED_PER_ITEM` IDs per item. An anchor that is not found in that window is left
 unresolved.
+
+Strict mode (registered Gemini only) adds two bounded anchors: a short labelled record number
+("Appointment 1355") found back in the same window, and, for an item that states an outcome
+while its cited motion has none, the first outcome statement at most `MAX_FORWARD_SEGMENTS`
+segments and `MAX_FORWARD_SECONDS` seconds after the motion.
+
+Strict mode also links two structured anchors in a separate, wider window of at most
+`MAX_STRUCTURED_SEGMENTS` segments and `MAX_STRUCTURED_SECONDS` seconds, with no bridge:
+
+- a literal record number absent from the cited pool links only the nearest explicit agenda
+  header that states it; a different header found first stops the search;
+- a person named just before "votes/voted/voting" links the next explicit vote block (vote or
+  roll call opening through its stated result) when the block contains that name. The heard
+  vote is never interpreted; a new agenda item, a block without the name or two different
+  blocks for one item leave the item unresolved.
 """
 
 from __future__ import annotations
@@ -21,6 +36,10 @@ from typing import Any
 MAX_BACK_SEGMENTS = 16
 MAX_BACK_SECONDS = 180.0
 MAX_ADDED_PER_ITEM = 12
+MAX_FORWARD_SEGMENTS = 4
+MAX_FORWARD_SECONDS = 120.0
+MAX_STRUCTURED_SEGMENTS = 32
+MAX_STRUCTURED_SECONDS = 360.0
 
 _ROLES = ("councilmember", "council member", "chair", "president", "mayor", "commissioner")
 _HONORIFIC = r"(?:Mr|Mrs|Ms|Dr|Judge|Councilmember|Council member|President|Mayor|Commissioner)"
@@ -30,6 +49,35 @@ _CONNECTED_ORG = re.compile(r"\b[A-Z][\w'-]+(?:\s+(?:of|the|for)){1,2}(?:\s+[A-Z
 # A literal item number; a decimal or longer number does not match.
 _NUMBER_EDGES = (r"(?<!\d)(?<!\d\.)", r"(?!\d)(?!\.\d)")
 _LONG_NUMBER = re.compile(rf"{_NUMBER_EDGES[0]}\d{{5,}}{_NUMBER_EDGES[1]}")
+# Strict mode: a 3-4 digit number labelled by a capitalised word ("Resolution 318").
+_LABELED_NUMBER = re.compile(rf"\b[A-Z][a-z]+\.?\s+(\d{{3,4}}){_NUMBER_EDGES[1]}")
+_ITEM_OUTCOME = re.compile(
+    r"\b(?:approved|adopted|passed|carried|confirmed|amended|rejected|defeated)\b"
+    r"|thông qua|phê duyệt|chấp thuận|bác bỏ",
+    re.IGNORECASE,
+)
+_MOTION = re.compile(r"\b(?:move|moved|motion|second|vote)\b|biểu quyết|đề nghị", re.IGNORECASE)
+_SOURCE_OUTCOME = re.compile(
+    r"\b(?:ayes have it|carries|carried|passes|passed|adopted|approved|amended|confirmed|"
+    r"fails|failed)\b|thông qua|bác bỏ",
+    re.IGNORECASE,
+)
+# Strict mode: an explicit agenda header, a vote block opening and a person named as a voter.
+_HEADER = re.compile(
+    r"\bagenda\s+items?\b|\bitems?\s+(?:no\.?\s*)?\d"
+    r"|\b(?:bill|resolution|ordinance|appointment)\s+(?:no\.?\s*)?\d",
+    re.IGNORECASE,
+)
+_VOTE_START = re.compile(
+    r"\b(?:roll\s*call|call\s+the\s+(?:roll|role)|passage\s+of"
+    r"|vote\s+on\s+(?:the\s+)?(?:council\s+)?(?:bill|resolution|ordinance|motion|amendment|item))\b",
+    re.IGNORECASE,
+)
+_VOTER = re.compile(r"\b([A-Z][a-z][\w'-]*)\s+(?:votes?|voted|voting)\b")
+_NOT_A_VOTER = {
+    *_ROLES, "council", "committee", "board", "commission", "member", "members", "final",
+    "unanimous", "majority", "public", "roll", "the", "no", "yes",
+}  # fmt: skip
 _ATTRIBUTION_VERBS = (
     "said|says|stated|asked|requested|urged|noted|proposed|argued|supported|opposed|described|"
     "raised|expressed|recommended|thanked|emphasized|questioned|suggested|called|warned"
@@ -43,13 +91,15 @@ _TOPIC_BREAK = re.compile(
 )
 
 
-def _anchors(item: dict[str, Any]) -> list[tuple[str, str]]:
+def _anchors(item: dict[str, Any], *, strict: bool = False) -> list[tuple[str, str]]:
     """(kind, value) anchors stated by the item; kind selects the matcher."""
     text = item["text"]
     found: list[tuple[str, str]] = []
     found += [("word", name) for name in _NAME_AFTER_HONORIFIC.findall(text)]
     found += [("org", org) for org in _CONNECTED_ORG.findall(text)]
     found += [("number", number) for number in _LONG_NUMBER.findall(text)]
+    if strict:
+        found += [("number", number) for number in _LABELED_NUMBER.findall(text)]
     if (match := _ATTRIBUTED_SUBJECT.match(text)) and match.group(1).lower() not in _ROLES:
         found.append(("word", match.group(1)))
     if match := _ROLE_LEAD.match(text):
@@ -121,14 +171,99 @@ def _runs(indices: list[int]) -> list[list[int]]:
     return runs
 
 
+def _outcome_after(run: list[int], segments: list[dict[str, Any]]) -> int | None:
+    """First outcome statement shortly after a cited motion run; a new agenda item stops it."""
+    end = run[-1]
+    end_time = float(segments[end]["end_seconds"])
+    for ahead in range(end + 1, min(end + MAX_FORWARD_SEGMENTS, len(segments) - 1) + 1):
+        text = segments[ahead]["text"]
+        if _TOPIC_BREAK.search(text) or float(segments[ahead]["start_seconds"]) - end_time > (
+            MAX_FORWARD_SECONDS
+        ):
+            return None
+        if _SOURCE_OUTCOME.search(text):
+            return ahead
+    return None
+
+
+def _header_before(value: str, segments: list[dict[str, Any]], start: int) -> int | None:
+    """Nearest explicit agenda header stating `value`; any other header first stops the search."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - MAX_STRUCTURED_SEGMENTS, 0) - 1, -1):
+        if start_time - float(segments[back]["start_seconds"]) > MAX_STRUCTURED_SECONDS:
+            return None
+        text = segments[back]["text"]
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            numbers = set(_LONG_NUMBER.findall(text)) | set(_LABELED_NUMBER.findall(text))
+            # A header naming a different or a second record number is never this item's.
+            return back if _match("number", value, text) and numbers <= {value} else None
+    return None
+
+
+def _vote_block_after(name: str, cited: list[int], segments: list[dict[str, Any]]) -> range | None:
+    """Next explicit vote block after the last cited mention of `name`, if it contains the name."""
+    mentions = [index for index in cited if _match("word", name, segments[index]["text"])]
+    if not mentions:
+        return None
+    anchor = mentions[-1]
+    anchor_end = float(segments[anchor]["end_seconds"])
+    opening = None
+    last = min(anchor + MAX_STRUCTURED_SEGMENTS, len(segments) - 1)
+    for ahead in range(anchor + 1, last + 1):
+        text = segments[ahead]["text"]
+        if float(segments[ahead]["start_seconds"]) - anchor_end > MAX_STRUCTURED_SECONDS:
+            return None
+        topic_break = _TOPIC_BREAK.search(text)
+        header = _HEADER.search(text)
+        # A vote opening may itself name its bill. Later headers (including another vote
+        # opening) end this block; compare positions so an outcome after a header cannot win.
+        if (
+            header is not None
+            and (opening is not None or not _VOTE_START.search(text))
+            and (topic_break is None or header.start() < topic_break.start())
+        ):
+            topic_break = header
+        if opening is None:
+            if topic_break:
+                return None  # a new agenda item before any vote
+            if not _VOTE_START.search(text):
+                continue
+            opening = ahead
+        outcome = _SOURCE_OUTCOME.search(text)
+        if outcome and (topic_break is None or outcome.start() < topic_break.start()):
+            block = range(opening, ahead + 1)
+            named = any(_match("word", name, segments[index]["text"]) for index in block)
+            return block if named else None
+        if topic_break:
+            return None  # the block ran into a new agenda item without a result
+    return None
+
+
 def _context_for_item(
-    item: dict[str, Any], segments: list[dict[str, Any]], position: dict[str, int]
-) -> list[int]:
+    item: dict[str, Any],
+    segments: list[dict[str, Any]],
+    position: dict[str, int],
+    *,
+    strict: bool = False,
+) -> tuple[list[int], list[set[int]]]:
+    """Generic context IDs (unchanged rules) and the complete strict structured links."""
     cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
-    anchors = _anchors(item)
-    if not cited or not anchors:
-        return []
+    anchors = _anchors(item, strict=strict)
     added: set[int] = set()
+    structured: list[set[int]] = []
+    if (
+        strict
+        and cited
+        and _ITEM_OUTCOME.search(item["text"])
+        and not any(_SOURCE_OUTCOME.search(segments[index]["text"]) for index in cited)
+    ):
+        for run in _runs(cited):
+            if (
+                _MOTION.search(" ".join(segments[index]["text"] for index in run))
+                and (ahead := _outcome_after(run, segments)) is not None
+            ):
+                added.update(range(run[-1] + 1, ahead + 1))
+                break  # one outcome per item
     for run in _runs(cited):
         run_text = " ".join(segments[index]["text"] for index in run)
         start = run[0]
@@ -139,14 +274,35 @@ def _context_for_item(
             if back is not None:
                 # The anchor and the bridge that carries its reference to the cited run.
                 added.update(range(back, start))
+            elif (
+                strict
+                and kind == "number"
+                and not any(_match(kind, value, segments[index]["text"]) for index in cited)
+            ):
+                header = _header_before(value, segments, start)
+                if header is not None:
+                    structured.append({header})  # the header states the relation: no bridge
+    if strict and cited:
+        voters = [name for name in _VOTER.findall(item["text"]) if name.lower() not in _NOT_A_VOTER]
+        blocks = {
+            tuple(block)
+            for name in dict.fromkeys(voters)
+            if (block := _vote_block_after(name, cited, segments)) is not None
+        }
+        if len(blocks) == 1:  # two different blocks for one item conflict: unresolved
+            structured.append(set(blocks.pop()))
     added -= set(cited)
     if len(added) > MAX_ADDED_PER_ITEM:
-        return []  # An over-wide chain is left unresolved, not truncated.
-    return sorted(added)
+        added = set()  # An over-wide chain is left unresolved, not truncated.
+    return sorted(added), [link - set(cited) for link in structured]
 
 
 def link_antecedent_context(
-    document: dict[str, Any], snapshot: dict[str, Any], *, max_refs_per_item: int
+    document: dict[str, Any],
+    snapshot: dict[str, Any],
+    *,
+    max_refs_per_item: int,
+    strict: bool = False,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """Return a copy with local antecedent IDs added, and bounded counts.
 
@@ -160,8 +316,19 @@ def link_antecedent_context(
         if section == "overview" or not isinstance(value, list):
             continue
         for item in value:
-            added = _context_for_item(item, segments, position)
-            if not added or len(item["source_ids"]) + len(added) > max_refs_per_item:
+            generic, structured = _context_for_item(item, segments, position, strict=strict)
+            fits = len(item["source_ids"]) + len(generic) <= max_refs_per_item
+            added = set(generic) if fits else set()
+            # Generic links are kept as before; each complete structured link joins only if the
+            # union still fits both caps. A link is never truncated.
+            for link in structured:
+                union = added | link
+                if (
+                    len(union) <= MAX_ADDED_PER_ITEM
+                    and len(item["source_ids"]) + len(union) <= max_refs_per_item
+                ):
+                    added = union
+            if not added:
                 continue
             ids = set(item["source_ids"]) | {segments[index]["id"] for index in added}
             item["source_ids"] = sorted(ids, key=position.__getitem__)

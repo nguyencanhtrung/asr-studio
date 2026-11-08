@@ -276,3 +276,11 @@ def reconcile_keep_patch(prompt: str) -> str:
             else reconcile_disposition(item["ref"])
         )
     return json.dumps({"ledger_version": 2, "dispositions": dispositions, "additions": []})
+
+
+SEMANTIC_KEEP_PATCH = json.dumps({"audit_version": 1, "changes": [], "unresolved_refs": []})
+
+
+def semantic_payload(prompt: str) -> dict:
+    """The audit JSON of one semantic-audit prompt; a repair suffix may follow it."""
+    return json.JSONDecoder().raw_decode(prompt.split("AUDIT_INPUT_JSON:\n", 1)[1])[0]

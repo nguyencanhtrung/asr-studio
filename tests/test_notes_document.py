@@ -1017,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v24"
+    assert PROMPT_VERSION == "notes-hierarchical-v28"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1371,8 +1371,9 @@ def test_known_chatgpt_over_an_hour_plans_complete_quarter_hour_fact_parts():
     assert owned_positions == list(range(len(snapshot["segments"])))  # complete, once each
     assert len(plan.chunks) == 9  # 25 segments, three whole ones per <= 900 s part
 
-    # Antigravity and unknown budgets keep hourly parts; <= 1 h known ChatGPT is unchanged.
-    for provider, model in (("antigravity", "gemini-3.8-flash"), (None, None)):
+    # Known Gemini also gets fact parts; unknown budgets keep hourly parts.
+    assert plan_source(snapshot, provider="antigravity", model="gemini-3.8-flash").fact_inventory
+    for provider, model in (("antigravity", "gemini-test"), (None, None)):
         other = plan_source(snapshot, provider=provider, model=model)
         assert not other.fact_inventory
     assert plan_source(snapshot, provider="antigravity", model="gemini-3.8-flash").hourly

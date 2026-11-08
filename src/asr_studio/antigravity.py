@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -1406,11 +1406,16 @@ class AntigravityProvider:
                 prompt_bytes: int,
                 budget: NotesBudget,
                 max_unit_size: int = 1,
+                response_schema: Mapping[str, Any] | None = None,
             ) -> str:
                 observed_usage = getattr(self.adapter, "last_notes_usage", None)
                 if isinstance(observed_usage, dict):
                     observed_usage.clear()
-                schema = build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+                schema = (
+                    build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+                    if response_schema is None
+                    else dict(response_schema)
+                )
                 message = build_notes_provider_message(prompt, schema)
                 estimated_input_tokens = estimate_notes_tokens(
                     notes_provider_input_bytes(
@@ -1418,6 +1423,7 @@ class AntigravityProvider:
                         allowed_source_ids,
                         budget=budget,
                         max_unit_size=max_unit_size,
+                        response_schema=response_schema,
                     ),
                     budget,
                 )
@@ -1428,6 +1434,7 @@ class AntigravityProvider:
                             allowed_source_ids,
                             budget=budget,
                             max_unit_size=max_unit_size,
+                            response_schema=response_schema,
                         )
                         > budget.request_guard_bytes
                     ):

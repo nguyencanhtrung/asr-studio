@@ -20,11 +20,14 @@ from asr_studio.notes_reconcile import (
     ReconcileLedger,
     ReconcileRepair,
 )
+from asr_studio.notes_semantic import MAX_SEMANTIC_OUTPUT_BYTES, SemanticAudit
 
 # The code a transport gives a response over its output cap.
 _OUTPUT_TOO_LARGE = "provider_output_too_large"
 _LOGGER = logging.getLogger(__name__)
-_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit", "reconcile"})
+_NOTES_VALIDATION_STAGES = frozenset(
+    {"single", "chunk", "reduce", "final", "audit", "reconcile", "semantic_audit"}
+)
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
 
@@ -818,10 +821,17 @@ def generate_notes_document(
             raise limit_error("Notes synthesis could not compact a summary within its limit.")
         return reduced
 
-    def reconcile(final_document: dict[str, Any]) -> dict[str, Any]:
+    def reconcile(
+        final_document: dict[str, Any], *, reference_evidence: bool = False
+    ) -> dict[str, Any]:
         """One structured patch over the projected final draft, map ledger and full source."""
         ledger = ReconcileLedger.build(
-            projected_snapshot, final_document, summaries, max_unit_size=max_unit_size
+            projected_snapshot,
+            final_document,
+            summaries,
+            max_unit_size=max_unit_size,
+            strict_names=nd._is_known_gemini(synthesis_budget),
+            reference_evidence=reference_evidence,
         )
 
         repairs: list[ReconcileRepair] = []
@@ -844,7 +854,7 @@ def generate_notes_document(
         try:
             prompt = reconcile_prompt()
         except nd.NotesDocumentError:
-            # The long ChatGPT path requires this audit; publishing the unchecked draft would
+            # The long known-budget path requires this audit; publishing the unchecked draft would
             # misreport it, so the bounded limit fails the task instead.
             raise limit_error(
                 "This transcript exceeds the bounded notes source reconciliation limit."
@@ -875,21 +885,71 @@ def generate_notes_document(
         }
         return document
 
+    def semantic_audit(final_document: dict[str, Any]) -> dict[str, Any]:
+        """One sparse immutable-reference source-binding audit (registered Gemini only)."""
+        audit = SemanticAudit(projected_snapshot, final_document, max_unit_size=max_unit_size)
+
+        def audit_prompt(invalid_output: str | None = None) -> str:
+            return audit.build_prompt(
+                output_language=output_language,
+                invalid_output=invalid_output,
+                budget=synthesis_budget,
+            )
+
+        try:
+            prompt = audit_prompt()
+        except nd.NotesDocumentError:
+            # Required for this path: skipping it would publish an unaudited binding.
+            raise limit_error(
+                "This transcript exceeds the bounded notes semantic audit limit."
+            ) from None
+        counts: list[dict[str, int]] = []
+
+        def parse(raw: object) -> dict[str, Any]:
+            document, result_counts = audit.parse(raw, output_language=output_language)
+            counts.append(result_counts)
+            return document
+
+        document, call_index = request_document(
+            prompt,
+            projected_snapshot,
+            max_output_bytes=MAX_SEMANTIC_OUTPUT_BYTES,
+            stage="semantic_audit",
+            repair_prompt=audit_prompt,
+            budget=synthesis_budget,
+            response_schema=audit.schema(),
+            parse=parse,
+        )
+        coverage["semantic_audit"] = {
+            "status": "applied",
+            "provider_call_index": call_index,
+            "counts": counts[-1],
+        }
+        return document
+
     if plan.fact_inventory:
-        # Long known-ChatGPT: the structured reconcile over every map fact and the full source
+        # Long known budget: the structured reconcile over every map fact and the full source
         # is the final synthesis; no lossy free-form final or reduction runs before it.
         empty_seed: dict[str, Any] = {
             "schema_version": nd.SCHEMA_VERSION,
             **{section: [] for section, _heading in nd.SECTIONS},
         }
         reduction_calls += 1
-        final_document = reconcile(empty_seed)
-        final_document = restore_final_document(final_document, stage="reconcile")
+        # Registered Gemini: the semantic audit is mandatory, so reconcile may rebind evidence.
+        semantic_required = nd._is_known_gemini(synthesis_budget)
+        final_document = reconcile(empty_seed, reference_evidence=semantic_required)
+        if semantic_required:
+            final_document = semantic_audit(final_document)
+        final_document = restore_final_document(
+            final_document,
+            stage="semantic_audit" if "semantic_audit" in coverage else "reconcile",
+        )
         # After the last provider request: add local antecedent-context citations in code.
         linked, context_counts = link_antecedent_context(
             final_document,
             snapshot,
             max_refs_per_item=nd.MAX_SOURCE_REFS_PER_ITEM,
+            strict=nd._is_known_gemini(synthesis_budget),
         )
         try:
             final_document = nd.validate_document(

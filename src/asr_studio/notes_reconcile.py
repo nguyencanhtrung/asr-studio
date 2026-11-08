@@ -211,8 +211,14 @@ class LedgerEntry:
 class _SourceIndex:
     """Positions, normalized text and lower-case vocabulary of the full projected source."""
 
-    def __init__(self, segments: Mapping[str, Mapping[str, Any]]) -> None:
+    def __init__(
+        self,
+        segments: Mapping[str, Mapping[str, Any]],
+        *,
+        strict: bool = False,
+    ) -> None:
         self.segments = segments
+        self.strict = strict  # also single and source-absent names (registered Gemini only)
         self.position = {source_id: index for index, source_id in enumerate(segments)}
         self.text = {
             source_id: _normalized(segment["text"]) for source_id, segment in segments.items()
@@ -263,6 +269,51 @@ class _SourceIndex:
                         and not any(_contains(_normalized(name), span) for name in missing)
                     ):
                         missing.append(" ".join(words))
+        if self.strict:
+            missing += self._uncited_single_names(text, cited, missing)
+        return missing
+
+    def _uncited_single_names(self, text: str, cited: str, found: Sequence[str]) -> list[str]:
+        """Strict mode: capitalised name-like words absent from the cited pool.
+
+        Absent from the whole source counts too (an invented identity), except a sentence-initial
+        word, which may be an ordinary capitalised word. Only the trusted source decides what is a
+        common word (its lower-case vocabulary), and a name must match a cited spelling exactly.
+        ponytail: lexical heuristic; an invented sentence-initial name is missed, and a correct
+        ASR repair of a cited spelling is flagged (the model cites, uses the cited spelling or
+        unnames it). Proven-variant matching is the upgrade if repairs prove too costly.
+        """
+        cited_words = set(cited.split()) - {"|"}
+        tokens = [
+            (_POSSESSIVE_RE.sub("", _EDGE_PUNCT_RE.sub("", m.group())), m.group())
+            for m in _WORD_RE.finditer(unicodedata.normalize("NFC", text))
+        ]
+        missing: list[str] = []
+        sentence_start = True
+        for position, (token, raw) in enumerate(tokens):
+            initial, sentence_start = (
+                sentence_start,
+                raw.endswith((".", "!", "?")) or not token,  # a colon list keeps names
+            )
+            if (
+                len(token) < 3
+                or not token[:1].isupper()
+                or token.isupper()  # acronym, not a person name
+                or not _NAME_INNER_RE.sub("", token).isalpha()
+                or _fold(token) in self.lower_words
+            ):
+                continue
+            following = tokens[position + 1][0] if position + 1 < len(tokens) else ""
+            if following[:1].isdigit():  # date part: "April 11"
+                continue
+            span = _normalized(token)
+            if initial and not _contains(self.full, span):
+                continue
+            if any(_contains(_normalized(name), span) for name in [*found, *missing]):
+                continue
+            if all(part in cited_words for part in span.split()):
+                continue
+            missing.append(token)
         return missing
 
     def candidates(self, phrase: str, ids: Sequence[str]) -> list[str]:
@@ -372,6 +423,11 @@ class ReconcileLedger:
     source: Mapping[str, Any]
     entries: tuple[LedgerEntry, ...]
     max_unit_size: int = 1
+    # Registered Gemini only: single and source-absent names must be in the cited pool too.
+    strict_names: bool = False
+    # Registered Gemini fact inventory with its mandatory semantic audit only: a well-shaped
+    # quote that is not exact is replaced by the whole text of its declared, cited segment.
+    reference_evidence: bool = False
 
     @classmethod
     def build(
@@ -381,6 +437,8 @@ class ReconcileLedger:
         map_documents: Sequence[dict[str, Any]],
         *,
         max_unit_size: int = 1,
+        strict_names: bool = False,
+        reference_evidence: bool = False,
     ) -> ReconcileLedger:
         entries: list[LedgerEntry] = []
         for prefix, documents in (("f", [final]), ("m", list(map_documents))):
@@ -400,7 +458,11 @@ class ReconcileLedger:
         if not isinstance(source, dict) or not isinstance(source.get("segments"), list):
             raise _error("The reconcile source is invalid.", reason_code="source_ids")
         return cls(
-            source=copy.deepcopy(source), entries=tuple(entries), max_unit_size=max_unit_size
+            source=copy.deepcopy(source),
+            entries=tuple(entries),
+            max_unit_size=max_unit_size,
+            strict_names=strict_names,
+            reference_evidence=reference_evidence,
         )
 
     @property
@@ -412,6 +474,13 @@ class ReconcileLedger:
         return {
             segment["id"]: segment for segment in nd.provider_source(dict(self.source))["segments"]
         }
+
+    def _index(self, segments: Mapping[str, Mapping[str, Any]]) -> _SourceIndex:
+        return _SourceIndex(segments, strict=self.strict_names)
+
+    def _rules(self, output_language: str) -> str:
+        strict = _STRICT_NAME_RULE[output_language] if self.strict_names else ""
+        return _instructions(output_language) + strict
 
     # ----- provider contract ------------------------------------------------------------------
 
@@ -545,7 +614,7 @@ class ReconcileLedger:
         return cues
 
     def prompt_payload(self) -> dict[str, Any]:
-        index = _SourceIndex(self._segments())
+        index = self._index(self._segments())
         targets = self.merge_targets()
 
         def entry_payload(entry: LedgerEntry) -> dict[str, Any]:
@@ -578,7 +647,7 @@ class ReconcileLedger:
         """Build the bounded prompt; the custom schema is counted in every budget guard."""
         output_language = nd.validate_output_language(output_language)
         prompt = (
-            _instructions(output_language)
+            self._rules(output_language)
             + "RECONCILE_INPUT_JSON:\n"
             + json.dumps(
                 self.prompt_payload(), ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -644,7 +713,7 @@ class ReconcileLedger:
         """Failing refs with their prior ops, errors and cited/candidate source only."""
         output_language = nd.validate_output_language(output_language)
         segments = self._segments()
-        index = _SourceIndex(segments)
+        index = self._index(segments)
         targets = self.merge_targets()
         by_ref = {entry.ref: entry for entry in self.entries}
         wanted: set[str] = set()
@@ -712,7 +781,7 @@ class ReconcileLedger:
             "source": source,
         }
         prompt = (
-            _instructions(output_language)
+            self._rules(output_language)
             + _repair_instructions(output_language, repair.addition_slots)
             + "REPAIR_INPUT_JSON:\n"
             + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
@@ -742,6 +811,11 @@ class ReconcileLedger:
                 raise _error("The reconcile repair changes a ref outside its failures.")
             if {d["ref"] for d in dispositions} != set(repair.refs):
                 raise _error("The reconcile repair must explicitly resolve every failing ref.")
+            if self.strict_names:
+                # A final repair can quote one utterance across adjacent cited segments. Bind
+                # it back to exact per-segment fragments; never rewrite its words or sources.
+                dispositions = [self._bind_repair_quotes(d) for d in dispositions]
+                additions = [(i, self._bind_repair_quotes(a)) for i, a in additions]
             return self.apply(
                 {
                     "ledger_version": LEDGER_VERSION,
@@ -753,6 +827,103 @@ class ReconcileLedger:
             raise
         except _PATCH_ERRORS as error:
             raise _error("The reconcile patch is invalid.", reason_code="fields") from error
+
+    def _bind_repair_quotes(self, operation: dict[str, Any]) -> dict[str, Any]:
+        """Bind a unique contiguous quote only within its existing cited source IDs.
+
+        This repair-only format recovery keeps the primary check and repair request unchanged.
+        Unknown IDs, gaps, paraphrases, ambiguous matches and expansion over the evidence cap
+        remain errors in the normal validator. Each resulting fragment is an exact NFC quote.
+        """
+        segments = self._segments()
+        ids = operation["source_ids"]
+        if len(set(ids)) != len(ids) or any(ref not in segments for ref in ids):
+            return operation
+        positions = {ref: i for i, ref in enumerate(segments)}
+        ordered = sorted(ids, key=positions.__getitem__)
+        runs: list[list[str]] = []
+        for ref in ordered:
+            if not runs or positions[ref] != positions[runs[-1][-1]] + 1:
+                runs.append([])
+            runs[-1].append(ref)
+        evidence: list[dict[str, str]] = []
+        for quote in operation["evidence"]:
+            ref, text = quote["source_id"], unicodedata.normalize("NFC", quote["quote"])
+            if ref not in ids or ref not in segments:
+                return operation
+            if text in unicodedata.normalize("NFC", segments[ref]["text"]):
+                evidence.append(quote)
+                continue
+            if not MIN_RECONCILE_QUOTE_CHARS <= len(quote["quote"]) <= MAX_RECONCILE_QUOTE_CHARS:
+                return operation
+            matches: list[list[dict[str, str]]] = []
+            for run in runs:
+                if ref not in run or len(run) < 2:
+                    continue
+                parts = [unicodedata.normalize("NFC", segments[sid]["text"]) for sid in run]
+                joined = " ".join(parts)
+                start = joined.find(text)
+                while start >= 0:
+                    stop, offset = start + len(text), 0
+                    fragments: list[dict[str, str]] = []
+                    for sid, part in zip(run, parts, strict=True):
+                        lo, hi = max(start, offset), min(stop, offset + len(part))
+                        if lo < hi:
+                            fragments.append(
+                                {"source_id": sid, "quote": part[lo - offset : hi - offset]}
+                            )
+                        offset += len(part) + 1
+                    if (
+                        len(fragments) >= 2
+                        and any(piece["source_id"] == ref for piece in fragments)
+                        and all(
+                            len(piece["quote"].strip()) >= MIN_RECONCILE_QUOTE_CHARS
+                            for piece in fragments
+                        )
+                    ):
+                        matches.append(fragments)
+                        if len(matches) > 1:
+                            return operation
+                    start = joined.find(text, start + 1)
+            if len(matches) != 1:
+                return operation
+            evidence.extend(matches[0])
+            if len(evidence) > MAX_RECONCILE_EVIDENCE:
+                return operation
+        if len(evidence) > MAX_RECONCILE_EVIDENCE:
+            return operation
+        return {**operation, "evidence": evidence}
+
+    @staticmethod
+    def _reference_evidence(
+        operation: dict[str, Any], segments: Mapping[str, Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        """Replace an inexact, well-shaped quote by its declared cited segment's whole text.
+
+        Only the quote changes: no source ID, prose or metadata. An exact quote, a quote outside
+        the length bounds, an uncited or unknown ID, or a segment outside the same bounds stays
+        as given, so the normal validator still rejects it.
+        """
+
+        def shaped(text: str) -> bool:
+            return len(text.strip()) >= MIN_RECONCILE_QUOTE_CHARS and (
+                len(text) <= MAX_RECONCILE_QUOTE_CHARS
+            )
+
+        evidence = []
+        for quote in operation["evidence"]:
+            segment = segments.get(quote["source_id"])
+            if segment is not None and quote["source_id"] in operation["source_ids"]:
+                whole = str(segment["text"])
+                if (
+                    shaped(quote["quote"])
+                    and shaped(whole)
+                    and unicodedata.normalize("NFC", quote["quote"])
+                    not in unicodedata.normalize("NFC", whole)
+                ):
+                    quote = {"source_id": quote["source_id"], "quote": whole}
+            evidence.append(quote)
+        return {**operation, "evidence": evidence}
 
     # ----- patch application ------------------------------------------------------------------
 
@@ -771,8 +942,11 @@ class ReconcileLedger:
         global shape or document failure raises on its own.
         """
         segments = self._segments()
-        index = _SourceIndex(segments)
+        index = self._index(segments)
         dispositions, additions, failed = self._shape(patch)
+        if self.reference_evidence:
+            dispositions = [self._reference_evidence(d, segments) for d in dispositions]
+            additions = [(i, self._reference_evidence(a, segments)) for i, a in additions]
         by_ref = {entry.ref: entry for entry in self.entries}
         for disposition in dispositions:
             if disposition["ref"] not in by_ref:
@@ -1446,6 +1620,25 @@ def _instructions(output_language: str) -> str:
         "reason là none trừ khi action là remove; target là null trừ khi action cần. "
         f"Viết text mới bằng {language}, theo văn phong telegraph của final items.\n"
     )
+
+
+# Appended to reconcile and repair prompts of a strict-name (registered Gemini) ledger only.
+_STRICT_NAME_RULE = {
+    "en": (
+        "Strict names: attention.uncited_names also lists single names, and names that no "
+        "transcript segment states (empty candidate_ids). Every name of a person, role holder or "
+        "group must be in the item's cited segments: cite a candidate segment that states it, "
+        "use the cited segment's own spelling, or leave the person unnamed by role. Keep every "
+        "other fact, number, negation and outcome. Never keep an unlisted name-flagged ref.\n"
+    ),
+    "vi": (
+        "Tên nghiêm ngặt: attention.uncited_names cũng liệt kê tên đơn và tên không segment "
+        "transcript nào nêu (candidate_ids rỗng). Mọi tên người, người giữ vai trò hoặc nhóm phải "
+        "có trong segment mục trích: trích segment ứng viên nêu tên, dùng đúng chính tả của "
+        "segment được trích, hoặc để ẩn danh theo vai trò. Giữ mọi ý, số, phủ định và kết quả "
+        "khác. Không để ref bị cảnh báo tên mà không liệt kê.\n"
+    ),
+}
 
 
 def _repair_instructions(output_language: str, addition_slots: int) -> str:
