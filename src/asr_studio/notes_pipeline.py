@@ -894,7 +894,12 @@ def generate_notes_document(
         At most two disjoint item partitions run concurrently, each over the full source; their
         validated patches are merged and applied once. Any failed part fails the whole task.
         """
-        audit = SemanticAudit(projected_snapshot, final_document, max_unit_size=max_unit_size)
+        audit = SemanticAudit(
+            projected_snapshot,
+            final_document,
+            max_unit_size=max_unit_size,
+            output_language=output_language,
+        )
         parts: list[tuple[SemanticAudit, str, Callable[[str | None], str]]] = []
         for part in audit.partitions():
 

@@ -186,6 +186,205 @@ def anonymous_variants(
     return variants[:MAX_VARIANTS_PER_ITEM]
 
 
+# ----- secondary legal references (detail-free variants) ---------------------------------------
+
+_EXCERPT_LABELS = tuple(
+    _source_excerpt_text("", language).removesuffix(" “”") for language in ("en", "vi")
+)
+_REFERENCE_UNCLEAR = {"en": "[reference unclear]", "vi": "[tham chiếu chưa rõ]"}
+_QUANTITY_UNCLEAR = {"en": "[quantity unclear]", "vi": "[số lượng chưa rõ]"}
+# A multi-component dotted identifier; a 1-3 digit lead never reads a 4-digit year as one.
+_DOTTED = r"(?<![\w.])\d{1,3}[A-Za-z]?(?:\.\d+[A-Za-z]?)+(?:\([0-9A-Za-z]{1,3}\))*(?![\w.]*\d)"
+_REF_LIST = rf"{_DOTTED}(?:(?:\s*,\s*(?:(?:and|or|và|hoặc)\s+)?|\s+(?:and|or|through|to|và|hoặc|đến)\s+){_DOTTED})*"  # noqa: E501
+_WORD_LABEL = (
+    r"(?i:(?:municipal|administrative|revised|penal|civil|criminal|building|zoning|land\s+use|"
+    r"tax|health|city|county|state|government|labou?r|family|commercial|vehicle)\s+codes?|"
+    r"code\s+sections?|sections?|sec\.|articles?|art\.|clauses?|chapters?|"
+    r"điều|khoản|mục|chương)|§§?"
+)
+_LEGAL_RE = re.compile(
+    rf"(?:(?<!\w)(?P<word>{_WORD_LABEL})|\b(?P<acronym>[A-Z]{{2,6}}))\s+(?P<refs>{_REF_LIST})",
+    re.UNICODE,
+)
+
+_ACRONYM_LEGAL_CONTEXT = re.compile(
+    r"\b(?:(?:bill|ordinance|resolution|statute|act|section|article|clause)\s+"
+    r"(?:no\.?\s*)?\d+|(?:statutory|legal)\s+(?:code|references?)|"
+    r"(?:municipal|administrative|penal|civil|criminal|tax)\s+code)\b",
+    re.IGNORECASE,
+)
+_TECHNICAL_REFERENCE_CONTEXT = re.compile(
+    r"\b(?:versions?|releases?|software|firmware|sdk|api|library|package|installed|"
+    r"installing|installs?|upgrades?|upgrading|deployed|deploying|product|build|model)\b",
+    re.IGNORECASE,
+)
+
+
+def _date_like_reference(reference: str) -> bool:
+    parts = reference.split(".")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts) or len(parts[2]) != 4:
+        return False
+    first, second = int(parts[0]), int(parts[1])
+    return (1 <= first <= 31 and 1 <= second <= 12) or (1 <= first <= 12 and 1 <= second <= 31)
+
+
+def reference_variant(text: str, output_language: str = "en") -> str | None:
+    """The text with only labelled multi-component legal reference lists marked as unclear.
+
+    A list follows an explicit statutory label (code, section, article, clause, chapter, §) or
+    an all-caps code acronym with nearby statutory context and no software-version cue.
+    Every acronym identifier needs at least three components.
+    Record numbers, votes, dates and every other word stay byte-for-byte.
+    """
+    marker = _REFERENCE_UNCLEAR[nd.validate_output_language(output_language)]
+    pieces: list[str] = []
+    last = 0
+    for match in _LEGAL_RE.finditer(text):
+        refs = re.findall(_DOTTED, match["refs"])
+        if any(_date_like_reference(ref) for ref in refs):
+            continue
+        if match["acronym"]:
+            preceding = text[max(0, match.start() - 200) : match.start()]
+            local = text[max(0, match.start() - 60) : match.end() + 30]
+            if (
+                any(ref.count(".") < 2 for ref in refs)
+                or not _ACRONYM_LEGAL_CONTEXT.search(preceding)
+                or _TECHNICAL_REFERENCE_CONTEXT.search(local)
+            ):
+                continue  # an acronym or a product version alone is not a statutory label
+        pieces += [text[last : match.start("refs")], marker]
+        last = match.end("refs")
+    return None if not pieces else "".join(pieces) + text[last:]
+
+
+# ----- joined-number size enumerations (quantity marker) --------------------------------------
+
+_SMALL_NUMBERS = {
+    **{str(n): n for n in range(1, 10)},
+    **{word: n for n, word in enumerate("one two three four five six seven eight nine".split(), 1)},  # noqa: SIM905
+}
+_SMALL = "|".join(sorted(_SMALL_NUMBERS, key=len, reverse=True))
+_SIZE_UNIT = (
+    r"(?:bed(?:room)?|bath(?:room)?|room|seat(?:er)?|stor(?:e?y|ies|eys)|door|axle|berth|"
+    r"person|people|car|bay)s?"
+)
+# "243, four and five-seat vehicles": an ASR merge of a total and the first size can make the
+# total's last digit the member just before a consecutive size pair.
+_ENUMERATION_RE = re.compile(
+    rf"(?<![\d.,])(?P<n>\d{{1,3}}(?:,\d{{3}})+|\d{{2,}})\s*,\s*(?P<a>{_SMALL})"
+    rf"(?:\s*-?\s*(?:,|and|or|to|-|–)\s*|\s+)(?P<b>{_SMALL})[\s-]+{_SIZE_UNIT}\b"
+    r"(?P<tail>(?:[\s-]+[\w'’-]+){1,3})",
+    re.IGNORECASE | re.UNICODE,
+)
+# Counted-object families; a quantity is marked only when its noun shares the enumeration's.
+_FAMILIES = {
+    "dwellings": (
+        "apartment unit home house townhome townhouse rowhome condo condominium dwelling "
+        "residence flat household căn nhà hộ"
+    ),
+    "vehicles": "vehicle car bus van truck boat xe",
+    "lodging": "suite cabin cottage phòng",
+}
+_FAMILY_OF = {word: family for family, words in _FAMILIES.items() for word in words.split()}
+_LABEL_BEFORE = re.compile(
+    r"(?i:(?:bill|resolution|ordinance|appointment|appointments|item|no\.?|number|case|file|"
+    r"docket|route|district|ward|section|code|chapter|article|clause|số|dự\s+luật|nghị\s+quyết)"
+    r"\s*#?\s*|#)$"
+)
+_COUNT_CUE = re.compile(r"(?i:(?:total|count|number)\s+of|tổng(?:\s+(?:cộng|số))?)\s*$")
+
+
+def _family(word: str) -> str | None:
+    word = _word(word)
+    for stem in (word, word[:-1] if word.endswith("s") else word, word[:-2]):
+        if stem in _FAMILY_OF:
+            return _FAMILY_OF[stem]
+    return None
+
+
+# A function word or measure unit ends the modifier run: "24 hours for vehicles" is no count.
+_NOT_MODIFIER = frozenset(
+    """
+    of for to in on at by per with from and or than the a an
+    hour minute day week month year percent dollar acre foot feet mile meter metre square
+    cho của và hoặc với trong giờ phút ngày tuần tháng năm đồng mét
+    """.split()  # noqa: SIM905 - a readable word list
+)
+
+
+def _noun_family(tail: str) -> str | None:
+    """The counted-object family of a noun reached through at most three modifier words."""
+    for token in re.findall(r"[\w'’]+", tail)[:3]:
+        if family := _family(token):
+            return family
+        word = _word(token)
+        if word in _NOT_MODIFIER or word.removesuffix("s") in _NOT_MODIFIER:
+            return None
+    return None
+
+
+def _number(value: int) -> str:
+    return rf"(?<![\w$€£¥.,#%-])(?:{value}|{value:,})(?![\w%]|[.,]\d)"
+
+
+def _count_claims(text: str, value: int, family: str) -> list[re.Match[str]]:
+    """Definite counts of ``value`` objects of ``family``: the number, then <= 3 words, a noun."""
+    pattern = re.compile(_number(value) + r"(?P<tail>(?:[\s-]+[\w'’-]+){1,4})", re.UNICODE)
+    return [
+        match
+        for match in pattern.finditer(text)
+        if _noun_family(match["tail"]) == family
+        and not _LABEL_BEFORE.search(text[: match.start()].rstrip())
+    ]
+
+
+def ambiguous_quantities(cited_text: str) -> list[tuple[int, str]]:
+    """(candidate value, family) pairs that only a suspicious joined-number list supports.
+
+    For each enumeration, the literal total, its rounded-down tens and its prefix without the
+    joined digit are candidates, unless the cited text, outside every such list, states that
+    value as a clear count or total of the same family.
+    """
+    matches = []
+    for match in _ENUMERATION_RE.finditer(cited_text):
+        total = int(match["n"].replace(",", ""))
+        first = _SMALL_NUMBERS[match["a"].casefold()]
+        family = _noun_family(match["tail"])
+        if (
+            family is not None
+            and _SMALL_NUMBERS[match["b"].casefold()] == first + 1
+            and first >= 2  # the inferred first size (joined last digit) is a positive size
+            and total % 10 == first - 1
+        ):
+            matches.append((match, total, family))
+    rest = cited_text
+    for match, _total, _family_name in reversed(matches):
+        rest = rest[: match.start()] + " … " + rest[match.end() :]
+    candidates: list[tuple[int, str]] = []
+    for _match, total, family in matches:
+        for value in (total, total - total % 10, total // 10):
+            explicit = _count_claims(rest, value, family) or any(
+                _COUNT_CUE.search(rest[: m.start()]) for m in re.finditer(_number(value), rest)
+            )
+            if value >= 2 and not explicit and (value, family) not in candidates:
+                candidates.append((value, family))
+    return candidates
+
+
+def mark_unclear_quantities(
+    text: str, cited_text: str, output_language: str = "en"
+) -> tuple[str, int]:
+    """Replace only definite counts that rest on a joined-number list by a fixed marker."""
+    marker = _QUANTITY_UNCLEAR[nd.validate_output_language(output_language)]
+    spans: set[tuple[int, int]] = set()
+    for value, family in ambiguous_quantities(cited_text):
+        for match in _count_claims(text, value, family):
+            spans.add((match.start(), match.start() + len(match.group()) - len(match["tail"])))
+    for start, end in sorted(spans, reverse=True):
+        text = text[:start] + marker + text[end:]
+    return text, len(spans)
+
+
 @dataclass(frozen=True, slots=True)
 class _Item:
     ref: str
@@ -198,10 +397,16 @@ class SemanticAudit:
     """The final items of one long run, their immutable text refs and the projected source."""
 
     def __init__(
-        self, source: dict[str, Any], document: dict[str, Any], *, max_unit_size: int = 1
+        self,
+        source: dict[str, Any],
+        document: dict[str, Any],
+        *,
+        max_unit_size: int = 1,
+        output_language: str = "en",
     ) -> None:
         if not isinstance(source, dict) or not isinstance(source.get("segments"), list):
             raise _error("The semantic audit source is invalid.", "source_ids")
+        self.output_language = nd.validate_output_language(output_language)
         self.source = copy.deepcopy(source)
         self.document = copy.deepcopy(document)
         self.max_unit_size = max_unit_size
@@ -210,20 +415,44 @@ class SemanticAudit:
         }
         common = _common_vocabulary(source)
         items: list[_Item] = []
+        self.quantity_marks = 0
         for section in _SECTION_NAMES:
-            entries = document.get(section)
+            entries = self.document.get(section)
             if not isinstance(entries, list):
                 raise _error("The semantic audit input is invalid.", "fields")
             for position, item in enumerate(entries):
+                # A labelled literal source quote is never edited; the detail guards skip it.
+                verbatim = any(label in item["text"] for label in _EXCERPT_LABELS)
+                if not verbatim:
+                    # Before any ref exists, so no text ref (not even '.o') can restore it.
+                    item["text"], marks = mark_unclear_quantities(
+                        item["text"], self._cited(item), self.output_language
+                    )
+                    self.quantity_marks += marks
                 ref = f"i{len(items)}"
                 texts = [(f"{ref}.o", item["text"])]
-                texts += [
-                    (f"{ref}.a{n}", variant)
-                    for n, variant in enumerate(
-                        anonymous_variants(item["text"], common, self._cited(item)), start=1
+                legal = None if verbatim else reference_variant(item["text"], self.output_language)
+                if legal is not None:
+                    texts.append((f"{ref}.r", legal))
+                for n, variant in enumerate(
+                    anonymous_variants(item["text"], common, self._cited(item)), start=1
+                ):
+                    texts.append((f"{ref}.a{n}", variant))
+                    combined = (
+                        None if verbatim else reference_variant(variant, self.output_language)
                     )
-                ]
-                items.append(_Item(ref, section, position, tuple(texts)))
+                    if combined is not None:
+                        texts.append((f"{ref}.a{n}r", combined))
+                items.append(
+                    _Item(ref, section, position, tuple(texts[: 1 + MAX_VARIANTS_PER_ITEM]))
+                )
+        if self.quantity_marks:  # markers are nonfactual, but the bounded document must hold
+            nd.validate_document(
+                self.document,
+                dict(self.source),
+                max_output_bytes=nd.MAX_OUTPUT_BYTES,
+                max_unit_size=self.max_unit_size,
+            )
         self.items = tuple(items)
         self._by_ref = {item.ref: item for item in items}
         self._text_refs = {
@@ -256,13 +485,22 @@ class SemanticAudit:
         view._text_refs = {r: (item, text) for item in items for r, text in item.texts}
         return view
 
-    def validated_patch(self, raw_output: object, *, output_language: str = "en") -> dict:
+    def _language(self, output_language: str | None) -> str:
+        """The constructor's language; a different one would mix marker and label languages."""
+        if (
+            output_language is not None
+            and nd.validate_output_language(output_language) != self.output_language
+        ):
+            raise _error("The semantic audit output language changed.", "fields")
+        return self.output_language
+
+    def validated_patch(self, raw_output: object, *, output_language: str | None = None) -> dict:
         """This view's patch after the full parse guard; the canonical decoded JSON object."""
         self.parse(raw_output, output_language=output_language)
         return json.loads(raw_output)  # type: ignore[arg-type] - parse proved it is JSON text
 
     def combine_patches(
-        self, parts: Sequence[tuple[SemanticAudit, dict]], *, output_language: str = "en"
+        self, parts: Sequence[tuple[SemanticAudit, dict]], *, output_language: str | None = None
     ) -> tuple[dict[str, Any], dict[str, int]]:
         """Merge the validated patches of disjoint views covering every item; parse it once."""
         scopes = [set(view._by_ref) for view, _patch in parts]
@@ -347,12 +585,12 @@ class SemanticAudit:
     def build_prompt(
         self,
         *,
-        output_language: str = "en",
+        output_language: str | None = None,
         invalid_output: str | None = None,
         budget: nd.NotesBudget | None = None,
     ) -> str:
         """The bounded audit prompt; raises when it, with its schema, cannot fit the budget."""
-        output_language = nd.validate_output_language(output_language)
+        output_language = self._language(output_language)
         prompt = (
             _INSTRUCTIONS[output_language]
             + "AUDIT_INPUT_JSON:\n"
@@ -387,13 +625,13 @@ class SemanticAudit:
         return {"text": excerpt, "source_ids": ids}
 
     def parse(
-        self, raw_output: object, *, output_language: str = "en"
+        self, raw_output: object, *, output_language: str | None = None
     ) -> tuple[dict[str, Any], dict[str, int]]:
         """Apply one sparse patch; an unknown, duplicate, cross-origin or conflicting ref fails.
 
         Each valid unresolved ref is quarantined as cited source excerpts.
         """
-        output_language = nd.validate_output_language(output_language)
+        output_language = self._language(output_language)
         if not isinstance(raw_output, str):
             raise _error("The semantic audit response must be text.", "json")
         try:
@@ -430,9 +668,12 @@ class SemanticAudit:
                 "cleared_owner",
                 "cleared_deadline",
                 "quarantined",
+                "reference_unclear",
+                "quantity_unclear",
             ),
             0,
         )
+        counts["quantity_unclear"] = self.quantity_marks  # applied once, before any text ref
         for change in changes:
             if not isinstance(change, dict) or set(change) != {
                 "ref",
@@ -471,7 +712,9 @@ class SemanticAudit:
                 published["deadline_text"] = None
                 published["deadline_date"] = None
             counts["changes"] += 1
-            counts["anonymized"] += text_ref != f"{ref}.o"
+            suffix = text_ref.removeprefix(f"{ref}.")
+            counts["anonymized"] += suffix.startswith("a")
+            counts["reference_unclear"] += suffix.endswith("r")
             counts["cited_items"] += bool(added)
             counts["added_ids"] += len(added)
             counts["cleared_owner"] += clear_owner
@@ -505,7 +748,10 @@ _INSTRUCTIONS = {
         "final notes assigned to this request. Each item has immutable text_refs: '.o' is its "
         "original text, '.aN' an "
         "anonymous variant that only drops a leading speaker or group attribution or a leading "
-        "qualifier. Check only material bindings: every named person, role, organization, "
+        "qualifier, '.r' only replaces labelled secondary legal reference identifiers (code, "
+        "section, article or clause numbers) with a fixed reference-unclear marker, and '.aNr' "
+        "does both. Bracketed unclear markers were set by code, are not claims and need no "
+        "support. Check only material bindings: every named person, role, organization, "
         "number, duration, date, vote, owner, deadline and commitment must be stated by the "
         "item's cited segments. Check every listed item in every section, including overview "
         "titles, headings and confirmation_items; a section or heading never makes an "
@@ -517,7 +763,10 @@ _INSTRUCTIONS = {
         "Every number, quantity, count and bill, ordinance, statute or section identifier must "
         "appear in the cited segments; never split, merge or reinterpret garbled transcribed "
         "digits or a spoken list to create a count, and never guess, correct or complete "
-        "identifier digits. When such a fact is ambiguous and no variant drops it, list the ref "
+        "identifier digits. When only a secondary legal reference is uncertain while the main "
+        "record, outcome, vote and date are supported, choose the '.r' or '.aNr' variant and "
+        "keep the item; unresolved_refs is for an unsupported main fact. When such a fact is "
+        "ambiguous and no variant drops it, list the ref "
         "in unresolved_refs. A procedural approval, requirement or commitment needs its own "
         "cited statement; when that statement continues in the next segment, add that "
         "segment's source ID. Never supply background legal or procedural assumptions. "
@@ -546,7 +795,10 @@ _INSTRUCTIONS = {
         "trả về tài liệu hay câu chữ mới. AUDIT_INPUT_JSON.source là toàn bộ bản ghi; items là "
         "các mục biên bản cuối được giao cho yêu cầu này. Mỗi mục có text_refs bất biến: '.o' "
         "là văn bản gốc, '.aN' là "
-        "biến thể ẩn danh chỉ bỏ phần ghi người nói hoặc nhóm ở đầu, hoặc bổ ngữ ở đầu. Chỉ kiểm "
+        "biến thể ẩn danh chỉ bỏ phần ghi người nói hoặc nhóm ở đầu, hoặc bổ ngữ ở đầu; '.r' chỉ "
+        "thay số hiệu tham chiếu pháp lý phụ có nhãn (số bộ luật, điều, mục, khoản) bằng một dấu "
+        "tham chiếu chưa rõ cố định, và '.aNr' làm cả hai. Các dấu chưa rõ trong ngoặc vuông do "
+        "mã đặt, không phải khẳng định và không cần nguồn. Chỉ kiểm "
         "tra các gắn kết trọng yếu: mọi người được nêu tên, vai trò, tổ chức, con số, thời lượng, "
         "ngày, kết quả biểu quyết, người phụ trách, hạn chót và cam kết phải được segment được "
         "trích nêu rõ. Kiểm tra mọi mục được liệt kê trong mọi phần, kể cả tiêu đề tổng quan, "
@@ -559,7 +811,10 @@ _INSTRUCTIONS = {
         "Mọi con số, số lượng, phép đếm và số hiệu dự luật, sắc lệnh, luật hay điều khoản phải "
         "xuất hiện trong segment được trích; không bao giờ tách, gộp hay diễn giải lại chữ số "
         "bị ghi sai hoặc một danh sách được đọc để tạo ra một phép đếm, và không bao giờ đoán, "
-        "sửa hay điền thêm chữ số của số hiệu. Khi dữ kiện như vậy mơ hồ và không biến thể nào "
+        "sửa hay điền thêm chữ số của số hiệu. Khi chỉ tham chiếu pháp lý phụ không chắc chắn "
+        "còn hồ sơ chính, kết quả, biểu quyết và ngày được hỗ trợ, hãy chọn biến thể '.r' hoặc "
+        "'.aNr' và giữ mục; unresolved_refs dành cho dữ kiện chính không được hỗ trợ. Khi dữ "
+        "kiện như vậy mơ hồ và không biến thể nào "
         "bỏ được nó, liệt kê ref đó trong unresolved_refs. Một phê duyệt, yêu cầu hay cam kết "
         "theo thủ tục cần chính phát biểu được trích của nó; khi phát biểu đó tiếp tục ở "
         "segment kế tiếp, hãy thêm source ID của segment đó. Không bao giờ tự bổ sung giả định "

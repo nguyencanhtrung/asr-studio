@@ -1805,7 +1805,7 @@ thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Kế
 Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ, không phải lượt đo
 end-to-end mới. Mốc ngoài cửa sổ hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
 
-### #183 — Gemini giữ sự kiện và kiểm gắn nguồn (`notes-hierarchical-v29`)
+### #183 — Gemini giữ sự kiện và kiểm gắn nguồn (`notes-hierarchical-v30`)
 
 **Vấn đề.** Cùng transcript/gold đã khóa, bản trước đạt 8/12 nội dung, 6/7 ý quan trọng,
 9 khẳng định quan trọng thiếu căn cứ; mẫu ngắn 8/9. Map theo giờ bỏ mất sự kiện, final tự do
@@ -1831,6 +1831,7 @@ quyết định đổi lịch với công việc phát sinh; ca ngắn giữ s�
   Gemini danh mục sự kiện cũng giữ các phân biệt này; prompt ngắn/ChatGPT/fallback giữ nguyên.
   Mục chưa đủ căn cứ chuyển sang confirmation bằng trích đoạn nguồn nguyên văn, bỏ khẳng định
   chưa xác minh và metadata. Ref sai/lặp/chéo, ID sai, xung đột thao tác hoặc quá giới hạn vẫn lỗi.
+- Bản vá có thể chọn biến thể đánh dấu riêng mã điều khoản phụ chưa rõ, giữ phần quyết định đã có nguồn. Chỉ nhận nhãn pháp lý; tên viết tắt cần ngữ cảnh pháp lý và không có dấu hiệu phiên bản phần mềm, giữ ngày dạng chấm. Số lượng nghi do ASR ghép danh sách kích cỡ được đánh dấu riêng theo ngôn ngữ nếu không có tổng số độc lập trong nguồn của mục, trước khi sinh lựa chọn văn bản; không khôi phục số mơ hồ qua lựa chọn câu gốc. Không sửa transcript hay số hồ sơ/biểu quyết/tiền/ngày.
 - `notes_context.py` thêm neo số hồ sơ ngắn có nhãn và câu kết quả gần kiến nghị cho Gemini.
   Neo có cấu trúc tìm tối đa 32 segment/360 giây: tiêu đề cùng số hồ sơ hoặc khối biểu quyết
   kế tiếp có đúng tên người bỏ phiếu. Dừng ở tiêu đề khác, kể cả bên trong khối; không suy
@@ -1845,7 +1846,7 @@ quyết định đổi lịch với công việc phát sinh; ca ngắn giữ s�
 5 khẳng định quan trọng thiếu nguồn. Chưa đạt; đây là nguyên nhân siết kiểm nguồn và chia
 nhỏ danh sách để kiểm song song. Nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/`
 `eval-final-physical/results/long.json`, `physical-score-a/assessment.json`,
-`physical-score-b/assessment.json`. Kết quả thực tế v29 sẽ được bổ sung sau kiểm chứng.
+`physical-score-b/assessment.json`. V29 đã chạy lại nhưng chưa đạt; v30 cần lượt đo thực tế và chấm nguồn mới trước nghiệm thu.
 
 Thêm một lượt kiểm ngữ nghĩa giúp sửa việc gắn tên/ngữ cảnh mà kiểm từ vựng không xác định
 được; chi phí tăng so với bản final tự do. Không dùng tóm tắt mạnh hơn vì làm mất sự kiện.

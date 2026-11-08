@@ -66,8 +66,8 @@ def _document() -> dict:
     return nd.validate_document(document, SOURCE)
 
 
-def _audit() -> SemanticAudit:
-    return SemanticAudit(SOURCE, _document())
+def _audit(language: str = "en") -> SemanticAudit:
+    return SemanticAudit(SOURCE, _document(), output_language=language)
 
 
 def _change(ref: str, text_ref: str | None = None, ids=(), owner=False, deadline=False) -> dict:
@@ -155,6 +155,8 @@ def test_sparse_patch_keeps_unlisted_items_and_only_selects_appends_and_clears()
         "cleared_owner": 1,
         "cleared_deadline": 1,
         "quarantined": 0,
+        "reference_unclear": 0,
+        "quantity_unclear": 0,
     }
     assert audit.parse(SEMANTIC_KEEP_PATCH)[0] == _document()
 
@@ -212,7 +214,9 @@ def test_invalid_patches_fail_closed(patch, reason):
 
 @pytest.mark.parametrize("language", ["en", "vi"])
 def test_prompt_states_the_speaker_and_modifier_binding_rules(language):
-    prompt = _audit().build_prompt(output_language=language, budget=nd.notes_budget(*GEMINI))
+    prompt = _audit(language).build_prompt(
+        output_language=language, budget=nd.notes_budget(*GEMINI)
+    )
     markers = {
         "en": (
             "does not identify who made a statement",
@@ -426,10 +430,10 @@ def test_audit_prompt_over_budget_fails_the_task_instead_of_skipping(monkeypatch
 # ----- unresolved-ref quarantine ----------------------------------------------------------------
 
 
-def _quarantine_audit() -> SemanticAudit:
+def _quarantine_audit(language: str = "en") -> SemanticAudit:
     document = _document()
     document["key_topics"].append({"text": "Tarrow and Metro agreed", "source_ids": [ID[2], ID[0]]})
-    return SemanticAudit(SOURCE, nd.validate_document(document, SOURCE))
+    return SemanticAudit(SOURCE, nd.validate_document(document, SOURCE), output_language=language)
 
 
 _LABEL = (
@@ -461,7 +465,7 @@ def test_unresolved_refs_become_literal_source_excerpts_without_shifting_other_i
 
 
 def test_quarantine_label_follows_the_output_language():
-    document, _ = _quarantine_audit().parse(_patch(unresolved=["i0"]), output_language="vi")
+    document, _ = _quarantine_audit("vi").parse(_patch(unresolved=["i0"]), output_language="vi")
     assert document["confirmation_items"][0]["text"] == (
         "Cần xem lại: đã bỏ một ghi chú chưa được kiểm chứng. Trích nguyên văn (ngôn ngữ gốc; "
         f"ngôn ngữ đầu ra: tiếng Việt): “{SOURCE['segments'][1]['text']}”"
@@ -491,10 +495,12 @@ def test_unresolved_item_without_a_cited_source_fails():
 
 @pytest.mark.parametrize("language", ["en", "vi"])
 def test_prompt_explains_the_source_excerpt_quarantine(language):
-    prompt = _audit().build_prompt(output_language=language, budget=nd.notes_budget(*GEMINI))
+    prompt = _audit(language).build_prompt(
+        output_language=language, budget=nd.notes_budget(*GEMINI)
+    )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v29"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v30"
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------
@@ -798,7 +804,9 @@ def test_every_section_is_audited_and_unsupported_bindings_become_literal_excerp
 
 @pytest.mark.parametrize("language", ["en", "vi"])
 def test_prompt_states_the_generic_section_role_number_and_procedure_rules(language):
-    prompt = _audit().build_prompt(output_language=language, budget=nd.notes_budget(*GEMINI))
+    prompt = _audit(language).build_prompt(
+        output_language=language, budget=nd.notes_budget(*GEMINI)
+    )
     markers = {
         "en": (
             "including overview titles, headings and confirmation_items",
