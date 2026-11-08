@@ -830,6 +830,7 @@ def generate_notes_document(
         *,
         reference_evidence: bool = False,
         split: bool = False,
+        clause_cues: bool = False,
     ) -> dict[str, Any]:
         """One structured patch over the projected final draft, map ledger and full source.
 
@@ -846,6 +847,7 @@ def generate_notes_document(
             max_unit_size=max_unit_size,
             strict_names=nd._is_known_gemini(synthesis_budget),
             reference_evidence=reference_evidence,
+            include_clause_cues=clause_cues,
         )
         views = ledger.partitions() if split else (ledger,)
         if len(views) > 1:
@@ -1081,7 +1083,10 @@ def generate_notes_document(
         # Registered Gemini: the semantic audit is mandatory, so reconcile may rebind evidence.
         semantic_required = nd._is_known_gemini(synthesis_budget)
         final_document = reconcile(
-            empty_seed, reference_evidence=semantic_required, split=semantic_required
+            empty_seed,
+            reference_evidence=semantic_required,
+            split=semantic_required,
+            clause_cues=semantic_required,
         )
         if semantic_required:
             final_document = semantic_audit(final_document)

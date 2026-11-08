@@ -101,6 +101,79 @@ _UNCLEAR_PHRASES = (
 MAX_NAME_SPAN_WORDS = 6
 MAX_NAME_CANDIDATE_IDS = 3
 MAX_MERGE_TARGETS = 8
+# Registered Gemini fact inventory only: advisory cues to clauses of an item's own cited segments
+# that its text may omit. Bounds hold per owned view; the lowest-ranked cues are dropped first.
+MAX_CLAUSE_CUES_PER_ITEM = 2
+MAX_CLAUSE_CUES_PER_VIEW = 48
+MAX_CLAUSE_CUE_CHARS = 200
+MAX_CLAUSE_CUE_BYTES = 16_384
+CLAUSE_CUE_MAX_OVERLAP = 0.3  # share of a clause's content words already in the item text
+_CLAUSE_MIN_WORDS = 2
+_SENTENCE_RE = re.compile(r"\S.*?(?:[.!?…]+(?=\s)|$)", re.S)
+_CLAUSE_PART_RE = re.compile(r"\S.*?(?:[,;:](?=\s)|$)", re.S)
+# "may" is left out: as a modal verb it is far more common than the month.
+_MONTHS = frozenset(
+    {"january", "february", "march", "april", "june", "july", "august", "september"}
+    | {"october", "november", "december"}
+)
+_WEEKDAYS = frozenset(
+    {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+)
+_VI_DATE_WORDS = frozenset({"ngày", "tháng", "năm", "quý"})
+# Relative deadline phrases (normalized); each is a date cue when the item does not word it.
+_DEADLINE_PHRASES = (
+    *("next week", "next month", "next year", "end of the week", "end of the month"),
+    *("end of the year", "tuần sau", "tuần tới", "tháng sau", "tháng tới", "năm sau"),
+    *("năm tới", "cuối tuần", "cuối tháng", "cuối năm"),
+)
+# Explicit ordinal step/stage/phase of a process (EN and VI, normalized text). An item already
+# naming any step/stage/phase counts as wording the class.
+_ORDINALS = (
+    r"first|second|third|fourth|fifth|sixth|final|last|next|initial|early|\d+(?:st|nd|rd|th)"
+)
+_NUMERALS = r"one|two|three|four|five|six|\d+|ii|iii|iv"
+_PHASE_RE = re.compile(
+    rf"\b(?:(?:{_ORDINALS}) (?:step|stage|phase|round)s?"
+    rf"|(?:step|stage|phase) (?:{_NUMERALS})"
+    rf"|(?:{_NUMERALS}) (?:part|step|stage|phase) process"
+    r"|(?:bước|giai đoạn|đợt|vòng) (?:đầu|đầu tiên|cuối|cuối cùng|tiếp theo|thứ \w+|"
+    r"một|hai|ba|bốn|năm|\d+))\b"
+)
+_PHASE_WORDS = frozenset({"step", "steps", "stage", "stages", "phase", "phases", "bước"})
+# Closed-class relation connectives in priority order (EN and VI source text). Grammar classes
+# only; a class already worded in the item text is not cued again.
+_CLAUSE_RELATIONS: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
+    (name, tuple(markers.split("|")))
+    for name, markers in (
+        (
+            "sequence",
+            "once|after|afterwards|before|until|prior to|following|upon|subsequently|later|"
+            "come back|comes back|subject to|contingent on|pending|sau khi|trước khi|"
+            "cho đến khi|cho tới khi|sau đó|rồi mới|tùy thuộc",
+        ),
+        (
+            "cause",
+            "because|due to|so that|in order to|therefore|as a result|reason|hence|thus|vì|"
+            "bởi vì|do đó|vì vậy|vì thế|nhằm|để|lý do",
+        ),
+        (
+            "attribution",
+            "on behalf of|representing|represent|represents|speaking for|member of|"
+            "according to|thay mặt|đại diện|nhân danh",
+        ),
+        (
+            "stance",
+            "support|supports|supported|supporting|oppose|opposes|opposed|opposing|opposition|"
+            "in favor|in favour|endorse|endorses|endorsed|urge|urges|urging|against|ủng hộ|"
+            "phản đối|tán thành|đồng tình|kêu gọi",
+        ),
+    )
+)
+# Fixed phrases whose connective word carries no relation ("so that's" normalizes to "so that s").
+_RELATION_IDIOMS = ("once again", "at once", "the following", "heard before", "so that s")
+# Priority order: an explicit phase and a date or deadline are never starved by ordinary
+# cause or stance cues; incidental numbers and capitalised words come last.
+_CLAUSE_REASONS = ("phase", "date", *(name for name, _ in _CLAUSE_RELATIONS), "number", "entity")
 
 
 def _error(
@@ -202,6 +275,102 @@ def _anchor_tokens(text: str) -> frozenset[str]:
     return frozenset(anchors)
 
 
+def _content_words(text: str) -> frozenset[str]:
+    """Normalized words of 4+ characters or with a digit: the overlap vocabulary."""
+    return frozenset(
+        word
+        for word in _normalized(text).split()
+        if len(word) >= 4 or any(char.isdigit() for char in word)
+    )
+
+
+def _clause_units(text: str) -> list[tuple[str, bool]]:
+    """Exact, bounded substrings of one segment: sentences, else merged clauses, else windows.
+
+    A sentence over the cap is split at clause punctuation and adjacent clauses are merged back
+    while they fit; a clause still over the cap becomes word-bounded windows marked truncated.
+    """
+    units: list[tuple[str, bool]] = []
+    for sentence in _SENTENCE_RE.finditer(text):
+        if len(sentence.group()) <= MAX_CLAUSE_CUE_CHARS:
+            units.append((sentence.group(), False))
+            continue
+        base = sentence.start()
+        group: tuple[int, int] | None = None
+        for part in _CLAUSE_PART_RE.finditer(sentence.group()):
+            start, end = base + part.start(), base + part.end()
+            if group is not None and end - group[0] <= MAX_CLAUSE_CUE_CHARS:
+                group = (group[0], end)
+                continue
+            if group is not None:
+                units.append((text[group[0] : group[1]], True))
+            if end - start <= MAX_CLAUSE_CUE_CHARS:
+                group = (start, end)
+                continue
+            group = None
+            window: tuple[int, int] | None = None
+            for word in _WORD_RE.finditer(text, start, end):
+                if window is not None and word.end() - window[0] <= MAX_CLAUSE_CUE_CHARS:
+                    window = (window[0], word.end())
+                    continue
+                if window is not None:
+                    units.append((text[window[0] : window[1]], True))
+                window = (word.start(), min(word.end(), word.start() + MAX_CLAUSE_CUE_CHARS))
+            if window is not None:
+                units.append((text[window[0] : window[1]], True))
+        if group is not None:
+            units.append((text[group[0] : group[1]], True))
+    return units
+
+
+def _relation_classes(normalized: str) -> frozenset[str]:
+    for idiom in _RELATION_IDIOMS:
+        normalized = f" {normalized} ".replace(f" {idiom} ", " | ")
+    return frozenset(
+        name
+        for name, markers in _CLAUSE_RELATIONS
+        if any(_contains(normalized, marker) for marker in markers)
+    )
+
+
+def _states_phase(normalized: str) -> bool:
+    return bool(_PHASE_RE.search(normalized))
+
+
+def _clause_material(unit: str, item_text: str, item_words: frozenset[str]) -> frozenset[str]:
+    """Dates, numbers and mid-sentence capitalised words of a clause absent from the item."""
+    found: set[str] = set()
+    words = _normalized(unit).split()
+    item_numbers = _numbers(item_text)
+    item_normalized = _normalized(item_text)
+    if any(
+        _contains(" ".join(words), phrase) and not _contains(item_normalized, phrase)
+        for phrase in _DEADLINE_PHRASES
+    ):
+        found.add("date")
+    for position, word in enumerate(words):
+        if word in _MONTHS | _WEEKDAYS and word not in item_words:
+            found.add("date")
+        if (
+            word in _VI_DATE_WORDS
+            and position + 1 < len(words)
+            and words[position + 1].isdigit()
+            and words[position + 1] not in item_numbers
+        ):
+            found.add("date")
+    for number in _numbers(unit) - item_numbers:
+        found.add("date" if len(number) == 4 and number[:2] in ("19", "20") else "number")
+    for token in _anchor_tokens(unit):
+        if (
+            token.isalpha()
+            and len(token) >= 3
+            and token not in _MONTHS | _WEEKDAYS
+            and _normalized(token) not in item_words
+        ):
+            found.add("entity")
+    return frozenset(found)
+
+
 @dataclass(frozen=True, slots=True)
 class LedgerEntry:
     """One immutable final or map item, addressed by an opaque ref."""
@@ -282,7 +451,7 @@ class _SourceIndex:
         Absent from the whole source counts too (an invented identity), except a sentence-initial
         word, which may be an ordinary capitalised word. Only the trusted source decides what is a
         common word (its lower-case vocabulary), and a name must match a cited spelling exactly.
-        ponytail: lexical heuristic; an invented sentence-initial name is missed, and a correct
+        lexical heuristic; an invented sentence-initial name is missed, and a correct
         ASR repair of a cited spelling is flagged (the model cites, uses the cited spelling or
         unnames it). Proven-variant matching is the upgrade if repairs prove too costly.
         """
@@ -431,6 +600,9 @@ class ReconcileLedger:
     # Registered Gemini fact inventory with its mandatory semantic audit only: a well-shaped
     # quote that is not exact is replaced by the whole text of its declared, cited segment.
     reference_evidence: bool = False
+    # Registered Gemini fact inventory only: advisory ``attention.unstated_clauses`` cues from
+    # each owned item's own cited segments, with one conditional rule. Off: payload unchanged.
+    include_clause_cues: bool = False
     # Partition view only (see ``partitions``); the defaults are an ordinary, unsplit ledger
     # and leave its payload, schema and parsing byte-identical.
     context: tuple[LedgerEntry, ...] = ()  # other views' entries, shown read-only
@@ -447,6 +619,7 @@ class ReconcileLedger:
         max_unit_size: int = 1,
         strict_names: bool = False,
         reference_evidence: bool = False,
+        include_clause_cues: bool = False,
     ) -> ReconcileLedger:
         entries: list[LedgerEntry] = []
         for prefix, documents in (("f", [final]), ("m", list(map_documents))):
@@ -471,6 +644,7 @@ class ReconcileLedger:
             max_unit_size=max_unit_size,
             strict_names=strict_names,
             reference_evidence=reference_evidence,
+            include_clause_cues=include_clause_cues,
         )
 
     @property
@@ -745,9 +919,106 @@ class ReconcileLedger:
             cues["unclear_ranges"] = ranges
         return cues
 
+    def clause_cues(self) -> dict[str, list[dict[str, Any]]]:
+        """Advisory cues per owned ref: bounded clauses of its own cited segments it may omit.
+
+        A clause is a candidate when under ``CLAUSE_CUE_MAX_OVERLAP`` of its content words are in
+        the item text and it has a relation connective class the item does not word, or a date,
+        deadline, number or capitalised word the item lacks. An explicit ordinal step, stage or
+        phase is a candidate at any overlap unless the item already names one. Each item's best
+        cue ranks before any second cue; then the best reason in ``_CLAUSE_REASONS`` order, more
+        reasons, lower overlap,
+        ledger and source order. Per-item, per-view count and UTF-8
+        byte caps drop the lowest-ranked cues; read-only context entries never get cues.
+        Lexical attention only: a cue is never a fact and never changes validation.
+        """
+        if not self.include_clause_cues:
+            return {}
+        segments = self._segments()
+        position = {source_id: index for index, source_id in enumerate(segments)}
+        ranked: list[tuple[tuple[Any, ...], str, dict[str, Any]]] = []
+        for entry_index, entry in enumerate(self.entries):
+            text = entry.item["text"]
+            item_words = _content_words(text)
+            item_relations = _relation_classes(_normalized(text))
+            item_phase = _states_phase(_normalized(text)) or bool(
+                _PHASE_WORDS & set(_normalized(text).split()) or "giai đoạn" in _normalized(text)
+            )
+            ids = sorted(
+                {i for i in entry.item["source_ids"] if i in segments}, key=position.__getitem__
+            )
+            candidates: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+            seen: set[str] = set()
+            for source_id in ids:
+                for unit_index, (unit, truncated) in enumerate(
+                    _clause_units(segments[source_id]["text"])
+                ):
+                    words = _content_words(unit)
+                    if len(words) < _CLAUSE_MIN_WORDS or unit in seen:
+                        continue
+                    overlap = len(words & item_words) / len(words)
+                    # An unworded explicit phase is cued even when the item shares its nouns.
+                    phase = not item_phase and _states_phase(_normalized(unit))
+                    if overlap >= CLAUSE_CUE_MAX_OVERLAP and not phase:
+                        continue
+                    found = _relation_classes(_normalized(unit)) - item_relations
+                    if overlap < CLAUSE_CUE_MAX_OVERLAP:
+                        found |= _clause_material(unit, text, item_words)
+                    if phase:
+                        found |= {"phase"}
+                    reasons = [r for r in _CLAUSE_REASONS if r in found]
+                    if not reasons:
+                        continue
+                    seen.add(unit)
+                    cue: dict[str, Any] = {
+                        "source_id": source_id,
+                        "excerpt": unit,
+                        "reasons": reasons,
+                    }
+                    if truncated:
+                        cue["truncated"] = True
+                    key = (  # by the priority order of _CLAUSE_REASONS
+                        _CLAUSE_REASONS.index(reasons[0]),
+                        -len(reasons),
+                        round(overlap, 6),
+                        entry_index,
+                        position[source_id],
+                        unit_index,
+                    )
+                    candidates.append((key, cue))
+            candidates.sort(key=lambda candidate: candidate[0])
+            # Breadth first: every item's best cue ranks before any item's second cue.
+            ranked += [
+                ((rank, *key), entry.ref, cue)
+                for rank, (key, cue) in enumerate(candidates[:MAX_CLAUSE_CUES_PER_ITEM])
+            ]
+        ranked.sort(key=lambda candidate: candidate[0])
+
+        def size(value: object) -> int:
+            return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+
+        index = self._index(segments)
+        attention_refs = {entry.ref for entry in self.entries if self._attention(entry, index)}
+        chosen: dict[str, list[dict[str, Any]]] = {}
+        used = 0
+        for _key, ref, cue in ranked:
+            if sum(map(len, chosen.values())) >= MAX_CLAUSE_CUES_PER_VIEW:
+                break
+            cost = size(cue) + 1  # one separating comma
+            if ref not in chosen:
+                cost += len('"unstated_clauses":[]') + 1
+                if ref not in attention_refs:
+                    cost += len('"attention":{}') + 1
+            if used + cost > MAX_CLAUSE_CUE_BYTES:
+                continue  # a smaller lower-ranked cue may still fit
+            used += cost
+            chosen.setdefault(ref, []).append(cue)
+        return chosen
+
     def prompt_payload(self) -> dict[str, Any]:
         index = self._index(self._segments())
         targets = self.merge_targets()
+        clauses = self.clause_cues()
 
         def entry_payload(entry: LedgerEntry) -> dict[str, Any]:
             payload = {
@@ -757,6 +1028,8 @@ class ReconcileLedger:
                 "allowed_merge_targets": targets[entry.ref],
             }
             attention = self._attention(entry, index)
+            if entry.ref in clauses:
+                attention["unstated_clauses"] = clauses[entry.ref]
             if attention:
                 payload["attention"] = attention
             return payload
@@ -784,8 +1057,10 @@ class ReconcileLedger:
     ) -> str:
         """Build the bounded prompt; the custom schema is counted in every budget guard."""
         output_language = nd.validate_output_language(output_language)
+        clause_rule = _CLAUSE_CUE_RULE[output_language] if self.include_clause_cues else ""
         prompt = (
             self._rules(output_language)
+            + clause_rule
             + "RECONCILE_INPUT_JSON:\n"
             + json.dumps(
                 self.prompt_payload(), ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -1784,6 +2059,39 @@ _STRICT_NAME_RULE = {
         "có trong segment mục trích: trích segment ứng viên nêu tên, dùng đúng chính tả của "
         "segment được trích, hoặc để ẩn danh theo vai trò. Giữ mọi ý, số, phủ định và kết quả "
         "khác. Không để ref bị cảnh báo tên mà không liệt kê.\n"
+    ),
+}
+
+
+# Appended to the reconcile prompt (not the repair prompt) of a clause-cue ledger only.
+_CLAUSE_CUE_RULE = {
+    "en": (
+        "attention.unstated_clauses: code-selected clauses of the item's own cited segments that "
+        "its text may omit; reasons names what the clause has (phase, date, sequence, cause, "
+        "attribution, stance, number, entity); an explicit step, stage or phase and a date or "
+        "deadline matter most. A cue is a pointer, not a fact, and alone never requires "
+        "listing the ref. Read the full cited segment, always when truncated is true, for "
+        "negation, actor and conditions. If the clause states a material dependency, trigger or "
+        "sequence, cause or purpose, who someone speaks for, a stated support or opposition, or "
+        "a date that the item lacks, update the item to add it: keep every existing fact, "
+        "negation, modality and actor-object relation, and add an exact evidence quote from that "
+        "cited segment. Otherwise leave the ref unlisted. Never treat a speaker label as an "
+        "identity, and never assign a speaker's own work or statement to a person the speaker "
+        "names.\n"
+    ),
+    "vi": (
+        "attention.unstated_clauses: mệnh đề do mã chọn từ chính segment mục trích mà text của "
+        "mục có thể bỏ sót; reasons nêu mệnh đề có gì (phase, date, sequence, cause, "
+        "attribution, stance, number, entity); bước, giai đoạn và ngày hoặc hạn được nói rõ là "
+        "quan trọng nhất. Cảnh báo này chỉ là gợi ý, không phải sự kiện, và tự nó không "
+        "bắt buộc liệt kê ref. Đọc toàn bộ segment được trích, nhất là khi truncated là true, để "
+        "biết phủ định, chủ thể và điều kiện. Nếu mệnh đề nêu phụ thuộc, điều kiện kích hoạt "
+        "hoặc trình tự, nguyên nhân hoặc mục đích, người được đại diện, sự ủng hộ hoặc phản đối "
+        "được nói rõ, hoặc ngày mà mục còn thiếu và là chi tiết quan trọng, update mục để bổ "
+        "sung: giữ mọi ý, phủ định, mức chắc chắn và quan hệ chủ thể-đối tượng đã có, và thêm "
+        "evidence trích nguyên văn từ segment đó. Nếu không, không liệt kê ref. Không coi nhãn "
+        "người nói là danh tính, và không gán việc hay lời của người nói cho người mà họ nhắc "
+        "tên.\n"
     ),
 }
 

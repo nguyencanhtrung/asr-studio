@@ -41,6 +41,7 @@ from asr_studio.notes_context import (
     unverified_speakers,
     unverified_vote_names,
 )
+from asr_studio.notes_outcomes import outcome_core_candidate
 
 AUDIT_VERSION = 2
 MAX_SEMANTIC_OUTPUT_BYTES = 64_000  # one part's response and the merged patch alike
@@ -282,8 +283,8 @@ _LEGAL_RE = re.compile(
 )
 
 _ACRONYM_LEGAL_CONTEXT = re.compile(
-    r"\b(?:(?:bill|ordinance|resolution|statute|act|section|article|clause)\s+"
-    r"(?:no\.?\s*)?\d+|(?:statutory|legal)\s+(?:code|references?)|"
+    r"\b(?:(?:bill|cb|ordinance|resolution|statute|act|section|article|clause)\s+"
+    r"(?:no\.?\s*)?\d+|amend(?:s|ed|ing)?|(?:statutory|legal)\s+(?:code|references?)|"
     r"(?:municipal|administrative|penal|civil|criminal|tax)\s+code)\b",
     re.IGNORECASE,
 )
@@ -719,6 +720,71 @@ def strengthened_completion(text: str, cited_text: str) -> bool:
     return bool(claims) and not all(claims) and bool(cited) and all(cited)
 
 
+# A nominee credential list, and a source clause where the speaker owns the work in first person.
+_CREDENTIAL_RE = re.compile(
+    r"\b(?:credentials?|qualifications?|experience|background|track\s+record|r[ée]sum[ée])\b"
+    r"[^.;:]*?\b(?:include[sd]?|including|are|is)\b|\b(?:credentials?|qualifications?):",
+    re.IGNORECASE,
+)
+_FIRST_PERSON_WORK = re.compile(
+    r"\b(?:I|we)\s+(?:\w+\s+)?(?:initiated|started|launched|led|created|began|introduced|"
+    r"sponsored|championed|built|drafted|worked)\b|\b(?:my|our)\s+(?:committee|office|efforts?|"
+    r"work|team|initiative|legislation|bill|staff)\b",
+    re.IGNORECASE,
+)
+_NEGATION_RE = re.compile(r"\b(?:not|never|no)\b|n['’]t\b", re.IGNORECASE)
+# A clause about a third person ("he's worked ... similar to our work") is mixed attribution.
+_THIRD_PERSON_RE = re.compile(r"\b(?:he|she|they|him|her|them|his|hers|their)\b", re.IGNORECASE)
+_FIRST_PERSON_ITEM = re.compile(r"\b(?:I|we|my|our)\b", re.IGNORECASE)
+_STEM_STOP = frozenset("and the of for on at in to with from by a an work".split())  # noqa: SIM905
+
+
+def _stems(text: str) -> set[str]:
+    """Lower-case content-word stems: "rates"/"rate", "sizing"/"size" share one."""
+    stems = set()
+    for word in re.findall(r"[^\W_]+", text.lower()):
+        if word in _STEM_STOP or len(word) < 3:
+            continue
+        for suffix in ("ing", "ed", "es", "s", "e"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+                word = word[: -len(suffix)]
+                break
+        stems.add(word)
+    return stems
+
+
+def speaker_work_as_credential(text: str, cited_text: str) -> bool:
+    """A credential list entry that the cited pool states only as the speaker's own work.
+
+    The item must assert a credential or qualification list and hold no first person itself.
+    An entry counts when at least two of its content stems, and at least half, co-occur only in
+    a non-negated cited clause with explicit first-person ownership ("we initiated", "my
+    committee") and no third-person word, and in no other cited clause. Third-person or other
+    cited credentials, negated or unrelated first-person talk never count; full entailment
+    stays with the model audit.
+    """
+    lead = _CREDENTIAL_RE.search(text)
+    if lead is None or _FIRST_PERSON_ITEM.search(text):
+        return False
+    clauses = [c for c in re.split(r"[.!?;]+", cited_text) if c.strip()]
+    owned = [
+        _stems(c)
+        for c in clauses
+        if _FIRST_PERSON_WORK.search(c)
+        and not _NEGATION_RE.search(c)
+        and not _THIRD_PERSON_RE.search(c)
+    ]
+    other = [_stems(c) for c in clauses if not _FIRST_PERSON_WORK.search(c)]
+    for entry in re.split(r",\s*(?:and\s+)?|\s+and\s+", text[lead.end() :]):
+        stems = _stems(entry)
+        need = max(2, (len(stems) + 1) // 2)
+        if any(len(stems & c) >= need for c in owned) and not any(
+            len(stems & c) >= 2 for c in other
+        ):
+            return True
+    return False
+
+
 _RECORD_KINDS = {
     "ordinance": r"ordinance|sắc\s+lệnh",
     "resolution": r"resolution|nghị\s+quyết",
@@ -825,6 +891,8 @@ class SemanticAudit:
             segment["id"]: str(segment.get("text", "")) for segment in source["segments"]
         }
         common = self._common = _common_vocabulary(source)
+        self._position = {s["id"]: index for index, s in enumerate(self.source["segments"])}
+        self._cores: dict[str, tuple[str, tuple[str, ...]]] = {}
         items: list[_Item] = []
         self.quantity_marks = 0
         for section in _SECTION_NAMES:
@@ -856,6 +924,11 @@ class SemanticAudit:
                         texts.append((f"{ref}.a{n}r", combined))
                 texts = texts[: 1 + MAX_VARIANTS_PER_ITEM]
                 texts += self._responsibility_texts(texts)  # a quoted excerpt gets none
+                core = None if verbatim or section != "decisions" else self._outcome_core(item)
+                if core is not None:
+                    self._cores[ref] = core
+                    if core[0] not in {text for _r, text in texts}:
+                        texts.append((f"{ref}.c", core[0]))
                 items.append(_Item(ref, section, position, tuple(texts)))
         if self.quantity_marks:  # markers are nonfactual, but the bounded document must hold
             nd.validate_document(
@@ -872,8 +945,38 @@ class SemanticAudit:
         self._source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in self.source["segments"])
         )
-        self._position = {s["id"]: index for index, s in enumerate(self.source["segments"])}
         self._visible = self._visible_ids(self.items)
+
+    def _outcome_core(self, entry: Mapping[str, Any]) -> tuple[str, tuple[str, ...]] | None:
+        """The record-outcome core candidate of one decision and its candidate source IDs.
+
+        A candidate is an immutable shorter option the model may choose; it is not semantic
+        truth, and code never publishes it over a model's unresolved decision.
+
+        The pool is the item's cited IDs and its candidates from a read-only strict
+        ``complete_bindings`` run over a copy holding only this item: the same candidates
+        that make up the item's visible source, so a core never cites an unshown segment.
+        """
+        part: dict[str, Any] = {section: [] for section in _SECTION_NAMES}
+        part["decisions"] = [copy.deepcopy(dict(entry))]
+        limit = nd._source_ref_limit(self.max_unit_size)
+        linked, _counts = link_antecedent_context(
+            part, self.source, max_refs_per_item=limit, strict=True, complete_bindings=True
+        )
+        cited = [self._position[i] for i in entry["source_ids"] if i in self._position]
+        pool = set(cited) | {
+            self._position[i]
+            for linked_entry in linked["decisions"]
+            for i in linked_entry["source_ids"]
+            if i in self._position
+        }
+        core = outcome_core_candidate(
+            entry["text"], self.source["segments"], pool, cited=cited, max_refs=limit
+        )
+        if core is None:
+            return None
+        segments = self.source["segments"]
+        return core[0], tuple(segments[index]["id"] for index in core[1])
 
     def _responsibility_texts(self, texts: list[tuple[str, str]]) -> list[tuple[str, str]]:
         """'.p' over the original, '.pr' over '.r', '.aNp'/'.aNpr' over anonymous ones; capped."""
@@ -1095,13 +1198,20 @@ class SemanticAudit:
             }
         )
 
+    def _text_ref_entry(self, item: _Item, text_ref: str, text: str) -> dict[str, Any]:
+        """A '.c' option also lists the source IDs choosing it would append (shown, not proof)."""
+        entry: dict[str, Any] = {"text_ref": text_ref, "text": text}
+        if text_ref == f"{item.ref}.c":
+            entry["source_ids"] = list(self._cores[item.ref][1])
+        return entry
+
     def prompt_payload(self) -> dict[str, Any]:
         def entry(item: _Item) -> dict[str, Any]:
             original = self.document[item.section][item.position]
             payload: dict[str, Any] = {
                 "ref": item.ref,
                 "section": item.section,
-                "text_refs": [{"text_ref": r, "text": t} for r, t in item.texts],
+                "text_refs": [self._text_ref_entry(item, r, t) for r, t in item.texts],
                 "source_ids": list(original["source_ids"]),
             }
             if item.section == "action_items":
@@ -1214,6 +1324,8 @@ class SemanticAudit:
                 "reference_unclear",
                 "quantity_unclear",
                 "responsibility_unclear",
+                "core_selected",
+                "core_preserved",  # retired: always 0, kept for manifest compatibility
                 "reviewed",
                 "model_verified",
             ),
@@ -1252,6 +1364,13 @@ class SemanticAudit:
             ):
                 raise _error("The semantic audit cites an invalid source ID.", "source_ids")
             published = document[item.section][item.position]
+            suffix = text_ref.removeprefix(f"{ref}.")
+            if suffix == "c":  # a chosen candidate carries its own candidate IDs
+                core_ids = self._cores[ref][1]
+                if any(i not in scope for i in core_ids):
+                    raise _error("The semantic audit core cites an unshown ID.", "source_ids")
+                ids = [*ids, *(i for i in core_ids if i not in ids)]
+                counts["core_selected"] += 1
             added = [i for i in ids if i not in published["source_ids"]]
             published["text"] = target[1]
             published["source_ids"] = [*published["source_ids"], *added]
@@ -1261,7 +1380,6 @@ class SemanticAudit:
                 published["deadline_text"] = None
                 published["deadline_date"] = None
             counts["changes"] += 1
-            suffix = text_ref.removeprefix(f"{ref}.")
             counts["anonymized"] += suffix.startswith("a")
             counts["reference_unclear"] += suffix.endswith("r")
             counts["responsibility_unclear"] += "p" in suffix
@@ -1290,7 +1408,9 @@ class SemanticAudit:
                 published["text"], self._cited(published), output_language
             )
             counts["quantity_unclear"] += marks
-            if unverified_vote_names(published, segments, position):
+            if unverified_vote_names(published, segments, position) or speaker_work_as_credential(
+                published["text"], self._cited(published)
+            ):
                 forced.add(item.ref)
                 continue
             names = attributed_speakers(published["text"], self._common)
@@ -1421,7 +1541,20 @@ _INSTRUCTIONS = {
         "'.p' (and '.pr', '.aNp', '.aNpr') replaces only one trailing secondary responsibility "
         "phrase such as 'developed by' an organization with a fixed responsibility-unclear marker; "
         "when the main quantity or fact is supported but that actor's role is not, choose it "
-        "instead of unresolved_refs. Check each atomic actor-role-object binding separately: a "
+        "instead of unresolved_refs. '.c' is only a shorter candidate, literal words of the "
+        "original: its record, its explicit outcome and a directly stated tally. Code does not "
+        "prove, guarantee or vouch for it. Check it independently against your own cited and "
+        "candidate source exactly like '.o', including retractions, history, committee or "
+        "other-body votes and qualifiers. Choose '.c' only when its record and outcome are "
+        "supported and only a name, role, purpose or secondary code number is unclear; "
+        "otherwise unresolved_refs remains valid. A '.c' text_ref lists the source_ids that "
+        "choosing it adds: proposed citation additions, not proof. Review the item's existing "
+        "source_ids, those proposed IDs and the shown context; choosing '.c' approves those IDs, "
+        "so add any other needed IDs explicitly or list the ref in unresolved_refs. "
+        "'N in favor, unopposed' or 'not opposed' states N-0. "
+        "Work the speaker describes as their own (we initiated, my committee) is never the "
+        "nominee's credential or qualification. "
+        "Check each atomic actor-role-object binding separately: a "
         "list of partners does not give each partner the same function, and roles stated for "
         "different projects, categories or examples cannot be merged. A distant introduction, "
         "role continuity, a roster or co-occurrence never identifies a speaker; a "
@@ -1487,7 +1620,20 @@ _INSTRUCTIONS = {
         "trong đầu vào. '.p' (và '.pr', '.aNp', '.aNpr') chỉ thay một cụm vai trò phụ ở cuối, "
         "như 'phát triển bởi' một tổ chức, bằng một dấu vai trò chưa rõ cố định; khi con số hay "
         "dữ kiện chính được hỗ trợ nhưng vai trò của chủ thể đó không được hỗ trợ, hãy chọn nó "
-        "thay vì unresolved_refs. Kiểm tra riêng từng gắn kết nguyên tử chủ thể-vai trò-đối "
+        "thay vì unresolved_refs. '.c' chỉ là lõi ứng viên ngắn hơn, đúng chữ của văn bản gốc: "
+        "hồ sơ, kết quả rõ ràng và kết quả biểu quyết nêu trực tiếp. Mã không chứng minh hay bảo "
+        "đảm nó. Hãy kiểm nó độc lập với nguồn đã trích và ứng viên của chính bạn đúng như '.o', "
+        "gồm rút lại, lịch sử, biểu quyết ở ủy ban hay cơ quan khác và điều kiện. Chỉ chọn '.c' "
+        "khi hồ sơ và kết quả được hỗ trợ và chỉ tên, vai trò, mục đích hay số hiệu điều khoản "
+        "phụ chưa rõ; nếu không, unresolved_refs vẫn hợp lệ. text_ref '.c' liệt kê source_ids mà "
+        "việc chọn nó sẽ thêm: đó là đề xuất trích dẫn thêm, không phải bằng chứng. "
+        "Hãy xem source_ids hiện có của mục, các ID đề xuất đó và ngữ cảnh được hiển thị; "
+        "chọn '.c' là chấp thuận các ID đó, nên hãy thêm tường minh mọi ID cần khác "
+        "hoặc liệt kê ref trong unresolved_refs. "
+        "'N in favor, unopposed' hoặc 'not opposed' là "
+        "N-0. Việc người nói mô tả là của chính mình (we initiated, my committee) không bao giờ "
+        "là thành tích hay năng lực của người được đề cử. "
+        "Kiểm tra riêng từng gắn kết nguyên tử chủ thể-vai trò-đối "
         "tượng: một danh sách đối tác không cho mỗi đối tác cùng một chức năng, và vai trò được "
         "nêu cho các dự án, hạng mục hay ví dụ khác nhau không được gộp. Lời giới thiệu ở xa, "
         "sự liên tục của vai trò, danh sách hay việc cùng xuất hiện không bao giờ xác định "

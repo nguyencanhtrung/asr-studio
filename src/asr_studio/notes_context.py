@@ -721,8 +721,33 @@ def _record_refs(text: str) -> list[tuple[str, str, str, tuple[int, int]]]:
     return refs
 
 
+# "Appointments 7401 and 7402", "Bill 12 through 15", "Bills 12/13", "Bill 12, and 13": an
+# unlabelled sibling number of a record.
+_LIST_SIBLING = re.compile(
+    r"\s*(?:,\s*(?:and\b|or\b|&|plus\b|as\s+well\s+as\b)?|&|/|\band\b|\bor\b|\bplus\b"
+    r"|\bas\s+well\s+as\b|\bthrough\b|\bto\b|[-–](?=\s*\d))\s*(\d{1,3}(?:[ \u00a0]\d{3})+|\d+)"
+    r"(?![\d]|\.\d)",
+    re.IGNORECASE,
+)
+
+
+def lists_records(family: str, text: str) -> bool:
+    """A record of the family is followed by an unlabelled list or range of other numbers.
+
+    An unlabelled sibling of any length is a list, a year-like one too ("Bill 74010, 2026"):
+    only a labelled date ("dated", "of 2026", "(2026)") is no sibling. A labelled record of
+    another family is a secondary reference, never a sibling.
+    """
+    return any(
+        kind == family and _LIST_SIBLING.match(text, end)
+        for kind, _canonical, _label, (_start, end) in _record_refs(text)
+    )
+
+
 def _header_states_record(family: str, number: str, text: str) -> bool:
     """The header's primary record is exactly this one; another family's record is secondary."""
+    if lists_records(family, text):
+        return False
     refs = _record_refs(text)
     primary = {canonical for kind, canonical, _label, _span in refs if kind == family}
     if _GENERIC_HEADER.search(text):
@@ -748,6 +773,46 @@ def _record_header_before(
         if _HEADER.search(text) or _TOPIC_BREAK.search(text):
             return back if _header_states_record(family, number, text) else None
     return None
+
+
+# Opt-in long-agenda window: only for an explicit agenda header of the same primary record.
+MAX_AGENDA_SEGMENTS = 64
+MAX_AGENDA_SECONDS = 900.0
+
+
+def _explicit_record_header(text: str) -> bool:
+    """An agenda item header, or a segment that opens with a record label (not a motion)."""
+    if _GENERIC_HEADER.search(text):
+        return True
+    refs = _record_refs(text)
+    lead = len(text) - len(text.lstrip(" \"'“‘([-–—"))
+    return bool(refs) and refs[0][3][0] == lead and not _MOTION.search(text)
+
+
+def _agenda_header_before(
+    family: str, number: str, segments: list[dict[str, Any]], start: int
+) -> tuple[int | None, int | None]:
+    """(explicit agenda header, nearest same-record mention) within the long window.
+
+    A same-record mention (an amendment or a motion) is passed, never taken for the header;
+    any other header, topic break or a different labelled record stops the search.
+    """
+    start_time = float(segments[start]["start_seconds"])
+    mention = None
+    for back in range(start - 1, max(start - MAX_AGENDA_SEGMENTS, 0) - 1, -1):
+        if start_time - float(segments[back]["start_seconds"]) > MAX_AGENDA_SECONDS:
+            break
+        text = segments[back]["text"]
+        refs = {(kind, canonical) for kind, canonical, _label, _span in _record_refs(text)}
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            if not _header_states_record(family, number, text):
+                break
+            if _explicit_record_header(text):
+                return back, mention
+            mention = back if mention is None else mention
+        elif refs - {(family, number)}:
+            break  # a competing record in the long window
+    return None, None
 
 
 _QUANTITY_WORDS = {
@@ -879,6 +944,15 @@ def _completion_links(
         ]
         if found:
             links.append({min(found)[1]})
+        # The long agenda window: the actual header of this record, and its nearest mention.
+        far = []
+        for run in _runs(cited):
+            header, mention = _agenda_header_before(family, number, segments, run[0])
+            if header is not None:
+                far.append((run[0] - header, header, mention))
+        if far:
+            _gap, header, mention = min(far)
+            links += [{index} for index in (header, mention) if index is not None]
     if overview:
         return links
     spans = _interior_spans(cited, segments)
@@ -890,10 +964,34 @@ def _completion_links(
                 (i for span in spans for i in span if _states_phrase(phrase, segments[i]["text"])),
                 None,
             )
-            if witness is not None:
-                links.append({witness})
+            link = {witness} if witness is not None else _continuation(phrase, cited, segments)
+            if link:
+                links.append(link)
                 break
     return links
+
+
+def _continuation(
+    phrase: tuple[str, ...], cited: list[int], segments: list[dict[str, Any]]
+) -> set[int]:
+    """The bounded continuation of a cut sentence after a cited run that completes the phrase."""
+    for run in _runs(cited):
+        end = last = run[-1]
+        if _states_phrase(phrase, segments[end]["text"]):
+            continue
+        while (
+            not _SENTENCE_END.search(segments[last]["text"])
+            and last + 1 < len(segments)
+            and last + 1 - end <= MAX_FORWARD_SEGMENTS
+            and float(segments[last + 1]["start_seconds"]) - float(segments[end]["end_seconds"])
+            <= MAX_FORWARD_SECONDS
+            and not _HEADER.search(segments[last + 1]["text"])
+            and not _TOPIC_BREAK.search(segments[last + 1]["text"])
+        ):
+            last += 1
+            if _states_phrase(phrase, " ".join(segments[i]["text"] for i in range(end, last + 1))):
+                return set(range(end + 1, last + 1))
+    return set()
 
 
 def _context_for_item(

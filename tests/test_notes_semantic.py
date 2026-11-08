@@ -165,6 +165,8 @@ def test_sparse_patch_keeps_unlisted_items_and_only_selects_appends_and_clears()
         "reference_unclear": 0,
         "quantity_unclear": 0,
         "responsibility_unclear": 0,
+        "core_selected": 0,
+        "core_preserved": 0,
         "reviewed": 4,
         "model_verified": 1,  # i2 only: every listed ref is decided false
     }
@@ -527,7 +529,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v38"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v39"
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------

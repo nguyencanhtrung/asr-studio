@@ -2034,6 +2034,94 @@ Chấm mù độc lập (A, B; 89 + 89 = 178 mục): 7/12 mẫu (5 một phần,
 `v38-performance-comparison.json`, `eval-v38-physical/results/long.json`, `v38-score-a/assessment.json`,
 `v38-score-b/assessment.json`.
 
+### #183 (tiếp) — Lõi hồ sơ-kết quả ứng viên, nguồn nghị sự dài và guard thành tích (`notes-hierarchical-v39`)
+
+**Vấn đề và nguyên nhân đo được (v38).** Lần đo v38 (517,149696 giây, 20 lượt gọi thật, 0 cache,
+179 mục vào kiểm, 178 mục cuối, 8 phần kiểm) đạt 7/12 mẫu, 5/7 ý quan trọng, 2 khẳng định quan trọng
+thiếu nguồn. Ba quyết định có kết quả biểu quyết trực tiếp trong nguồn bị chuyển thành trích đoạn
+cần kiểm tra: model đánh dấu unresolved vì chi tiết phụ (mục đích, tên/chức danh, mã điều khoản phụ
+ASR không rõ) hoặc thiếu tiêu đề hồ sơ trong nguồn của mục, nên ba mẫu chỉ còn một phần. Tiêu đề
+nghị sự của một bổ nhiệm nằm 35 segment/524 giây trước kết quả, ngoài cửa sổ 32/360. Một khẳng định
+thiếu nguồn ghép công việc người nói tự nhận ("we initiated in my committee") vào danh sách thành
+tích của người được đề cử; khẳng định còn lại thiếu số lượng ở segment tiếp nối bị cắt câu.
+
+**Thiết kế.**
+
+- `notes_outcomes.outcome_core_candidate`: với mục `decisions` không phải trích đoạn, mã đề xuất
+  một lõi ứng viên (không chứng minh sự thật của quyết định) gồm đúng chữ của văn bản gốc: một hồ sơ chính có nhãn và số (một họ hồ sơ, không danh
+  sách/số nhiều), một động từ kết quả rõ ràng; kết quả biểu quyết và "as amended" chỉ khi chính lượt
+  biểu quyết của kết quả nêu trực tiếp (mệnh đề kết quả hoặc các câu ngay trước nó trong segment đó
+  và segment liền trước, dừng ở câu của lượt biểu quyết khác như sửa đổi hay hồ sơ có nhãn; "N in
+  favor, unopposed/not opposed" là N-0; không đếm điểm danh, không suy số thiếu). Mục có phủ định,
+  điều kiện, kiến nghị, biểu quyết tương lai hay câu hỏi không có lõi; nhãn "No.", danh từ riêng
+  ("Plan") và tháng "May" không bị coi là phủ định/dự định/khả năng. Nguồn hỗ trợ chỉ lấy từ ID
+  được trích và ứng viên strict `complete_bindings` của chính mục (cùng hợp đồng nguồn hiển thị);
+  segment nêu riêng hồ sơ đó (ưu tiên tiêu đề nghị sự của đúng hồ sơ; danh sách/khoảng số cùng họ
+  không nhãn như "Appointments 7401 and 7402" không nêu hồ sơ nào) phải đứng trước câu kết quả. Câu
+  kết quả khẳng định trực tiếp với danh từ hồ sơ làm chủ ngữ ("The bill passed"), không phải câu
+  hỏi, lời thuật lại hay nghi ngờ; không có hồ sơ có nhãn khác, tiêu đề hay chuyển mục từ hồ sơ đến
+  hết câu kết quả (đọc toàn nguồn; nghị sự khác ở câu sau vẫn được), và không có câu thất bại trong
+  pool. Tên, vai trò, ngày, mục đích và mã điều khoản phụ không vào lõi.
+- Kiểm ngữ nghĩa có thêm text ref bất biến `.c` cho lõi ứng viên; chỉ một thay đổi hợp lệ của model
+  (verified=false, ref không nằm trong unresolved) chọn `.c`, khi đó mã thêm ID ứng viên (trong trần,
+  hiển thị, giữ ID cũ) rồi vẫn qua mọi guard tất định và kiểm tra tài liệu. Input liệt kê `source_ids` đề xuất ngay trên text_ref `.c` (chỉ `.c`, đều thuộc nguồn hiển thị, bằng đúng ID sẽ được nối; không phải bằng chứng) để model kiểm nhóm trích dẫn cuối. Ref unresolved luôn thành
+  trích đoạn cần kiểm tra dù có `.c`: mã không ghi đè từ chối của model bằng nhận dạng từ vựng,
+  vì chỉnh sửa nguồn, cơ quan khác và bất định có vô số biến thể ngôn ngữ; lõi ngắn hơn bất biến chỉ
+  là lựa chọn thêm. Manifest đếm `core_selected` (model chọn, không tính vào `model_verified`);
+  `core_preserved` luôn 0, đã loại bỏ, giữ cho tương thích. Mục khác, trích đoạn có nhãn và đường `.r`/`.p`/ẩn danh không đổi.
+- Mã viết tắt luật (ví dụ SMC) sau nhãn `CB <số>` hoặc động từ sửa đổi được coi là tham chiếu pháp
+  lý phụ, nên `.r` chỉ đánh dấu chưa rõ các số điều khoản, không che hồ sơ chính.
+- Guard thành tích: mục nêu danh sách credentials/qualifications/experience bị chuyển sang trích
+  đoạn cần kiểm tra khi một mục trong danh sách chỉ khớp (≥ 2 gốc từ nội dung, ≥ một nửa) với mệnh
+  đề đã trích có sở hữu ngôi thứ nhất rõ ("we initiated", "my committee"), không phủ định, không có
+  từ ngôi thứ ba, và không khớp mệnh đề nào khác. Không đổi vai trò, không viết lại câu.
+- Liên kết strict `complete_bindings` (mặc định tắt, chỉ Gemini đã đăng ký): tiêu đề nghị sự rõ của
+  đúng hồ sơ chính có thể được nối trong cửa sổ 64 segment/900 giây, qua lời nhắc cùng hồ sơ (sửa
+  đổi/kiến nghị) nhưng dừng ở hồ sơ hay tiêu đề khác; số lượng nguyên văn thiếu có thể nối câu tiếp
+  nối bị cắt phía sau (4 segment/120 giây, không qua kết câu/tiêu đề/chuyển mục). Cửa sổ 32/360 cũ,
+  chế độ mặc định và strict không bật vẫn như cũ.
+- Prompt kiểm (EN/VI) gọi `.c` là ứng viên, yêu cầu model kiểm nó với nguồn đã trích như `.o` (rút lại, lịch sử, ủy ban/cơ quan khác, điều kiện), chỉ chọn khi hồ sơ và kết quả được hỗ trợ và chỉ chi tiết phụ chưa rõ, nêu `.c`, "unopposed/not opposed" là 0 phiếu chống, và công việc người nói tự
+  nhận không phải thành tích của người được đề cử. `AUDIT_VERSION` 2, 8 phần, 2 view reconcile toàn
+  nguồn, 3 worker map, bản gộp 64.000 byte, trần 54 call, một repair dùng chung không đổi; không thêm
+  pass hay model.
+
+**Đo trước/sau.** Trước: số v38 ở trên. Bản phát lại tất định trước đó công bố lõi thay mọi ref
+unresolved; cách đó bị bỏ vì mã ghi đè từ chối của model. Các bản vá v38 thô nay giữ nguyên
+unresolved (trích đoạn); không điều chỉnh chúng để chọn `.c` và không có kết luận phục hồi chất
+lượng. Ba lõi ứng viên đã biết vẫn được đề xuất cho lần chọn thật sau của model. Đây không phải đo
+chất lượng hay thời gian; v39 chưa đo thực tế, kết quả đang chờ.
+
+**Đánh đổi.** Lõi bỏ chi tiết phụ đúng của quyết định (tên, chức danh, mục đích); kết quả biểu quyết
+xa hơn segment liền trước, gắn với lượt biểu quyết khác hoặc bị ASR làm sai không được giữ; câu
+kết quả có chủ ngữ hay dấu câu ASR bất thường có thể không được chứng minh. Guard thành tích là so khớp từ vựng
+tiếng Anh và có thể bỏ sót; mệnh đề lẫn ngôi thứ ba được để cho model. Mỗi quyết định thêm một lượt
+liên kết strict chỉ đọc khi dựng kiểm. Nguồn: `src/asr_studio/notes_outcomes.py`,
+`src/asr_studio/notes_semantic.py`, `src/asr_studio/notes_context.py`,
+`src/asr_studio/notes_document.py`; hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/`
+(`v38-runtime-proof.json`, `v38-score-a/assessment.json`, `v38-score-b/assessment.json`).
+
+**Gợi ý mệnh đề chưa nêu trong reconcile (v39).** Nguyên nhân đo trên sổ v38 (call 10/11/12):
+reconcile không bỏ mục nào; 5/6 chỗ thiếu của ba mẫu một phần là mệnh đề có trong chính segment
+mục map đã trích nhưng text bỏ sót (ngày/điều kiện sau báo cáo, tổ chức người nói đại diện, lý do,
+bước của quy trình, sự ủng hộ). Prompt map vốn đã yêu cầu các ý này. Thiết kế: chỉ nhánh fact
+inventory của Gemini đã đăng ký bật `include_clause_cues` (mặc định tắt; ChatGPT, mặc định và
+Gemini ngắn không đổi byte). Mỗi view reconcile thêm `attention.unstated_clauses` cho ref nó sở
+hữu: câu/mệnh đề nguyên văn từ segment mục đã trích, có < 30% từ nội dung trùng text, và có lớp
+quan hệ chưa nêu (bước/giai đoạn có thứ tự, ngày/hạn, trình tự, nguyên nhân, đại diện, ủng hộ/phản
+đối; EN/VI) hoặc số/từ viết hoa thiếu; bước có thứ tự được gợi ý cả khi trùng từ cao nếu text chưa
+nêu bước nào. Ưu tiên: bước, ngày, rồi quan hệ, rồi số/tên; mỗi mục một gợi ý tốt nhất trước gợi
+ý thứ hai. Trần: ≤ 2/mục, ≤ 48 và ≤ 16.384 byte UTF-8/view, trích ≤ 200 ký tự (cắt thì
+`truncated`). Gợi ý chỉ là chỉ dẫn: ref không nêu vẫn hợp lệ; quy tắc có điều kiện yêu cầu update
+có quote đúng nguyên văn, giữ mọi ý/phủ định/mức chắc chắn, không coi nhãn người nói là danh tính.
+Không thêm pass, call, schema hay đường repair; repair không mang gợi ý. Đo đầu vào trên hai view
+v38 dựng lại (payload trùng byte bản đã lưu): 48 gợi ý/view, prompt +10.431/+10.968 byte (≈ 5%),
+dựng < 0,1 giây; 6/6 mục chứa chỗ thiếu có ít nhất một segment nhân chứng được gợi ý (6/8 segment;
+8/8 khi bỏ trần). Đây chỉ là đo đầu vào, không phải đo chất lượng hay thời gian. Đánh đổi: so khớp
+từ vựng, nhiều gợi ý nguyên nhân/ngày là nhiễu; mục nhiều hơn 48 thì phần sau mất gợi ý; model vẫn
+có thể bỏ qua. Nguồn: `src/asr_studio/notes_reconcile.py`, `src/asr_studio/notes_pipeline.py`,
+`tests/test_notes_unstated_clauses.py`; hồ sơ cục bộ `v39-omissions/report.md`,
+`v39-clause-cues/engineering/cues-v38.json`, `v39-clause-cues/engineering/prompt-check.json`.
+
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 
 Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)

@@ -272,7 +272,9 @@ def _decision_audit(texts: tuple[str, ...]):
 def test_model_selected_reference_variant_keeps_the_core_decision():
     source, audit = _decision_audit((DECISION,))
     texts = _texts(audit)
-    assert set(texts) == {"i0.o", "i0.r"}
+    # '.c': the proven record, outcome and directly stated tally ("none opposed" is 7-0).
+    assert set(texts) == {"i0.o", "i0.r", "i0.c"}
+    assert texts["i0.c"] == "Bill 204877 passed 7-0"
     published, counts = audit.parse(_patch(_change("i0", "i0.r")))
     assert published["decisions"] == [
         {"text": DECISION.replace("42.13.010 and 42.13.012", R), "source_ids": _ids(source)[:2]}

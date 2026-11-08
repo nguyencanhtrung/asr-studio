@@ -31,6 +31,8 @@ gemini-3.8-flash, medium, v38; cùng transcript/gold. **Chưa đạt chất lư�
 | Mục đã kiểm | 178 |
 | Notes đo thực tế | 517,149696 giây; 20 lượt gọi; 0 cache |
 
+v39 (lõi hồ sơ-kết quả, guard thành tích, nguồn nghị sự dài, gợi ý mệnh đề chưa nêu trong reconcile): chưa đo thực tế, đang chờ.
+
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
 hồ sơ cục bộ (không theo dõi) `reports/.notes-gemini-fix-local-20261108/`:
 `eval-v38-physical/results/long.json`, `v38-runtime-proof.json`, `v38-score-a/assessment.json`,

@@ -138,12 +138,13 @@ def test_record_search_stops_at_another_agenda_header_and_window_bounds():
     # Without the other header the same far span links.
     near = [*BILL_TEXTS[:3], FILLER, *BILL_TEXTS[3:]]
     assert _cases(near, BILL_ITEM, [4, 5])[0] == [1, 4, 5]
-    far = [*BILL_TEXTS[:3], *[FILLER] * nc.MAX_STRUCTURED_SEGMENTS, *BILL_TEXTS[3:]]
+    far = [*BILL_TEXTS[:3], *[FILLER] * nc.MAX_AGENDA_SEGMENTS, *BILL_TEXTS[3:]]
     assert _cases(far, BILL_ITEM, [len(far) - 2, len(far) - 1])[0] == [len(far) - 2, len(far) - 1]
     at_limit = [BILL_TEXTS[1], *[FILLER] * (nc.MAX_STRUCTURED_SEGMENTS - 1), BILL_TEXTS[3]]
     assert _cases(at_limit, BILL_ITEM, [len(at_limit) - 1])[0] == [0, len(at_limit) - 1]
-    # 2 segments back, but 400 s earlier: outside the time window.
-    assert _cases(BILL_TEXTS, BILL_ITEM, [3, 4], gap=200.0)[0] == [3, 4]
+    # An explicit agenda header 2 segments back: 400 s links (agenda window), 920 s does not.
+    assert _cases(BILL_TEXTS, BILL_ITEM, [3, 4], gap=200.0)[0] == [1, 3, 4]
+    assert _cases(BILL_TEXTS, BILL_ITEM, [3, 4], gap=460.0)[0] == [3, 4]
 
 
 def test_record_already_stated_by_the_pool_or_raw_excerpt_is_skipped():
