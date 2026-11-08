@@ -527,7 +527,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v37"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v38"
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------
@@ -587,8 +587,11 @@ def _n_item_audit(n: int) -> SemanticAudit:
         (2, [1, 1]),
         (3, [1, 1, 1]),
         (4, [1] * 4),
-        (7, [2, 2, 2, 1]),
-        (9, [3, 2, 2, 2]),
+        (7, [1] * 7),
+        (8, [1] * 8),
+        (9, [2] + [1] * 7),
+        (17, [3] + [2] * 7),
+        (23, [3] * 7 + [2]),
     ],
 )
 def test_partitions_are_balanced_disjoint_and_cover_every_global_ref_once(n, sizes):
@@ -599,7 +602,7 @@ def test_partitions_are_balanced_disjoint_and_cover_every_global_ref_once(n, siz
         return
     refs = [[item.ref for item in part.items] for part in parts]
     assert len(parts) == min(notes_semantic.MAX_AUDIT_PARTS, n) == len(sizes)
-    assert notes_semantic.MAX_AUDIT_PARTS == 4
+    assert notes_semantic.MAX_AUDIT_PARTS == 8
     assert [len(r) for r in refs] == sizes  # balanced, larger first
     assert sum(refs, []) == [f"i{k}" for k in range(n)]  # global refs, document order, once
     for part, own in zip(parts, refs, strict=True):
@@ -612,7 +615,7 @@ def test_part_prompt_and_schema_carry_their_visible_source_and_only_their_own_it
     audit = _quarantine_audit()
     budget = nd.notes_budget(*GEMINI)
     parts = audit.partitions()
-    assert len(parts) == 4
+    assert len(parts) == 5  # min(8, 5): one item per part
     full_texts = {i["ref"]: i["text_refs"][0]["text"] for i in audit.prompt_payload()["items"]}
     for part in parts:
         own = {item.ref for item in part.items}
@@ -642,17 +645,17 @@ def test_part_prompt_and_schema_carry_their_visible_source_and_only_their_own_it
 @pytest.mark.parametrize(
     "patch",
     [
-        _patch(_change("i3"), refs=("i0", "i1")),  # another part's ref
-        _patch(_change("i0", "i3.o"), refs=("i0", "i1")),  # another part's text ref
-        _patch(unresolved=["i4"], refs=("i0", "i1")),  # another part's unresolved ref
-        _patch(refs=("i0", "i1", "i2")),  # another part's verified ref
-        _patch(refs=("i0",)),  # an own ref left undecided
+        _patch(_change("i3"), refs=("i0",)),  # another part's ref
+        _patch(_change("i0", "i3.o"), refs=("i0",)),  # another part's text ref
+        _patch(unresolved=["i4"], refs=("i0",)),  # another part's unresolved ref
+        _patch(refs=("i0", "i1")),  # another part's verified ref
+        _patch(refs=()),  # an own ref left undecided
     ],
 )
 def test_a_part_rejects_refs_outside_its_partition(patch):
     first = _quarantine_audit().partitions()[0]
-    assert semantic_refs(first) == ["i0", "i1"]
-    first.validated_patch(_patch(refs=("i0", "i1")))  # the valid base
+    assert semantic_refs(first) == ["i0"]
+    first.validated_patch(_patch(refs=("i0",)))  # the valid base
     with pytest.raises(nd.NotesDocumentError):
         first.validated_patch(patch)
 
@@ -676,7 +679,7 @@ def test_merged_part_patches_equal_one_full_patch_without_index_shift():
     # i2's part sees ID[1] (its bounded neighbour), never the unshown ID[0].
     change, unresolved = _change("i2", "i2.o", ids=[ID[1]]), ["i4", "i0", "i3"]
     parts = _part_patches(audit, [change], unresolved)
-    assert len(parts) == 4
+    assert len(parts) == 5
     merged = audit.combine_patches(parts)
     expected = audit.parse(_patch(change, unresolved=unresolved, refs=_QREFS))
     assert merged == expected
@@ -932,7 +935,7 @@ def _wide_map_reply(prompt: str) -> str:
     return json.dumps(document)
 
 
-def _wide_run(semantic, calls, coverage, reconcile=None):
+def _wide_run(semantic, calls, coverage, reconcile=None, snapshot=None):
     def transport(prompt, **kwargs):
         calls.append({"prompt": prompt, **kwargs})
         if kwargs["stage"] == "chunk":
@@ -943,7 +946,7 @@ def _wide_run(semantic, calls, coverage, reconcile=None):
         return semantic(prompt, kwargs)
 
     return generate_notes_document(
-        snapshot=_wide_snapshot(),
+        snapshot=snapshot or _wide_snapshot(),
         output_language="en",
         provider=GEMINI[0],
         model=GEMINI[1],
@@ -954,10 +957,10 @@ def _wide_run(semantic, calls, coverage, reconcile=None):
     )
 
 
-def test_four_audit_parts_run_concurrently_over_their_visible_source_and_decide_every_ref_once():
+def test_every_audit_part_runs_concurrently_over_its_visible_source_and_decides_each_ref_once():
     calls: list[dict] = []
     coverage: list[dict] = []
-    barrier = threading.Barrier(4, timeout=10)  # breaks unless all four parts are in flight
+    barrier = threading.Barrier(5, timeout=10)  # min(8, 5): breaks unless all five are in flight
 
     def semantic(prompt, kwargs):
         verified = kwargs["response_schema"]["properties"]["verified"]
@@ -969,7 +972,7 @@ def test_four_audit_parts_run_concurrently_over_their_visible_source_and_decide_
     result = _wide_run(semantic, calls, coverage)
     audits = [c for c in calls if c["stage"] == "semantic_audit"]
     owned = [semantic_refs(c["prompt"]) for c in audits]
-    assert len(audits) == 4 and sorted(len(refs) for refs in owned) == [1, 1, 1, 2]
+    assert len(audits) == 5 and sorted(len(refs) for refs in owned) == [1] * 5
     assert sorted(sum(owned, [])) == [f"i{k}" for k in range(5)]  # disjoint, each once
     texts = [s["text"] for s in _wide_snapshot()["segments"]]
     shown = {}
@@ -985,7 +988,7 @@ def test_four_audit_parts_run_concurrently_over_their_visible_source_and_decide_
     # Own segment plus a neighbour within 120 s; the 3,581 s gap is never crossed.
     first, second, third, fourth, fifth = (text.rstrip(".") for text in texts)
     assert shown == {
-        first: texts[:3],
+        first: texts[:2],
         second: texts[:3],
         third: texts[1:3],
         fourth: texts[3:],
@@ -993,9 +996,64 @@ def test_four_audit_parts_run_concurrently_over_their_visible_source_and_decide_
     }
     assert len(result["key_topics"]) == 5
     audit = coverage[0]["semantic_audit"]
-    assert audit["part_count"] == 4 and len(audit["provider_call_indices"]) == 4
+    assert audit["part_count"] == 5 and len(audit["provider_call_indices"]) == 5
     assert (audit["counts"]["reviewed"], audit["counts"]["model_verified"]) == (5, 5)
     assert coverage[0]["provider_calls"] == len(calls) <= nd.MAX_PROVIDER_CALLS
+
+
+def _many_snapshot(n: int) -> dict:
+    texts = [f"Agenda point {k} is recorded." for k in range(n)]
+    return {
+        "meeting_date": "2026-01-05",
+        "speakers": [],
+        # Past one hour, like _wide_snapshot, so the registered long path runs.
+        "segments": [
+            _segment(k + 1, 10.0 * k + (3_600.0 if k >= n // 2 else 0.0), t)
+            for k, t in enumerate(texts)
+        ],
+    }
+
+
+def test_seventeen_items_run_as_eight_balanced_parts_with_one_shared_repair():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+    barrier = threading.Barrier(8, timeout=10)  # breaks unless all eight parts are in flight
+
+    def semantic(prompt, kwargs):
+        if kwargs["attempt"] == "primary":
+            barrier.wait()
+            if "i16" in semantic_refs(prompt):
+                return _without_one_decision(prompt)  # earns the run's one repair
+        return semantic_keep_patch(prompt)
+
+    result = _wide_run(semantic, calls, coverage, snapshot=_many_snapshot(17))
+    audits = [c for c in calls if c["stage"] == "semantic_audit"]
+    primaries = [semantic_refs(c["prompt"]) for c in audits if c["attempt"] == "primary"]
+    assert len(primaries) == 8
+    assert sorted(len(refs) for refs in primaries) == [2] * 7 + [3]  # balanced, min(8, 17)
+    assert sorted(sum(primaries, []), key=lambda r: int(r[1:])) == [f"i{k}" for k in range(17)]
+    assert [c["attempt"] for c in audits].count("repair") == 1  # one global repair
+    assert [c["attempt"] for c in calls].count("repair") == 1
+    audit = coverage[0]["semantic_audit"]
+    assert audit["part_count"] == 8 and len(audit["provider_call_indices"]) == 8
+    assert (audit["counts"]["reviewed"], audit["counts"]["model_verified"]) == (17, 17)
+    assert len(result["key_topics"]) == 17
+    assert coverage[0]["provider_calls"] == len(calls) <= nd.MAX_PROVIDER_CALLS
+
+
+def test_one_failed_part_of_eight_fails_the_task_unpublished():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+
+    def semantic(prompt, _kwargs):
+        if "i9" in semantic_refs(prompt):
+            return _without_one_decision(prompt)  # stays undecided after the repair
+        return semantic_keep_patch(prompt)
+
+    with pytest.raises((AssertionError, RuntimeError)):
+        _wide_run(semantic, calls, coverage, snapshot=_many_snapshot(17))
+    assert [c["attempt"] for c in calls].count("repair") == 1
+    assert coverage == []
 
 
 def _without_one_decision(prompt: str) -> str:
@@ -1015,8 +1073,8 @@ def test_an_undecided_ref_takes_the_shared_repair_once_and_then_publishes():
 
     _wide_run(semantic, calls, coverage)
     attempts = [c["attempt"] for c in calls if c["stage"] == "semantic_audit"]
-    assert sorted(attempts) == ["primary"] * 4 + ["repair"]
-    assert coverage[0]["semantic_audit"]["part_count"] == 4
+    assert sorted(attempts) == ["primary"] * 5 + ["repair"]
+    assert coverage[0]["semantic_audit"]["part_count"] == 5
 
 
 def test_a_part_that_stays_undecided_fails_the_whole_task_unpublished():
@@ -1065,11 +1123,11 @@ def test_the_single_repair_is_shared_between_reconcile_and_the_audit_parts():
     assert coverage == []
 
 
-def test_a_failed_part_of_four_stops_its_siblings_within_the_call_cap():
+def test_a_failed_part_stops_its_siblings_within_the_call_cap():
     calls: list[dict] = []
     coverage: list[dict] = []
     failed = threading.Event()
-    started = threading.Barrier(4, timeout=10)  # all four primaries are in flight first
+    started = threading.Barrier(5, timeout=10)  # all five primaries are in flight first
 
     def semantic(prompt, kwargs):
         if kwargs["attempt"] == "primary":
@@ -1084,5 +1142,5 @@ def test_a_failed_part_of_four_stops_its_siblings_within_the_call_cap():
     with pytest.raises(RuntimeError, match="provider down"):
         _wide_run(semantic, calls, coverage)
     attempts = [c["attempt"] for c in calls if c["stage"] == "semantic_audit"]
-    assert attempts == ["primary"] * 4  # no sibling sends the repair after the failure
+    assert attempts == ["primary"] * 5  # no sibling sends the repair after the failure
     assert len(calls) <= nd.MAX_PROVIDER_CALLS and coverage == []

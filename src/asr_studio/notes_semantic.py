@@ -1,6 +1,6 @@
 """One bounded source-binding audit for registered-Gemini long notes, as sparse immutable refs.
 
-The pass may split the final items into at most four balanced, disjoint partitions; each one
+The pass may split the final items into at most eight balanced, disjoint partitions; each one
 sees and may patch only its own items under their global refs. A view's prompt shows only its
 visible source: every segment its items cite, the read-only strict context candidates of those
 items and one bounded neighbour on each side of each cited run, under their global IDs and order,
@@ -44,7 +44,7 @@ from asr_studio.notes_context import (
 
 AUDIT_VERSION = 2
 MAX_SEMANTIC_OUTPUT_BYTES = 64_000  # one part's response and the merged patch alike
-MAX_AUDIT_PARTS = 4
+MAX_AUDIT_PARTS = 8  # v38: 4 -> 8 shortens the slowest part's sequential reasoning
 MAX_LEADING_NAME_TOKENS = 4
 MAX_VARIANTS_PER_ITEM = 4
 MAX_RESPONSIBILITY_OPTIONS = 2  # '.p' options per item, after the capped existing ones
@@ -899,7 +899,7 @@ class SemanticAudit:
     # ----- partitions -------------------------------------------------------------------------
 
     def partitions(self) -> tuple[SemanticAudit, ...]:
-        """min(4, N) balanced, contiguous, disjoint item views; fewer than two items: itself.
+        """min(8, N) balanced, contiguous, disjoint item views; fewer than two items: itself.
 
         A view shares this audit's full source and document and keeps the global refs; its
         schema, prompt and parse admit only its own refs and text refs.

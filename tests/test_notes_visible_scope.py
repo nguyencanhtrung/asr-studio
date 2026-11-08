@@ -182,7 +182,7 @@ def test_an_unknown_owned_id_fails_the_audit():
 
 
 def test_caps_stay_unchanged():
-    assert (MAX_AUDIT_PARTS, MAX_SEMANTIC_OUTPUT_BYTES, nd.MAX_PROVIDER_CALLS) == (4, 64_000, 54)
+    assert (MAX_AUDIT_PARTS, MAX_SEMANTIC_OUTPUT_BYTES, nd.MAX_PROVIDER_CALLS) == (8, 64_000, 54)
 
 
 def test_an_unshown_append_takes_the_shared_repair_in_the_pipeline():
@@ -207,8 +207,8 @@ def test_an_unshown_append_takes_the_shared_repair_in_the_pipeline():
 
     _wide_run(semantic, calls, coverage)
     attempts = [c["attempt"] for c in calls if c["stage"] == "semantic_audit"]
-    assert sorted(attempts) == ["primary"] * 4 + ["repair"]
-    assert coverage[0]["semantic_audit"]["part_count"] == 4
+    assert sorted(attempts) == ["primary"] * 5 + ["repair"]
+    assert coverage[0]["semantic_audit"]["part_count"] == 5  # min(8, 5)
     assert len(_wide_snapshot()["segments"]) == 5
 
 

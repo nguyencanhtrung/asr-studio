@@ -111,6 +111,8 @@ SOURCE = {
     "segments": [
         _segment(1, "the plan has 40 senior units with Harbor Housing support at zero land cost."),
         _segment(2, "per section 23.45.010 the plan adds 12 homes; Cedar Trust is a partner."),
+        # Uncited: the name exists in the source but is never treated as a person (v38).
+        _segment(3, "The Tarrow annex quote is closed."),
     ],
 }
 ID = [segment["id"] for segment in SOURCE["segments"]]

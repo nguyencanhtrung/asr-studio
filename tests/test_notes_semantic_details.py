@@ -180,7 +180,8 @@ def test_marking_happens_before_refs_so_no_text_ref_can_restore_the_value():
         published, counts = audit.parse(_patch(_change("i0", text_ref), refs=semantic_refs(audit)))
         assert "243" not in json.dumps(published) and counts["quantity_unclear"] == 1
     published, _ = audit.parse(semantic_keep_patch(audit))  # unlisted keeps the marked copy too
-    assert published["key_topics"][0]["text"] == texts["i0.o"]
+    # v38: "Rivera" is absent from the source, so the attribution drops; the mark stays.
+    assert published["key_topics"][0]["text"] == f"Said depot adds {Q} vehicles"
     assert (source, document) == (source_before, document_before)  # inputs are never mutated
     assert audit.source["segments"][0]["text"] == FLEET
 

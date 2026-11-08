@@ -127,7 +127,7 @@ def test_a_call_order_name_needs_recognition_but_an_untitled_organization_is_out
     source = _source(
         "We'll start off with Ana Vale, followed by Ben Ro.",
         "Go ahead, Mr. Vail. You have the floor.",  # inexact handoff: never matched
-        "Thank you. The depot keeps the city rundown.",
+        "Thank you. Harbor Trust keeps the city rundown.",  # an organization the source states
         "Excuse me. Is there an agenda item or specific work?",
     )
     assert _unverified("Inquiry whether Ana Vale comments address an agenda item", source, [0, 3])

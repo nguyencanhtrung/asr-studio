@@ -980,7 +980,7 @@ def generate_notes_document(
     def semantic_audit(final_document: dict[str, Any]) -> dict[str, Any]:
         """The mandatory sparse source-binding pass (registered Gemini only).
 
-        At most four disjoint item partitions run concurrently, each shown only its visible
+        At most eight disjoint item partitions run concurrently, each shown only its visible
         source (also its citation scope); their validated patches are merged and applied once.
         Any failed part fails the whole task.
         """

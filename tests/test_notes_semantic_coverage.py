@@ -65,15 +65,15 @@ def _refs(audit: SemanticAudit) -> list[str]:
 # ----- partitions -----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("n", [0, 1, 2, 3, 4, 5, 7, 9, 10])
-def test_partitions_are_min_four_n_balanced_disjoint_global_views(n):
+@pytest.mark.parametrize("n", [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 17, 40])
+def test_partitions_are_min_eight_n_balanced_disjoint_global_views(n):
     audit = _audit(n)
     parts = audit.partitions()
     if n < 2:
         assert parts == (audit,)
         return
     sizes = [len(part.items) for part in parts]
-    assert len(parts) == min(MAX_AUDIT_PARTS, n) == min(4, n)
+    assert len(parts) == min(MAX_AUDIT_PARTS, n) == min(8, n)
     assert max(sizes) - min(sizes) <= 1 and sizes == sorted(sizes, reverse=True)
     assert [ref for part in parts for ref in _refs(part)] == [f"i{k}" for k in range(n)]
     for part in parts:
@@ -150,10 +150,10 @@ def _validated(audit: SemanticAudit) -> list[tuple[SemanticAudit, dict]]:
     return [(p, p.validated_patch(json.dumps(_patch(_refs(p))))) for p in audit.partitions()]
 
 
-def test_four_complete_parts_merge_once_and_equal_one_full_patch():
-    audit = _audit(9)
+def test_eight_complete_parts_merge_once_and_equal_one_full_patch():
+    audit = _audit(17)
     parts = audit.partitions()
-    assert len(parts) == 4
+    assert len(parts) == 8
     patches = []
     # Each part appends the first segment it was shown: an unshown ID would fail the part.
     changes = [_change(_refs(p)[0], p.visible_snapshot()["segments"][0]["id"]) for p in parts]
@@ -163,25 +163,26 @@ def test_four_complete_parts_merge_once_and_equal_one_full_patch():
     merged = audit.combine_patches(patches)
     unresolved = [_refs(p)[-1] for p in parts]
     assert merged == audit.parse(json.dumps(_patch(_refs(audit), changes, unresolved)))
-    assert merged[1]["reviewed"] == 9 and merged[1]["model_verified"] == 1
+    assert merged[1]["reviewed"] == 17 and merged[1]["model_verified"] == 1
 
 
 def test_combine_rejects_missing_duplicate_and_cross_scope_parts():
-    audit = _audit(8)
+    audit = _audit(16)
     good = _validated(audit)
-    a, b, c, d = good
+    assert len(good) == 8
+    a, b, c, *rest = good  # rest: the other five parts, always present
     stolen = dict(a[1], verified={**a[1]["verified"], **b[1]["verified"]})
     shrunk = dict(a[1], verified=dict(list(a[1]["verified"].items())[1:]))
     no_map = {k: v for k, v in a[1].items() if k != "verified"}
     for parts in (
-        [a, b, c],  # missing part
-        [a, b, c, d, d],  # duplicate part
-        [a, a, c, d],  # duplicate instead of one part
-        [(a[0], stolen), c, d],  # verified crosses into another scope
-        [(a[0], stolen), b, c, d],
-        [(a[0], shrunk), b, c, d],  # a part's map misses one of its refs
-        [(a[0], no_map), b, c, d],
-        [(a[0], b[1]), (b[0], a[1]), c, d],  # patches swapped between views
+        [a, b, *rest],  # missing part
+        [a, b, c, *rest, rest[0]],  # duplicate part
+        [a, a, c, *rest],  # duplicate instead of one part
+        [(a[0], stolen), c, *rest],  # verified crosses into another scope
+        [(a[0], stolen), b, c, *rest],
+        [(a[0], shrunk), b, c, *rest],  # a part's map misses one of its refs
+        [(a[0], no_map), b, c, *rest],
+        [(a[0], b[1]), (b[0], a[1]), c, *rest],  # patches swapped between views
     ):
         with pytest.raises(nd.NotesDocumentError):
             audit.combine_patches(parts)
@@ -199,7 +200,7 @@ def test_merged_verified_map_counts_toward_the_unchanged_merge_cap(monkeypatch):
 
 
 def test_constants_stay_as_contracted():
-    assert (AUDIT_VERSION, MAX_AUDIT_PARTS) == (2, 4)
+    assert (AUDIT_VERSION, MAX_AUDIT_PARTS) == (2, 8)
     assert notes_semantic.MAX_SEMANTIC_OUTPUT_BYTES == 64_000
 
 

@@ -1978,6 +1978,48 @@ giữ đúng request cũ. Chất lượng và thời gian v37 chưa đo. Nguồn
 `v36-runtime-proof.json`, `v36-score-a/report.md`, `v36-score-b/report.md`,
 `v37-scope-plan/report.md`, `v37-audit-scope/scope-measure.json`).
 
+### #183 (tiếp) — Kiểm ngữ nghĩa tám phần và tên người nói phải có trong nguồn (`notes-hierarchical-v38`)
+
+**Nguyên nhân đo được.** Lần đo mới v37 mất 660,67189 giây (15 lượt gọi thật, 0 cache, 193 mục,
+0 ID không hợp lệ), vượt trần 600 giây. Theo capture: map xong ở khoảng 162 giây, reconcile hai
+view toàn nguồn xong ở khoảng 387 giây, bốn phần kiểm ngữ nghĩa (49/48/48/48 mục) xong sau
+186,946/225,611/250,046/273,530 giây. Phần chậm có khoảng 39.000 token suy luận; prompt nhỏ hơn của
+v37 không rút ngắn thời gian. Nút thắt là đầu ra/suy luận tuần tự trong mỗi phần. Chấm mù v37:
+10/12 mẫu (G12 một phần, G08 thiếu), đủ 7 ý quan trọng, 0 ID không hợp lệ, 2 khẳng định quan trọng
+thiếu nguồn: hai mục đầu câu là tên người nói không chức danh đi với động từ "compared"/"affirmed";
+nguồn của mục không có tên hay lời giao lượt, và tên không có nguyên văn trong transcript (lời giao
+lượt chưa trích chỉ có biến thể ASR tách chữ).
+
+**Thiết kế.**
+
+- `MAX_AUDIT_PARTS` 4 → 8: `min(8, N)` tập mục liên tục, cân bằng (phần lớn hơn trước), không chồng
+  lặp; N < 8 thì N phần một mục, không tạo phần rỗng. Executor chạy `len(parts)` phần song song,
+  như trước. Hợp đồng mỗi phần giữ nguyên: nguồn hiển thị, `audit_version` 2 với `verified` bắt
+  buộc boolean cho mọi ref sở hữu, mọi phần phải hợp lệ rồi mới gộp và áp một lần, một phần lỗi
+  làm tác vụ lỗi, bản gộp tối đa 64.000 byte, một repair dùng chung, `MAX_PROVIDER_CALLS` 54. Không
+  thêm pass kiểm hay nới guard; reconcile hai view toàn nguồn và map ba worker không đổi. Fixture
+  dài: 9 map + 2 reconcile + 8 kiểm = 19 call, tối đa 20 với repair dùng chung.
+- Danh mục động từ quy lời (`ATTRIBUTION_FORMS`) thêm `compare`, `affirm` ở mọi thì; danh sách
+  động từ cũ của liên kết ngữ cảnh chung (ChatGPT) giữ nguyên.
+- `unverified_speakers`: tên quy cho người nói ở đầu câu mà không có đúng nguyên tên (so khớp cả
+  từ, không phân biệt hoa thường) ở bất kỳ đâu trong toàn nguồn cũng cần bằng chứng cục bộ như tên
+  có chức danh; không có thì mã bỏ phần quy tên bằng hậu tố nguyên văn hoặc chuyển mục sang trích
+  đoạn cần kiểm tra. Bằng chứng tự giới thiệu, câu báo cáo, lời giao lượt/cảm ơn cục bộ đã trích
+  không đổi. Tên tổ chức không chức danh có trong nguồn vẫn ngoài phạm vi; tên tổ chức không có
+  trong nguồn bị xử lý như trên.
+
+**Đánh đổi.** Tám phần nghĩa là gấp đôi request song song và lặp lại chỉ dẫn/schema cùng segment
+kề ở mỗi phần (tốn thêm token đầu vào, tăng rủi ro giới hạn tốc độ provider); mỗi phần ít mục hơn
+nên thấy ít ngữ cảnh lân cận hơn. Thời gian và chất lượng v38 chưa đo; không ước tính độ trễ. Quy
+tắc tên vắng mặt là so khớp từ vựng: tên được model sửa đúng từ biến thể ASR cũng bị bỏ hoặc chuyển
+kiểm tra; nhãn đầu câu viết hoa kết thúc bằng dấu hai chấm mà nguồn không có (ví dụ "Quote:") cũng
+bị bỏ như một tên. Trên tài liệu v37 đã đóng băng, chạy lại bước kiểm tất định chỉ đổi đúng hai mục
+thiếu nguồn (bỏ tên đầu câu), không mục nào khác. ChatGPT 11 call và bốn ca ngắn phát lại đúng
+request, tài liệu giống hệt. Nguồn: `src/asr_studio/notes_semantic.py`,
+`src/asr_studio/notes_context.py`, `src/asr_studio/notes_document.py`; hồ sơ cục bộ
+`reports/.notes-gemini-fix-local-20261108/` (`v37-runtime-proof.json`,
+`eval-v37-physical/capture/`, `v37-score-a/assessment.json`, `v37-score-b/assessment.json`).
+
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 
 Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)

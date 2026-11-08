@@ -67,7 +67,8 @@ quote a cited segment verbatim:
 will vote) who is not recognised for any cited first-person vote statement by an exact handoff
 before that turn or an exact "Thank you, <name>" after it. A thank-you elsewhere is no proof.
 `unverified_speakers` applies the same local recognition, plus a cited self-introduction or
-grammatical report, to every attributed speaker the item names.
+grammatical report, to every attributed speaker the item names that is titled, treated as a
+person by the source, or absent from the whole source (no exact whole-name occurrence).
 """
 
 from __future__ import annotations
@@ -159,6 +160,7 @@ ATTRIBUTION_FORMS = frozenset(
     say state ask request urge note propose argue support oppose describe raise express
     recommend thank emphasize emphasise question suggest call warn explain testify comment
     remark claim praise acknowledge highlight mention report condemn insist add agree
+    compare affirm
     """.split()  # noqa: SIM905 - a readable word list
     for form in _inflections(base)
 )
@@ -516,17 +518,24 @@ def unverified_speakers(
 ) -> list[str]:
     """Attributed speakers (name, titled) the item's own pool does not locally identify.
 
-    A titled name, or one the source treats as a person, needs a cited self-introduction, a
-    cited grammatical report, an exact cited handoff before a cited turn or an exact cited
-    "Thank you, <name>" after it. A roster, roll call, thanks to someone else or a mention
-    elsewhere in the pool is no proof; an untitled organization name is out of scope.
+    A titled name, one the source treats as a person, or one with no exact whole-name
+    occurrence anywhere in the full source (an invented or ASR-mangled identity, even untitled)
+    needs a cited self-introduction, a cited grammatical report, an exact cited handoff before a
+    cited turn or an exact cited "Thank you, <name>" after it. A roster, roll call, thanks to
+    someone else or a mention elsewhere in the pool is no proof; an untitled organization name
+    the source states is out of scope.
+    The match is exact and case-insensitive; an ASR alias does not prove an identity.
     """
     cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
     pool = set(cited)
     return [
         name
         for name, titled in dict.fromkeys(names)
-        if (titled or _person_evidence(name, segments))
+        if (
+            titled
+            or _person_evidence(name, segments)
+            or not any(_match("word", name, segment["text"]) for segment in segments)
+        )
         and not any(
             _self_introduces(name, segments[index]["text"])
             or _reports_speech(name, segments[index]["text"])
