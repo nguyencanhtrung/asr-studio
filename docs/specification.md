@@ -4,7 +4,7 @@
 
 Thiết kế giao diện A dark theme đã được duyệt theo prototype và ghi thành chuẩn triển khai tại [Frontend design v1](frontend-design.md).
 
-Các quyết định backend Q1–Q27 đã thống nhất tại [Backend design v1](backend-design.md), được cụ thể hóa thành schema/API và vòng đời tác vụ trong [Backend contract v1](backend-contract.md). Đã chọn Python/FastAPI, hai service `app`/`worker` giao việc qua SQLite và file âm thanh local. ASR/phân biệt người nói chạy local; Qwen3-ASR-1.7B là mặc định GPU, Whisper small là mặc định CPU; tạo notes dùng ChatGPT hoặc OMP + Google Antigravity theo [ADR 0007](adr/0007-cloud-notes-providers.md). Benchmark và khả năng đạt toàn bộ nghiệm thu vẫn cần kiểm chứng.
+Các quyết định backend Q1–Q27 đã thống nhất tại [Backend design v1](backend-design.md), được cụ thể hóa thành schema/API và vòng đời tác vụ trong [Backend contract v1](backend-contract.md). Issue [#166](https://github.com/nguyencanhtrung/asr-studio/issues/166) bổ sung `notes-service` cho việc gọi provider; `app`, worker transcription và notes service giao việc qua SQLite/file âm thanh local với cùng `processing_slot`. ASR/phân biệt người nói chạy local; Qwen3-ASR-1.7B là mặc định GPU, Whisper small là mặc định CPU; tạo notes dùng ChatGPT hoặc OMP + Google Antigravity theo [ADR 0007](adr/0007-cloud-notes-providers.md). Benchmark và khả năng đạt toàn bộ nghiệm thu vẫn cần kiểm chứng.
 
 Ứng dụng dùng qua trình duyệt, với backend ASR và logic được đóng gói trong Docker Compose trên máy do người dùng quản lý, để biến bản ghi cuộc họp của một nhóm nội bộ cố định thành meeting notes bằng tiếng Anh hoặc tiếng Việt theo lựa chọn. Người dùng nhập bản ghi, chọn ngôn ngữ chính và nhà cung cấp tạo notes, xử lý, nghe lại và sửa bản nháp, sau đó copy hoặc xuất notes.
 
@@ -75,7 +75,7 @@ V1 không bao gồm tự ghi âm, bot tham gia Meet, chép lời thời gian th�
 - Không tự gửi âm thanh tới dịch vụ cloud khi ASR/phân biệt người nói local thất bại. Khi tạo notes lỗi/hết quota, báo lỗi, giữ transcript và notes cũ; người dùng chủ động chọn provider khác rồi chạy lại bước notes. Không tự đổi provider/tài khoản hoặc bật API billing, kể cả đã kết nối cả hai bên.
 - Khi lỗi mạng ở lượt gọi tạo notes, không tự gửi lại inference, kể cả chưa nhận được kết quả. Giữ transcript/notes cũ, kết thúc lỗi và cho người dùng chủ động thử lại; SDK/harness cũng phải tuân theo chính sách này. Lượt sửa đầu ra đã nhận nhưng không hợp lệ ở Q18 là trường hợp riêng được phép.
 
-Phần phục vụ UI/API và phần chạy model được tách thành hai service theo [ADR 0004](adr/0004-app-worker-sqlite.md). Giao tiếp, nhận việc, hủy và phục hồi được mô tả trong [backend contract](backend-contract.md), cần triển khai và kiểm chứng trong giới hạn một tác vụ xử lý tại một thời điểm.
+Phần phục vụ UI/API, chạy model và gọi provider được tách thành các service theo [ADR 0004](adr/0004-app-worker-sqlite.md) và [ADR 0013](adr/0013-notes-service-boundary.md). Giao tiếp, nhận việc, hủy và phục hồi được mô tả trong [backend contract](backend-contract.md), vẫn nằm trong giới hạn một tác vụ xử lý tại một thời điểm.
 
 ## 3. Transcript, người nói và bằng chứng
 
@@ -130,7 +130,11 @@ Model sinh dữ liệu có cấu trúc trung gian với ID đoạn nguồn; back
 
 Nếu đầu ra sai cấu trúc hoặc tham chiếu nguồn, cho tối đa **một lượt yêu cầu model sửa tự động trong cả tác vụ tạo notes**, cùng provider/model. Giới hạn áp dụng chung cho mọi đoạn và bước hợp nhất, không đặt lại theo từng lượt gọi. Nếu vẫn không hợp lệ hoặc phát sinh lỗi cần sửa khác sau khi hết lượt này, báo lỗi và giữ transcript/notes cũ; không công bố notes dở hay sai schema. Đây không phải giới hạn retry lỗi mạng.
 
-Transcript vừa ngân sách thì xử lý một lượt. Khi quá dài, chia theo đoạn phát biểu với phần chồng tại ranh giới, trích thông tin kèm ID nguồn rồi hợp nhất bằng cùng provider/model đã chọn. Kiểm soát ngân sách đầu vào/đầu ra ở mọi bước, kể cả hợp nhất; không bỏ phần cuối hoặc để harness tự rút gọn mất bằng chứng. Cần đo riêng chất lượng và quota/thời gian của nhiều lượt gọi.
+Transcript vừa ngân sách được xử lý một lượt để tạo bản nháp. Với nguồn đơn của owner model đã biết, nếu toàn bộ source và draft vẫn vừa ngân sách, cho tối đa một lượt đối chiếu bổ sung. ChatGPT trả JSON Notes đã hợp nhất theo schema 1; Antigravity chọn mã catalog để giữ mục draft, bỏ mục hoặc giữ tiền tố được phép. Với Antigravity, runtime giải mã và kiểm tra mã trước publication; source quote chỉ vào key_topics/confirmation_items, giữ nguyên ngôn ngữ nguồn và có nhãn. Guard tham chiếu không phải chứng minh ngữ nghĩa cho mọi claim được giữ. Đường ChatGPT có thể viết lại nội dung nên vẫn cần đối chiếu nguồn và người duyệt.
+
+Khi span `max(end_seconds) - min(start_seconds)` vượt 3.600 giây, chia theo đoạn phát biểu với overlap có giới hạn, chạy tối đa hai map song song rồi hợp nhất với toàn nguồn khi vừa ngân sách. Không thêm audit sau final phân cấp: các phép thử chưa chứng minh lợi ích đủ để bật đường này; coverage ghi `source_audit.status=skipped`, `reason=quality_not_qualified`. Giữ giới hạn source/ID/ngân sách và khai báo fallback chỉ có draft khi toàn nguồn không vừa. Không được bỏ phần cuối hoặc để harness tự rút gọn mất bằng chứng.
+
+Mọi kiểu audit dùng chung giới hạn repair/recovery của cả task; không audit đệ quy và không fallback sang draft khi audit đã chạy nhưng thất bại. Nếu full-source audit không vừa thì trả draft đã qua validator và ghi `prompt_budget`. Model/budget chưa biết giữ đường bảo thủ. Chính sách dùng các đường đã có bằng chứng theo provider và dạng planner, không theo tên dataset hoặc đáp án. Chi phí và kết quả replay phải phân biệt với inference mới. #79 tiếp tục theo dõi độ đầy đủ nội dung còn thiếu; không dùng kiểm tra schema thay cho nghiệm thu ngữ nghĩa.
 
 ### 4.1. Action items
 
@@ -224,7 +228,7 @@ Mục tiêu là khoảng **5–10 phút duyệt và sửa cho mỗi giờ họp*
 - Cung cấp một bộ triển khai Docker Compose. Sau thiết lập, khởi động hệ thống bằng một lệnh.
 - Hỗ trợ hai cách lấy image: tự build từ source của dự án hoặc pull image công khai đã được build từ registry mà không cần tài khoản để tải image đó. Cả hai cách đều phải dẫn tới cùng luồng thiết lập và sử dụng của cùng phiên bản. GHCR là registry được đề xuất theo repo GitHub hiện tại; namespace/image cụ thể sẽ được xác định khi triển khai phát hành.
 - Cài đặt qua terminal, có hướng dẫn điều kiện máy, bước kiểm tra môi trường và setup tải tài nguyên trước khi khởi động. Không yêu cầu trình cài đặt đồ họa; người dùng tự thực hiện các điều kiện truy cập model nếu có.
-- Bộ triển khai gồm hai service: `app` phục vụ UI/API và `worker` chạy model. SQLite lưu dữ liệu nghiệp vụ/trạng thái tác vụ; âm thanh là file riêng trên ổ đĩa local, theo [ADR 0004](adr/0004-app-worker-sqlite.md).
+- Bộ triển khai gồm `app`, worker transcription, notes service và model-installer; SQLite lưu dữ liệu nghiệp vụ/trạng thái tác vụ; âm thanh là file riêng trên ổ đĩa local. Worker transcription chỉ ở mạng nội bộ, notes service giữ provider egress; giới hạn shared data volume được ghi tại [ADR 0013](adr/0013-notes-service-boundary.md).
 - Máy đích phải đáp ứng cấu hình phần cứng, NVIDIA driver và container runtime tương thích được công bố. Các yêu cầu và bước thiết lập phải đủ rõ để cài mới mà không phụ thuộc môi trường phát triển của tác giả.
 - Dễ cài trên máy khác là yêu cầu cài mới. Không yêu cầu mang theo lịch sử, cấu hình hoặc model cache từ một bản cài cũ; bước thiết lập có thể tải model cho bản cài mới.
 - Dữ liệu cuộc họp và các tài nguyên cần giữ được lưu ngoài lớp ghi tạm của container, để thay container trong cùng bản cài không xóa lịch sử đã lưu.
@@ -271,7 +275,7 @@ Các quyết định kỹ thuật cần giải quyết bằng thử nghiệm:
 - Chọn model tạo notes theo quyền tài khoản và cách xử lý transcript dài phù hợp context, quota và chất lượng của từng provider. Không âm thầm cắt nguồn hoặc để harness tự rút gọn làm mất bằng chứng; việc chia đoạn/hợp nhất cần được thiết kế và kiểm chứng.
 - Kiểm tra khả năng tải và chạy offline toàn bộ tài nguyên ASR/phân biệt người nói. Ví dụ, Community-1 có điều kiện truy cập trên Hugging Face và hỗ trợ chạy từ bản tải local. [Model card pyannote](https://huggingface.co/pyannote/speaker-diarization-community-1)
 
-UI trên trình duyệt, Python/FastAPI, Docker Compose với hai service `app`/`worker` giao việc qua SQLite và file âm thanh local đã được chọn. Schema/API và điều phối đã được cụ thể hóa trong backend contract, cần hiện thực và kiểm chứng. Framework frontend được chọn khi triển khai; cấu hình model phát hành dựa trên kết quả thử nghiệm. Các lựa chọn kỹ thuật phải phục vụ hành vi và tiêu chí trong đặc tả này.
+UI trên trình duyệt, Python/FastAPI, Docker Compose với `app`, worker transcription, notes-service và model-installer đã được chọn; processing roles giao việc qua SQLite và file âm thanh local. Schema/API và điều phối đã được cụ thể hóa trong backend contract và ADR 0013, cần kiểm chứng runtime. Framework frontend được chọn khi triển khai; cấu hình model phát hành dựa trên kết quả thử nghiệm. Các lựa chọn kỹ thuật phải phục vụ hành vi và tiêu chí trong đặc tả này.
 
 ## 8. Nghiệm thu
 

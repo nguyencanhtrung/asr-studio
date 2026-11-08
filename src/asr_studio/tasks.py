@@ -8,7 +8,7 @@ import math
 import re
 import sqlite3
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +40,12 @@ _SEGMENT_ID_RE = re.compile(r"[0-9a-f]{32}\Z")
 _LANGUAGE_HINTS = frozenset({"en", "vi"})
 _LANGUAGE_HINT_UNSET = object()
 _ACTIVE_TASK_STATES = frozenset({"accepted", "running", "stopping"})
+_TASK_ROLES = frozenset({"legacy", "transcription", "notes"})
+_ROLE_KINDS = {
+    "legacy": frozenset({"transcription", "notes"}),
+    "transcription": frozenset({"transcription"}),
+    "notes": frozenset({"notes"}),
+}
 _TASK_HEARTBEAT_MAX_AGE_SECONDS = 20
 TASK_ERROR_MESSAGES = {
     "publication_failed": (
@@ -305,8 +311,9 @@ def accept_transcription_task(
             "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
             "diarization_model_path, "
             "asr_model, model_name, device, compute_type, language_hint, status, stage, "
-            "audio_duration_seconds) "
-            "VALUES (?, ?, ?, ?, 'transcription', ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?)",
+            "audio_duration_seconds, owner_role) "
+            "VALUES (?, ?, ?, ?, 'transcription', ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?, "
+            "'transcription')",
             (
                 task_id,
                 normalized_request_id,
@@ -373,8 +380,35 @@ def cancel_task(data_dir: Path, task_id: str) -> dict[str, object]:
         return _task_summary(updated)
 
 
-def claim_next_task(data_dir: Path, *, owner_id: str) -> dict[str, object] | None:
-    """Atomically claim the one accepted task and bind it to a worker ownership token."""
+def _claim_role_kinds(
+    role: str, allowed_kinds: Collection[str] | None
+) -> tuple[frozenset[str], frozenset[str]]:
+    if role not in _TASK_ROLES:
+        raise ValueError(f"Unknown task role: {role}")
+    kinds = _ROLE_KINDS[role]
+    if allowed_kinds is not None:
+        requested = frozenset(allowed_kinds)
+        if not requested <= kinds:
+            raise ValueError("A task role cannot claim a different task kind")
+        kinds = requested
+    owner_roles = frozenset(_TASK_ROLES) if role == "legacy" else frozenset({role, "legacy"})
+    return kinds, owner_roles
+
+
+def claim_next_task(
+    data_dir: Path,
+    *,
+    owner_id: str,
+    role: str = "legacy",
+    allow_legacy: bool = True,
+    allowed_kinds: Collection[str] | None = None,
+) -> dict[str, object] | None:
+    """Atomically claim the slot's accepted task for one service role."""
+    kinds, owner_roles = _claim_role_kinds(role, allowed_kinds)
+    if role != "legacy" and not allow_legacy:
+        owner_roles = frozenset({role})
+    if not kinds:
+        return None
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         slot = connection.execute(
@@ -383,11 +417,21 @@ def claim_next_task(data_dir: Path, *, owner_id: str) -> dict[str, object] | Non
         if slot is None or slot["active_task_id"] is None:
             return None
         task_id = slot["active_task_id"]
+        kind_placeholders = ", ".join("?" for _ in kinds)
+        owner_placeholders = ", ".join("?" for _ in owner_roles)
+        task = connection.execute(
+            f"SELECT * FROM tasks WHERE id = ? AND status = 'accepted' "
+            f"AND kind IN ({kind_placeholders}) AND owner_role IN ({owner_placeholders})",
+            (task_id, *sorted(kinds), *sorted(owner_roles)),
+        ).fetchone()
+        if task is None:
+            return None
         cursor = connection.execute(
             "UPDATE tasks SET status = 'running', stage = 'starting', owner_id = ?, "
+            "owner_role = ?, "
             "started_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP, "
             "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'accepted'",
-            (owner_id, task_id),
+            (owner_id, role, task_id),
         )
         if cursor.rowcount != 1:
             return None
@@ -855,18 +899,45 @@ def publish_complete_generation(
         }
 
 
-def recover_abandoned_tasks(data_dir: Path) -> list[str]:
-    """Cancel stopping tasks and interrupt other active work once the exclusive lock is held."""
+def recover_abandoned_tasks(
+    data_dir: Path,
+    *,
+    role: str = "legacy",
+) -> list[str]:
+    """Recover only tasks this role can own, preserving another live role's slot."""
+    kinds, _ = _claim_role_kinds(role, None)
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         rows = connection.execute(
-            "SELECT id FROM tasks WHERE status IN ('accepted', 'running', 'stopping')"
+            "SELECT id, kind, status, owner_role FROM tasks "
+            "WHERE status IN ('accepted', 'running', 'stopping')"
         ).fetchall()
-        task_ids = [row["id"] for row in rows]
+        task_ids: list[str] = []
+        for row in rows:
+            if row["kind"] not in kinds:
+                continue
+            owner_role = row["owner_role"] or "legacy"
+            if role == "legacy":
+                # The direct legacy helper remains compatible with pre-split callers. The
+                # production legacy process holds the split-service reservation locks before
+                # calling this function, so it cannot recover a live split role.
+                recoverable = owner_role in _TASK_ROLES
+            else:
+                recoverable = owner_role in {role, "legacy"}
+            # Accepted work is still pending, not abandoned.  A split service
+            # leaves it in the authoritative slot so it can claim pre-v16 rows
+            # whose compatibility owner is legacy.  The legacy role retains
+            # the historical recovery behavior for old callers.
+            if recoverable and not (role != "legacy" and row["status"] == "accepted"):
+                task_ids.append(row["id"])
+        if not task_ids:
+            return []
+        placeholders = ", ".join("?" for _ in task_ids)
         connection.execute(
             "UPDATE tasks SET status = 'canceled', stage = 'canceled', "
             "completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
-            "WHERE status = 'stopping'"
+            f"WHERE status = 'stopping' AND id IN ({placeholders})",
+            task_ids,
         )
         connection.execute(
             "UPDATE tasks SET status = 'interrupted', stage = 'interrupted', "
@@ -875,11 +946,13 @@ def recover_abandoned_tasks(data_dir: Path) -> list[str]:
             "THEN 'The worker restarted before notes finished.' "
             "ELSE 'The worker restarted before transcription finished.' END, "
             "completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
-            "WHERE status IN ('accepted', 'running')"
+            f"WHERE status IN ('accepted', 'running') AND id IN ({placeholders})",
+            task_ids,
         )
         connection.execute(
             "UPDATE processing_slot SET active_task_id = NULL, updated_at = CURRENT_TIMESTAMP "
-            "WHERE slot_id = 1"
+            f"WHERE slot_id = 1 AND active_task_id IN ({placeholders})",
+            task_ids,
         )
     return task_ids
 

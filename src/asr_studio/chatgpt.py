@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -98,7 +98,7 @@ _CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{5,256}\Z")
 _SAFE_ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}\Z")
 _ALL_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 _POSITIVE_REASONING_EFFORTS = _ALL_REASONING_EFFORTS[1:]
-_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final"})
+_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit", "reconcile"})
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
 
@@ -301,6 +301,7 @@ class ChatGPTAdapter(Protocol):
         max_output_bytes: int | None = None,
         budget: NotesBudget | None = None,
         max_unit_size: int = 1,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> str: ...
 
     def revoke(self, *, client_id: str, refresh_token: str) -> bool: ...
@@ -476,7 +477,24 @@ class ChatGPTHTTPAdapter:
         self._transport = transport
         self._discovery_document: dict[str, Any] | None = None
         self._discovery_lock = threading.Lock()
-        self.last_notes_usage: dict[str, int] = {}
+        self._notes_usage_local = threading.local()
+
+    @property
+    def last_notes_usage(self) -> dict[str, int]:
+        """Return usage isolated to the current notes transport thread."""
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        usage = getattr(self._notes_usage_local, "value", None)
+        if not isinstance(usage, dict):
+            usage = {}
+            self._notes_usage_local.value = usage
+        return usage
+
+    @last_notes_usage.setter
+    def last_notes_usage(self, value: object) -> None:
+        if not hasattr(self, "_notes_usage_local"):
+            self._notes_usage_local = threading.local()
+        self._notes_usage_local.value = value if isinstance(value, dict) else {}
 
     @contextmanager
     def _client(self, *, read_timeout: float | None = None) -> Iterator[httpx.Client]:
@@ -992,8 +1010,13 @@ class ChatGPTHTTPAdapter:
         max_output_bytes: int | None = None,
         budget: NotesBudget | None = None,
         max_unit_size: int = 1,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> str:
-        """Request one strict JSON notes document within its per-stage output budget."""
+        """Request one strict JSON notes document within its per-stage output budget.
+
+        `response_schema` replaces notes schema 1 for an internal pipeline stage; every size
+        guard below measures the schema actually sent.
+        """
         from asr_studio.notes_document import (
             MAX_OUTPUT_BYTES,
             MAX_PROMPT_BYTES,
@@ -1018,7 +1041,11 @@ class ChatGPTHTTPAdapter:
                 "The notes request exceeds the configured size limit.",
             )
         try:
-            schema = build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+            schema = (
+                dict(response_schema)
+                if response_schema is not None
+                else build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+            )
             prompt_bytes = prompt.encode("utf-8")
             schema_bytes = json.dumps(
                 schema, ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -1427,6 +1454,7 @@ class ChatGPTProvider:
         self.store = ProviderStore(directory)
         self.callback_url = callback_url
         self.adapter: ChatGPTAdapter = adapter or ChatGPTHTTPAdapter()
+        self._token_refresh_lock = threading.Lock()
         self._clock = clock
         self._sleep = sleeper
         self._active_task_guard = active_task_guard
@@ -2222,6 +2250,12 @@ class ChatGPTProvider:
     def _access_token(
         self, *, minimum_lifetime_seconds: float = ACCESS_REFRESH_MARGIN_SECONDS
     ) -> str:
+        # One generation holds the store operation across its parallel map transports.
+        # Serialize token rotation inside that operation, while model requests stay parallel.
+        with self._token_refresh_lock:
+            return self._access_token_locked(minimum_lifetime_seconds=minimum_lifetime_seconds)
+
+    def _access_token_locked(self, *, minimum_lifetime_seconds: float) -> str:
         client_id, registration = self._active_registration()
         expires_at = registration.get("expires_at")
         refresh_token = registration.get("refresh_token")
@@ -2408,6 +2442,7 @@ class ChatGPTProvider:
                 prompt_bytes: int,
                 budget: NotesBudget,
                 max_unit_size: int = 1,
+                response_schema: Mapping[str, Any] | None = None,
             ) -> str:
                 observed_usage = getattr(self.adapter, "last_notes_usage", None)
                 if isinstance(observed_usage, dict):
@@ -2423,6 +2458,7 @@ class ChatGPTProvider:
                         allowed_source_ids,
                         budget=budget,
                         max_unit_size=max_unit_size,
+                        response_schema=response_schema,
                     )
                     estimated_input_tokens = estimate_notes_tokens(input_bytes, budget)
                 except (NotesDocumentError, TypeError, ValueError, UnicodeError):
@@ -2440,6 +2476,8 @@ class ChatGPTProvider:
                     }
                     if max_unit_size > 1:
                         adapter_call["max_unit_size"] = max_unit_size
+                    if response_schema is not None:
+                        adapter_call["response_schema"] = response_schema
                     return self.adapter.generate_notes(
                         **adapter_call,
                     )

@@ -450,7 +450,10 @@ class Api:
 
 @asynccontextmanager
 async def _api(settings, monkeypatch, *, chatgpt=None, omp=None):
-    monkeypatch.setattr("asr_studio.notes_routes.worker_is_healthy", lambda _path: True)
+    monkeypatch.setattr(
+        "asr_studio.notes_routes.worker_is_healthy",
+        lambda _path, *, role=None: True,
+    )
     app = create_app(
         settings,
         chatgpt_adapter=chatgpt or FakeChatGPTAdapter(),

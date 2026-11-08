@@ -381,7 +381,7 @@ def test_pull_version_mismatch_stops_before_any_service_volume_is_mounted(tmp_pa
     )
 
     assert result.returncode != 0
-    assert "does not match source version 0.2.1 and schema 15" in result.stderr
+    assert "does not match source version 0.2.1 and schema 16" in result.stderr
     commands = result.docker_log.splitlines()
     assert f"pull {image}" in commands
     assert any("version --json --expect-version" in line for line in commands)

@@ -4,10 +4,13 @@ import copy
 import dataclasses
 import json
 import re
+import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 
 import pytest
+from notes_helpers import reconcile_keep_patch
 
 from asr_studio.chatgpt import (
     ACCESS_REFRESH_MARGIN_SECONDS,
@@ -51,6 +54,7 @@ class NotesOnlyAdapter:
         self.replies = list(replies or [])
         self.responder = responder
         self.calls: list[NotesReply] = []
+        self.response_schemas: list[object] = []
         self.refresh_calls: list[dict[str, str]] = []
         self.refresh_results: list[dict | ChatGPTError] = []
 
@@ -79,7 +83,9 @@ class NotesOnlyAdapter:
         allowed_source_ids,
         max_output_bytes=None,
         budget=None,
+        response_schema=None,
     ):
+        self.response_schemas.append(response_schema)
         self.calls.append(
             NotesReply(
                 prompt,
@@ -170,6 +176,8 @@ def _payload(prompt, marker):
 
 
 def _document_for_prompt(prompt):
+    if "RECONCILE_INPUT_JSON:\n" in prompt:
+        return reconcile_keep_patch(prompt)
     if "SOURCE_JSON:\n" in prompt:
         payload = _payload(prompt, "SOURCE_JSON:\n")
         source_ids = [payload["segments"][0]["id"]]
@@ -182,6 +190,20 @@ def _document_for_prompt(prompt):
                 for source_id in summary["source_order"]
             )
         )
+        audit_catalog = payload.get("audit_catalog")
+        if isinstance(audit_catalog, dict):
+            document = _valid_document()
+            draft_candidates = audit_catalog.get("draft_candidates", [])
+            if draft_candidates:
+                entry = draft_candidates[0]
+                section = entry["section"]
+                item = {"text": entry["ref"], "source_ids": source_ids[:1]}
+                if section == "action_items":
+                    item.update({"owner": None, "deadline_text": None, "deadline_date": None})
+                document[section] = [item]
+            else:
+                document["key_topics"] = [{"text": "s0", "source_ids": source_ids[:1]}]
+            return json.dumps(document)
     document = _valid_document()
     document["overview"] = [{"text": "A concise summary.", "source_ids": source_ids[:1]}]
     return json.dumps(document)
@@ -515,21 +537,19 @@ def test_final_output_expansion_fails_safely_after_restoring_original_ids(tmp_pa
     adapter = NotesOnlyAdapter([output])
     provider = _provider(tmp_path, adapter)
 
-    with pytest.raises(ChatGPTError) as oversized:
-        provider.generate_notes_document(
-            snapshot=snapshot,
-            connection_version=7,
-            model="gpt-6.1-sol",
-            reasoning_effort="high",
-        )
+    result = provider.generate_notes_document(
+        snapshot=snapshot,
+        connection_version=7,
+        model="gpt-6.1-sol",
+        reasoning_effort="high",
+    )
 
-    assert oversized.value.code == "notes_invalid_output"
-    diagnostic = provider.store._read()["last_diagnostic"]
-    assert diagnostic["stage"] == "single"
-    assert diagnostic["validation_reason"] == "size"
-    assert diagnostic["output_bytes"] > MAX_OUTPUT_BYTES
     assert len(adapter.calls) == 1
-    assert "segment-" not in json.dumps(diagnostic)
+    assert len(result["overview"]) == 1
+    assert len(result["overview"][0]["source_ids"]) == len(snapshot["segments"])
+    assert set(result["overview"][0]["source_ids"]) == {
+        segment["id"] for segment in snapshot["segments"]
+    }
 
 
 @pytest.mark.parametrize(
@@ -1417,6 +1437,97 @@ def _synthesis_summaries(prompt):
     return _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")["summaries"]
 
 
+def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
+    from asr_studio.notes_pipeline import generate_notes_document
+
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": start,
+            "end_seconds": start + 1,
+            "text": f"detail {index}",
+            "speaker_name": "Morgan",
+        }
+        for index, start in enumerate((0.0, 1_200.0, 2_400.0, 3_600.0))
+    ]
+    first_maps_ready = threading.Barrier(3)
+    active = 0
+    max_active = 0
+    state_lock = threading.Lock()
+    completion_order = []
+    final_payloads = []
+    progress = []
+    manifests = []
+
+    def document(text, source_id):
+        result = {
+            "schema_version": 1,
+            "overview": [{"text": text, "source_ids": [source_id]}],
+            "key_topics": [],
+            "decisions": [],
+            "open_questions": [],
+            "action_items": [],
+            "confirmation_items": [],
+        }
+        return json.dumps(result)
+
+    def transport(prompt, **kwargs):
+        nonlocal active, max_active
+        if kwargs["stage"] == "chunk":
+            source = _payload(prompt, "SOURCE_JSON:\n")
+            owned = [segment for segment in source["segments"] if not segment.get("overlap")]
+            label = owned[0]["text"]
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                if label != "detail 3":
+                    first_maps_ready.wait(timeout=5)
+                if label == "detail 0":
+                    time.sleep(0.08)
+                completion_order.append(label)
+                return document(label, owned[0]["id"])
+            finally:
+                with state_lock:
+                    active -= 1
+        if kwargs["stage"] == "reconcile":
+            return reconcile_keep_patch(prompt)
+        if kwargs["stage"] == "audit":
+            payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
+            ref = payload["audit_catalog"]["draft_candidates"][0]["ref"]
+            source_id = next(iter(payload["summaries"][0]["source_order"]))
+            return document(ref, source_id)
+        final_payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
+        final_payloads.append(final_payload)
+        source_id = next(iter(final_payload["summaries"][0]["source_order"]))
+        return document("final", source_id)
+
+    result = generate_notes_document(
+        snapshot=snapshot,
+        output_language="en",
+        transport=transport,
+        invalid_output_error=lambda diagnostics: AssertionError(diagnostics),
+        limit_error=RuntimeError,
+        on_coverage=manifests.append,
+        on_progress=progress.append,
+        provider="chatgpt",
+        model="gpt-5.6-sol",
+    )
+
+    # Quarter-hour fact parts: four maps, at most three in flight, then one structured final.
+    assert max_active == 3
+    assert completion_order[-1] == "detail 0"
+    assert sorted(completion_order) == [f"detail {i}" for i in range(4)]
+    assert final_payloads == []  # no free-form final synthesis
+    assert [item["text"] for item in result["overview"]] == [f"detail {i}" for i in range(4)]
+    chunk_indices = [entry["provider_call_index"] for entry in manifests[0]["chunks"]]
+    assert sorted(chunk_indices) == [1, 2, 3, 4]
+    assert manifests[0]["source_audit"]["provider_call_index"] == 5
+    chunk_progress = [event["current"] for event in progress if event["stage"] == "chunking"]
+    assert chunk_progress == sorted(chunk_progress)
+
+
 def test_long_run_sends_budgeted_overlapping_requests_and_reports_coverage(tmp_path):
     from asr_studio.notes_document import MAX_CHUNK_OUTPUT_BYTES, prompt_fits_repair
 
@@ -1646,13 +1757,16 @@ def test_overlap_repeats_are_dropped_before_reduction_but_distinct_items_survive
     assert len(summaries) == chunk_number >= 2
     assert [item["text"] for item in summaries[0]["open_questions"]] == ["Question 1"]
     for number, notes in enumerate(summaries[1:], start=2):
-        assert [item["text"] for item in notes["open_questions"]] == [f"Question {number}"]
+        assert [item["text"] for item in notes["open_questions"]] == [
+            f"Question {number}",
+            "Same question, rephrased",
+        ]
         assert [item["text"] for item in notes["confirmation_items"]] == ["Spans the boundary"]
     assert "overlap repeats" not in final_prompt  # the reducer is told, not given repeats
     assert "Neighbouring chunks overlap" in final_prompt
 
 
-def _tight_budget(monkeypatch, *, limit=14_000):
+def _tight_budget(monkeypatch, *, limit=15_000):
     from asr_studio import notes_document
 
     monkeypatch.setattr(notes_document, "MAX_PROMPT_BYTES", limit)
@@ -2229,3 +2343,214 @@ def test_a_lower_target_prompt_that_overruns_the_context_for_its_ids_is_not_sent
     assert len(adapter.calls) == 1
     diagnostic = provider.store._read()["last_diagnostic"]
     assert (diagnostic["stage"], diagnostic["attempt"]) == ("single", "primary")
+
+
+def test_parallel_map_progress_reports_completed_results_before_all_maps_finish():
+    from asr_studio.notes_pipeline import generate_notes_document
+
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": start,
+            "end_seconds": start + 1,
+            "text": label,
+            "speaker_name": "Morgan",
+        }
+        for index, start, label in ((1, 0.0, "first"), (2, 3_601.0, "second"))
+    ]
+    entered = threading.Barrier(2)
+    second_returned = threading.Event()
+    intermediate_progress = threading.Event()
+    initial_counts = []
+    progress = []
+
+    def on_progress(event):
+        progress.append(event)
+        if event["stage"] == "chunking" and event["current"] == 1 and second_returned.is_set():
+            intermediate_progress.set()
+
+    def transport(prompt, **kwargs):
+        if kwargs["stage"] == "chunk":
+            initial_counts.append([x["current"] for x in progress if x["stage"] == "chunking"][-1])
+            entered.wait(timeout=5)
+            payload = _payload(prompt, "SOURCE_JSON:\n")
+            owned = [x for x in payload["segments"] if not x.get("overlap")]
+            if owned[0]["text"] == "first":
+                assert intermediate_progress.wait(timeout=5), (
+                    "First completed map was not reported while another map was running"
+                )
+            else:
+                second_returned.set()
+        if kwargs["stage"] == "reconcile":
+            return reconcile_keep_patch(prompt)
+        if kwargs["stage"] == "audit":
+            payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
+            result = _valid_document()
+            result["overview"] = [
+                {
+                    "text": payload["audit_catalog"]["draft_candidates"][0]["ref"],
+                    "source_ids": [kwargs["allowed_source_ids"][0]],
+                }
+            ]
+            return json.dumps(result)
+        result = _valid_document()
+        result["overview"] = [{"text": "Purpose", "source_ids": [kwargs["allowed_source_ids"][0]]}]
+        return json.dumps(result)
+
+    generate_notes_document(
+        snapshot=snapshot,
+        transport=transport,
+        output_language="en",
+        invalid_output_error=lambda value: AssertionError(value),
+        limit_error=RuntimeError,
+        provider="chatgpt",
+        model="gpt-5.6-sol",
+        on_progress=on_progress,
+    )
+
+    assert initial_counts == [0, 0]
+    assert [x["current"] for x in progress if x["stage"] == "chunking"] == [0, 1, 2]
+
+
+def test_source_audit_invalid_output_retains_stage_and_redacts_private_source_ids(tmp_path):
+    invalid_document = _valid_document()
+    invalid_document["overview"][0]["source_ids"] = ["private-unknown-source-id"]
+    bad = json.dumps(invalid_document)
+    adapter = NotesOnlyAdapter([json.dumps(_valid_document()), bad, bad])
+    provider = _provider(tmp_path, adapter)
+    with pytest.raises(ChatGPTError) as failure:
+        provider.generate_notes_document(
+            snapshot=_snapshot(),
+            connection_version=7,
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        )
+    assert failure.value.code == "notes_invalid_output"
+    assert len(adapter.calls) == 3
+    diagnostic = provider.store._read()["last_diagnostic"]
+    assert diagnostic["stage"] == "audit"
+    assert diagnostic["provider_call_index"] == 3
+    assert diagnostic["attempt"] == "repair"
+    assert "private-unknown-source-id" not in json.dumps(diagnostic)
+
+
+def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tmp_path):
+    class RotatingAdapter(NotesOnlyAdapter):
+        def __init__(self):
+            super().__init__(responder=lambda prompt, _limit: _document_for_prompt(prompt))
+            self.refresh_barrier = threading.Barrier(2)
+            self.refresh_counter_lock = threading.Lock()
+
+        def refresh(self, *, client_id, refresh_token):
+            with self.refresh_counter_lock:
+                self.refresh_calls.append({"client_id": client_id, "refresh_token": refresh_token})
+                count = len(self.refresh_calls)
+            # One serialized refresh completes without a second request after the barrier timeout.
+            with suppress(threading.BrokenBarrierError):
+                self.refresh_barrier.wait(timeout=1)
+            return {
+                "access_token": f"fake-refreshed-access-{count}",
+                "refresh_token": f"fake-rotated-refresh-{count}",
+                "token_type": "Bearer",
+                "expires_in": 3_600,
+                "scope": DIRECT_SCOPE,
+            }
+
+    adapter = RotatingAdapter()
+    clock = MutableClock()
+    provider = _provider(tmp_path, adapter, clock=clock)
+    with provider.store.locked(write=True) as state:
+        state["registrations"]["oaiapp_test-123456"]["expires_at"] = clock.value + 60
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": start,
+            "end_seconds": start + 1,
+            "text": f"detail {index}",
+            "speaker_name": "Morgan",
+        }
+        for index, start in ((1, 0.0), (2, 3_601.0))
+    ]
+    coverage = []
+    result = provider.generate_notes_document(
+        snapshot=snapshot,
+        connection_version=7,
+        model="gpt-5.6-sol",
+        reasoning_effort="medium",
+        on_coverage=coverage.append,
+    )
+    assert result["overview"]
+    assert len(adapter.refresh_calls) == 1
+    # Two maps and the structured reconcile as the final synthesis; no free final call.
+    assert len(adapter.calls) == coverage[0]["provider_calls"] == 3
+    assert coverage[0]["source_audit"] == {
+        "status": "applied",
+        "mode": "reconcile",
+        "provider_call_index": 3,
+        "counts": {
+            "final": {"keep": 0, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
+            "map": {"keep": 1, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
+            "additions": 0,
+            "default_kept": 0,
+        },
+    }
+    assert adapter.response_schemas[:2] == [None, None]
+    assert adapter.response_schemas[2]["required"] == [
+        "ledger_version",
+        "dispositions",
+        "additions",
+    ]
+    assert {call.access_token for call in adapter.calls} == {"fake-refreshed-access-1"}
+    state = provider.store._read()
+    assert state["connection_status"] == "connected"
+    assert state["connection_version"] == 7
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected_workers"),
+    [("antigravity", "gemini-3.8-flash", [2]), ("chatgpt", "unknown-model", [])],
+)
+def test_other_map_paths_keep_their_existing_concurrency(
+    monkeypatch, provider, model, expected_workers
+):
+    from asr_studio import notes_pipeline
+
+    real_executor = notes_pipeline.ThreadPoolExecutor
+    capacities = []
+
+    def executor(*args, **kwargs):
+        capacities.append(kwargs["max_workers"])
+        return real_executor(*args, **kwargs)
+
+    monkeypatch.setattr(notes_pipeline, "ThreadPoolExecutor", executor)
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": float(index * 1_200),
+            "end_seconds": float(index * 1_200 + 1),
+            "text": f"Discussion detail {index}.",
+            "speaker_name": "Morgan",
+        }
+        for index in range(4)
+    ]
+
+    def transport(prompt, **kwargs):
+        result = _valid_document()
+        result["overview"] = [
+            {"text": "Discussion.", "source_ids": [kwargs["allowed_source_ids"][0]]}
+        ]
+        return json.dumps(result)
+
+    notes_pipeline.generate_notes_document(
+        snapshot=snapshot,
+        output_language="en",
+        transport=transport,
+        invalid_output_error=lambda diagnostics: AssertionError(diagnostics),
+        limit_error=RuntimeError,
+        provider=provider,
+        model=model,
+    )
+    assert capacities == expected_workers

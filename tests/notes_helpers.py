@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -240,3 +241,38 @@ def seed_cited_notes(
     )
     assert revision is not None
     return meeting_id, revision, snapshot, segment_ids
+
+
+def reconcile_payload(prompt: str) -> dict:
+    """The ledger JSON of one reconcile prompt; a repair suffix may follow it."""
+    return json.JSONDecoder().raw_decode(prompt.split("RECONCILE_INPUT_JSON:\n", 1)[1])[0]
+
+
+def reconcile_disposition(ref: str, action: str = "keep", **fields: object) -> dict:
+    return {
+        "ref": ref,
+        "action": action,
+        "reason": "none",
+        "target": None,
+        "text": None,
+        "source_ids": [],
+        "evidence": [],
+        "owner": None,
+        "deadline_text": None,
+        **fields,
+    }
+
+
+def reconcile_keep_patch(prompt: str) -> str:
+    """Keep every final item; a map item is a duplicate of an allowed final target, else kept."""
+    payload = reconcile_payload(prompt)
+    finals = [item["ref"] for item in payload["final_items"]]
+    dispositions = [reconcile_disposition(ref) for ref in finals]
+    for item in payload["map_items"]:
+        targets = [ref for ref in item["allowed_merge_targets"] if ref in finals]
+        dispositions.append(
+            reconcile_disposition(item["ref"], "remove", reason="duplicate", target=targets[0])
+            if targets
+            else reconcile_disposition(item["ref"])
+        )
+    return json.dumps({"ledger_version": 2, "dispositions": dispositions, "additions": []})

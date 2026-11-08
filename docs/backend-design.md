@@ -6,11 +6,11 @@ Trạng thái: **đã thống nhất các quyết định thiết kế Q1–Q27*
 
 ## 1. Tổ chức backend và lưu trữ
 
-- Hai service trong cùng bộ Docker Compose: `app` phục vụ UI/API; `worker` chạy model. Tách vòng đời tiến trình để lỗi tiến trình model không trực tiếp làm chết tiến trình phục vụ UI. Việc hết tài nguyên toàn máy vẫn cần kiểm soát và kiểm thử riêng.
+- Bộ Docker Compose tách `app` phục vụ UI/API, `worker` chạy ASR/diarization và `notes-service` gọi provider notes. Tách vòng đời tiến trình để lỗi model hoặc provider không trực tiếp làm chết tiến trình phục vụ UI; worker không cần provider mount hay egress. Việc hết tài nguyên toàn máy vẫn cần kiểm soát và kiểm thử riêng. Xem [ADR 0013](adr/0013-notes-service-boundary.md).
 - Python cho phần ứng dụng và điều phối; FastAPI phục vụ HTTP API. Worker là tiến trình riêng gọi các runtime model.
 - SQLite lưu metadata cuộc họp, transcript, tên người nói, các bản notes và trạng thái tác vụ. Âm thanh được lưu thành file riêng trên ổ đĩa local của máy chạy backend.
 - Dữ liệu nằm trong vùng lưu bền, được giữ khi thay container. Không sử dụng một service PostgreSQL trong thiết kế đã chọn.
-- Giao dịch ghi phải ngắn; không giữ giao dịch cơ sở dữ liệu trong lúc suy luận model. `app` ghi nhận tác vụ vào SQLite khi hệ thống rảnh; `worker` nhận việc bằng giao dịch nguyên tử và cập nhật tiến độ/kết quả. Trạng thái và quyền nhận tác vụ được lưu tại SQLite; hai service cùng phụ thuộc schema này.
+- Giao dịch ghi phải ngắn; không giữ giao dịch cơ sở dữ liệu trong lúc suy luận model. `app` ghi nhận tác vụ vào SQLite khi hệ thống rảnh; `worker` hoặc `notes-service` nhận việc bằng giao dịch nguyên tử và cập nhật tiến độ/kết quả. Trạng thái, role và quyền nhận tác vụ được lưu tại SQLite; các service xử lý cùng phụ thuộc schema và `processing_slot` này.
 - Giữ giới hạn một tác vụ xử lý toàn hệ thống, gồm xử lý bản ghi và tạo notes. Không nhận thêm tác vụ vào hàng đợi khi đang bận.
 
 Lý do lựa chọn được ghi tại [ADR 0004](adr/0004-app-worker-sqlite.md).
@@ -91,7 +91,7 @@ Người dùng đồng ý các đề xuất Q7–Q11. Với Q7, phạm vi đồn
 | --- | --- | --- |
 | Q7 — Bộ model thử nghiệm | Whisper large-v3 qua faster-whisper; pyannote Community-1. Qwen3-14B Q4_K_M từng được chọn thử nhưng **đã hoãn theo Q12**; tạo notes dùng cloud | Đây là quyết định lịch sử của bộ thử nghiệm; default GPU sau đó chuyển sang Qwen3-ASR-1.7B theo #168. ASR/diarization chạy lần lượt và giải phóng GPU giữa các model |
 | Q8 — Stack backend | Python cho phần ứng dụng/điều phối; FastAPI phục vụ HTTP API; worker là tiến trình riêng gọi runtime model | Dùng chung ngôn ngữ và kiểu dữ liệu; tiếp tục thiết kế API và module. [FastAPI](https://fastapi.tiangolo.com/features/) hỗ trợ OpenAPI và validation qua Pydantic |
-| Q9 — Giao việc giữa hai service | Trạng thái và quyền nhận tác vụ nằm trong SQLite; app ghi nhận một tác vụ khi rảnh, worker nhận bằng giao dịch nguyên tử và cập nhật tiến độ | Hai service cùng phụ thuộc schema DB; phải thiết kế ownership, phát hiện worker ngắt và giải phóng tài nguyên trước khi nhận việc mới. Không nhận tác vụ thứ hai để chờ |
+| Q9 — Giao việc giữa các service | Trạng thái, role và quyền nhận tác vụ nằm trong SQLite; app ghi nhận một tác vụ khi rảnh, worker hoặc notes-service nhận bằng giao dịch nguyên tử và cập nhật tiến độ | Các service cùng phụ thuộc schema DB và `processing_slot`; phải thiết kế ownership, lock/heartbeat theo role, phát hiện service ngắt và giải phóng tài nguyên trước khi nhận việc mới. Không nhận tác vụ thứ hai để chờ |
 | Q10 — Chạy lại khi đã có transcript được sửa | Lưu kết quả chạy lại thành một thế hệ transcript mới, giữ nguồn cũ và liên kết của các bản notes cũ | Tốn thêm dung lượng văn bản; Q19/Q21 sau đó chốt snapshot và cách xem thế hệ cũ. Không trộn segment hoặc speaker của hai lần xử lý |
 | Q11 — Kiểm tra notes do model sinh | Model sinh cấu trúc trung gian có ID nguồn; backend kiểm tra cấu trúc và tham chiếu trước khi render Markdown | Chỉ kiểm tra được các điều kiện xác định, không tự bảo đảm ý nghĩa đúng; Q18 sau đó chốt một lượt sửa tự động tối đa/tác vụ. Notes do người dùng sửa vẫn là Markdown tự do |
 

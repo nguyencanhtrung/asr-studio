@@ -5,17 +5,26 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import suppress
+from threading import Lock
 from typing import Any, Protocol
 
 # Limits are read through the module at call time so tests can lower them.
 from asr_studio import notes_document as nd
+from asr_studio.notes_audit import AuditCatalog
+from asr_studio.notes_context import link_antecedent_context
+from asr_studio.notes_reconcile import (
+    MAX_RECONCILE_OUTPUT_BYTES,
+    ReconcileLedger,
+    ReconcileRepair,
+)
 
 # The code a transport gives a response over its output cap.
 _OUTPUT_TOO_LARGE = "provider_output_too_large"
 _LOGGER = logging.getLogger(__name__)
-_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final"})
+_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit", "reconcile"})
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
 
@@ -137,6 +146,7 @@ class NotesTransport(Protocol):
         prompt_bytes: int,
         budget: nd.NotesBudget,
         max_unit_size: int = 1,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> str: ...
 
 
@@ -182,15 +192,27 @@ def generate_notes_document(
     )
     nd.verify_coverage(snapshot, plan)  # before any provider call
     synthesis_budget = nd.conservative_notes_budget(provider)
+    if provider in {"chatgpt", "antigravity"}:
+        synthesis_budget = nd.notes_budget(provider, model)
+    chunk_output_bytes = nd.notes_chunk_output_bytes(synthesis_budget)
     coverage = copy.deepcopy(plan.manifest)
     call_count = 0
     repair_used = False
     output_recoveries = 0
     last_successful_response: tuple[int, str, str] | None = None
+    ledger_lock = Lock()
+    progress_lock = Lock()
+    progress_high_water: dict[tuple[str, str], int] = {}
 
     def progress(stage: str, current: int, total: int | None, unit: str) -> None:
         if on_progress is not None:
-            on_progress({"stage": stage, "current": current, "total": total, "unit": unit})
+            with progress_lock:
+                key = (stage, unit)
+                current = max(current, progress_high_water.get(key, 0))
+                if total is not None:
+                    current = min(current, total)
+                progress_high_water[key] = current
+                on_progress({"stage": stage, "current": current, "total": total, "unit": unit})
 
     progress("preparing_source", 1, 1, "phase")
 
@@ -202,23 +224,30 @@ def generate_notes_document(
         stage: str,
         attempt: str,
         budget: nd.NotesBudget,
-    ) -> str:
+        response_schema: Mapping[str, Any] | None = None,
+    ) -> tuple[str, int]:
         nonlocal call_count
-        if call_count >= nd.MAX_PROVIDER_CALLS:
-            raise limit_error("This transcript exceeds the bounded notes synthesis request limit.")
-        call_count += 1
+        with ledger_lock:
+            if call_count >= nd.MAX_PROVIDER_CALLS:
+                raise limit_error(
+                    "This transcript exceeds the bounded notes synthesis request limit."
+                )
+            call_count += 1
+            provider_call_index = call_count
         transport_kwargs: dict[str, object] = {
             "allowed_source_ids": allowed_source_ids,
             "max_output_bytes": max_output_bytes,
             "stage": stage,
             "attempt": attempt,
-            "provider_call_index": call_count,
+            "provider_call_index": provider_call_index,
             "prompt_bytes": len(prompt.encode("utf-8")),
             "budget": budget,
         }
         if max_unit_size > 1:
             transport_kwargs["max_unit_size"] = max_unit_size
-        return transport(prompt, **transport_kwargs)
+        if response_schema is not None:  # None keeps the schema-1 request byte-for-byte
+            transport_kwargs["response_schema"] = response_schema
+        return transport(prompt, **transport_kwargs), provider_call_index
 
     def invalid_output(
         validation_error: Exception,
@@ -277,6 +306,7 @@ def generate_notes_document(
         citation_scope: dict[str, Any],
         *,
         max_output_bytes: int,
+        extra_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not isinstance(raw_output, str):
             raise nd.NotesDocumentError("The notes response must be text.", reason_code="json")
@@ -287,15 +317,26 @@ def generate_notes_document(
                 "The notes response must be valid JSON.", reason_code="json"
             ) from None
         try:
-            document = nd.normalize_duplicate_source_refs(
+            if extra_validator is None:
+                document = nd.normalize_duplicate_source_refs(
+                    document,
+                    nd._unique_source_ids(
+                        tuple(segment["id"] for segment in citation_scope["segments"])
+                    ),
+                    max_unit_size=max_unit_size,
+                )
+                document = nd.coalesce_exact_duplicate_items(document, max_unit_size=max_unit_size)
+            validated = nd.validate_document(
                 document,
-                nd._unique_source_ids(
-                    tuple(segment["id"] for segment in citation_scope["segments"])
-                ),
+                citation_scope,
+                max_output_bytes=max_output_bytes,
                 max_unit_size=max_unit_size,
             )
+            if extra_validator is None:
+                return validated
+            resolved = extra_validator(validated)
             return nd.validate_document(
-                document,
+                resolved,
                 citation_scope,
                 max_output_bytes=max_output_bytes,
                 max_unit_size=max_unit_size,
@@ -315,8 +356,6 @@ def generate_notes_document(
         """Yield the lower-target prompts one request may still send, within both budgets."""
         nonlocal output_recoveries
         for _ in range(nd.MAX_OUTPUT_RECOVERY_ATTEMPTS):
-            if output_recoveries >= nd.MAX_OUTPUT_RECOVERY_CALLS:
-                return
             target = nd.lower_output_target(target)
             try:
                 lowered = nd.build_recovery_prompt(
@@ -329,7 +368,10 @@ def generate_notes_document(
                 )
             except nd.NotesDocumentError:
                 return  # the request budget has no room for the lower-target prompt
-            output_recoveries += 1
+            with ledger_lock:
+                if output_recoveries >= nd.MAX_OUTPUT_RECOVERY_CALLS:
+                    return
+                output_recoveries += 1
             yield lowered
 
     def request_document(
@@ -340,28 +382,50 @@ def generate_notes_document(
         stage: str,
         repair_prompt: Callable[[str], str],
         budget: nd.NotesBudget,
-    ) -> dict[str, Any]:
+        extra_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        response_schema: Mapping[str, Any] | None = None,
+        parse: Callable[[object], dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], int]:
+        """Run one logical request; `parse` replaces schema-1 parsing for an internal schema."""
         nonlocal last_successful_response, repair_used
         allowed_source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in citation_scope["segments"])
         )
-        recoveries = recovery_prompts(
-            prompt,
-            # The aim the primary prompt states: the reduction target, else the stage cap.
-            target=nd.MAX_REDUCTION_TARGET_BYTES if stage == "reduce" else max_output_bytes,
-            allowed_source_ids=allowed_source_ids,
-            budget=budget,
+        # A lower-size recovery prompt describes a schema-1 document, so an internal-schema
+        # request gets none; its over-cap or oversized answer goes to the shared repair or fails.
+        recoveries: Iterator[str] = (
+            iter(())
+            if parse is not None
+            else recovery_prompts(
+                prompt,
+                # The aim the primary prompt states: the reduction target, else the stage cap.
+                target=nd.MAX_REDUCTION_TARGET_BYTES if stage == "reduce" else max_output_bytes,
+                allowed_source_ids=allowed_source_ids,
+                budget=budget,
+            )
         )
+
+        def validate(raw: object) -> dict[str, Any]:
+            if parse is not None:
+                return parse(raw)
+            return parse_and_validate(
+                raw,
+                citation_scope,
+                max_output_bytes=max_output_bytes,
+                extra_validator=extra_validator,
+            )
+
         attempt, sent = "primary", prompt
         while True:
             try:
-                raw_output = request(
+                raw_output, provider_call_index = request(
                     sent,
                     allowed_source_ids=allowed_source_ids,
                     max_output_bytes=max_output_bytes,
                     stage=stage,
                     attempt=attempt,
                     budget=budget,
+                    response_schema=response_schema,
                 )
             except Exception as error:
                 # Only a response over its cap earns a smaller ask; any other failure is final.
@@ -370,20 +434,24 @@ def generate_notes_document(
                 lowered = next(recoveries, None)
                 if lowered is None:
                     raise
-                progress("repairing", max(0, output_recoveries - 1), None, "recoveries")
+                with ledger_lock:
+                    recovery_count = output_recoveries
+                progress("repairing", max(0, recovery_count - 1), None, "recoveries")
                 attempt, sent = "recovery", lowered
                 continue
-            provider_call_index = call_count
             try:
-                validated = parse_and_validate(
-                    raw_output,
-                    citation_scope,
-                    max_output_bytes=max_output_bytes,
-                )
-                last_successful_response = (provider_call_index, attempt, raw_output)
+                validated = validate(raw_output)
+                with ledger_lock:
+                    if (
+                        last_successful_response is None
+                        or provider_call_index >= last_successful_response[0]
+                    ):
+                        last_successful_response = (provider_call_index, attempt, raw_output)
                 if attempt == "recovery":
-                    progress("repairing", output_recoveries, None, "recoveries")
-                return validated
+                    with ledger_lock:
+                        recovery_count = output_recoveries
+                    progress("repairing", recovery_count, None, "recoveries")
+                return validated, provider_call_index
             except (nd.NotesDocumentError, TypeError) as validation_error:
                 # OMP ignores the response cap, so its overflow is a size failure here.
                 if getattr(validation_error, "reason_code", None) == "size":
@@ -391,7 +459,11 @@ def generate_notes_document(
                     if lowered is not None:
                         attempt, sent = "recovery", lowered
                         continue
-                if repair_used:
+                with ledger_lock:
+                    can_repair = not repair_used
+                    if can_repair:
+                        repair_used = True
+                if not can_repair:
                     raise invalid_output(
                         validation_error,
                         stage=stage,
@@ -402,7 +474,6 @@ def generate_notes_document(
                         prompt_bytes=len(sent.encode("utf-8")),
                         response_limit=max_output_bytes,
                     ) from None
-                repair_used = True
                 progress("repairing", 0, 1, "repairs")
                 try:
                     bounded_repair_prompt = repair_prompt(raw_output)
@@ -417,24 +488,29 @@ def generate_notes_document(
                         prompt_bytes=len(sent.encode("utf-8")),
                         response_limit=max_output_bytes,
                     ) from None
-                repaired_output = request(
+                repaired_output, repair_call_index = request(
                     bounded_repair_prompt,
                     allowed_source_ids=allowed_source_ids,
                     max_output_bytes=max_output_bytes,
                     stage=stage,
                     attempt="repair",
                     budget=budget,
+                    response_schema=response_schema,
                 )
-                repair_call_index = call_count
                 try:
-                    validated = parse_and_validate(
-                        repaired_output,
-                        citation_scope,
-                        max_output_bytes=max_output_bytes,
-                    )
-                    last_successful_response = (repair_call_index, "repair", repaired_output)
+                    validated = validate(repaired_output)
+                    with ledger_lock:
+                        if (
+                            last_successful_response is None
+                            or repair_call_index >= last_successful_response[0]
+                        ):
+                            last_successful_response = (
+                                repair_call_index,
+                                "repair",
+                                repaired_output,
+                            )
                     progress("repairing", 1, 1, "repairs")
-                    return validated
+                    return validated, repair_call_index
                 except (nd.NotesDocumentError, TypeError) as repair_error:
                     raise invalid_output(
                         repair_error,
@@ -450,10 +526,13 @@ def generate_notes_document(
     def restore_final_document(document: dict[str, Any], *, stage: str) -> dict[str, Any]:
         restored = nd.restore_source_refs(document, projection.alias_to_original)
         try:
+            restored = nd.coalesce_exact_duplicate_items(restored)
             return nd.validate_document(restored, snapshot, max_output_bytes=nd.MAX_OUTPUT_BYTES)
         except (nd.NotesDocumentError, TypeError) as validation_error:
-            response = last_successful_response
-            call_index = response[0] if response is not None else max(call_count, 1)
+            with ledger_lock:
+                response = last_successful_response
+                latest_call_count = call_count
+            call_index = response[0] if response is not None else max(latest_call_count, 1)
             try:
                 expanded_bytes = len(
                     json.dumps(
@@ -476,18 +555,55 @@ def generate_notes_document(
             ) from None
 
     def finish(document: dict[str, Any]) -> dict[str, Any]:
-        coverage["provider_calls"] = call_count
-        coverage["output_recoveries"] = output_recoveries
+        with ledger_lock:
+            coverage["provider_calls"] = call_count
+            coverage["output_recoveries"] = output_recoveries
         if on_coverage is not None:
             on_coverage(coverage)
         return document
+
+    def audit_request_parts(
+        draft: dict[str, Any],
+    ) -> tuple[Callable[[str | None], str], Callable[[dict[str, Any]], dict[str, Any]] | None]:
+        """Build one source-audit prompt and its boundary resolver for one accepted draft."""
+        catalog = (
+            AuditCatalog.from_documents(projected_snapshot, draft)
+            if provider == "antigravity"
+            else None
+        )
+        catalog_payload = catalog.prompt_payload() if catalog is not None else None
+
+        def audit_prompt(invalid_output: str | None = None) -> str:
+            return nd.build_reduction_prompt(
+                projected_snapshot,
+                [draft],
+                final=True,
+                invalid_output=invalid_output,
+                output_language=output_language,
+                budget=single_budget,
+                max_unit_size=max_unit_size,
+                require_source=True,
+                audit=True,
+                audit_catalog=catalog_payload,
+            )
+
+        def audit_validator(document: dict[str, Any]) -> dict[str, Any]:
+            assert catalog is not None
+            return catalog.apply(
+                document,
+                max_output_bytes=nd.MAX_OUTPUT_BYTES,
+                max_unit_size=max_unit_size,
+                output_language=output_language,
+            )
+
+        return audit_prompt, audit_validator if catalog is not None else None
 
     if not plan.chunked:
         source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in projected_snapshot["segments"])
         )
         progress("generating", 0, 1, "calls")
-        document = request_document(
+        document, accepted_call_index = request_document(
             nd.build_prompt(
                 projected_snapshot,
                 allowed_source_ids=source_ids,
@@ -508,15 +624,44 @@ def generate_notes_document(
             ),
             budget=single_budget,
         )
-        document = restore_final_document(document, stage="single")
+        coverage["chunks"][0]["provider_call_index"] = accepted_call_index
+        if single_budget.uses_token_estimate:
+            draft = document
+            audit_prompt, audit_validator = audit_request_parts(draft)
+
+            try:
+                source_audit_prompt = audit_prompt()
+            except nd.NotesDocumentError:
+                coverage["source_audit"] = {"status": "skipped", "reason": "prompt_budget"}
+            else:
+                progress("merging", 0, 1, "calls")
+                audited_document, audit_call_index = request_document(
+                    source_audit_prompt,
+                    projected_snapshot,
+                    max_output_bytes=nd.MAX_OUTPUT_BYTES,
+                    stage="audit",
+                    repair_prompt=audit_prompt,
+                    budget=single_budget,
+                    extra_validator=audit_validator,
+                )
+                document = audited_document
+                coverage["source_audit"] = {
+                    "status": "applied",
+                    "provider_call_index": audit_call_index,
+                    "mode": "references" if provider == "antigravity" else "rewrite",
+                }
+                progress("merging", 1, 1, "calls")
+        document = restore_final_document(
+            document,
+            stage="audit"
+            if coverage.get("source_audit", {}).get("status") == "applied"
+            else "single",
+        )
         progress("generating", 1, 1, "calls")
-        coverage["chunks"][0]["provider_call_index"] = call_count
         return finish(document)
 
-    summaries: list[dict[str, Any]] = []
-    previous_document: dict[str, Any] | None = None
+    prepared_chunks: list[tuple[dict[str, Any], str, Callable[[str], str]]] = []
     for index, chunk in enumerate(plan.chunks, start=1):
-        progress("chunking", index - 1, len(plan.chunks), "chunks")
         projected_chunk = projection.project_chunk(chunk)
         source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in projected_chunk["segments"])
@@ -529,6 +674,8 @@ def generate_notes_document(
             output_language=output_language,
             budget=synthesis_budget,
             max_unit_size=max_unit_size,
+            max_output_bytes=chunk_output_bytes,
+            fact_inventory=plan.fact_inventory,
         )
 
         def repair_chunk(
@@ -547,20 +694,72 @@ def generate_notes_document(
                 output_language=output_language,
                 budget=synthesis_budget,
                 max_unit_size=max_unit_size,
+                max_output_bytes=chunk_output_bytes,
+                fact_inventory=plan.fact_inventory,
             )
 
-        document = request_document(
-            prompt,
-            projected_chunk,
-            max_output_bytes=nd.MAX_CHUNK_OUTPUT_BYTES,
-            stage="chunk",
-            repair_prompt=repair_chunk,
-            budget=synthesis_budget,
+        prepared_chunks.append((projected_chunk, prompt, repair_chunk))
+
+    map_results: list[tuple[dict[str, Any], int] | None] = [None] * len(prepared_chunks)
+    parallel_maps = (
+        provider in {"chatgpt", "antigravity"}
+        and synthesis_budget.uses_token_estimate
+        and len(prepared_chunks) > 1
+    )
+    if parallel_maps:
+        progress("chunking", 0, len(prepared_chunks), "chunks")
+        executor = ThreadPoolExecutor(
+            max_workers=3 if plan.fact_inventory else 2, thread_name_prefix="notes-map"
         )
-        progress("chunking", index, len(plan.chunks), "chunks")
-        coverage["chunks"][index - 1]["provider_call_index"] = call_count
+        futures: dict[Future[tuple[dict[str, Any], int]], int] = {}
+        try:
+            for index, (projected_chunk, prompt, repair_chunk) in enumerate(prepared_chunks):
+                futures[
+                    executor.submit(
+                        request_document,
+                        prompt,
+                        projected_chunk,
+                        max_output_bytes=chunk_output_bytes,
+                        stage="chunk",
+                        repair_prompt=repair_chunk,
+                        budget=synthesis_budget,
+                    )
+                ] = index
+            for completed_count, future in enumerate(as_completed(futures), start=1):
+                map_results[futures[future]] = future.result()
+                progress("chunking", completed_count, len(prepared_chunks), "chunks")
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=True, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
+    else:
+        for index, (projected_chunk, prompt, repair_chunk) in enumerate(prepared_chunks):
+            progress("chunking", index, len(prepared_chunks), "chunks")
+            map_results[index] = request_document(
+                prompt,
+                projected_chunk,
+                max_output_bytes=chunk_output_bytes,
+                stage="chunk",
+                repair_prompt=repair_chunk,
+                budget=synthesis_budget,
+            )
+            progress("chunking", index + 1, len(prepared_chunks), "chunks")
+
+    summaries: list[dict[str, Any]] = []
+    previous_document: dict[str, Any] | None = None
+    for index, ((projected_chunk, _prompt, _repair), result) in enumerate(
+        zip(prepared_chunks, map_results, strict=True), start=1
+    ):
+        if result is None:
+            raise limit_error("The notes map did not return a document for every source part.")
+        document, accepted_call_index = result
+        coverage["chunks"][index - 1]["provider_call_index"] = accepted_call_index
         if previous_document is not None:
-            # The previous chunk read the overlap in full, so its items win over repeats.
+            # The previous chunk read the overlap in full, so an exact repeat can be removed;
+            # paraphrases and metadata/source differences remain for final reconciliation.
             overlap_ids = [
                 segment["id"] for segment in projected_chunk["segments"] if segment.get("overlap")
             ]
@@ -581,6 +780,7 @@ def generate_notes_document(
             invalid_output=invalid_output,
             output_language=output_language,
             budget=synthesis_budget,
+            max_unit_size=max_unit_size,
         )
 
     def fits(group: list[dict[str, Any]]) -> bool:
@@ -596,7 +796,7 @@ def generate_notes_document(
             raise limit_error("This transcript exceeds the bounded notes reduction limit.")
         progress("merging", reduction_calls, None, "calls")
         reduction_calls += 1
-        result = request_document(
+        result, _accepted_call_index = request_document(
             reduction_prompt(group, final=False),
             nd._prompt_citation_scope(projected_snapshot, group),
             max_output_bytes=nd.MAX_REDUCTION_OUTPUT_BYTES,
@@ -618,18 +818,106 @@ def generate_notes_document(
             raise limit_error("Notes synthesis could not compact a summary within its limit.")
         return reduced
 
+    def reconcile(final_document: dict[str, Any]) -> dict[str, Any]:
+        """One structured patch over the projected final draft, map ledger and full source."""
+        ledger = ReconcileLedger.build(
+            projected_snapshot, final_document, summaries, max_unit_size=max_unit_size
+        )
+
+        repairs: list[ReconcileRepair] = []
+
+        def reconcile_prompt(invalid_output: str | None = None) -> str:
+            # Per-ref failures get a sparse repair over the accepted ops; a global failure keeps
+            # the bounded generic repair, which is unavailable above its raw-output cap.
+            plan = None if invalid_output is None else ledger.plan_repair(invalid_output)
+            if plan is not None:
+                repairs.append(plan)
+                return ledger.build_repair_prompt(
+                    plan, output_language=output_language, budget=synthesis_budget
+                )
+            return ledger.build_prompt(
+                output_language=output_language,
+                invalid_output=invalid_output,
+                budget=synthesis_budget,
+            )
+
+        try:
+            prompt = reconcile_prompt()
+        except nd.NotesDocumentError:
+            # The long ChatGPT path requires this audit; publishing the unchecked draft would
+            # misreport it, so the bounded limit fails the task instead.
+            raise limit_error(
+                "This transcript exceeds the bounded notes source reconciliation limit."
+            ) from None
+        counts: list[dict[str, Any]] = []
+
+        def parse(raw: object) -> dict[str, Any]:
+            result = ledger.parse_repair(raw, repairs[-1]) if repairs else ledger.parse(raw)
+            counts.append(result.counts)
+            return result.document
+
+        progress("merging", reduction_calls, None, "calls")
+        document, call_index = request_document(
+            prompt,
+            projected_snapshot,
+            max_output_bytes=MAX_RECONCILE_OUTPUT_BYTES,
+            stage="reconcile",
+            repair_prompt=reconcile_prompt,
+            budget=synthesis_budget,
+            response_schema=ledger.schema(),
+            parse=parse,
+        )
+        coverage["source_audit"] = {
+            "status": "applied",
+            "mode": "reconcile",
+            "provider_call_index": call_index,
+            "counts": counts[-1],
+        }
+        return document
+
+    if plan.fact_inventory:
+        # Long known-ChatGPT: the structured reconcile over every map fact and the full source
+        # is the final synthesis; no lossy free-form final or reduction runs before it.
+        empty_seed: dict[str, Any] = {
+            "schema_version": nd.SCHEMA_VERSION,
+            **{section: [] for section, _heading in nd.SECTIONS},
+        }
+        reduction_calls += 1
+        final_document = reconcile(empty_seed)
+        final_document = restore_final_document(final_document, stage="reconcile")
+        # After the last provider request: add local antecedent-context citations in code.
+        linked, context_counts = link_antecedent_context(
+            final_document,
+            snapshot,
+            max_refs_per_item=nd.MAX_SOURCE_REFS_PER_ITEM,
+        )
+        try:
+            final_document = nd.validate_document(
+                linked, snapshot, max_output_bytes=nd.MAX_OUTPUT_BYTES
+            )
+            coverage["source_context"] = {"status": "applied", **context_counts}
+        except nd.NotesDocumentError:
+            # Context links are optional provenance; the validated document stays as it was.
+            coverage["source_context"] = {"status": "skipped", "reason": "limit"}
+        progress("merging", reduction_calls, None, "calls")
+        return finish(final_document)
+
     documents = summaries
     for _level in range(nd.MAX_REDUCTION_LEVELS):
         final_prompt = None
-        final_scope = nd._prompt_citation_scope(projected_snapshot, documents)
         with suppress(nd.NotesDocumentError):
             final_prompt = reduction_prompt(documents, final=True)
         if final_prompt is not None:
+            final_scope = (
+                projected_snapshot
+                if nd.reduction_prompt_includes_source(final_prompt)
+                else nd._prompt_citation_scope(projected_snapshot, documents)
+            )
             if reduction_calls >= nd.MAX_REDUCTION_CALLS:
                 raise limit_error("This transcript exceeds the bounded notes reduction limit.")
             progress("merging", reduction_calls, None, "calls")
             reduction_calls += 1
-            final_document = request_document(
+            final_document, _accepted_call_index = request_document(
                 final_prompt,
                 final_scope,
                 max_output_bytes=nd.MAX_OUTPUT_BYTES,
@@ -639,7 +927,17 @@ def generate_notes_document(
                 ),
                 budget=synthesis_budget,
             )
-            final_document = restore_final_document(final_document, stage="final")
+            final_stage = "final"
+            if provider == "chatgpt" and synthesis_budget.uses_token_estimate:
+                final_document = reconcile(final_document)
+                final_stage = "reconcile"
+            elif synthesis_budget.uses_token_estimate:
+                coverage["source_audit"] = {
+                    "status": "skipped",
+                    "reason": "quality_not_qualified",
+                }
+            # Projected IDs are restored exactly once, at publication.
+            final_document = restore_final_document(final_document, stage=final_stage)
             progress("merging", reduction_calls, None, "calls")
             return finish(final_document)
 

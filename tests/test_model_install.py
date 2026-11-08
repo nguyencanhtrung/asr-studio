@@ -152,8 +152,12 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    stat = Path(f"/proc/{pid}/stat")
-    return not stat.exists() or stat.read_text().split(")")[-1].split()[0] != "Z"
+    if not Path("/proc").is_dir():
+        return True
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] != "Z"
+    except (FileNotFoundError, ProcessLookupError):
+        return False
 
 
 # -- AC-05: one job per model -----------------------------------------------------------------
@@ -526,7 +530,11 @@ async def api(rig, monkeypatch):
     settings = rig.settings
     _whisper_dir(settings.asr_gpu_model_path)
     profile = {"value": RuntimeProfile("cuda", "float16", settings.asr_gpu_model_path)}
-    monkeypatch.setattr(routes, "worker_is_healthy", lambda _data_dir: profile["value"] is not None)
+    monkeypatch.setattr(
+        routes,
+        "worker_is_healthy",
+        lambda _data_dir, *, role=None: profile["value"] is not None,
+    )
     monkeypatch.setattr(routes, "read_runtime_profile", lambda _data_dir: profile["value"])
     app = create_app(settings)
     async with (

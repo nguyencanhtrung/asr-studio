@@ -6,7 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -558,6 +558,14 @@ def _migrate_v15(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v16(connection: sqlite3.Connection) -> None:
+    """Remember which processing service owns a claimed task."""
+    connection.execute(
+        "ALTER TABLE tasks ADD COLUMN owner_role TEXT NOT NULL DEFAULT 'legacy' "
+        "CHECK(owner_role IN ('legacy', 'transcription', 'notes'))"
+    )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -682,6 +690,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 15:
             _migrate_v15(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (15)")
+        if current_version < 16:
+            _migrate_v16(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (16)")
         connection.commit()
     finally:
         connection.close()

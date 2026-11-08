@@ -11,7 +11,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
-from notes_helpers import StubNotesProvider, seed_completed_transcript
+from notes_helpers import StubNotesProvider, seed_cited_notes, seed_completed_transcript
 
 from asr_studio import worker
 from asr_studio.config import Settings
@@ -551,3 +551,42 @@ def test_notes_runner_runs_only_the_current_prompt_and_the_legacy_english_contra
         assert (code, event["type"]) == (0, "result")
     else:
         assert (code, event["type"], event["code"]) == (1, "error", "notes_contract_changed")
+
+
+def test_failed_notes_regeneration_preserves_the_existing_revision(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    seeded = seed_completed_transcript(data_dir)
+    meeting_id, generation_id, _segment_ids = seeded
+    seed_cited_notes(data_dir, existing=seeded)
+    before = notes_state(data_dir, meeting_id)["revisions"]
+    assert len(before) == 1
+    accepted = _accept(data_dir, meeting_id, generation_id, "notes-failed-regeneration")
+    task = claim_next_task(data_dir, owner_id="preserve-existing-notes")
+    assert task is not None and task["id"] == accepted["id"]
+    monkeypatch.setattr(
+        worker,
+        "_notes_command",
+        _child_printing(
+            {"type": "stage", "stage": "generating_notes"},
+            {
+                "type": "error",
+                "code": "notes_invalid_output",
+                "message": "The single repair failed validation.",
+            },
+        ),
+    )
+    lock_fd = acquire_worker_lock(data_dir)
+    assert lock_fd is not None
+    try:
+        worker._run_notes_task(
+            Settings(data_dir=data_dir, auth_dir=tmp_path / "auth"),
+            lock_fd,
+            task,
+            threading.Event(),
+        )
+    finally:
+        os.close(lock_fd)
+    after = notes_state(data_dir, meeting_id)
+    assert after["task"]["status"] == "failed"
+    assert after["task"]["error_code"] == "notes_invalid_output"
+    assert after["revisions"] == before
