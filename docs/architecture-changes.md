@@ -1805,7 +1805,7 @@ thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Kế
 Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ, không phải lượt đo
 end-to-end mới. Mốc ngoài cửa sổ hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
 
-### #183 — Gemini giữ sự kiện và kiểm gắn nguồn (`notes-hierarchical-v30`)
+### #183 — Gemini giữ sự kiện và kiểm gắn nguồn (`notes-hierarchical-v31`)
 
 **Vấn đề.** Cùng transcript/gold đã khóa, bản trước đạt 8/12 nội dung, 6/7 ý quan trọng,
 9 khẳng định quan trọng thiếu căn cứ; mẫu ngắn 8/9. Map theo giờ bỏ mất sự kiện, final tự do
@@ -1832,6 +1832,7 @@ quyết định đổi lịch với công việc phát sinh; ca ngắn giữ s�
   Mục chưa đủ căn cứ chuyển sang confirmation bằng trích đoạn nguồn nguyên văn, bỏ khẳng định
   chưa xác minh và metadata. Ref sai/lặp/chéo, ID sai, xung đột thao tác hoặc quá giới hạn vẫn lỗi.
 - Bản vá có thể chọn biến thể đánh dấu riêng mã điều khoản phụ chưa rõ, giữ phần quyết định đã có nguồn. Chỉ nhận nhãn pháp lý; tên viết tắt cần ngữ cảnh pháp lý và không có dấu hiệu phiên bản phần mềm, giữ ngày dạng chấm. Số lượng nghi do ASR ghép danh sách kích cỡ được đánh dấu riêng theo ngôn ngữ nếu không có tổng số độc lập trong nguồn của mục, trước khi sinh lựa chọn văn bản; không khôi phục số mơ hồ qua lựa chọn câu gốc. Không sửa transcript hay số hồ sơ/biểu quyết/tiền/ngày.
+- Sau bản vá, mã đánh dấu số lượng xấp xỉ bị viết thành chính xác, so đúng giá trị/đơn vị với nguồn riêng của mục. Ý định bỏ phiếu có tên phải có nhận diện cục bộ đã trích hoặc câu báo cáo trực tiếp đúng người, nếu không chuyển thành trích đoạn cần kiểm tra; tên cùng đoạn hoặc lời cảm ơn nơi khác không đủ. Strict ưu tiên nối câu bị cắt và lời giao lượt lân cận, giữ giới hạn segment/thời gian và 12 ID thêm/mục. Không thêm lượt gọi model.
 - `notes_context.py` thêm neo số hồ sơ ngắn có nhãn và câu kết quả gần kiến nghị cho Gemini.
   Neo có cấu trúc tìm tối đa 32 segment/360 giây: tiêu đề cùng số hồ sơ hoặc khối biểu quyết
   kế tiếp có đúng tên người bỏ phiếu. Dừng ở tiêu đề khác, kể cả bên trong khối; không suy
@@ -1841,12 +1842,14 @@ quyết định đổi lịch với công việc phát sinh; ca ngắn giữ s�
 - Antigravity gửi và đếm đúng schema tùy chọn trong ngân sách RPC. ChatGPT/model fallback giữ
   thông điệp mặc định; schema công khai 1, ledger 2, một lượt repair dùng chung và các trần giữ nguyên.
 
-**Đo và đánh đổi.** Lượt physical v28 mới: 534,47 giây, 11 call thực tế, 0 cache;
-11/12 nội dung, 7/7 ý quan trọng nhưng còn
-5 khẳng định quan trọng thiếu nguồn. Chưa đạt; đây là nguyên nhân siết kiểm nguồn và chia
-nhỏ danh sách để kiểm song song. Nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/`
-`eval-final-physical/results/long.json`, `physical-score-a/assessment.json`,
-`physical-score-b/assessment.json`. V29 đã chạy lại nhưng chưa đạt; v30 cần lượt đo thực tế và chấm nguồn mới trước nghiệm thu.
+**Đo và đánh đổi.** Lượt v30 toàn chuỗi mới: 514.831632 giây, 13 call thực tế, 0 cache;
+11/12 nội dung, 7/7 ý quan trọng, 4 khẳng định quan trọng thiếu nguồn, 0 ID sai trong 140 mục.
+Chưa đạt. Nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/`
+`eval-v30-final-physical/results/long.json`, `v30-score-a/report.md`, `v30-score-b/report.md`.
+V31 sửa ngữ cảnh cục bộ và mức xấp xỉ; phát lại đúng request giữ các quyết định, đánh dấu số lượng,
+thêm nguồn thiếu và chuyển mục chưa gắn được người sang trích đoạn cần kiểm tra. Đây chỉ là
+kiểm chứng kỹ thuật, chưa thay lượt đo/chấm thực tế mới. Nguồn: `v31-root-replay.log` và
+`v31-binding/report.md` trong cùng hồ sơ cục bộ.
 
 Thêm một lượt kiểm ngữ nghĩa giúp sửa việc gắn tên/ngữ cảnh mà kiểm từ vựng không xác định
 được; chi phí tăng so với bản final tự do. Không dùng tóm tắt mạnh hơn vì làm mất sự kiện.

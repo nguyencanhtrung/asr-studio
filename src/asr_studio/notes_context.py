@@ -25,6 +25,19 @@ Strict mode also links two structured anchors in a separate, wider window of at 
   roll call opening through its stated result) when the block contains that name. The heard
   vote is never interpreted; a new agenda item, a block without the name or two different
   blocks for one item leave the item unresolved.
+
+Strict mode also adds two short binding links, ahead of any other structured link:
+
+- a cited run whose last segment ends mid-sentence links the continuation, at most
+  `MAX_FORWARD_SEGMENTS` segments, through the first one that states item words the pool lacks;
+- a named person absent from the cited run and its window links the nearest floor handoff (a
+  segment ending in a short capitalised address, "Councilmember Lee.") at most
+  `MAX_FORWARD_SEGMENTS` segments before the run. The handoff is provenance only: its words are
+  never matched to the name.
+
+`unverified_vote_names` is a check, not a link: it lists each person an item says is voting (or
+will vote) who is not recognised for any cited first-person vote statement by an exact handoff
+before that turn or an exact "Thank you, <name>" after it. A thank-you elsewhere is no proof.
 """
 
 from __future__ import annotations
@@ -78,6 +91,15 @@ _NOT_A_VOTER = {
     *_ROLES, "council", "committee", "board", "commission", "member", "members", "final",
     "unanimous", "majority", "public", "roll", "the", "no", "yes",
 }  # fmt: skip
+# A vote intention attributed to a named person, and a first-person vote statement in the source.
+_INTENT_VOTER = re.compile(
+    r"\b([A-Z][a-z][\w'-]*)\s+(?:(?:is|was)\s+)?(?:voting|(?:will|would|plans?\s+to|intends?\s+to)\s+vote)\b"
+)
+_FIRST_PERSON_VOTE = re.compile(
+    r"\bI(?:\s+will|\s+am|\s+plan\s+to|\s+intend\s+to|['’]ll|['’]m)?\s+(?:be\s+)?vot(?:e|ing)\b"
+)
+_ACK = re.compile(r"^\s*(?:thank\s+you|thanks)\b[^.!?]*", re.IGNORECASE)
+_SENTENCE_END = re.compile(r"[.!?…][\"'”’)]*\s*$")
 _ATTRIBUTION_VERBS = (
     "said|says|stated|asked|requested|urged|noted|proposed|argued|supported|opposed|described|"
     "raised|expressed|recommended|thanked|emphasized|questioned|suggested|called|warned"
@@ -239,6 +261,134 @@ def _vote_block_after(name: str, cited: list[int], segments: list[dict[str, Any]
     return None
 
 
+def _vocative(text: str) -> str | None:
+    """The last sentence when it is only a short capitalised address: "Councilmember Lee."."""
+    last = re.split(r"(?<=[.!?])\s+", text.strip())[-1].rstrip(".!?")
+    words = last.split()
+    return last if 2 <= len(words) <= 4 and all(word[0].isupper() for word in words) else None
+
+
+def _handoff_before(start: int, segments: list[dict[str, Any]], limit: int) -> int | None:
+    """Nearest floor handoff before `start`; an acknowledgment or a new agenda item stops it."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - limit, 0) - 1, -1):
+        text = segments[back]["text"]
+        if start_time - float(segments[back]["start_seconds"]) > MAX_BACK_SECONDS:
+            return None
+        if _vocative(text) is not None:
+            return back
+        if _ACK.match(text) or _TOPIC_BREAK.search(text):
+            return None
+    return None
+
+
+def _ack_after(end: int, segments: list[dict[str, Any]]) -> int | None:
+    """The first "Thank you, ..." acknowledgment shortly after `end`."""
+    end_time = float(segments[end]["end_seconds"])
+    for ahead in range(end + 1, min(end + MAX_FORWARD_SEGMENTS, len(segments) - 1) + 1):
+        text = segments[ahead]["text"]
+        if _TOPIC_BREAK.search(text) or float(segments[ahead]["start_seconds"]) - end_time > (
+            MAX_FORWARD_SECONDS
+        ):
+            return None
+        if _ACK.match(text):
+            return ahead
+    return None
+
+
+def _recognized(name: str, index: int, segments: list[dict[str, Any]], cited: set[int]) -> bool:
+    """A cited exact handoff to `name` before statement `index`, or a cited acknowledgment after.
+
+    The turn bounds are found in the full source, but the witness itself must be in the item's
+    own pool; an uncited recognition leaves the name unverified.
+    """
+    back = _handoff_before(index, segments, MAX_BACK_SEGMENTS)
+    if back in cited and _match("word", name, _vocative(segments[back]["text"]) or ""):
+        return True
+    ahead = _ack_after(index, segments)
+    ack = _ACK.match(segments[ahead]["text"]) if ahead in cited else None
+    return ack is not None and _match("word", name, ack.group(0)) is not None
+
+
+def _reports_vote(name: str, text: str) -> bool:
+    """`name` is the grammatical voter: "Lee votes no", "Lee will be voting yes"."""
+    aux = r"(?:(?:is|was|will|would|has|had)\s+)?(?:be\s+)?"
+    voter = rf"\b{re.escape(name)}\s+{aux}vot(?:e|es|ed|ing)\b"
+    return re.search(voter, text) is not None
+
+
+def unverified_vote_names(
+    item: dict[str, Any], segments: list[dict[str, Any]], position: dict[str, int]
+) -> list[str]:
+    """Named vote intentions with first-person cited statements but no cited recognition."""
+    names = [
+        name
+        for name in dict.fromkeys(_INTENT_VOTER.findall(item["text"]))
+        if name.lower() not in _NOT_A_VOTER
+    ]
+    cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
+    statements = [index for index in cited if _FIRST_PERSON_VOTE.search(segments[index]["text"])]
+    if not names or not statements:
+        return []  # no first-person statement to bind: out of scope
+    return [
+        name
+        for name in names
+        if not any(_reports_vote(name, segments[index]["text"]) for index in cited)
+        and not any(_recognized(name, index, segments, set(cited)) for index in statements)
+    ]
+
+
+_FUNCTION_WORDS = frozenset(
+    """
+    about after again against because before being below between could during every other
+    their there these those through under until where which while would should
+    """.split()  # noqa: SIM905 - a readable word list
+)
+
+
+def _words(text: str) -> set[str]:
+    """Content words (five or more letters, no function words), plural "s" dropped."""
+    words = {word.lower() for word in re.findall(r"[A-Za-z]{5,}", text)}
+    return {word.removesuffix("s") for word in words - _FUNCTION_WORDS}
+
+
+def _binding_links(
+    item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]]
+) -> list[set[int]]:
+    """Strict binding links: the continuation of a cut sentence, and a named turn's handoff."""
+    links: list[set[int]] = []
+    missing = _words(item["text"]) - _words(" ".join(segments[i]["text"] for i in cited))
+    names = [*_NAME_AFTER_HONORIFIC.findall(item["text"])]
+    if (match := _ATTRIBUTED_SUBJECT.match(item["text"])) and match.group(1).lower() not in _ROLES:
+        names.append(match.group(1))
+    for run in _runs(cited):
+        end, last = run[-1], run[-1]
+        while (
+            missing
+            and not _SENTENCE_END.search(segments[last]["text"])
+            and last + 1 < len(segments)
+            and last + 1 - end <= MAX_FORWARD_SEGMENTS
+            and float(segments[last + 1]["start_seconds"]) - float(segments[end]["end_seconds"])
+            <= MAX_FORWARD_SECONDS
+            and not _TOPIC_BREAK.search(segments[last + 1]["text"])
+        ):
+            last += 1
+            if _words(segments[last]["text"]) & missing:
+                links.append(set(range(end + 1, last + 1)))
+                break
+        run_text = " ".join(segments[i]["text"] for i in run)
+        for name in dict.fromkeys(names):
+            if (
+                _match("word", name, run_text)
+                or _antecedent("word", name, segments, run[0]) is not None
+            ):
+                continue
+            back = _handoff_before(run[0], segments, MAX_FORWARD_SEGMENTS)
+            if back is not None:
+                links.append(set(range(back, run[0])))
+    return links
+
+
 def _context_for_item(
     item: dict[str, Any],
     segments: list[dict[str, Any]],
@@ -250,7 +400,8 @@ def _context_for_item(
     cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
     anchors = _anchors(item, strict=strict)
     added: set[int] = set()
-    structured: list[set[int]] = []
+    # Binding evidence first: complete links are admitted in order while they fit.
+    structured: list[set[int]] = _binding_links(item, cited, segments) if strict else []
     if (
         strict
         and cited

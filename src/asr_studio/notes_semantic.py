@@ -24,6 +24,7 @@ from typing import Any
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_audit import _source_excerpt_text
+from asr_studio.notes_context import unverified_vote_names
 
 AUDIT_VERSION = 1
 MAX_SEMANTIC_OUTPUT_BYTES = 64_000  # one part's response and the merged patch alike
@@ -385,6 +386,83 @@ def mark_unclear_quantities(
     return text, len(spans)
 
 
+# ----- approximate scale wording (quantity marker) --------------------------------------------
+
+_SCALES = {"hundred": 100, "thousand": 1_000, "million": 1_000_000, "billion": 10**9, "dozen": 12}
+_VAGUE_BEFORE = re.compile(
+    r"(?i:\b(?:a\s+few|few|several|a\s+couple(?:\s+of)?|couple\s+of|some|many|"
+    r"about|around|roughly|approximately|nearly|almost|over|under|up\s+to|more\s+than|"
+    r"less\s+than|fewer\s+than))\s*$"
+)
+_COUNT_WORD = r"(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)"
+
+
+def _scale_uses(text: str, scale: str) -> list[tuple[re.Match[str], bool, str]]:
+    """(match, vague, next word) for each singular `scale`, a number word before it included."""
+    uses = []
+    pattern = rf"(?i:(?:\b{_COUNT_WORD}\s+)?\b{scale}\b)(?=\s+(?:of\s+)?([\w'’-]+))"
+    for match in re.finditer(pattern, text):
+        vague = bool(_VAGUE_BEFORE.search(text[: match.start()]))
+        uses.append((match, vague, match.group(1).casefold()))
+    return uses
+
+
+def _scale_amount(match: re.Match[str], value: int) -> int:
+    coefficients = {"a": 1, "an": 1, "ten": 10, **_SMALL_NUMBERS}
+    words = match.group(0).casefold().split()
+    coefficient = words[0] if len(words) > 1 else "one"
+    return value * int(coefficients.get(coefficient, coefficient))
+
+
+def _exact_scale_count(
+    cited_text: str, unit: str, number: int, exact_counts: set[tuple[str, int]]
+) -> bool:
+    if (unit, number) in exact_counts:
+        return True
+    pattern = rf"{_number(number)}(?=\s+{re.escape(unit)}\b)"
+    return any(
+        not _VAGUE_BEFORE.search(cited_text[: m.start()])
+        for m in re.finditer(pattern, cited_text, re.IGNORECASE)
+    )
+
+
+def mark_approximate_quantities(
+    text: str, cited_text: str, output_language: str = "en"
+) -> tuple[str, int]:
+    """Mark a definite scale count ("hundred feet") that the cited text states only vaguely.
+
+    A unit qualifies when the cited text says it only with an approximation ("a few hundred
+    feet") and never as a plain count; the item's unqualified count of that unit (word or digits)
+    becomes the fixed quantity marker.
+    """
+    marker = _QUANTITY_UNCLEAR[nd.validate_output_language(output_language)]
+    spans: set[tuple[int, int]] = set()
+    for scale, value in _SCALES.items():
+        source = _scale_uses(cited_text, scale)
+        vague_units = {unit for _m, vague, unit in source if vague}
+        exact_counts = {(unit, _scale_amount(m, value)) for m, vague, unit in source if not vague}
+        for unit in vague_units:
+            for match, vague, item_unit in _scale_uses(text, scale):
+                if (
+                    not vague
+                    and item_unit == unit
+                    and not _exact_scale_count(
+                        cited_text, unit, _scale_amount(match, value), exact_counts
+                    )
+                ):
+                    spans.add(match.span())
+            if not _exact_scale_count(cited_text, unit, value, exact_counts):
+                plain = rf"{_number(value)}(?=\s+{re.escape(unit)}\b)"
+                spans.update(
+                    m.span()
+                    for m in re.finditer(plain, text, re.IGNORECASE)
+                    if not _VAGUE_BEFORE.search(text[: m.start()])
+                )
+    for start, end in sorted(spans, reverse=True):
+        text = text[:start] + marker + text[end:]
+    return text, len(spans)
+
+
 @dataclass(frozen=True, slots=True)
 class _Item:
     ref: str
@@ -719,8 +797,24 @@ class SemanticAudit:
             counts["added_ids"] += len(added)
             counts["cleared_owner"] += clear_owner
             counts["cleared_deadline"] += clear_deadline
+        # Deterministic guards on the patched text and its own pooled citations: approximate
+        # scale wording keeps a fixed marker, and a named vote intention with no local
+        # recognition of its first-person statement is quarantined like an unresolved ref.
+        segments = self.source["segments"]
+        position = {segment["id"]: index for index, segment in enumerate(segments)}
+        forced: set[str] = set()
+        for item in self.items:
+            published = document[item.section][item.position]
+            if item.ref in unresolved or any(x in published["text"] for x in _EXCERPT_LABELS):
+                continue
+            published["text"], marks = mark_approximate_quantities(
+                published["text"], self._cited(published), output_language
+            )
+            counts["quantity_unclear"] += marks
+            if unverified_vote_names(published, segments, position):
+                forced.add(item.ref)
         # Remove by original position after every change, so no index shifts under another.
-        quarantined = [item for item in self.items if item.ref in unresolved]
+        quarantined = [item for item in self.items if item.ref in unresolved or item.ref in forced]
         removed = {(item.section, item.position) for item in quarantined}
         for section in _SECTION_NAMES:
             document[section] = [
