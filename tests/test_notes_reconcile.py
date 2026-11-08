@@ -675,3 +675,146 @@ def test_long_antigravity_keeps_its_previous_policy():
     )
     assert "reconcile" not in [c["stage"] for c in calls]
     assert coverage[0]["source_audit"] == {"status": "skipped", "reason": "quality_not_qualified"}
+
+
+# --- compat: redundant merge echo and optional superseded target ---
+
+
+def _evidence(sid, quote):
+    return [{"source_id": sid, "quote": quote}]
+
+
+def test_merge_may_echo_exactly_its_original_source_ids():
+    ledger = _ledger()
+    echo = reconcile_disposition("m0", "merge", target="f0", source_ids=["s3"])
+    plain = ledger.apply(_keep_all(ledger, m0=reconcile_disposition("m0", "merge", target="f0")))
+    echoed = ledger.apply(_keep_all(ledger, m0=echo))
+    assert echoed.document == plain.document
+    assert echoed.document["decisions"][0]["source_ids"] == ["s1", "s3"]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"source_ids": ["s1"]}, id="changed-existing-id"),
+        pytest.param({"source_ids": ["s2"]}, id="new-citation"),
+        pytest.param({"source_ids": ["s3", "s1"]}, id="superset"),
+        pytest.param({"source_ids": ["s3", "s3"]}, id="duplicate-id"),
+        pytest.param({"source_ids": ["zz"]}, id="unknown-id"),
+        pytest.param(
+            {"source_ids": ["s3"], "evidence": _evidence("s3", "Budget review")},
+            id="echo-with-evidence",
+        ),
+        pytest.param({"source_ids": ["s3"], "text": "New prose."}, id="echo-with-text"),
+        pytest.param({"source_ids": ["s3"], "owner": "Avery"}, id="echo-with-metadata"),
+        pytest.param({"evidence": _evidence("s3", "Budget review")}, id="evidence-only"),
+    ],
+)
+def test_merge_echo_rejects_anything_but_the_exact_original_ids(fields):
+    ledger = _ledger()
+    merge = reconcile_disposition("m0", "merge", target="f0", **fields)
+    with pytest.raises(nd.NotesDocumentError):
+        ledger.apply(_keep_all(ledger, m0=merge))
+
+
+def test_merge_echo_of_a_subset_of_several_original_ids_is_rejected():
+    map_doc = _empty()
+    map_doc["key_topics"] = [{"text": "Pilot and budget.", "source_ids": ["s1", "s3"]}]
+    ledger = ReconcileLedger.build(SOURCE, _final(), [map_doc])
+    ref = ledger.refs[-1]
+
+    def run(ids):
+        merge = reconcile_disposition(ref, "merge", target="f0", source_ids=ids)
+        return ledger.apply(_keep_all(ledger, **{ref: merge}))
+
+    assert run(["s3", "s1"]).document["decisions"][0]["source_ids"] == ["s1", "s3"]
+    with pytest.raises(nd.NotesDocumentError):
+        run(["s1"])
+
+
+@pytest.mark.parametrize("target", ["f0", "f1"])
+def test_superseded_removal_may_name_a_kept_target_without_citation_union(target):
+    ledger = _ledger()
+    before = ledger.apply(
+        _keep_all(ledger, m1=reconcile_disposition("m1", "remove", reason="superseded"))
+    )
+    named = reconcile_disposition("m1", "remove", reason="superseded", target=target)
+    after = ledger.apply(_keep_all(ledger, m1=named))
+    assert after.document == before.document
+
+
+def test_superseded_target_may_be_an_updated_item():
+    ledger = _ledger()
+    update = _update(
+        "f0", "Pilot ships in 3 regions now.", ["s1"], [("s1", "ship the pilot in 3 regions")]
+    )
+    result = ledger.apply(
+        _keep_all(
+            ledger,
+            f0=update,
+            m1=reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
+        )
+    )
+    assert result.document["decisions"][0]["text"] == "Pilot ships in 3 regions now."
+
+
+def test_superseded_removal_without_a_target_stays_allowed():
+    ledger = _ledger()
+    ledger.apply(_keep_all(ledger, m1=reconcile_disposition("m1", "remove", reason="superseded")))
+
+
+@pytest.mark.parametrize(
+    ("m1", "f0"),
+    [
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="superseded", target="m1"), None, id="self"
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="superseded", target="zz"),
+            None,
+            id="unknown",
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
+            reconcile_disposition("f0", "remove", reason="unsupported"),
+            id="removed-target",
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
+            reconcile_disposition("f0", "merge", target="f1"),
+            id="merged-target",
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
+            reconcile_disposition("f0", "remove", reason="superseded", target="m1"),
+            id="chain-cycle",
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="nonmaterial", target="f0"),
+            None,
+            id="nonmaterial-with-target",
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="unsupported", target="f0"),
+            None,
+            id="unsupported-with-target",
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="duplicate"),
+            None,
+            id="duplicate-no-target",
+        ),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="superseded", target="f0", text="x"),
+            None,
+            id="superseded-with-text",
+        ),
+    ],
+)
+def test_superseded_target_is_validated_like_merge_and_duplicate(m1, f0):
+    ledger = _ledger()
+    overrides = {"m1": m1}
+    if f0 is not None:
+        overrides["f0"] = f0
+    with pytest.raises(nd.NotesDocumentError):
+        ledger.apply(_keep_all(ledger, **overrides))

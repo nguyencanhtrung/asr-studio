@@ -308,6 +308,16 @@ class ReconcileLedger:
             action = disposition["action"]
             counts["final" if entry.ref.startswith("f") else "map"][action] += 1
             self._check_reason_and_target(disposition, seen)
+            if action == "merge":
+                ids, original = disposition["source_ids"], entry.item["source_ids"]
+                # Redundant echo of exactly the original unique IDs, no evidence: same as [].
+                if (
+                    ids
+                    and not disposition["evidence"]
+                    and len(ids) == len(set(ids))
+                    and set(ids) == set(original)
+                ):
+                    disposition = {**disposition, "source_ids": []}
             if action in {"merge", "remove"}:
                 self._require_empty(disposition, text=True, citations=True, action_fields=True)
                 continue
@@ -442,7 +452,7 @@ class ReconcileLedger:
         if action == "remove":
             if reason == _NO_REASON:
                 raise _error("A removal needs an explicit reason.")
-            needs_target = reason == "duplicate"
+            needs_target = reason == "duplicate" or (reason == "superseded" and target is not None)
         else:
             if reason != _NO_REASON:
                 raise _error("Only a removal may carry a removal reason.")
