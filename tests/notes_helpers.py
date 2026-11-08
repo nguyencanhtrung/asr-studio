@@ -278,7 +278,30 @@ def reconcile_keep_patch(prompt: str) -> str:
     return json.dumps({"ledger_version": 2, "dispositions": dispositions, "additions": []})
 
 
-SEMANTIC_KEEP_PATCH = json.dumps({"audit_version": 1, "changes": [], "unresolved_refs": []})
+def semantic_patch(refs, changes=(), unresolved=()) -> str:
+    """An audit-v2 patch deciding every owned ref: false exactly for those changed or unresolved."""
+    changes, unresolved = list(changes), list(unresolved)
+    listed = {c.get("ref") for c in changes if isinstance(c, dict)} | set(unresolved)
+    return json.dumps(
+        {
+            "audit_version": 2,
+            "verified": {ref: ref not in listed for ref in refs},
+            "changes": changes,
+            "unresolved_refs": unresolved,
+        }
+    )
+
+
+def semantic_refs(prompt_or_audit) -> list[str]:
+    """The refs one audit prompt (its payload) or audit view owns, in order."""
+    if isinstance(prompt_or_audit, str):
+        return [item["ref"] for item in semantic_payload(prompt_or_audit)["items"]]
+    return [item.ref for item in prompt_or_audit.items]
+
+
+def semantic_keep_patch(prompt_or_audit) -> str:
+    """Verify every owned ref unchanged."""
+    return semantic_patch(semantic_refs(prompt_or_audit))
 
 
 def semantic_payload(prompt: str) -> dict:

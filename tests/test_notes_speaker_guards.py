@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
+from notes_helpers import semantic_keep_patch
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_context import ATTRIBUTION_FORMS, unverified_speakers
@@ -17,7 +16,6 @@ from asr_studio.notes_semantic import (
 )
 
 NEEDS_REVIEW = "Needs review: an unverified note was removed."
-KEEP = json.dumps({"audit_version": 1, "changes": [], "unresolved_refs": []})
 COMMON = frozenset({"councilmember", "council", "the"})
 
 
@@ -234,7 +232,8 @@ def test_the_audit_anonymizes_quarantines_and_keeps_supported_items():
         {"text": "Designations finalized by year end", "source_ids": [_sid(5)]},
     ]
     document = nd.validate_document(document, source)
-    published, counts = SemanticAudit(source, document).parse(KEEP)
+    audit = SemanticAudit(source, document)
+    published, counts = audit.parse(semantic_keep_patch(audit))
     assert [item["text"] for item in published["key_topics"]] == [
         "States intention to vote yes",
         "Councilmember Tamm urges a depot vote",

@@ -1,21 +1,25 @@
 """One bounded source-binding audit for registered-Gemini long notes, as sparse immutable refs.
 
-The pass may split the final items into at most two balanced, disjoint partitions; each one
-reads the full source but sees and may patch only its own items under their global refs. The
-validated part patches are merged and applied once, so every item is audited exactly once.
+The pass may split the final items into at most four balanced, disjoint partitions; each one
+reads the full source but sees and may patch only its own items under their global refs. Every
+part returns an explicit Boolean decision for each of its refs (``verified``), so an omitted
+item fails the part. The validated part patches are merged and applied once, so every item is
+audited exactly once. The verified map proves decision coverage only, never semantic truth.
 
 The model never writes text. Each final item has an original text ref and, at most, a few
 anonymous variants that code derived: exact suffixes of the original that drop only a leading
-proper-name attribution or leading proper qualifiers. A sparse patch selects a text ref, adds
-source IDs (a union onto the cited IDs) and may clear an action owner or deadline. Unlisted
-items stay unchanged; no item can be dropped, duplicated, moved or invented, and any unresolved
-ref is quarantined: its unverified wording is removed and its cited source segments are
-published verbatim as one needs-review confirmation item.
+proper-name attribution or leading proper qualifiers, and a bounded variant that replaces one
+trailing secondary responsibility phrase ("developed by X") with a fixed marker. A sparse patch
+selects a text ref, adds source IDs (a union onto the cited IDs) and may clear an action owner
+or deadline. Unlisted items stay unchanged; no item can be dropped, duplicated, moved or
+invented, and any unresolved ref is quarantined: its unverified wording is removed and its cited
+source segments are published verbatim as one needs-review confirmation item.
 """
 
 from __future__ import annotations
 
 import copy
+import itertools
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -26,11 +30,12 @@ from asr_studio import notes_document as nd
 from asr_studio.notes_audit import _source_excerpt_text
 from asr_studio.notes_context import ATTRIBUTION_FORMS, unverified_speakers, unverified_vote_names
 
-AUDIT_VERSION = 1
+AUDIT_VERSION = 2
 MAX_SEMANTIC_OUTPUT_BYTES = 64_000  # one part's response and the merged patch alike
-MAX_AUDIT_PARTS = 2
+MAX_AUDIT_PARTS = 4
 MAX_LEADING_NAME_TOKENS = 4
 MAX_VARIANTS_PER_ITEM = 4
+MAX_RESPONSIBILITY_OPTIONS = 2  # '.p' options per item, after the capped existing ones
 _NEEDS_REVIEW = {
     "en": "Needs review: an unverified note was removed.",
     "vi": "Cần xem lại: đã bỏ một ghi chú chưa được kiểm chứng.",
@@ -519,6 +524,100 @@ def mark_approximate_quantities(
     return text, len(spans)
 
 
+# ----- trailing secondary responsibility (responsibility marker) ------------------------------
+
+_RESPONSIBILITY_UNCLEAR = {"en": "[responsibility unclear]", "vi": "[vai trò chưa rõ]"}
+_RESPONSIBILITY_RE = re.compile(
+    r"(?<!\w)(?:(?:developed|built|funded|operated|managed|delivered|supported|sponsored|owned|led)"
+    r"(?:\s+by)?|(?:phát\s+triển|xây\s+dựng|tài\s+trợ|vận\s+hành|quản\s+lý|hỗ\s+trợ|bảo\s+trợ|"
+    r"sở\s+hữu|dẫn\s+dắt)\s+bởi)(?=\s)",
+    re.IGNORECASE | re.UNICODE,
+)
+_ACTOR_JOINS = frozenset({"and", "&", "of", "the", "for", "và", "của"})
+# Right before the verb these make it the main predicate, or negate or condition it.
+_PREDICATE_LEADS = frozenset(
+    """
+    is are was were be been being am will would shall should may might must can could has have
+    had to not never no if unless whether được bị sẽ đã đang không chưa nếu
+    """.split()  # noqa: SIM905 - a readable word list
+)
+_QUANTITY_WORDS = frozenset(
+    """
+    zero one two three four five six seven eight nine ten eleven twelve twenty thirty forty fifty
+    sixty seventy eighty ninety hundred thousand million billion dozen
+    """.split()  # noqa: SIM905 - a readable word list
+)
+# A vote, an approval or a record is a primary fact: its responsibility is never masked.
+_PRIMARY_RECORD_RE = re.compile(
+    r"(?<!\w)(?:vot(?:e|es|ed|ing)|approv\w*|adopt\w*|pass(?:es|ed)?|ordinances?|resolutions?|"
+    r"bills?|motions?|biểu\s+quyết|phê\s+duyệt|thông\s+qua|nghị\s+quyết|dự\s+luật|sắc\s+lệnh)(?!\w)",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _actor_end(text: str, start: int, common: frozenset[str]) -> int | None:
+    """The end of a proper actor phrase starting at ``start`` (trailing punctuation kept out)."""
+    end = None
+    for count, token in enumerate(_TOKEN_RE.finditer(text, start)):
+        raw = token.group()
+        if count >= 12:
+            return None  # too long to be one bounded actor phrase
+        # The first actor word is a proper name; later capitalized words continue its name even
+        # when the source also writes them lower-case ("Harbor Housing Services").
+        if _proper(raw, common if end is None else frozenset()):
+            end = token.start() + len(raw.rstrip(",.;:!?)]”’\"'"))
+            if raw[-1:] in ".;:!?)":
+                break
+        elif (
+            any(c.isdigit() for c in raw)
+            and end is not None
+            and not text[end : token.start()].strip()
+        ):
+            return None  # "District 7": a numbered actor is never partly masked
+        elif _word(raw) not in _ACTOR_JOINS or raw[-1:] in ",.;:":
+            break
+    return end
+
+
+def responsibility_variant(
+    text: str, common: frozenset[str] = frozenset(), output_language: str = "en"
+) -> str | None:
+    """The text with one trailing secondary responsibility phrase replaced by a fixed marker.
+
+    Offered only for exactly one "<verb> [by] <Proper Actor>" phrase that follows a
+    quantitative core (a number in the same sentence before it) and is not the main predicate,
+    negated or conditioned. The phrase holds only the verb, "by" and the proper actor, so every
+    digit, date, negation, modality and other word outside it stays byte-for-byte. A quote, a
+    vote, an approval or a record item gets no variant.
+    """
+    marker = _RESPONSIBILITY_UNCLEAR[nd.validate_output_language(output_language)]
+    if any(quote in text for quote in '"“”') or _PRIMARY_RECORD_RE.search(text):
+        return None
+    spans: list[tuple[int, int]] = []
+    for match in _RESPONSIBILITY_RE.finditer(text):
+        end = _actor_end(text, match.end(), common)
+        if end is None:
+            continue
+        sentence = re.split(r"[.;!?](?:\s|$)", text[: match.start()])[-1]
+        before = _TOKEN_RE.findall(sentence)
+        if (
+            not before
+            or _word(before[-1]) in _PREDICATE_LEADS
+            or before[-1].casefold().endswith("n't")
+            or not any(
+                any(c.isdigit() for c in token) or _word(token) in _QUANTITY_WORDS
+                for token in before
+            )
+            or _protected(text[match.start() : end])  # defense in depth: never true today
+        ):
+            continue
+        spans.append((match.start(), end))
+    if len(spans) != 1:
+        return None  # none, or ambiguous: which actor's role is unclear is not decidable here
+    start, end = spans[0]
+    return text[:start] + marker + text[end:]
+
+
 # ----- confirmation-item evidence guards (official roles, modified record IDs) ----------------
 
 # Canonical official roles and their literal cues; "chủ tịch" reads as president or chair.
@@ -743,9 +842,9 @@ class SemanticAudit:
                     )
                     if combined is not None:
                         texts.append((f"{ref}.a{n}r", combined))
-                items.append(
-                    _Item(ref, section, position, tuple(texts[: 1 + MAX_VARIANTS_PER_ITEM]))
-                )
+                texts = texts[: 1 + MAX_VARIANTS_PER_ITEM]
+                texts += self._responsibility_texts(texts)  # a quoted excerpt gets none
+                items.append(_Item(ref, section, position, tuple(texts)))
         if self.quantity_marks:  # markers are nonfactual, but the bounded document must hold
             nd.validate_document(
                 self.document,
@@ -762,21 +861,41 @@ class SemanticAudit:
             tuple(segment["id"] for segment in self.source["segments"])
         )
 
+    def _responsibility_texts(self, texts: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """'.p' over the original, '.pr' over '.r', '.aNp'/'.aNpr' over anonymous ones; capped."""
+        extra: list[tuple[str, str]] = []
+        for text_ref, text in texts:
+            base, suffix = text_ref.split(".")
+            variant = responsibility_variant(text, self._common, self.output_language)
+            if variant is None or variant in {t for _r, t in [*texts, *extra]}:
+                continue
+            name = (
+                "p"
+                if suffix == "o"
+                else suffix[:-1] + "pr"
+                if suffix.endswith("r")
+                else suffix + "p"
+            )
+            extra.append((f"{base}.{name}", variant))
+        return extra[:MAX_RESPONSIBILITY_OPTIONS]
+
     def _cited(self, item: Mapping[str, Any]) -> str:
         return " ".join(self._segment_text.get(i, "") for i in item.get("source_ids", []))
 
     # ----- partitions -------------------------------------------------------------------------
 
     def partitions(self) -> tuple[SemanticAudit, ...]:
-        """At most two balanced, contiguous, disjoint item views; fewer than two items: itself.
+        """min(4, N) balanced, contiguous, disjoint item views; fewer than two items: itself.
 
         A view shares this audit's full source and document and keeps the global refs; its
         schema, prompt and parse admit only its own refs and text refs.
         """
-        if len(self.items) < MAX_AUDIT_PARTS:
+        count = min(MAX_AUDIT_PARTS, len(self.items))
+        if count < 2:
             return (self,)
-        half = (len(self.items) + 1) // 2
-        return (self._view(self.items[:half]), self._view(self.items[half:]))
+        size, extra = divmod(len(self.items), count)
+        bounds = [k * size + min(k, extra) for k in range(count + 1)]  # larger parts first
+        return tuple(self._view(self.items[a:b]) for a, b in itertools.pairwise(bounds))
 
     def _view(self, items: tuple[_Item, ...]) -> SemanticAudit:
         view = copy.copy(self)  # parse deep-copies the shared document; nothing mutates it
@@ -808,14 +927,26 @@ class SemanticAudit:
             raise _error("The semantic audit parts do not cover every item exactly once.")
         changes: list[Any] = []
         unresolved: list[Any] = []
+        verified: dict[str, Any] = {}
         for (_view, patch), scope in zip(parts, scopes, strict=True):
             refs = [c.get("ref") for c in patch["changes"] if isinstance(c, dict)]
-            if not {*refs, *patch["unresolved_refs"]} <= scope:
+            decided = patch.get("verified")
+            if (
+                not {*refs, *patch["unresolved_refs"]} <= scope
+                or not isinstance(decided, dict)
+                or set(decided) != scope
+            ):
                 raise _error("The semantic audit names a ref outside its partition.")
             changes += patch["changes"]
             unresolved += patch["unresolved_refs"]
+            verified.update(decided)
         merged = json.dumps(
-            {"audit_version": AUDIT_VERSION, "changes": changes, "unresolved_refs": unresolved},
+            {
+                "audit_version": AUDIT_VERSION,
+                "verified": verified,
+                "changes": changes,
+                "unresolved_refs": unresolved,
+            },
             ensure_ascii=False,
             separators=(",", ":"),
         )
@@ -852,6 +983,7 @@ class SemanticAudit:
         return obj(
             {
                 "audit_version": {"type": "integer", "enum": [AUDIT_VERSION]},
+                "verified": obj({ref: {"type": "boolean"} for ref in refs}),
                 "changes": {"type": "array", "maxItems": len(refs), "items": change},
                 "unresolved_refs": {
                     "type": "array",
@@ -940,6 +1072,7 @@ class SemanticAudit:
             raise _error("The semantic audit response must be valid JSON.", "json") from None
         if not isinstance(patch, dict) or set(patch) != {
             "audit_version",
+            "verified",
             "changes",
             "unresolved_refs",
         }:
@@ -955,6 +1088,13 @@ class SemanticAudit:
             or any(isinstance(c, dict) and c.get("ref") in unresolved for c in changes)
         ):
             raise _error("The semantic audit names an unknown, repeated or conflicting ref.")
+        verified = patch["verified"]
+        if (
+            not isinstance(verified, dict)
+            or set(verified) != set(self._by_ref)
+            or any(type(value) is not bool for value in verified.values())
+        ):
+            raise _error("The semantic audit must decide every item exactly once.")
 
         document = copy.deepcopy(self.document)
         scope = set(self._source_ids)
@@ -970,9 +1110,15 @@ class SemanticAudit:
                 "quarantined",
                 "reference_unclear",
                 "quantity_unclear",
+                "responsibility_unclear",
+                "reviewed",
+                "model_verified",
             ),
             0,
         )
+        # Decision coverage, not a quality grade: how many items the model explicitly kept.
+        counts["reviewed"] = len(self.items)
+        counts["model_verified"] = sum(verified.values())
         counts["quantity_unclear"] = self.quantity_marks  # applied once, before any text ref
         for change in changes:
             if not isinstance(change, dict) or set(change) != {
@@ -1015,10 +1161,15 @@ class SemanticAudit:
             suffix = text_ref.removeprefix(f"{ref}.")
             counts["anonymized"] += suffix.startswith("a")
             counts["reference_unclear"] += suffix.endswith("r")
+            counts["responsibility_unclear"] += "p" in suffix
             counts["cited_items"] += bool(added)
             counts["added_ids"] += len(added)
             counts["cleared_owner"] += clear_owner
             counts["cleared_deadline"] += clear_deadline
+        listed = seen | set(unresolved)
+        if any(verified[ref] == (ref in listed) for ref in self._by_ref):
+            # true means kept unchanged and verified; false means exactly one change or unresolved
+            raise _error("The semantic audit decision contradicts its patch.")
         # Deterministic guards on the patched text and its own pooled citations: approximate
         # scale wording keeps a fixed marker; a named vote intention with no local recognition
         # of its first-person statement is quarantined like an unresolved ref; an attributed
@@ -1148,7 +1299,20 @@ _INSTRUCTIONS = {
         "material unsupported claim, list its ref in unresolved_refs: code then removes that "
         "item's wording and publishes its cited source segments verbatim as a needs-review "
         "confirmation item, so a fixable item should be fixed instead. Never list a ref in both "
-        "changes and unresolved_refs. Use only refs, text_refs and source IDs from the input.\n"
+        "changes and unresolved_refs. Use only refs, text_refs and source IDs from the input. "
+        "'.p' (and '.pr', '.aNp', '.aNpr') replaces only one trailing secondary responsibility "
+        "phrase such as 'developed by' an organization with a fixed responsibility-unclear marker; "
+        "when the main quantity or fact is supported but that actor's role is not, choose it "
+        "instead of unresolved_refs. Check each atomic actor-role-object binding separately: a "
+        "list of partners does not give each partner the same function, and roles stated for "
+        "different projects, categories or examples cannot be merged. A distant introduction, "
+        "role continuity, a roster or co-occurrence never identifies a speaker; a "
+        "self-introduction counts only within the stated turn, otherwise only explicit local "
+        "recognition or a direct report does. Prefer a safe variant or a citation fix over "
+        "unresolved_refs for a supported main fact. verified must hold every item ref with a "
+        "Boolean: true only when that item is kept unchanged and fully supported, false when it "
+        "has exactly one change or is in unresolved_refs; this records your decision for every "
+        "item, it is not proof of truth.\n"
     ),
     "vi": (
         "Kiểm tra cuối cùng việc gắn nguồn của biên bản họp. Trả về một bản vá JSON thưa, không "
@@ -1201,6 +1365,18 @@ _INSTRUCTIONS = {
         "ref đó trong unresolved_refs: mã sẽ bỏ câu chữ của mục đó và đăng nguyên văn các segment "
         "được trích thành một mục cần xác nhận lại, nên mục sửa được thì hãy sửa. Không bao giờ "
         "liệt kê một ref ở cả changes và unresolved_refs. Chỉ dùng ref, text_ref và source ID có "
-        "trong đầu vào.\n"
+        "trong đầu vào. '.p' (và '.pr', '.aNp', '.aNpr') chỉ thay một cụm vai trò phụ ở cuối, "
+        "như 'phát triển bởi' một tổ chức, bằng một dấu vai trò chưa rõ cố định; khi con số hay "
+        "dữ kiện chính được hỗ trợ nhưng vai trò của chủ thể đó không được hỗ trợ, hãy chọn nó "
+        "thay vì unresolved_refs. Kiểm tra riêng từng gắn kết nguyên tử chủ thể-vai trò-đối "
+        "tượng: một danh sách đối tác không cho mỗi đối tác cùng một chức năng, và vai trò được "
+        "nêu cho các dự án, hạng mục hay ví dụ khác nhau không được gộp. Lời giới thiệu ở xa, "
+        "sự liên tục của vai trò, danh sách hay việc cùng xuất hiện không bao giờ xác định "
+        "người nói; lời tự giới thiệu chỉ được tính trong chính lượt nói đó, ngoài ra chỉ lời "
+        "mời rõ ràng tại chỗ hoặc lời thuật trực tiếp mới được tính. Với dữ kiện chính được hỗ "
+        "trợ, ưu tiên biến thể an toàn hoặc sửa trích dẫn hơn unresolved_refs. verified phải "
+        "chứa mọi ref của mục với giá trị Boolean: true chỉ khi mục được giữ nguyên và được hỗ "
+        "trợ đầy đủ, false khi mục có đúng một thay đổi hoặc nằm trong unresolved_refs; đây là "
+        "ghi nhận quyết định của bạn cho từng mục, không phải bằng chứng về tính đúng.\n"
     ),
 }

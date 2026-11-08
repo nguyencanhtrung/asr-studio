@@ -13,7 +13,9 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 # v35: registered Gemini fact-inventory reconcile runs as at most two owned ledger views.
-PROMPT_VERSION = "notes-hierarchical-v35"
+# v36: registered Gemini fact-inventory maps keep follow-up dependencies and per-object roles;
+# the semantic audit runs as at most four parts with an explicit decision for every item.
+PROMPT_VERSION = "notes-hierarchical-v36"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -1226,14 +1228,24 @@ _GEMINI_FACT_INVENTORY_RULE = {
         "Never join a transcribed number with a following spoken list into one quantity, and "
         "never split, merge or complete garbled digits of a count or identifier; quote such a "
         "number as said and mark it unclear. Supporting, endorsing, voting for or thanking is "
-        "not sponsoring, introducing or bringing forward; keep each actor's stated role.\n"
+        "not sponsoring, introducing or bringing forward; keep each actor's stated role. Keep "
+        "each stated next step with its trigger, prerequisite or later approval (after, once, "
+        "unless, then returns for); a deadline does not replace the follow-up. Attach each "
+        "actor's exact stated role to its own object or category: a list of named actors does "
+        "not give each the same role, and never carry an actor or role across adjoining "
+        "examples, projects or categories.\n"
     ),
     "vi": (
         "Không bao giờ ghép một số được ghi âm với danh sách đọc liền sau thành một số lượng, và "
         "không bao giờ tách, gộp hay điền thêm chữ số bị ghi sai của một số lượng hoặc số hiệu; "
         "giữ nguyên con số như đã nói và ghi là chưa rõ. Ủng hộ, tán thành, bỏ phiếu thuận hay "
         "cảm ơn không phải là bảo trợ, giới thiệu hay đưa ra; giữ đúng vai trò được nêu của "
-        "từng người.\n"
+        "từng người. Giữ mỗi bước tiếp theo được nêu cùng điều kiện kích hoạt, điều kiện tiên "
+        "quyết hoặc lần phê duyệt sau đó (sau khi, khi, trừ khi, rồi quay lại để); hạn chót "
+        "không thay thế bước tiếp theo. Gắn đúng vai trò được nêu của từng bên với chính đối "
+        "tượng hoặc hạng mục của nó: một danh sách các bên được nêu tên không cho mỗi bên cùng "
+        "một vai trò, và không chuyển một bên hay vai trò sang ví dụ, dự án hoặc hạng mục liền "
+        "kề.\n"
     ),
 }
 

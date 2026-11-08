@@ -8,7 +8,13 @@ import threading
 import time
 
 import pytest
-from notes_helpers import SEMANTIC_KEEP_PATCH, reconcile_keep_patch, semantic_payload
+from notes_helpers import (
+    reconcile_keep_patch,
+    semantic_keep_patch,
+    semantic_patch,
+    semantic_payload,
+    semantic_refs,
+)
 
 from asr_studio import notes_document as nd
 from asr_studio import notes_semantic
@@ -80,10 +86,11 @@ def _change(ref: str, text_ref: str | None = None, ids=(), owner=False, deadline
     }
 
 
-def _patch(*changes: dict, unresolved=()) -> str:
-    return json.dumps(
-        {"audit_version": 1, "changes": list(changes), "unresolved_refs": list(unresolved)}
-    )
+_REFS = ("i0", "i1", "i2", "i3")  # the items of _document()
+
+
+def _patch(*changes: dict, unresolved=(), refs=_REFS) -> str:
+    return semantic_patch(refs, changes, unresolved)
 
 
 # ----- anonymous variants ---------------------------------------------------------------------
@@ -157,8 +164,11 @@ def test_sparse_patch_keeps_unlisted_items_and_only_selects_appends_and_clears()
         "quarantined": 0,
         "reference_unclear": 0,
         "quantity_unclear": 0,
+        "responsibility_unclear": 0,
+        "reviewed": 4,
+        "model_verified": 1,  # i2 only: every listed ref is decided false
     }
-    assert audit.parse(SEMANTIC_KEEP_PATCH)[0] == _document()
+    assert audit.parse(semantic_keep_patch(audit))[0] == _document()
 
 
 @pytest.mark.parametrize(
@@ -176,29 +186,26 @@ def test_sparse_patch_keeps_unlisted_items_and_only_selects_appends_and_clears()
         (_patch(_change("i0", ids=["f" * 32])), "source_ids"),
         (_patch(_change("i0", ids=[ID[0], ID[0]])), "source_ids"),
         (_patch(_change("i0", owner=True)), "action_fields"),
-        (json.dumps({"audit_version": 1, "changes": []}), "fields"),
-        (json.dumps({"audit_version": 2, "changes": [], "unresolved_refs": []}), "version"),
+        (_patch(refs=_REFS[:-1]), "items"),  # a missing verified ref
+        (json.dumps({**json.loads(_patch()), "unresolved_refs": None}), "fields"),
+        (json.dumps({k: v for k, v in json.loads(_patch()).items() if k != "verified"}), "fields"),
+        (json.dumps({**json.loads(_patch()), "audit_version": 1}), "version"),
         (
             json.dumps(
-                {
-                    "audit_version": 1,
-                    "changes": [{**_change("i0"), "text": "x"}],
-                    "unresolved_refs": [],
-                }
+                {**json.loads(_patch(_change("i0"))), "changes": [{**_change("i0"), "text": "x"}]}
             ),
             "fields",
         ),  # no free-form prose field
         (
             json.dumps(
                 {
-                    "audit_version": 1,
+                    **json.loads(_patch(_change("i0"))),
                     "changes": [
                         {
                             **{k: v for k, v in _change("i0").items() if k != "add_source_ids"},
                             "source_ids": [ID[1]],
                         }
                     ],
-                    "unresolved_refs": [],
                 }
             ),
             "fields",
@@ -316,7 +323,9 @@ def test_long_gemini_runs_one_audit_pass_of_two_parts_after_reconcile_and_publis
 
     def semantic(prompt, _kwargs):
         ref = _tarrow_ref(prompt)
-        return _patch(_change(ref, f"{ref}.a1")) if ref else SEMANTIC_KEEP_PATCH
+        if not ref:
+            return semantic_keep_patch(prompt)
+        return _patch(_change(ref, f"{ref}.a1"), refs=semantic_refs(prompt))
 
     result = _run(_transport(calls, semantic), coverage=coverage)
 
@@ -368,7 +377,11 @@ def test_unresolved_audit_ref_is_published_as_a_quarantined_source_excerpt():
 
     def semantic(prompt, _kwargs):
         ref = _tarrow_ref(prompt)
-        return _patch(unresolved=[ref]) if ref else SEMANTIC_KEEP_PATCH
+        return (
+            _patch(unresolved=[ref], refs=semantic_refs(prompt))
+            if ref
+            else semantic_keep_patch(prompt)
+        )
 
     result = _run(_transport(calls, semantic), coverage=coverage)
 
@@ -392,7 +405,9 @@ def test_invalid_unresolved_audit_uses_the_shared_repair_once_then_fails_unpubli
 
     def semantic(prompt, _kwargs):
         ref = _tarrow_ref(prompt)
-        return _patch(unresolved=[ref, ref]) if ref else SEMANTIC_KEEP_PATCH
+        if not ref:
+            return semantic_keep_patch(prompt)
+        return _patch(unresolved=[ref, ref], refs=semantic_refs(prompt))
 
     with pytest.raises(AssertionError) as failure:
         _run(_transport(calls, semantic), coverage=coverage)
@@ -431,7 +446,7 @@ def test_audit_prompt_over_budget_fails_the_task_instead_of_skipping(monkeypatch
 
     monkeypatch.setattr(notes_semantic.SemanticAudit, "build_prompt", too_large)
     with pytest.raises(RuntimeError, match="semantic audit limit"):
-        _run(_transport(calls, lambda _p, _k: SEMANTIC_KEEP_PATCH))
+        _run(_transport(calls, lambda p, _k: semantic_keep_patch(p)))
     assert "semantic_audit" not in [c["stage"] for c in calls]
 
 
@@ -444,6 +459,8 @@ def _quarantine_audit(language: str = "en") -> SemanticAudit:
     return SemanticAudit(SOURCE, nd.validate_document(document, SOURCE), output_language=language)
 
 
+_QREFS = (*_REFS, "i4")  # the items of _quarantine_audit()
+
 _LABEL = (
     "Needs review: an unverified note was removed. Source excerpt (original language; "
     "output language: English): "
@@ -455,7 +472,7 @@ def test_unresolved_refs_become_literal_source_excerpts_without_shifting_other_i
     original = copy.deepcopy(audit.document)
     text = [segment["text"] for segment in SOURCE["segments"]]
     document, counts = audit.parse(
-        _patch(_change("i2", "i2.o", ids=[ID[0]]), unresolved=["i4", "i0", "i3"])
+        _patch(_change("i2", "i2.o", ids=[ID[0]]), unresolved=["i4", "i0", "i3"], refs=_QREFS)
     )
     # i0 (first key topic), i3 (action item), i4 removed; i1/i2 kept in order with i2's change.
     assert document["key_topics"] == [
@@ -473,7 +490,9 @@ def test_unresolved_refs_become_literal_source_excerpts_without_shifting_other_i
 
 
 def test_quarantine_label_follows_the_output_language():
-    document, _ = _quarantine_audit("vi").parse(_patch(unresolved=["i0"]), output_language="vi")
+    document, _ = _quarantine_audit("vi").parse(
+        _patch(unresolved=["i0"], refs=_QREFS), output_language="vi"
+    )
     assert document["confirmation_items"][0]["text"] == (
         "Cần xem lại: đã bỏ một ghi chú chưa được kiểm chứng. Trích nguyên văn (ngôn ngữ gốc; "
         f"ngôn ngữ đầu ra: tiếng Việt): “{SOURCE['segments'][1]['text']}”"
@@ -498,7 +517,7 @@ def test_unresolved_item_without_a_cited_source_fails():
     document["key_topics"].append({"text": "Uncited claim", "source_ids": []})
     audit = SemanticAudit(SOURCE, nd.validate_document(document, SOURCE))
     with pytest.raises(nd.NotesDocumentError):
-        audit.parse(_patch(unresolved=["i3"]))
+        audit.parse(_patch(unresolved=["i3"], refs=_QREFS))
 
 
 @pytest.mark.parametrize("language", ["en", "vi"])
@@ -508,7 +527,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v35"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v36"
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------
@@ -537,7 +556,7 @@ def test_reference_evidence_is_enabled_only_with_the_mandatory_gemini_audit(
         if kwargs["stage"] == "reconcile":
             return reconcile_keep_patch(prompt)
         if kwargs["stage"] == "semantic_audit":
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(prompt)
         document = _empty()
         document["key_topics"] = [
             {"text": "Renewal open", "source_ids": [kwargs["allowed_source_ids"][-1]]}
@@ -560,16 +579,29 @@ def _n_item_audit(n: int) -> SemanticAudit:
     return SemanticAudit(SOURCE, nd.validate_document(document, SOURCE))
 
 
-@pytest.mark.parametrize("n", [0, 1, 2, 3, 4, 7])
-def test_partitions_are_balanced_disjoint_and_cover_every_global_ref_once(n):
+@pytest.mark.parametrize(
+    ("n", "sizes"),
+    [
+        (0, None),
+        (1, None),
+        (2, [1, 1]),
+        (3, [1, 1, 1]),
+        (4, [1] * 4),
+        (7, [2, 2, 2, 1]),
+        (9, [3, 2, 2, 2]),
+    ],
+)
+def test_partitions_are_balanced_disjoint_and_cover_every_global_ref_once(n, sizes):
     audit = _n_item_audit(n)
     parts = audit.partitions()
-    if n < 2:
+    if sizes is None:
         assert parts == (audit,)
         return
     refs = [[item.ref for item in part.items] for part in parts]
-    assert len(parts) == 2 and [len(r) for r in refs] == [(n + 1) // 2, n // 2]
-    assert refs[0] + refs[1] == [f"i{k}" for k in range(n)]  # global refs, document order
+    assert len(parts) == min(notes_semantic.MAX_AUDIT_PARTS, n) == len(sizes)
+    assert notes_semantic.MAX_AUDIT_PARTS == 4
+    assert [len(r) for r in refs] == sizes  # balanced, larger first
+    assert sum(refs, []) == [f"i{k}" for k in range(n)]  # global refs, document order, once
     for part, own in zip(parts, refs, strict=True):
         assert set(part._by_ref) == set(own)
         assert {key.split(".")[0] for key in part._text_refs} == set(own)
@@ -579,19 +611,26 @@ def test_partitions_are_balanced_disjoint_and_cover_every_global_ref_once(n):
 def test_part_prompt_and_schema_carry_the_full_source_but_only_its_own_items():
     audit = _quarantine_audit()
     budget = nd.notes_budget(*GEMINI)
-    first, second = audit.partitions()
+    parts = audit.partitions()
+    assert len(parts) == 4
     full_texts = {i["ref"]: i["text_refs"][0]["text"] for i in audit.prompt_payload()["items"]}
-    for part, other in ((first, second), (second, first)):
-        payload = semantic_payload(part.build_prompt(budget=budget))
+    for part in parts:
         own = {item.ref for item in part.items}
+        others = [item for item in audit.items if item.ref not in own]
+        payload = semantic_payload(part.build_prompt(budget=budget))
         assert {item["ref"] for item in payload["items"]} == own
         assert payload["source"] == audit.prompt_payload()["source"]  # full source
-        change = part.schema()["properties"]["changes"]["items"]["properties"]
+        schema = part.schema()
+        change = schema["properties"]["changes"]["items"]["properties"]
         assert set(change["ref"]["enum"]) == own
         assert {r.split(".")[0] for r in change["text_ref"]["enum"]} == own
-        assert set(part.schema()["properties"]["unresolved_refs"]["items"]["enum"]) == own
+        assert set(schema["properties"]["unresolved_refs"]["items"]["enum"]) == own
+        verified = schema["properties"]["verified"]
+        assert set(verified["required"]) == set(verified["properties"]) == own
+        assert verified["additionalProperties"] is False
+        assert "verified" in schema["required"]
         prompt = part.build_prompt(budget=budget)
-        for item in other.items:
+        for item in others:
             assert f'"ref":"{item.ref}"' not in prompt
             assert full_texts[item.ref] not in prompt
 
@@ -599,55 +638,68 @@ def test_part_prompt_and_schema_carry_the_full_source_but_only_its_own_items():
 @pytest.mark.parametrize(
     "patch",
     [
-        _patch(_change("i3")),  # another part's ref
-        _patch(_change("i0", "i3.o")),  # another part's text ref
-        _patch(unresolved=["i4"]),  # another part's unresolved ref
+        _patch(_change("i3"), refs=("i0", "i1")),  # another part's ref
+        _patch(_change("i0", "i3.o"), refs=("i0", "i1")),  # another part's text ref
+        _patch(unresolved=["i4"], refs=("i0", "i1")),  # another part's unresolved ref
+        _patch(refs=("i0", "i1", "i2")),  # another part's verified ref
+        _patch(refs=("i0",)),  # an own ref left undecided
     ],
 )
 def test_a_part_rejects_refs_outside_its_partition(patch):
-    first, _second = _quarantine_audit().partitions()
+    first = _quarantine_audit().partitions()[0]
+    assert semantic_refs(first) == ["i0", "i1"]
+    first.validated_patch(_patch(refs=("i0", "i1")))  # the valid base
     with pytest.raises(nd.NotesDocumentError):
         first.validated_patch(patch)
 
 
+def _part_patches(audit, changes=(), unresolved=()):
+    """Each part's validated patch, holding only the changes and unresolved refs it owns."""
+    patches = []
+    for part in audit.partitions():
+        own = set(semantic_refs(part))
+        mine = [c for c in changes if c["ref"] in own]
+        patch = _patch(
+            *mine, unresolved=[r for r in unresolved if r in own], refs=semantic_refs(part)
+        )
+        patches.append((part, part.validated_patch(patch)))
+    return patches
+
+
 def test_merged_part_patches_equal_one_full_patch_without_index_shift():
     audit = _quarantine_audit()
-    first, second = audit.partitions()
     original = copy.deepcopy(audit.document)
-    parts = [
-        (
-            first,
-            first.validated_patch(_patch(_change("i2", "i2.o", ids=[ID[0]]), unresolved=["i0"])),
-        ),
-        (second, second.validated_patch(_patch(unresolved=["i4", "i3"]))),
-    ]
+    change, unresolved = _change("i2", "i2.o", ids=[ID[0]]), ["i4", "i0", "i3"]
+    parts = _part_patches(audit, [change], unresolved)
+    assert len(parts) == 4
     merged = audit.combine_patches(parts)
-    expected = audit.parse(
-        _patch(_change("i2", "i2.o", ids=[ID[0]]), unresolved=["i4", "i0", "i3"])
-    )
+    expected = audit.parse(_patch(change, unresolved=unresolved, refs=_QREFS))
     assert merged == expected
     assert merged[1]["quarantined"] == 3 and merged[1]["changes"] == 1
+    assert merged[1]["reviewed"] == 5 and merged[1]["model_verified"] == 1
     assert audit.document == original
 
 
 def test_combine_rejects_overlap_gaps_cross_scope_and_an_oversized_merge(monkeypatch):
     audit = _quarantine_audit()
-    first, second = audit.partitions()
-    keep = json.loads(SEMANTIC_KEEP_PATCH)
+    parts = audit.partitions()
+    keeps = [json.loads(semantic_keep_patch(part)) for part in parts]
+    valid = list(zip(parts, keeps, strict=True))
+    audit.combine_patches(valid)  # the valid base
+    first, keep = valid[0]
     bad = [
-        [(first, keep)],  # a missing part
-        [(first, keep), (first, keep)],  # an overlapping part
-        [(first, keep), (second, keep), (second, keep)],
-        [(first, {**keep, "unresolved_refs": ["i4"]}), (second, keep)],  # cross-part ref
-        [(first, {**keep, "changes": [_change("i3")]}), (second, keep)],
+        valid[:-1],  # a missing part
+        [*valid, valid[0]],  # an overlapping part
+        [*valid[:-1], valid[-2]],  # a repeated part in place of the last
+        [(first, {**keep, "unresolved_refs": ["i4"]}), *valid[1:]],  # cross-part ref
+        [(first, {**keep, "changes": [_change("i3")]}), *valid[1:]],
+        [(first, keeps[1]), (parts[1], keep), *valid[2:]],  # verified from the other view
+        [(first, {**keep, "verified": {**keep["verified"], "i2": True}}), *valid[1:]],
     ]
-    for parts in bad:
+    for parts_ in bad:
         with pytest.raises(nd.NotesDocumentError):
-            audit.combine_patches(parts)
-    big = [
-        (first, first.validated_patch(_patch(_change("i0", "i0.o", ids=[ID[2]])))),
-        (second, keep),
-    ]
+            audit.combine_patches(parts_)
+    big = _part_patches(audit, [_change("i0", "i0.o", ids=[ID[2]])])
     monkeypatch.setattr(notes_semantic, "MAX_SEMANTIC_OUTPUT_BYTES", 120)
     with pytest.raises(nd.NotesDocumentError) as failure:
         audit.combine_patches(big)
@@ -668,7 +720,7 @@ def test_the_two_audit_parts_run_concurrently_and_each_checks_its_items_once():
         barrier.wait()
         with lock:
             in_flight[0] -= 1
-        return SEMANTIC_KEEP_PATCH
+        return semantic_keep_patch(prompt)
 
     _run(_transport(calls, semantic), coverage=coverage)
     audited = [
@@ -689,7 +741,9 @@ def test_one_malformed_part_uses_the_single_shared_repair_and_the_pass_succeeds(
         ref = _tarrow_ref(prompt)
         if ref and kwargs["attempt"] == "primary":
             return "not json"
-        return _patch(_change(ref, f"{ref}.a1")) if ref else SEMANTIC_KEEP_PATCH
+        if not ref:
+            return semantic_keep_patch(prompt)
+        return _patch(_change(ref, f"{ref}.a1"), refs=semantic_refs(prompt))
 
     result = _run(_transport(calls, semantic), coverage=coverage)
     assert [c["attempt"] for c in calls if c["stage"] == "semantic_audit"].count("repair") == 1
@@ -730,7 +784,7 @@ def test_an_over_budget_part_fails_the_task_before_any_audit_request(monkeypatch
 
     monkeypatch.setattr(SemanticAudit, "build_prompt", second_too_large)
     with pytest.raises(RuntimeError, match="semantic audit limit"):
-        _run(_transport(calls, lambda _p, _k: SEMANTIC_KEEP_PATCH))
+        _run(_transport(calls, lambda p, _k: semantic_keep_patch(p)))
     assert "semantic_audit" not in [c["stage"] for c in calls]
 
 
@@ -795,7 +849,14 @@ def test_every_section_is_audited_and_unsupported_bindings_become_literal_excerp
             if item.section == "confirmation_items"
         ]
         unresolved = [ref for ref, item in own.items() if item.section != "confirmation_items"]
-        patches.append((part, part.validated_patch(_patch(*changes, unresolved=unresolved))))
+        patches.append(
+            (
+                part,
+                part.validated_patch(
+                    _patch(*changes, unresolved=unresolved, refs=semantic_refs(part))
+                ),
+            )
+        )
     document, counts = audit.combine_patches(patches)
     published = json.dumps(document, ensure_ascii=False)
     for invented in ("Director Dana Quill vision", "sponsoring", "100 1-", "7.20.020"):
@@ -837,3 +898,170 @@ def test_prompt_states_the_generic_section_role_number_and_procedure_rules(langu
     }[language]
     for marker in markers:
         assert marker in prompt
+
+
+# ----- four-part audit pass in the pipeline -----------------------------------------------------
+
+
+def _wide_snapshot() -> dict:
+    texts = ["Launch plan is approved.", "Budget review is next.", "Hiring is paused."]
+    texts += ["Vendor contract renews.", "Training starts soon."]
+    starts = [0.0, 10.0, 20.0, 3_601.0, 3_610.0]
+    return {
+        "meeting_date": "2026-01-05",
+        "speakers": [],
+        "segments": [
+            _segment(k + 1, s, t) for k, (s, t) in enumerate(zip(starts, texts, strict=True))
+        ],
+    }
+
+
+def _wide_map_reply(prompt: str) -> str:
+    source = json.JSONDecoder().raw_decode(prompt.split("SOURCE_JSON:\n", 1)[1])[0]
+    document = _empty()
+    document["key_topics"] = [
+        {"text": s["text"].rstrip("."), "source_ids": [s["id"]]}
+        for s in source["segments"]
+        if not s.get("overlap")
+    ]
+    return json.dumps(document)
+
+
+def _wide_run(semantic, calls, coverage, reconcile=None):
+    def transport(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        if kwargs["stage"] == "chunk":
+            return _wide_map_reply(prompt)
+        if kwargs["stage"] == "reconcile":
+            return (reconcile or (lambda p, _k: reconcile_keep_patch(p)))(prompt, kwargs)
+        assert kwargs["stage"] == "semantic_audit"
+        return semantic(prompt, kwargs)
+
+    return generate_notes_document(
+        snapshot=_wide_snapshot(),
+        output_language="en",
+        provider=GEMINI[0],
+        model=GEMINI[1],
+        transport=transport,
+        invalid_output_error=lambda diagnostics: AssertionError(diagnostics),
+        limit_error=RuntimeError,
+        on_coverage=coverage.append,
+    )
+
+
+def test_four_audit_parts_run_concurrently_over_the_full_source_and_decide_every_ref_once():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+    barrier = threading.Barrier(4, timeout=10)  # breaks unless all four parts are in flight
+
+    def semantic(prompt, kwargs):
+        verified = kwargs["response_schema"]["properties"]["verified"]
+        assert verified["required"] == semantic_refs(prompt)  # every owned ref is mandatory
+        assert verified["additionalProperties"] is False
+        barrier.wait()
+        return semantic_keep_patch(prompt)
+
+    result = _wide_run(semantic, calls, coverage)
+    audits = [c for c in calls if c["stage"] == "semantic_audit"]
+    owned = [semantic_refs(c["prompt"]) for c in audits]
+    assert len(audits) == 4 and sorted(len(refs) for refs in owned) == [1, 1, 1, 2]
+    assert sorted(sum(owned, [])) == [f"i{k}" for k in range(5)]  # disjoint, each once
+    sources = [semantic_payload(c["prompt"])["source"] for c in audits]
+    assert all(source == sources[0] for source in sources)
+    texts = [s["text"] for s in sources[0]["segments"]]
+    assert texts == [s["text"] for s in _wide_snapshot()["segments"]]  # the full source
+    assert len(result["key_topics"]) == 5
+    audit = coverage[0]["semantic_audit"]
+    assert audit["part_count"] == 4 and len(audit["provider_call_indices"]) == 4
+    assert (audit["counts"]["reviewed"], audit["counts"]["model_verified"]) == (5, 5)
+    assert coverage[0]["provider_calls"] == len(calls) <= nd.MAX_PROVIDER_CALLS
+
+
+def _without_one_decision(prompt: str) -> str:
+    patch = json.loads(semantic_keep_patch(prompt))
+    patch["verified"].pop(semantic_refs(prompt)[0])
+    return json.dumps(patch)
+
+
+def test_an_undecided_ref_takes_the_shared_repair_once_and_then_publishes():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+
+    def semantic(prompt, kwargs):
+        if "i4" in semantic_refs(prompt) and kwargs["attempt"] == "primary":
+            return _without_one_decision(prompt)
+        return semantic_keep_patch(prompt)
+
+    _wide_run(semantic, calls, coverage)
+    attempts = [c["attempt"] for c in calls if c["stage"] == "semantic_audit"]
+    assert sorted(attempts) == ["primary"] * 4 + ["repair"]
+    assert coverage[0]["semantic_audit"]["part_count"] == 4
+
+
+def test_a_part_that_stays_undecided_fails_the_whole_task_unpublished():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+
+    def semantic(prompt, _kwargs):
+        return (
+            _without_one_decision(prompt)
+            if "i4" in semantic_refs(prompt)
+            else (semantic_keep_patch(prompt))
+        )
+
+    with pytest.raises(AssertionError) as failure:
+        _wide_run(semantic, calls, coverage)
+    assert failure.value.args[0]["stage"] == "semantic_audit"
+    assert [c["attempt"] for c in calls].count("repair") == 1
+    assert coverage == []  # no part's verdict is published alone
+
+
+def test_the_single_repair_is_shared_between_reconcile_and_the_audit_parts():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+    reconciles: list[str] = []
+
+    def reconcile(prompt, kwargs):
+        reconciles.append(kwargs["attempt"])
+        if len(reconciles) == 1:
+            return "not json"  # spends the run's one repair
+        return reconcile_keep_patch(prompt)
+
+    def semantic(prompt, _kwargs):
+        return (
+            _without_one_decision(prompt)
+            if "i0" in semantic_refs(prompt)
+            else (semantic_keep_patch(prompt))
+        )
+
+    # The undecided part fails without a second repair; a sibling may instead see the stop.
+    with pytest.raises((AssertionError, RuntimeError)) as failure:
+        _wide_run(semantic, calls, coverage, reconcile=reconcile)
+    assert "repair" in reconciles
+    assert [c["attempt"] for c in calls].count("repair") == 1
+    if isinstance(failure.value, AssertionError):
+        assert failure.value.args[0]["repair_state"] == "already_consumed"
+    assert coverage == []
+
+
+def test_a_failed_part_of_four_stops_its_siblings_within_the_call_cap():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+    failed = threading.Event()
+    started = threading.Barrier(4, timeout=10)  # all four primaries are in flight first
+
+    def semantic(prompt, kwargs):
+        if kwargs["attempt"] == "primary":
+            started.wait()
+        if "i0" in semantic_refs(prompt):
+            failed.set()
+            raise RuntimeError("provider down")
+        failed.wait(10)
+        time.sleep(0.2)
+        return "not json"  # would earn the unused shared repair without the stop
+
+    with pytest.raises(RuntimeError, match="provider down"):
+        _wide_run(semantic, calls, coverage)
+    attempts = [c["attempt"] for c in calls if c["stage"] == "semantic_audit"]
+    assert attempts == ["primary"] * 4  # no sibling sends the repair after the failure
+    assert len(calls) <= nd.MAX_PROVIDER_CALLS and coverage == []

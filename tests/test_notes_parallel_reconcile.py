@@ -7,7 +7,7 @@ import threading
 import time
 
 import pytest
-from notes_helpers import SEMANTIC_KEEP_PATCH, reconcile_keep_patch, reconcile_payload
+from notes_helpers import reconcile_keep_patch, reconcile_payload, semantic_keep_patch
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_pipeline import generate_notes_document
@@ -79,7 +79,7 @@ def test_two_owned_views_run_concurrently_over_the_full_source_and_merge_once():
         if kwargs["stage"] == "chunk":
             return _map_reply(prompt)
         if kwargs["stage"] == "semantic_audit":
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(prompt)
         assert kwargs["stage"] == "reconcile" and kwargs["attempt"] == "primary"
         barrier.wait()
         return reconcile_keep_patch(prompt)
@@ -131,7 +131,7 @@ def test_both_views_are_charged_to_the_reduction_budget(monkeypatch):
         if kwargs["stage"] == "chunk":
             return _map_reply(prompt)
         if kwargs["stage"] == "semantic_audit":
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(prompt)
         return reconcile_keep_patch(prompt)
 
     monkeypatch.setattr(nd, "MAX_REDUCTION_CALLS", 1)
@@ -153,7 +153,7 @@ def test_both_views_are_charged_to_the_global_call_budget(monkeypatch):
         if kwargs["stage"] == "chunk":
             return _map_reply(prompt)
         if kwargs["stage"] == "semantic_audit":
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(prompt)
         return reconcile_keep_patch(prompt)
 
     # Two maps and two views fill the budget, so no semantic-audit part can be sent.

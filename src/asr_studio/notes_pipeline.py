@@ -980,7 +980,7 @@ def generate_notes_document(
     def semantic_audit(final_document: dict[str, Any]) -> dict[str, Any]:
         """The mandatory sparse source-binding pass (registered Gemini only).
 
-        At most two disjoint item partitions run concurrently, each over the full source; their
+        At most four disjoint item partitions run concurrently, each over the full source; their
         validated patches are merged and applied once. Any failed part fails the whole task.
         """
         audit = SemanticAudit(

@@ -9,7 +9,13 @@ import copy
 import json
 
 import pytest
-from notes_helpers import SEMANTIC_KEEP_PATCH, reconcile_keep_patch, semantic_payload
+from notes_helpers import (
+    reconcile_keep_patch,
+    semantic_keep_patch,
+    semantic_patch,
+    semantic_payload,
+    semantic_refs,
+)
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_pipeline import generate_notes_document
@@ -61,10 +67,8 @@ def _change(ref: str, text_ref: str, ids=()) -> dict:
     }
 
 
-def _patch(*changes: dict, unresolved=()) -> str:
-    return json.dumps(
-        {"audit_version": 1, "changes": list(changes), "unresolved_refs": list(unresolved)}
-    )
+def _patch(*changes: dict, unresolved=(), refs=("i0",)) -> str:
+    return semantic_patch(refs, changes, unresolved)
 
 
 def _texts(audit: SemanticAudit) -> dict[str, str]:
@@ -173,9 +177,9 @@ def test_marking_happens_before_refs_so_no_text_ref_can_restore_the_value():
     assert texts["i0.o"] == f"Rivera said depot adds {Q} vehicles"
     assert all("243" not in text for text in texts.values()) and "i0.a1" in texts
     for text_ref in ("i0.o", "i0.a1"):
-        published, counts = audit.parse(_patch(_change("i0", text_ref)))
+        published, counts = audit.parse(_patch(_change("i0", text_ref), refs=semantic_refs(audit)))
         assert "243" not in json.dumps(published) and counts["quantity_unclear"] == 1
-    published, _ = audit.parse(SEMANTIC_KEEP_PATCH)  # unlisted keeps the marked copy too
+    published, _ = audit.parse(semantic_keep_patch(audit))  # unlisted keeps the marked copy too
     assert published["key_topics"][0]["text"] == texts["i0.o"]
     assert (source, document) == (source_before, document_before)  # inputs are never mutated
     assert audit.source["segments"][0]["text"] == FLEET
@@ -185,8 +189,8 @@ def test_quantity_counts_are_reported_once_across_partitions():
     texts = ("Depot adds 243 vehicles", "Plan holds 24 vehicles", "Fleet notes")
     _source_, _document, audit = _fleet_audit(texts=texts)
     parts = audit.partitions()
-    assert len(parts) == 2
-    patches = [(part, part.validated_patch(SEMANTIC_KEEP_PATCH)) for part in parts]
+    assert len(parts) == 4  # one item each: two marked texts, two plain
+    patches = [(part, part.validated_patch(semantic_keep_patch(part))) for part in parts]
     published, counts = audit.combine_patches(patches)
     assert counts["quantity_unclear"] == 2
     assert [i["text"] for i in published["key_topics"][:2]] == [
@@ -199,8 +203,8 @@ def test_the_audit_language_is_fixed_by_its_constructor():
     _s, _d, audit = _fleet_audit("vi")
     assert _texts(audit)["i0.o"] == "Depot adds [số lượng chưa rõ] electric vehicles"
     with pytest.raises(nd.NotesDocumentError):
-        audit.parse(SEMANTIC_KEEP_PATCH, output_language="en")
-    assert audit.parse(SEMANTIC_KEEP_PATCH, output_language="vi")[1]["quantity_unclear"] == 1
+        audit.parse(semantic_keep_patch(audit), output_language="en")
+    assert audit.parse(semantic_keep_patch(audit), output_language="vi")[1]["quantity_unclear"] == 1
 
 
 # ----- legal reference variants ---------------------------------------------------------------
@@ -346,7 +350,7 @@ def test_long_gemini_run_passes_its_language_and_reports_detail_counts(language)
             for item in semantic_payload(prompt)["items"]
             if any(t["text_ref"].endswith(".r") for t in item["text_refs"])
         ]
-        return _patch(*changes)
+        return _patch(*changes, refs=semantic_refs(prompt))
 
     result = generate_notes_document(
         snapshot=_long_snapshot(),

@@ -20,26 +20,23 @@ Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
 
 ## Gemini Flash 3.8 — 08/11/2026
 
-gemini-3.8-flash, medium, v33 đo mới; cùng transcript/gold với ChatGPT. **Chưa đạt.**
+gemini-3.8-flash, medium, v35 đo mới; cùng transcript/gold với ChatGPT. **Chưa đạt.**
 
 | Chỉ tiêu | Kết quả cuối |
 | --- | ---: |
-| Nội dung mẫu dài | 11/12 (1 mục một phần) |
+| Nội dung mẫu dài | 10/12 (2 mục một phần) |
 | Ý quan trọng | 7/7 |
-| Khẳng định quan trọng thiếu nguồn | 5 |
+| Khẳng định quan trọng thiếu nguồn | 3 |
 | ID trích dẫn không tồn tại | 0 |
 | Nội dung mẫu ngắn | 9/9 |
 | VietMed | 2/2 |
-| Notes đo thực tế (v33) | 503,474 giây; 12 lượt gọi; 0 cache |
+| Notes đo thực tế (v35) | 598,342213 giây; 14 lượt gọi; 0 cache |
 
-v34 đo thực tế: **lỗi**, bị ngắt ở hạn 660 giây (wall 665,271 giây), không có Notes cuối nên
-không chấm. 12 phản hồi đã ghi; reconcile chính 309,379 giây, repair 98,588 giây.
-
-v35 (reconcile hai view song song): chờ lần đo thực tế.
+v36 (kiểm ngữ nghĩa bốn phần, quyết định rõ cho mọi mục): chờ lần đo thực tế.
 
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
-hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/v33-score-a/report.md`, `v33-score-b/report.md`,
-`eval-v34-physical/interrupted.json`, `eval-v34-physical/capture/call-0010.json`, `call-0011.json`.
+hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/v35-physical-qualification.json`,
+`v35-score-a/report.md`, `v35-score-b/report.md`.
 
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>

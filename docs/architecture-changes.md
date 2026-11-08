@@ -1894,6 +1894,48 @@ tích hợp tổng hợp. Chất lượng và thời gian v35 chưa đo. Nguồn
 `reports/.notes-gemini-fix-local-20261108/eval-v34-physical/` (`interrupted.json`,
 `physical.log`, `capture/call-0010.json`, `capture/call-0011.json`).
 
+### #183 (tiếp) — Kiểm ngữ nghĩa bốn phần, quyết định rõ cho mọi mục (`notes-hierarchical-v36`)
+
+**Vấn đề.** Lần đo thực tế v35 chưa đạt: 10/12 (2 mục một phần), 7/7 ý quan trọng, 3 khẳng định
+quan trọng thiếu căn cứ, 0 ID sai, 598,342213 giây, 14 call, 0 cache. Ba lỗi: tổ chức trong một
+mục overview không nằm trong nguồn của chính mục dù nguồn có; đối tác dịch vụ bị nâng thành bên
+phát triển do gộp vai trò qua hai hạng mục liền kề; một lời đề nghị gắn tên người nói chỉ dựa vào
+lời tự giới thiệu ở xa và sự liên tục vai trò, không có nhân chứng cục bộ. Bản vá thưa v1 chỉ liệt
+kê mục cần đổi, nên mục không được nhắc vẫn được giữ mà không có quyết định của model.
+
+**Thiết kế.** Chỉ với Gemini đã đăng ký:
+
+- `semantic_audit` chia mục thành tối đa `MAX_AUDIT_PARTS` = 4 phần liên tục, cân bằng, không
+  chồng lặp (`min(4, N)` phần; 0 hoặc 1 mục: một phần). Mỗi phần có toàn nguồn, giữ ref toàn cục,
+  chỉ sở hữu ref của mình và chạy song song qua controller chung (số luồng = số phần).
+- `AUDIT_VERSION` = 2: phản hồi đúng bốn trường `audit_version`, `verified`, `changes`,
+  `unresolved_refs`. `verified` là object bắt buộc có đủ mọi ref sở hữu, giá trị boolean:
+  `true` khi giữ nguyên đã kiểm, `false` khi ref có đúng một thay đổi hoặc nằm trong
+  `unresolved_refs`. Thiếu ref, ref lạ, ref của phần khác, giá trị không phải boolean hay
+  quyết định mâu thuẫn đều làm phần lỗi và đi vào repair dùng chung. Chỉ gộp `verified` của các
+  phần đủ và rời nhau, rồi parse bản gộp một lần dưới trần 64.000 byte. Manifest thêm số mục đã xét
+  và số mục model xác nhận; đây là độ phủ quyết định, không phải điểm chất lượng.
+- Vai trò phụ không chắc chắn: khi một lõi định lượng độc lập đứng trước vị ngữ trách nhiệm ở
+  cuối có tên bên thực hiện, mã sinh biến thể `.p` (và kết hợp với ẩn danh/điều khoản trong trần
+  biến thể) thay đúng một cụm đó bằng nhãn cố định `[responsibility unclear]` / `[vai trò chưa rõ]`.
+  Lõi trước/sau giữ nguyên byte; không đụng chữ số, ngày, phủ định, điều kiện, tình thái, đơn vị,
+  vai trò chính, trích dẫn, biểu quyết/phê duyệt hay số hồ sơ chính. Model chỉ chọn ref, không viết
+  câu mới; manifest đếm `responsibility_unclear` riêng.
+- Prompt map fact inventory của Gemini đã đăng ký thêm quy tắc chung: giữ bước tiếp theo cùng điều
+  kiện kích hoạt, tiên quyết hoặc lần phê duyệt sau; hạn chót không thay bước tiếp theo; gắn vai trò
+  của từng bên với đúng đối tượng/hạng mục, danh sách nhiều bên không cho mỗi bên cùng vai trò, không
+  chuyển bên hay vai trò sang ví dụ liền kề. Không có từ khóa hay thực thể của bộ dữ liệu. ChatGPT,
+  model chưa đăng ký và Gemini ca ngắn giữ đúng request cũ.
+
+**Đánh đổi.** Bốn phần nhỏ hơn mỗi phần gửi lại toàn nguồn, nên token đầu vào kiểm ngữ nghĩa tăng
+khoảng gấp đôi so với hai phần; thời gian chờ là phần chậm nhất. Chi phí và thời gian chưa đo.
+Fixture dự kiến 9 map + 2 reconcile + 4 kiểm ngữ nghĩa = 15 call, thêm 1 nếu dùng repair chung (16);
+`MAX_PROVIDER_CALLS` vẫn 54, trần mỗi request và bản gộp 64.000 byte không đổi. Quyết định rõ cho
+mọi mục chỉ chứng minh độ phủ, không chứng minh model đúng về ngữ nghĩa; biến thể vai trò chưa rõ là
+nhãn không chắc chắn, không khẳng định vai trò. Chất lượng và thời gian v36 chưa đo; v35 vẫn là kết
+quả thực tế mới nhất. Nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/`
+(`v35-physical-qualification.json`, `v35-score-a/report.md`, `v35-score-b/report.md`).
+
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 
 Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)

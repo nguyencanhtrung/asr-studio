@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
+from notes_helpers import semantic_keep_patch
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_semantic import (
@@ -15,7 +14,6 @@ from asr_studio.notes_semantic import (
 
 R = "[reference unclear]"
 NEEDS_REVIEW = "Needs review: an unverified note was removed."
-KEEP = json.dumps({"audit_version": 1, "changes": [], "unresolved_refs": []})
 
 
 def _source(*texts: str) -> dict:
@@ -82,7 +80,8 @@ def test_an_uncited_role_quarantines_only_that_confirmation_item():
         {"text": "Depot study pending", "source_ids": [_sid(2)]},
     ]
     document = nd.validate_document(document, source)
-    published, counts = SemanticAudit(source, document).parse(KEEP)
+    audit = SemanticAudit(source, document)
+    published, counts = audit.parse(semantic_keep_patch(audit))
     assert published["key_topics"] == document["key_topics"]
     texts = [item["text"] for item in published["confirmation_items"]]
     assert texts[0] == "Depot study pending" and len(texts) == 2
@@ -160,7 +159,8 @@ def test_the_audit_marks_a_confirmation_item_and_counts_it_once():
         {"text": "Bill 207311 amending Ordinance 431778 pending vote", "source_ids": [_sid(1)]},
     ]
     document = nd.validate_document(document, source)
-    published, counts = SemanticAudit(source, document).parse(KEEP)
+    audit = SemanticAudit(source, document)
+    published, counts = audit.parse(semantic_keep_patch(audit))
     assert published["key_topics"] == [main]
     assert [i["text"] for i in published["confirmation_items"]] == [
         f"Bill 207311 amending Ordinance {R} pending",

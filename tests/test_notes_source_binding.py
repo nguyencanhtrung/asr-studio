@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from notes_helpers import semantic_keep_patch
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_context import link_antecedent_context, unverified_vote_names
@@ -80,7 +81,8 @@ def test_the_audit_marks_the_patched_text_against_its_own_pool():
     )
     audit = SemanticAudit(source, document)
     patch = {
-        "audit_version": 1,
+        "audit_version": 2,
+        "verified": {"i0": False},
         "changes": [
             {
                 "ref": "i0",
@@ -155,8 +157,8 @@ def test_an_unverified_vote_attribution_is_quarantined_as_cited_excerpts():
     item = {"text": "Bill pending; Velto voting no", "source_ids": [_sid(1)]}
     kept = {"text": "Unrelated topic", "source_ids": [_sid(2)]}
     document = nd.validate_document(_doc("key_topics", item, kept), source)
-    keep = json.dumps({"audit_version": 1, "changes": [], "unresolved_refs": []})
-    published, counts = SemanticAudit(source, document).parse(keep)
+    audit = SemanticAudit(source, document)
+    published, counts = audit.parse(semantic_keep_patch(audit))
     assert [i["text"] for i in published["key_topics"]] == ["Unrelated topic"]
     quarantined = published["confirmation_items"][-1]
     assert quarantined["text"].startswith(NEEDS_REVIEW) and "Velto" not in quarantined["text"]

@@ -6,7 +6,7 @@ import json
 from dataclasses import replace
 
 import pytest
-from notes_helpers import SEMANTIC_KEEP_PATCH, reconcile_keep_patch
+from notes_helpers import reconcile_keep_patch, semantic_keep_patch
 
 from asr_studio import antigravity as antigravity_module
 from asr_studio import notes_document as nd
@@ -83,7 +83,7 @@ def test_gemini_pipeline_links_short_record_id_and_outcome_after_motion():
         if kwargs["stage"] == "reconcile":
             return reconcile_keep_patch(prompt)
         if kwargs["stage"] == "semantic_audit":
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(prompt)
         assert kwargs["stage"] == "chunk"
         document = _empty()
         for segment in _source(prompt)["segments"]:
@@ -114,7 +114,7 @@ def test_long_known_gemini_runs_fact_inventory_then_one_reconcile_and_context_li
         if kwargs["stage"] == "chunk":
             return _map_reply(prompt)
         if kwargs["stage"] == "semantic_audit":
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(prompt)
         assert kwargs["stage"] == "reconcile"
         source = json.JSONDecoder().raw_decode(prompt.split("RECONCILE_INPUT_JSON:\n", 1)[1])[0]
         claim = source["source"]["segments"][2]["id"]
@@ -136,13 +136,14 @@ def test_long_known_gemini_runs_fact_inventory_then_one_reconcile_and_context_li
     result = _run(transport, model=GEMINI[1], snapshot=snapshot, coverage=coverage)
 
     stages = [call["stage"] for call in calls]
-    # parts + two owned reconcile views + one semantic pass over two disjoint item parts,
-    # no free-form final
+    # parts + two owned reconcile views + one semantic pass over three disjoint one-item parts
+    # (min(4, items)), no free-form final
     assert stages == [
         "chunk",
         "chunk",
         "reconcile",
         "reconcile",
+        "semantic_audit",
         "semantic_audit",
         "semantic_audit",
     ]
@@ -151,9 +152,10 @@ def test_long_known_gemini_runs_fact_inventory_then_one_reconcile_and_context_li
         assert SUPERSESSION in call["prompt"]
         assert nd._GEMINI_FACT_INVENTORY_RULE["en"] in call["prompt"]
         assert "response_schema" not in call
-    for call in calls[-2:]:
+    for call in calls[-3:]:
         assert call["response_schema"]["required"] == [
             "audit_version",
+            "verified",
             "changes",
             "unresolved_refs",
         ]
@@ -307,7 +309,7 @@ class _GeminiAdapter:
         if "RECONCILE_INPUT_JSON:\n" in message:
             return reconcile_keep_patch(message)
         if "AUDIT_INPUT_JSON:\n" in message:
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(message)
         return _map_reply(message)
 
 
@@ -341,6 +343,7 @@ def test_antigravity_long_run_sends_the_reconcile_ledger_schema(tmp_path):
     for message in adapter.messages[-2:]:
         assert _schema_of(message)["required"] == [
             "audit_version",
+            "verified",
             "changes",
             "unresolved_refs",
         ]
@@ -596,7 +599,7 @@ def test_long_gemini_reconcile_is_strict_and_chatgpt_reconcile_is_not():
         if kwargs["stage"] == "chunk":
             return _map_reply(prompt)
         if kwargs["stage"] == "semantic_audit":
-            return SEMANTIC_KEEP_PATCH
+            return semantic_keep_patch(prompt)
         prompts[kwargs.get("provider_model", "x")] = prompt
         return reconcile_keep_patch(prompt)
 
@@ -647,3 +650,61 @@ def test_anti_inference_map_rule_reaches_only_registered_gemini_fact_inventory_m
     for other in others:
         assert rule not in chunk(other, True)
         assert rule not in nd.build_prompt(snapshot, output_language=language, budget=other)
+
+
+_DEPENDENCY_ROLE_MARKERS = {
+    "en": (
+        "Keep each stated next step with its trigger, prerequisite or later approval",
+        "a deadline does not replace the follow-up",
+        "Attach each actor's exact stated role to its own object or category",
+        "a list of named actors does not give each the same role",
+        "never carry an actor or role across adjoining examples, projects or categories",
+    ),
+    "vi": (
+        "Giữ mỗi bước tiếp theo được nêu cùng điều kiện kích hoạt, điều kiện tiên quyết",
+        "hạn chót không thay thế bước tiếp theo",
+        "Gắn đúng vai trò được nêu của từng bên với chính đối tượng hoặc hạng mục của nó",
+        "một danh sách các bên được nêu tên không cho mỗi bên cùng một vai trò",
+        "không chuyển một bên hay vai trò sang ví dụ, dự án hoặc hạng mục liền kề",
+    ),
+}
+
+
+@pytest.mark.parametrize("language", ["en", "vi"])
+def test_dependency_and_role_object_rule_reaches_only_registered_gemini_fact_inventory_maps(
+    language,
+):
+    snapshot = _short_snapshot()
+    markers = _DEPENDENCY_ROLE_MARKERS[language]
+    rule = nd._GEMINI_FACT_INVENTORY_RULE[language]
+    assert all(marker in rule for marker in markers)
+    gemini = nd.notes_budget(*GEMINI)
+
+    def chunk(budget, fact_inventory):
+        return nd.build_chunk_prompt(
+            snapshot,
+            chunk_index=1,
+            chunk_count=2,
+            output_language=language,
+            budget=budget,
+            fact_inventory=fact_inventory,
+        )
+
+    assert all(chunk(gemini, True).count(marker) == 1 for marker in markers)
+    others = [
+        chunk(gemini, False),
+        nd.build_prompt(snapshot, output_language=language, budget=gemini),
+    ]
+    for budget in (
+        nd.notes_budget("chatgpt", "gpt-5.6-sol"),
+        nd.notes_budget("antigravity", "gemini-test"),
+        None,
+    ):
+        others += [
+            chunk(budget, True),
+            nd.build_prompt(snapshot, output_language=language, budget=budget),
+        ]
+    for prompt in others:
+        assert not any(marker in prompt for marker in markers)
+    # Generic wording only: no digits and no entity or domain words from any evaluation corpus.
+    assert not any(ch.isdigit() for ch in rule)
