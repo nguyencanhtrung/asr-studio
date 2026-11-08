@@ -1800,11 +1800,10 @@ văn bản/metadata/trích dẫn cũ giữ nguyên. Bản cuối có 33 mục th
 vượt mục chương trình được bỏ. Chấm độc lập 34 pool đã thay đổi trước đó đạt 0 lỗi hỗ trợ quan
 trọng; bản cuối tái sử dụng đúng 33 pool đã chấm này và 256 pool của lượt chấm đầy đủ ban đầu,
 không có pool chưa được kiểm. Kết quả cố định: 11/12, đủ 7/7 điểm quan trọng, 0 claim quan trọng
-thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Nguồn số liệu và hash:
-[`notes-acceptance-2026-11-08.json`](notes-acceptance-2026-11-08.json), các báo cáo/response giữ
-bền cục bộ (gitignored). Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ,
-không phải lượt đo end-to-end mới. Bước liên kết được đo riêng trong metadata. Mốc ngoài cửa sổ
-hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
+thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Kết quả cuối nằm trong
+[báo cáo nghiệm thu](acceptance-report.md); bằng chứng chi tiết giữ bền cục bộ (gitignored).
+Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ, không phải lượt đo
+end-to-end mới. Mốc ngoài cửa sổ hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
 
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
