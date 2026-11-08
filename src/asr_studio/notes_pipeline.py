@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from threading import Lock
@@ -14,11 +14,12 @@ from typing import Any, Protocol
 # Limits are read through the module at call time so tests can lower them.
 from asr_studio import notes_document as nd
 from asr_studio.notes_audit import AuditCatalog
+from asr_studio.notes_reconcile import MAX_RECONCILE_OUTPUT_BYTES, ReconcileLedger
 
 # The code a transport gives a response over its output cap.
 _OUTPUT_TOO_LARGE = "provider_output_too_large"
 _LOGGER = logging.getLogger(__name__)
-_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit"})
+_NOTES_VALIDATION_STAGES = frozenset({"single", "chunk", "reduce", "final", "audit", "reconcile"})
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
 
@@ -140,6 +141,7 @@ class NotesTransport(Protocol):
         prompt_bytes: int,
         budget: nd.NotesBudget,
         max_unit_size: int = 1,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> str: ...
 
 
@@ -217,6 +219,7 @@ def generate_notes_document(
         stage: str,
         attempt: str,
         budget: nd.NotesBudget,
+        response_schema: Mapping[str, Any] | None = None,
     ) -> tuple[str, int]:
         nonlocal call_count
         with ledger_lock:
@@ -237,6 +240,8 @@ def generate_notes_document(
         }
         if max_unit_size > 1:
             transport_kwargs["max_unit_size"] = max_unit_size
+        if response_schema is not None:  # None keeps the schema-1 request byte-for-byte
+            transport_kwargs["response_schema"] = response_schema
         return transport(prompt, **transport_kwargs), provider_call_index
 
     def invalid_output(
@@ -373,18 +378,38 @@ def generate_notes_document(
         repair_prompt: Callable[[str], str],
         budget: nd.NotesBudget,
         extra_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        response_schema: Mapping[str, Any] | None = None,
+        parse: Callable[[object], dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], int]:
+        """Run one logical request; `parse` replaces schema-1 parsing for an internal schema."""
         nonlocal last_successful_response, repair_used
         allowed_source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in citation_scope["segments"])
         )
-        recoveries = recovery_prompts(
-            prompt,
-            # The aim the primary prompt states: the reduction target, else the stage cap.
-            target=nd.MAX_REDUCTION_TARGET_BYTES if stage == "reduce" else max_output_bytes,
-            allowed_source_ids=allowed_source_ids,
-            budget=budget,
+        # A lower-size recovery prompt describes a schema-1 document, so an internal-schema
+        # request gets none; its over-cap or oversized answer goes to the shared repair or fails.
+        recoveries: Iterator[str] = (
+            iter(())
+            if parse is not None
+            else recovery_prompts(
+                prompt,
+                # The aim the primary prompt states: the reduction target, else the stage cap.
+                target=nd.MAX_REDUCTION_TARGET_BYTES if stage == "reduce" else max_output_bytes,
+                allowed_source_ids=allowed_source_ids,
+                budget=budget,
+            )
         )
+
+        def validate(raw: object) -> dict[str, Any]:
+            if parse is not None:
+                return parse(raw)
+            return parse_and_validate(
+                raw,
+                citation_scope,
+                max_output_bytes=max_output_bytes,
+                extra_validator=extra_validator,
+            )
+
         attempt, sent = "primary", prompt
         while True:
             try:
@@ -395,6 +420,7 @@ def generate_notes_document(
                     stage=stage,
                     attempt=attempt,
                     budget=budget,
+                    response_schema=response_schema,
                 )
             except Exception as error:
                 # Only a response over its cap earns a smaller ask; any other failure is final.
@@ -409,12 +435,7 @@ def generate_notes_document(
                 attempt, sent = "recovery", lowered
                 continue
             try:
-                validated = parse_and_validate(
-                    raw_output,
-                    citation_scope,
-                    max_output_bytes=max_output_bytes,
-                    extra_validator=extra_validator,
-                )
+                validated = validate(raw_output)
                 with ledger_lock:
                     if (
                         last_successful_response is None
@@ -469,14 +490,10 @@ def generate_notes_document(
                     stage=stage,
                     attempt="repair",
                     budget=budget,
+                    response_schema=response_schema,
                 )
                 try:
-                    validated = parse_and_validate(
-                        repaired_output,
-                        citation_scope,
-                        max_output_bytes=max_output_bytes,
-                        extra_validator=extra_validator,
-                    )
+                    validated = validate(repaired_output)
                     with ledger_lock:
                         if (
                             last_successful_response is None
@@ -792,6 +809,53 @@ def generate_notes_document(
             raise limit_error("Notes synthesis could not compact a summary within its limit.")
         return reduced
 
+    def reconcile(final_document: dict[str, Any]) -> dict[str, Any]:
+        """One structured patch over the projected final draft, map ledger and full source."""
+        ledger = ReconcileLedger.build(
+            projected_snapshot, final_document, summaries, max_unit_size=max_unit_size
+        )
+
+        def reconcile_prompt(invalid_output: str | None = None) -> str:
+            return ledger.build_prompt(
+                output_language=output_language,
+                invalid_output=invalid_output,
+                budget=synthesis_budget,
+            )
+
+        try:
+            prompt = reconcile_prompt()
+        except nd.NotesDocumentError:
+            # The long ChatGPT path requires this audit; publishing the unchecked draft would
+            # misreport it, so the bounded limit fails the task instead.
+            raise limit_error(
+                "This transcript exceeds the bounded notes source reconciliation limit."
+            ) from None
+        counts: list[dict[str, Any]] = []
+
+        def parse(raw: object) -> dict[str, Any]:
+            result = ledger.parse(raw)
+            counts.append(result.counts)
+            return result.document
+
+        progress("merging", reduction_calls, None, "calls")
+        document, call_index = request_document(
+            prompt,
+            projected_snapshot,
+            max_output_bytes=MAX_RECONCILE_OUTPUT_BYTES,
+            stage="reconcile",
+            repair_prompt=reconcile_prompt,
+            budget=synthesis_budget,
+            response_schema=ledger.schema(),
+            parse=parse,
+        )
+        coverage["source_audit"] = {
+            "status": "applied",
+            "mode": "reconcile",
+            "provider_call_index": call_index,
+            "counts": counts[-1],
+        }
+        return document
+
     documents = summaries
     for _level in range(nd.MAX_REDUCTION_LEVELS):
         final_prompt = None
@@ -817,12 +881,17 @@ def generate_notes_document(
                 ),
                 budget=synthesis_budget,
             )
-            if synthesis_budget.uses_token_estimate:
+            final_stage = "final"
+            if provider == "chatgpt" and synthesis_budget.uses_token_estimate:
+                final_document = reconcile(final_document)
+                final_stage = "reconcile"
+            elif synthesis_budget.uses_token_estimate:
                 coverage["source_audit"] = {
                     "status": "skipped",
                     "reason": "quality_not_qualified",
                 }
-            final_document = restore_final_document(final_document, stage="final")
+            # Projected IDs are restored exactly once, at publication.
+            final_document = restore_final_document(final_document, stage=final_stage)
             progress("merging", reduction_calls, None, "calls")
             return finish(final_document)
 

@@ -1572,6 +1572,68 @@ nội dung nên #79 vẫn mở. Các ngưỡng cohort riêng tư và thời gian
 
 Tag: kiến trúc, chất lượng Notes. Tài liệu đích: `docs/specification.md`, báo cáo nghiệm thu.
 
+### #79 / PR #181 — Đối chiếu có cấu trúc cho Notes dài ChatGPT (`notes-hierarchical-v20`)
+
+Liên kết: [#79](https://github.com/nguyencanhtrung/asr-studio/issues/79),
+[PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
+
+#### Vấn đề và thay đổi
+
+Đường phân cấp trước đây bỏ audit sau final (`quality_not_qualified`), nên ý mà map đã trích có
+thể mất ở final và claim không có nguồn vẫn được công bố. Baseline đo trên `d726bf5`
+(nguồn: `/tmp/asr-notes-recheck-20261108/aggregate-metadata.json`, `semantic_gate`): ca dài
+`long_found` 9/12 (cần ≥10), `material_invented` 6 (cần 0), `long_critical` 7/7, Notes ca dài
+157,688 giây với 4 provider call. Chất lượng sau thay đổi **đang chờ** lượt chạy frozen 5 ca của
+root; mục này không công bố số mới.
+
+Sau final của nguồn dài, khi provider là ChatGPT với budget token đã biết, pipeline gửi đúng một
+lượt `reconcile` (module `notes_reconcile.py`) trước khi khôi phục source ID. Ledger bất biến
+gồm mọi mục final (`f…`) và mọi mục map sau khi bỏ trùng overlap (`m…`). Model trả bản vá theo
+schema nội bộ `ledger_version` 1, không trả tài liệu: mỗi ref có đúng một disposition
+`keep`/`update`/`merge`/`remove`/`confirm`, cộng tối đa 16 `additions`. Code từ chối ref thiếu,
+lặp hoặc lạ; `merge` và `remove` lý do `duplicate` phải trỏ tới ref khác đang `keep`/`update`,
+nên không có chuỗi hay vòng; `remove` khác cần lý do `unsupported`/`superseded`/`nonmaterial`
+và không có target. Không có ngưỡng tỷ lệ xóa.
+
+Mục `keep` giữ nguyên bản gốc, không lấy lại từ model. `update`, `confirm` có prose mới và
+`additions` cần source ID hợp lệ trong nguồn chiếu toàn phần và quote nguyên văn (chuỗi con
+NFC) từ segment được trích. Addition có thể lấy ý từ toàn bộ nguồn, không chỉ từ ref map. Các
+guard bảo thủ: số/tên mới (token có chữ số, từ viết hoa giữa câu) phải có trong segment được
+trích; `update`/`confirm` không được bỏ từ phủ định/điều kiện/không chắc chắn của mục gốc;
+`confirm` chỉ hạ mục vào `confirmation_items`, và mọi số/tên còn lại phải có trong nguồn được
+trích, nên tên không có căn cứ phải bị bỏ hoặc ẩn danh; owner/deadline mới phải xuất hiện trong
+segment được trích (owner có thể là speaker của segment đó), hoặc là null. Đây là kiểm tra từ
+vựng, **không chứng minh entailment**; đánh giá ngữ nghĩa vẫn thuộc gate frozen. Cuối cùng code
+kiểm tra lại tài liệu schema 1 đã dựng; source ID được khôi phục đúng một lần khi công bố.
+
+#### Ngân sách và lỗi
+
+Schema nội bộ được truyền qua seam `response_schema` của transport; `None` giữ request schema 1
+y như cũ. Byte schema thật được tính trong `_check_prompt` (token và request-body guard) và
+trong guard body/context của adapter ChatGPT. Antigravity không bật reconcile và không đổi.
+Lượt reconcile dùng chung một repair của task và trần `MAX_PROVIDER_CALLS` hiện có; không có
+recovery prompt hạ cỡ (prompt đó mô tả tài liệu schema 1), không audit đệ quy. Bản vá không hợp
+lệ sau repair dùng chung, hoặc khi repair đã dùng/không có (output lỗi vượt 8.000 byte), làm
+task lỗi `notes_invalid_output` và giữ Notes đã lưu trước đó. Nếu toàn nguồn + ledger + schema
+không vừa ngân sách, task lỗi giới hạn `notes_synthesis_limit_exceeded` thay vì công bố bản
+chưa kiểm. Hệ quả: transcript quá lớn để mang toàn nguồn trong một request ChatGPT (trước đây
+vẫn có Notes qua fallback chỉ đọc draft) nay thất bại. Coverage ghi
+`source_audit = {"status": "applied", "mode": "reconcile", "provider_call_index", "counts"}`.
+Đường ChatGPT nguồn đơn (`rewrite`), Antigravity (`references` / `quality_not_qualified`) và
+model không rõ giữ nguyên.
+
+#### Kiểm chứng và giới hạn
+
+`tests/test_notes_reconcile.py` dùng fixture tổng hợp: thiếu/lặp/lạ ref, map fact chưa được
+xử lý, merge/target/vòng, quote sai và source ID lạ, metadata action, addition từ toàn nguồn,
+confirm giữ phủ định/không giữ tên không có nguồn, một lượt reconcile, repair dùng chung,
+lỗi prompt budget và byte schema thật tại pipeline/adapter. Mỗi guard mới được đảo một lần và
+test đỏ. Guard từ vựng có thể từ chối nhầm khi bản dịch thêm từ viết hoa không có trong nguồn
+(ví dụ tên thứ trong tuần), khi đó task lỗi thay vì công bố. Ý mà cả map và final đều bỏ và model
+không thêm lại vẫn mất. Thêm một model call cho nguồn dài; latency chưa đo.
+
+Tag: kiến trúc, chất lượng Notes. Tài liệu đích: `docs/backend-contract.md`.
+
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
 - Problem: the original dataset issue mixed Notes-from-transcript checks with

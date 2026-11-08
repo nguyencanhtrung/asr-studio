@@ -6,13 +6,13 @@ import copy
 import json
 import math
 import re
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v19"
+PROMPT_VERSION = "notes-hierarchical-v20"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -320,8 +320,27 @@ def build_notes_schema(allowed_source_ids: Any, *, max_unit_size: int = 1) -> di
     return schema
 
 
-def notes_schema_json_bytes(allowed_source_ids: Any, *, max_unit_size: int = 1) -> int:
-    schema = build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+def _request_schema(
+    allowed_source_ids: Any,
+    *,
+    max_unit_size: int = 1,
+    response_schema: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The schema a request actually sends: an internal stage schema, else notes schema 1."""
+    if response_schema is not None:
+        return dict(response_schema)
+    return build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+
+
+def notes_schema_json_bytes(
+    allowed_source_ids: Any,
+    *,
+    max_unit_size: int = 1,
+    response_schema: Mapping[str, Any] | None = None,
+) -> int:
+    schema = _request_schema(
+        allowed_source_ids, max_unit_size=max_unit_size, response_schema=response_schema
+    )
     return len(
         json.dumps(schema, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
             "utf-8"
@@ -345,10 +364,13 @@ def notes_provider_input_bytes(
     *,
     budget: NotesBudget | None = None,
     max_unit_size: int = 1,
+    response_schema: Mapping[str, Any] | None = None,
 ) -> int:
-    """Count the UTF-8 bytes represented as provider input, including the notes schema."""
+    """Count the UTF-8 bytes represented as provider input, including the request schema."""
     selected = _CONSERVATIVE_NOTES_BUDGET if budget is None else budget
-    schema = build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+    schema = _request_schema(
+        allowed_source_ids, max_unit_size=max_unit_size, response_schema=response_schema
+    )
     if selected.provider == "antigravity":
         return len(build_notes_provider_message(prompt, schema).encode("utf-8"))
     return len(prompt.encode("utf-8")) + len(
@@ -393,10 +415,13 @@ def notes_request_body_bytes(
     *,
     budget: NotesBudget | None = None,
     max_unit_size: int = 1,
+    response_schema: Mapping[str, Any] | None = None,
 ) -> int:
     """Return the serialized request/frame size for a model-specific notes transport."""
     selected = _CONSERVATIVE_NOTES_BUDGET if budget is None else budget
-    schema = build_notes_schema(allowed_source_ids, max_unit_size=max_unit_size)
+    schema = _request_schema(
+        allowed_source_ids, max_unit_size=max_unit_size, response_schema=response_schema
+    )
     if selected.provider == "chatgpt":
         # Include the largest supported reasoning metadata in planning so the run-time body
         # remains under the guard for every selected effort, including the default omission.
@@ -425,6 +450,7 @@ def notes_request_body_bytes(
         allowed_source_ids,
         budget=selected,
         max_unit_size=max_unit_size,
+        response_schema=response_schema,
     )
 
 
@@ -1337,6 +1363,7 @@ def _check_prompt(
     output_language: str = "en",
     budget: NotesBudget | None = None,
     max_unit_size: int = 1,
+    response_schema: Mapping[str, Any] | None = None,
 ) -> str:
     output_language = validate_output_language(output_language)
     selected_budget = _CONSERVATIVE_NOTES_BUDGET if budget is None else budget
@@ -1344,7 +1371,9 @@ def _check_prompt(
         prompt_bytes = len(prompt.encode("utf-8"))
     except UnicodeEncodeError as error:
         raise NotesDocumentError("The notes prompt is not valid UTF-8.") from error
-    schema_bytes = notes_schema_json_bytes(allowed_source_ids, max_unit_size=max_unit_size)
+    schema_bytes = notes_schema_json_bytes(
+        allowed_source_ids, max_unit_size=max_unit_size, response_schema=response_schema
+    )
     if selected_budget.uses_token_estimate:
         if (
             estimate_notes_tokens(prompt_bytes + schema_bytes, selected_budget)
@@ -1359,6 +1388,7 @@ def _check_prompt(
                 allowed_source_ids,
                 budget=selected_budget,
                 max_unit_size=max_unit_size,
+                response_schema=response_schema,
             )
             > selected_budget.request_guard_bytes
         ):
@@ -1382,6 +1412,7 @@ def _check_prompt(
                     allowed_source_ids,
                     budget=selected_budget,
                     max_unit_size=max_unit_size,
+                    response_schema=response_schema,
                 )
                 > selected_budget.request_guard_bytes
             ):

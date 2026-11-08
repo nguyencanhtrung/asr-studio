@@ -10,6 +10,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 import pytest
+from notes_helpers import reconcile_keep_patch
 
 from asr_studio.chatgpt import (
     ACCESS_REFRESH_MARGIN_SECONDS,
@@ -53,6 +54,7 @@ class NotesOnlyAdapter:
         self.replies = list(replies or [])
         self.responder = responder
         self.calls: list[NotesReply] = []
+        self.response_schemas: list[object] = []
         self.refresh_calls: list[dict[str, str]] = []
         self.refresh_results: list[dict | ChatGPTError] = []
 
@@ -81,7 +83,9 @@ class NotesOnlyAdapter:
         allowed_source_ids,
         max_output_bytes=None,
         budget=None,
+        response_schema=None,
     ):
+        self.response_schemas.append(response_schema)
         self.calls.append(
             NotesReply(
                 prompt,
@@ -172,6 +176,8 @@ def _payload(prompt, marker):
 
 
 def _document_for_prompt(prompt):
+    if "RECONCILE_INPUT_JSON:\n" in prompt:
+        return reconcile_keep_patch(prompt)
     if "SOURCE_JSON:\n" in prompt:
         payload = _payload(prompt, "SOURCE_JSON:\n")
         source_ids = [payload["segments"][0]["id"]]
@@ -1482,6 +1488,8 @@ def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
             finally:
                 with state_lock:
                     active -= 1
+        if kwargs["stage"] == "reconcile":
+            return reconcile_keep_patch(prompt)
         if kwargs["stage"] == "audit":
             payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
             ref = payload["audit_catalog"]["draft_candidates"][0]["ref"]
@@ -2370,6 +2378,8 @@ def test_parallel_map_progress_reports_completed_results_before_all_maps_finish(
                 )
             else:
                 second_returned.set()
+        if kwargs["stage"] == "reconcile":
+            return reconcile_keep_patch(prompt)
         if kwargs["stage"] == "audit":
             payload = _payload(prompt, "SYNTHESIS_INPUT_JSON:\n")
             result = _valid_document()
@@ -2469,8 +2479,23 @@ def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tm
     )
     assert result["overview"]
     assert len(adapter.refresh_calls) == 1
-    assert len(adapter.calls) == coverage[0]["provider_calls"] == 3
-    assert coverage[0]["source_audit"] == {"status": "skipped", "reason": "quality_not_qualified"}
+    assert len(adapter.calls) == coverage[0]["provider_calls"] == 4
+    assert coverage[0]["source_audit"] == {
+        "status": "applied",
+        "mode": "reconcile",
+        "provider_call_index": 4,
+        "counts": {
+            "final": {"keep": 1, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
+            "map": {"keep": 0, "update": 0, "merge": 0, "remove": 1, "confirm": 0},
+            "additions": 0,
+        },
+    }
+    assert adapter.response_schemas[:3] == [None, None, None]
+    assert adapter.response_schemas[3]["required"] == [
+        "ledger_version",
+        "dispositions",
+        "additions",
+    ]
     assert {call.access_token for call in adapter.calls} == {"fake-refreshed-access-1"}
     state = provider.store._read()
     assert state["connection_status"] == "connected"

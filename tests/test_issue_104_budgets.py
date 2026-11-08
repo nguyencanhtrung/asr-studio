@@ -1139,18 +1139,21 @@ def test_budgeted_oversize_pipeline_uses_the_pinned_chatgpt_owner_budget():
             budget=kwargs["budget"],
         )
 
-    result = generate_notes_document(
-        snapshot=_many_segment_snapshot(repeats=10),
-        output_language="en",
-        provider="chatgpt",
-        model="gpt-5.6-sol",
-        transport=transport,
-        invalid_output_error=AssertionError,
-        limit_error=RuntimeError,
-    )
+    # The required reconcile audit cannot carry this whole source, so the run stops at its
+    # bounded limit instead of publishing an unaudited draft.
+    with pytest.raises(RuntimeError, match="source reconciliation limit"):
+        generate_notes_document(
+            snapshot=_many_segment_snapshot(repeats=10),
+            output_language="en",
+            provider="chatgpt",
+            model="gpt-5.6-sol",
+            transport=transport,
+            invalid_output_error=AssertionError,
+            limit_error=RuntimeError,
+        )
 
-    assert result == _empty_document()
     assert calls
+    assert calls[-1]["stage"] == "final"
     assert all(call["budget"].uses_token_estimate is True for call in calls)
     assert all(
         json.loads(request.content)["max_output_tokens"]
@@ -1181,15 +1184,16 @@ def test_chunk_recovery_prompt_uses_the_pinned_owner_budget(monkeypatch):
             )
         return json.dumps(_empty_document())
 
-    generate_notes_document(
-        snapshot=_snapshot(300_000),
-        output_language="en",
-        provider="chatgpt",
-        model="gpt-5.6-sol",
-        transport=transport,
-        invalid_output_error=AssertionError,
-        limit_error=RuntimeError,
-    )
+    with pytest.raises(RuntimeError, match="source reconciliation limit"):
+        generate_notes_document(
+            snapshot=_snapshot(300_000),
+            output_language="en",
+            provider="chatgpt",
+            model="gpt-5.6-sol",
+            transport=transport,
+            invalid_output_error=AssertionError,
+            limit_error=RuntimeError,
+        )
 
     assert recovery_budgets
     assert recovery_budgets[0].uses_token_estimate is True
@@ -1677,14 +1681,15 @@ def test_chatgpt_provider_passes_the_pinned_owner_budget_to_real_adapter(
 
     adapter = ChatGPTHTTPAdapter(transport=httpx.MockTransport(handler))
     provider = _connected_chatgpt_provider(tmp_path, adapter)
-    result = provider.generate_notes_document(
-        snapshot=_many_segment_snapshot(repeats=10),
-        connection_version=7,
-        model="gpt-5.6-sol",
-        reasoning_effort="medium",
-    )
+    with pytest.raises(ChatGPTError) as failure:
+        provider.generate_notes_document(
+            snapshot=_many_segment_snapshot(repeats=10),
+            connection_version=7,
+            model="gpt-5.6-sol",
+            reasoning_effort="medium",
+        )
 
-    assert result == _empty_document()
+    assert failure.value.code == "notes_synthesis_limit_exceeded"
     assert requests
     assert any(
         "SYNTHESIS_INPUT_JSON:" in json.loads(request.content)["input"][0]["content"][0]["text"]
