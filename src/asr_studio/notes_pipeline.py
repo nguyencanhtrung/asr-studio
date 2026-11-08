@@ -14,6 +14,7 @@ from typing import Any, Protocol
 # Limits are read through the module at call time so tests can lower them.
 from asr_studio import notes_document as nd
 from asr_studio.notes_audit import AuditCatalog
+from asr_studio.notes_context import link_antecedent_context
 from asr_studio.notes_reconcile import (
     MAX_RECONCILE_OUTPUT_BYTES,
     ReconcileLedger,
@@ -884,6 +885,20 @@ def generate_notes_document(
         reduction_calls += 1
         final_document = reconcile(empty_seed)
         final_document = restore_final_document(final_document, stage="reconcile")
+        # After the last provider request: add local antecedent-context citations in code.
+        linked, context_counts = link_antecedent_context(
+            final_document,
+            snapshot,
+            max_refs_per_item=nd.MAX_SOURCE_REFS_PER_ITEM,
+        )
+        try:
+            final_document = nd.validate_document(
+                linked, snapshot, max_output_bytes=nd.MAX_OUTPUT_BYTES
+            )
+            coverage["source_context"] = {"status": "applied", **context_counts}
+        except nd.NotesDocumentError:
+            # Context links are optional provenance; the validated document stays as it was.
+            coverage["source_context"] = {"status": "skipped", "reason": "limit"}
         progress("merging", reduction_calls, None, "calls")
         return finish(final_document)
 

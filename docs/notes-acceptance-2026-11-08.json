@@ -1,0 +1,76 @@
+{
+  "metadata_schema_version": 1,
+  "issue": 79,
+  "pull_request": 181,
+  "public_notes_schema_version": 1,
+  "prompt_version": "notes-hierarchical-v24",
+  "source_sha256": "c0a4de56d4fad658d8c3289cec67017d2203d31f84d5c54a6230633a185a8d37",
+  "gold_sha256": "402b70e218bae7a00a21a68f5782fcbaa69c457dde5c20f1076cb90c44986684",
+  "provider": "chatgpt",
+  "model": "gpt-5.6-sol",
+  "reasoning_effort": "medium",
+  "full_physical_run": {
+    "prompt_version": "notes-hierarchical-v23",
+    "elapsed_seconds": 474.498,
+    "actual_model_requests": 11,
+    "cached_requests": 0,
+    "breakdown": {
+      "maps": 9,
+      "reconciliation": 1,
+      "shared_repair": 1
+    },
+    "scope": "Notes from transcript; excludes ASR/audio"
+  },
+  "postprocess_verification": {
+    "exact_sdk_request_frames_replayed": 11,
+    "new_model_requests": 0,
+    "prose_metadata_items_unchanged": 289,
+    "existing_citations_removed": 0,
+    "items_with_added_context": 33,
+    "source_ids_added": 145,
+    "local_component_measurement": {
+      "runs": 20,
+      "mean_seconds": 0.004004061401428771,
+      "max_seconds": 0.0049644509999779984,
+      "counts": {
+        "items": 33,
+        "added_ids": 145
+      },
+      "scope": "local deterministic context-link step only; not a new full pipeline timing"
+    },
+    "scope": "v24 replay preserves all SDK bodies/schemas/response caps; physical timing above belongs to v23, not a new v24 end-to-end run",
+    "local_full_replay_seconds": 0.391,
+    "conservative_component_sum_seconds": 474.889,
+    "component_sum_scope": "previous measured full run plus entire measured current local replay; conservative reuse estimate for identical SDK frames, not a new physical end-to-end run"
+  },
+  "semantic_gate": {
+    "found": 11,
+    "total": 12,
+    "critical_found": 7,
+    "critical_total": 7,
+    "material_unsupported": 0,
+    "unresolved_source_ids": 0,
+    "assessment_scope": {
+      "original_full_audit_items": 289,
+      "independent_context_pools_checked": 34,
+      "current_pools_reusing_original_pass": 256,
+      "current_pools_reusing_context_pass": 33,
+      "uncovered_pools": 0
+    },
+    "remaining_partial_gold": [
+      "G09"
+    ]
+  },
+  "runtime_module_sha256": {
+    "notes_context.py": "ae00f9edd532b43594e00b885dccd0d8f455332e8feae0e847b74dd81f6eff4f",
+    "notes_pipeline.py": "fc44ac523928811c3c05df3edf4bbb20d5f49a1b8cc1f7d2252bf3f3bd75a698",
+    "notes_document.py": "b379d8d86039824de98f9f0fe4ba888c76367ff161573c176941a404088dad9e",
+    "notes_reconcile.py": "1372bbc629d6d39343a6b659d75edaf5b2df6954f344a53c6d3507002814cfc9"
+  },
+  "limits": [
+    "One fixed public long fixture and qualified short controls; no all-provider or private-cohort guarantee.",
+    "Context links add bounded local provenance; they do not prove semantic entailment.",
+    "English honorific/verb heuristics; unresolved anchors remain unchanged.",
+    "No raw source, gold, generated Notes or SDK capture is published."
+  ]
+}

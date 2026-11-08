@@ -647,9 +647,9 @@ def _long_transport(calls, reconcile, *, chunk=None):
     return transport
 
 
-def _run(transport, provider="chatgpt", model="gpt-5.6-sol", coverage=None):
+def _run(transport, provider="chatgpt", model="gpt-5.6-sol", coverage=None, snapshot=None):
     return generate_notes_document(
-        snapshot=_long_snapshot(),
+        snapshot=snapshot or _long_snapshot(),
         output_language="en",
         provider=provider,
         model=model,
@@ -706,6 +706,40 @@ def test_long_chatgpt_runs_one_reconcile_with_projected_ids_and_restores_once():
         len(calls),
     )
     assert audit["counts"]["additions"] == 1
+
+
+def test_long_reconcile_links_a_local_antecedent_after_the_last_provider_call():
+    snapshot = _long_snapshot()
+    snapshot["segments"].insert(
+        1,
+        {
+            "id": f"{9:032x}",
+            "start_seconds": 3_590.0,
+            "end_seconds": 3_591.0,
+            "text": "Mr. Varga, please come forward.",
+            "speaker_name": "Morgan",
+        },
+    )
+    calls: list[dict] = []
+    coverage: list[dict] = []
+
+    def reconcile(prompt, _kwargs):
+        source = reconcile_payload(prompt)["source"]["segments"]
+        claim = source[2]["id"]
+        patch = json.loads(reconcile_keep_patch(prompt))
+        patch["additions"] = [
+            _addition("key_topics", "Mr. Varga: renewal open", [claim], [(claim, "still open")])
+        ]
+        return json.dumps(patch)
+
+    result = _run(_long_transport(calls, reconcile), coverage=coverage, snapshot=snapshot)
+
+    assert [call["stage"] for call in calls][-1] == "reconcile"  # no call after the link
+    assert {"text": "Mr. Varga: renewal open", "source_ids": [f"{9:032x}", f"{2:032x}"]} in (
+        result["key_topics"]
+    )
+    assert coverage[0]["source_context"] == {"status": "applied", "items": 1, "added_ids": 1}
+    assert coverage[0]["provider_calls"] == len(calls)
 
 
 def test_invalid_reconcile_uses_the_one_shared_repair_then_fails():

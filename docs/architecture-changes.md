@@ -1764,6 +1764,48 @@ Regression cũng tạo một revision đã lưu, chạy lại Notes rồi nhận
 bộ revision trước/sau để xác nhận bản cũ được giữ nguyên. Đường Antigravity và model không rõ có
 kiểm tra riêng mức song song, không chỉ kiểm tra nhánh map danh mục sự kiện.
 
+### #79 — Liên kết ngữ cảnh tiền đề sau reconcile (`notes-hierarchical-v24`)
+
+#### Vấn đề quan sát
+
+Lượt chấm độc lập ca dài v23 (11 call thật): 0 thông tin bịa, nhưng 17 mục nêu đúng nguồn mà
+segment được trích không tự xác lập người/tổ chức/vai trò/số văn bản: tên tự giới thiệu, lời mời
+phát biểu hay số dự luật nằm ở segment liền trước, còn segment được trích chỉ có "she", "the bill"
+hoặc người nói chưa gắn tên. Nhãn diarization có thể đổi giữa câu nên không dùng làm ranh giới.
+
+#### Thay đổi
+
+- `notes_context.link_antecedent_context` chạy bằng mã, chỉ ở đường danh mục sự kiện ChatGPT dài,
+  sau call reconcile/repair cuối và sau khôi phục ID; không thêm call model, không đổi byte prompt,
+  schema hay trần phản hồi.
+- Mốc lấy từ mục: tên sau danh xưng/vai trò, chủ ngữ phát biểu đầu mục (`X:`, `X requested …`),
+  tổ chức có từ nối thường (`Friends of the …`; ưu tiên khớp đúng, từ cuối chỉ được lệch ASR khi
+  cùng độ dài ≥ 6, đúng một ký tự bên trong bị thay, 2 ký tự đầu/cuối giống; nhiều cách viết gần
+  khác nhau trong một hay nhiều segment thì bỏ),
+  số ≥ 5 chữ số nguyên văn, vai trò đầu mục hoặc owner là vai trò. Với mỗi cụm segment được trích
+  thiếu mốc, mã lùi tối đa 16 segment và 180 giây tìm lần xuất hiện gần nhất, thêm segment đó và
+  cầu nối tới cụm; không vượt qua tiêu đề mục chương trình mới. Quá 12 ID/mục hoặc vượt trần ref
+  thì bỏ, không cắt. Overview không đổi.
+- Chỉ thêm `source_ids` có thật theo thứ tự nguồn; không sửa văn bản, mục, owner, hạn, không bỏ
+  trích dẫn cũ, không dùng nhãn người nói. Tài liệu được kiểm tra lại; lỗi thì giữ bản trước.
+  Manifest ghi `source_context` (`applied` + số mục/ID, hoặc `skipped`).
+- Liên kết này là nguồn gốc ngữ cảnh, không phải bằng chứng ngữ nghĩa rằng mục được nguồn hàm ý.
+- `PROMPT_VERSION` = `notes-hierarchical-v24`; schema công khai 1, ledger nội bộ 2 giữ nguyên.
+
+#### Kiểm chứng và giới hạn
+
+Test dữ liệu bịa (tên lặp, nhãn đổi giữa câu, đại từ, chủ đề cũ ngoài cửa sổ, thiếu mốc, giới hạn)
+và test pipeline đỏ trước, xanh sau. Replay chính xác 11 frame SDK của lượt v23: 0 call mới,
+văn bản/metadata/trích dẫn cũ giữ nguyên. Bản cuối có 33 mục thêm 145 ID; một chuỗi ngữ cảnh dư
+vượt mục chương trình được bỏ. Chấm độc lập 34 pool đã thay đổi trước đó đạt 0 lỗi hỗ trợ quan
+trọng; bản cuối tái sử dụng đúng 33 pool đã chấm này và 256 pool của lượt chấm đầy đủ ban đầu,
+không có pool chưa được kiểm. Kết quả cố định: 11/12, đủ 7/7 điểm quan trọng, 0 claim quan trọng
+thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Nguồn số liệu và hash:
+[`notes-acceptance-2026-11-08.json`](notes-acceptance-2026-11-08.json), các báo cáo/response giữ
+bền cục bộ (gitignored). Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ,
+không phải lượt đo end-to-end mới. Bước liên kết được đo riêng trong metadata. Mốc ngoài cửa sổ
+hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
+
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
 - Problem: the original dataset issue mixed Notes-from-transcript checks with
