@@ -74,7 +74,7 @@ def _keep_all(ledger, **overrides):
     dispositions = []
     for ref in ledger.refs:
         dispositions.append(overrides.get(ref, reconcile_disposition(ref)))
-    return {"ledger_version": 1, "dispositions": dispositions, "additions": []}
+    return {"ledger_version": 2, "dispositions": dispositions, "additions": []}
 
 
 def _apply(patch):
@@ -102,11 +102,48 @@ def test_keep_preserves_original_items_and_map_keep_adds_the_map_item():
     assert result.counts["map"] == {"keep": 1, "update": 0, "merge": 0, "remove": 1, "confirm": 0}
 
 
+EMPTY_PATCH = {"ledger_version": 2, "dispositions": [], "additions": []}
+
+
+def test_empty_overlay_keeps_every_fact_and_input_is_immutable():
+    ledger = _ledger()
+    before = json.dumps(ledger.prompt_payload(), sort_keys=True)
+    result = ledger.apply(dict(EMPTY_PATCH, dispositions=[], additions=[]))
+    assert json.dumps(ledger.prompt_payload(), sort_keys=True) == before
+    assert _map()["decisions"][0] in result.document["decisions"]
+    assert result.document["key_topics"] == _map()["key_topics"]
+    assert result.counts["default_kept"] == 5
+    assert result.counts["final"]["keep"] == 3 and result.counts["map"]["keep"] == 2
+    assert result.document == ledger.apply(_keep_all(ledger)).document
+
+
+def test_sparse_update_preserves_unlisted_facts():
+    ledger = _ledger()
+    result = ledger.apply(
+        dict(
+            EMPTY_PATCH,
+            dispositions=[reconcile_disposition("m1", "remove", reason="duplicate", target="f0")],
+        )
+    )
+    assert result.document["decisions"] == _final()["decisions"]
+    assert result.document["key_topics"] == _map()["key_topics"]
+    assert result.counts["default_kept"] == 4 and result.counts["map"]["remove"] == 1
+
+
+def test_old_explicit_complete_patch_still_works_with_version_2():
+    ledger = _ledger()
+    assert ledger.apply(_keep_all(ledger)).counts["default_kept"] == 0
+
+
+def test_default_keep_does_not_bypass_grounding():
+    ledger = _cue_ledger("key_topics", "Priya Okafor shared survey results.", ["n3"])
+    with pytest.raises(nd.NotesDocumentError, match="named span"):
+        ledger.apply(EMPTY_PATCH)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
-        pytest.param(lambda patch: patch["dispositions"].pop(0), id="omitted-final-ref"),
-        pytest.param(lambda patch: patch["dispositions"].pop(), id="unaccounted-map-ref"),
         pytest.param(
             lambda patch: patch["dispositions"].append(reconcile_disposition("f0")),
             id="duplicate-ref",
@@ -122,10 +159,10 @@ def test_keep_preserves_original_items_and_map_keep_adds_the_map_item():
             id="keep-with-text",
         ),
         pytest.param(lambda patch: patch.update(extra=1), id="extra-field"),
-        pytest.param(lambda patch: patch.update(ledger_version=2), id="version"),
+        pytest.param(lambda patch: patch.update(ledger_version=1), id="version"),
     ],
 )
-def test_patch_accounting_rejects_omission_duplicates_and_unknown_refs(mutate):
+def test_patch_accounting_rejects_duplicates_and_unknown_refs(mutate):
     patch = _keep_all(_ledger())
     mutate(patch)
     with pytest.raises(nd.NotesDocumentError):
@@ -465,7 +502,7 @@ def test_confirm_with_new_prose_keeps_negation_and_conditions(original):
         evidence=[{"source_id": "s1", "quote": "ship the pilot"}],
     )
     with pytest.raises(nd.NotesDocumentError) as failure:
-        ledger.apply({"ledger_version": 1, "dispositions": [flipped], "additions": []})
+        ledger.apply({"ledger_version": 2, "dispositions": [flipped], "additions": []})
     assert failure.value.reason_code == "text"
 
 
@@ -473,7 +510,7 @@ def test_confirm_cannot_park_an_unsupported_name_unchanged():
     ledger = _confirm_ledger("Pilot approved by Quinn in 3 regions.")
     unchanged = reconcile_disposition("f0", "confirm")
     with pytest.raises(nd.NotesDocumentError):
-        ledger.apply({"ledger_version": 1, "dispositions": [unchanged], "additions": []})
+        ledger.apply({"ledger_version": 2, "dispositions": [unchanged], "additions": []})
     anonymised = reconcile_disposition(
         "f0",
         "confirm",
@@ -482,7 +519,7 @@ def test_confirm_cannot_park_an_unsupported_name_unchanged():
         evidence=[{"source_id": "s1", "quote": "ship the pilot in 3 regions"}],
     )
     document = ledger.apply(
-        {"ledger_version": 1, "dispositions": [anonymised], "additions": []}
+        {"ledger_version": 2, "dispositions": [anonymised], "additions": []}
     ).document
     assert document["confirmation_items"][0]["text"].startswith("Pilot approver")
     assert "reconcile" not in json.dumps(document)
@@ -492,7 +529,9 @@ def test_schema_counts_every_ref_without_source_id_enums():
     ledger = _ledger()
     schema = ledger.schema()
     dispositions = schema["properties"]["dispositions"]
-    assert dispositions["minItems"] == dispositions["maxItems"] == 5
+    assert dispositions["maxItems"] == 5
+    assert "minItems" not in dispositions
+    assert schema["properties"]["ledger_version"]["enum"] == [2]
     assert "s1" not in json.dumps(schema)
 
 
@@ -1138,7 +1177,7 @@ def _meta_ledger(final_action, map_action):
 
 def _dup(ledger, f0=None, action="remove"):
     return {
-        "ledger_version": 1,
+        "ledger_version": 2,
         "dispositions": [
             f0 or reconcile_disposition("f0"),
             reconcile_disposition(
@@ -1212,3 +1251,17 @@ def test_update_keeping_metadata_compares_canonical_date_not_none():
     assert [(i["owner"], i["deadline_date"]) for i in document["action_items"]] == [
         ("Ada", "2026-01-06")
     ]
+
+
+@pytest.mark.parametrize("language", ["en", "vi"])
+def test_instructions_ask_only_for_changed_operations(language):
+    prompt = _ledger().build_prompt(output_language=language)
+    assert '{"ledger_version":2,"dispositions":[],"additions":[]}' in prompt
+    assert "exactly one" not in prompt and "đúng một" not in prompt
+
+
+def test_sparse_wire_schema_omits_unchanged_keep_operations():
+    ledger = _ledger()
+    actions = ledger.schema()["properties"]["dispositions"]["items"]["properties"]["action"]["enum"]
+    assert "keep" not in actions
+    assert set(actions) == {"update", "merge", "remove", "confirm"}

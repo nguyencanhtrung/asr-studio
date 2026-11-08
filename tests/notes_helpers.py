@@ -275,4 +275,4 @@ def reconcile_keep_patch(prompt: str) -> str:
             if targets
             else reconcile_disposition(item["ref"])
         )
-    return json.dumps({"ledger_version": 1, "dispositions": dispositions, "additions": []})
+    return json.dumps({"ledger_version": 2, "dispositions": dispositions, "additions": []})

@@ -2489,6 +2489,7 @@ def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tm
             "final": {"keep": 0, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
             "map": {"keep": 1, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
             "additions": 0,
+            "default_kept": 0,
         },
     }
     assert adapter.response_schemas[:2] == [None, None]

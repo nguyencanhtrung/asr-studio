@@ -1688,6 +1688,35 @@ giữ Notes cũ. Guard số có thể bắt nhầm cụm giảm dần hợp lệ
 "10 to 5"). Nhiều map hơn làm ledger lớn hơn; nguồn + ledger vượt ngân sách vẫn là lỗi giới hạn
 có biên. Latency và chất lượng chưa đo.
 
+### #79 — Reconcile là overlay thưa, mặc định giữ (`notes-hierarchical-v22`, `ledger_version` 2)
+
+#### Vấn đề
+
+Đo trước thay đổi (nguồn: `eval-atomic/results/long.json` + `long.log`, ca dài v21, 557 segment):
+call `reconcile` (prompt 247.894 byte) kết thúc `provider_output_too_large` sau 676,6 giây. Model
+phải trả một disposition `keep` cho mỗi ref (294 ref map), nên phần lớn đầu ra là boilerplate.
+
+#### Thay đổi
+
+- Hợp đồng đổi định dạng, không đổi ngưỡng chất lượng. Model chỉ trả các thao tác **có thay đổi**;
+  bỏ bản ghi `keep` không đổi. Mã khởi tạo `keep` cho mọi ref bất biến của ledger, thao tác được
+  nêu chỉ ghi đè đúng ref đó. Thiếu thao tác nghĩa là giữ, không bao giờ bỏ (model bỏ sót không
+  gây mất ý). `counts.default_kept` cho biết số ref được mã giữ mặc định.
+- `keep` tường minh vẫn được chấp nhận (tương thích), không yêu cầu. Vá đầy đủ cũ chạy với
+  `ledger_version` 2.
+- Schema nội bộ `ledger_version` 2: `dispositions` chỉ còn `maxItems` = số ref (bỏ `minItems`).
+  Schema công khai 1 không đổi; byte các frame SDK ngắn đủ điều kiện không đổi, chỉ prompt dài
+  đổi (EN/VI, có ví dụ vá rỗng `{"ledger_version":2,"dispositions":[],"additions":[]}`).
+- Mọi guard giữ nguyên: ref lạ/lặp, vòng, sai hình dạng, evidence/owner/marker/range, merge không
+  mất mát và metadata action (owner/deadline). Mục giữ mặc định đi qua cùng kiểm tra grounding
+  toàn bộ mục cuối, nên tên/range/owner sai vẫn bị từ chối.
+- `PROMPT_VERSION` = `notes-hierarchical-v22`.
+
+#### Kiểm chứng và giới hạn
+
+Test đơn vị đỏ trên `b2d57fb`, xanh sau thay đổi. **Không** tuyên bố chất lượng hay latency sau
+thay đổi: chưa gọi model, đo sau chờ lượt frozen của root.
+
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
 - Problem: the original dataset issue mixed Notes-from-transcript checks with
