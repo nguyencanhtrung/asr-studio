@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v20"
+PROMPT_VERSION = "notes-hierarchical-v21"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -155,6 +155,8 @@ MAX_TOTAL_SOURCE_BYTES = 1_000_000
 # a segment larger than this is never repeated.
 NOTES_OVERLAP_BYTES = 2_000
 MAX_RETAINED_SOURCE_SPAN_SECONDS = 3_600.0
+# Known-ChatGPT sources over the hour are mapped in quarter-hour fact-inventory parts.
+FACT_PART_SPAN_SECONDS = 900.0
 # Parts of one over-budget segment repeat this many characters, cut at whitespace when possible.
 _PART_OVERLAP_CHARS = 300
 _PART_MARKER_MAX = 99  # the widest part marker, since MAX_NOTES_CHUNKS bounds the part count
@@ -527,6 +529,7 @@ class NotesPlan:
     chunked: bool
     manifest: dict[str, Any]
     hourly: bool = False
+    fact_inventory: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1192,6 +1195,28 @@ _PLACEMENT_RULE = {
 }
 
 
+# Map-stage only, for the long known-ChatGPT path; other prompts never carry it.
+_FACT_INVENTORY_RULE = {
+    "en": (
+        "Fact inventory: this output is a lossless fact list for a later structured merge, not "
+        "a summary. Give each distinct fact its own item with one claim per item; do not merge "
+        "separate facts into one topic. Keep separately: explicit requests, each stated support "
+        "or opposition with its stated rationale, follow-up work after a decision, and "
+        "stakeholder positions, apart from formal outcomes. Do not repair noisy names or counts "
+        "and do not turn an incoherent numeric phrase into a precise quantity; keep clear "
+        "information and mark the unclear part as unclear.\n"
+    ),
+    "vi": (
+        "Danh mục sự kiện: đầu ra này là danh sách ý không mất mát cho bước gộp có cấu trúc sau, "
+        "không phải bản tóm tắt. Mỗi ý riêng là một mục chỉ nêu một nội dung; không gộp các ý "
+        "khác nhau thành một chủ đề. Giữ riêng: yêu cầu nêu rõ, từng ý ủng hộ hoặc phản đối kèm "
+        "lý do được nêu, việc tiếp theo sau một quyết định và lập trường của các bên, tách khỏi "
+        "kết quả chính thức. Không sửa tên hoặc số bị nhiễu và không biến cụm số thiếu mạch lạc "
+        "thành số lượng chính xác; giữ thông tin rõ và ghi phần chưa rõ là chưa rõ.\n"
+    ),
+}
+
+
 def _style_rules(output_language: str) -> str:
     return _TELEGRAPH_RULE[output_language] + _PLACEMENT_RULE[output_language]
 
@@ -1203,6 +1228,7 @@ def _source_instructions(
     chunk_count: int | None = None,
     budget: NotesBudget | None = None,
     max_output_bytes: int | None = None,
+    fact_inventory: bool = False,
 ) -> str:
     output_language = validate_output_language(output_language)
     if output_language == "en":
@@ -1314,6 +1340,8 @@ def _source_instructions(
                 'Đoạn có dấu "part": [i, n] là mảnh i trên n của một đoạn dài; các mảnh dùng '
                 "chung mã và khoảng thời gian, hai mảnh liền nhau lặp lại một đoạn văn bản ngắn.\n"
             )
+        if fact_inventory:
+            instructions += _FACT_INVENTORY_RULE[output_language]
     return instructions
 
 
@@ -1325,6 +1353,7 @@ def _source_prompt(
     chunk_count: int | None = None,
     budget: NotesBudget | None = None,
     max_output_bytes: int | None = None,
+    fact_inventory: bool = False,
 ) -> str:
     instructions = _source_instructions(
         output_language=output_language,
@@ -1332,6 +1361,7 @@ def _source_prompt(
         chunk_count=chunk_count,
         budget=budget,
         max_output_bytes=max_output_bytes,
+        fact_inventory=fact_inventory,
     )
     prompt = (
         instructions
@@ -1489,8 +1519,9 @@ def build_chunk_prompt(
     budget: NotesBudget | None = None,
     max_unit_size: int = 1,
     max_output_bytes: int | None = None,
+    fact_inventory: bool = False,
 ) -> str:
-    """Build one source-local extraction request for a planned chunk."""
+    """Build one source-local extraction request; `fact_inventory` marks a long-CG map part."""
     output_language = validate_output_language(output_language)
     if not 1 <= chunk_index <= chunk_count <= MAX_NOTES_CHUNKS:
         raise NotesDocumentError("The notes chunk index is outside the configured chunk limit.")
@@ -1504,6 +1535,7 @@ def build_chunk_prompt(
                 chunk_count=chunk_count,
                 budget=budget,
                 max_output_bytes=max_output_bytes,
+                fact_inventory=fact_inventory,
             ),
             invalid_output,
             output_language=output_language,
@@ -1564,6 +1596,7 @@ def _chunk_prompt_for_budget(
     *,
     output_language: str = "en",
     budget: NotesBudget | None = None,
+    fact_inventory: bool = False,
 ) -> str:
     chunk = _chunk_snapshot(snapshot, segments)
     return _source_prompt(
@@ -1573,6 +1606,7 @@ def _chunk_prompt_for_budget(
         chunk_count=MAX_NOTES_CHUNKS,
         budget=budget,
         max_output_bytes=notes_chunk_output_bytes(budget),
+        fact_inventory=fact_inventory,
     )
 
 
@@ -1974,6 +2008,11 @@ def plan_source(
     hourly_partition = (
         retained_span is not None and retained_span > MAX_RETAINED_SOURCE_SPAN_SECONDS
     )
+    # Only a known-ChatGPT budget gets quarter-hour fact parts; others keep hourly parts.
+    fact_inventory = (
+        hourly_partition and provider == "chatgpt" and selected_budget.uses_token_estimate
+    )
+    part_span = FACT_PART_SPAN_SECONDS if fact_inventory else MAX_RETAINED_SOURCE_SPAN_SECONDS
     full_prompt = _source_prompt(
         planning_snapshot,
         output_language=output_language,
@@ -1996,6 +2035,7 @@ def plan_source(
                 prompt_segments,
                 output_language=output_language,
                 budget=selected_budget,
+                fact_inventory=fact_inventory,
             ),
             tuple(item["id"] for item in prompt_segments),
             output_language=output_language,
@@ -2034,8 +2074,7 @@ def plan_source(
                 same_source = candidate["id"] == owned_segments[0]["id"]
                 if (
                     not same_source
-                    and (_retained_span([*owned_segments, candidate]) or 0)
-                    > MAX_RETAINED_SOURCE_SPAN_SECONDS
+                    and (_retained_span([*owned_segments, candidate]) or 0) > part_span
                 ):
                     break
             owned.append(units[index])
@@ -2044,7 +2083,11 @@ def plan_source(
         overlap = _trailing_overlap(owned)
 
     plan = NotesPlan(
-        tuple(chunks), True, _coverage_manifest(source_ids, chunks), hourly=hourly_partition
+        tuple(chunks),
+        True,
+        _coverage_manifest(source_ids, chunks),
+        hourly=hourly_partition,
+        fact_inventory=fact_inventory,
     )
     verify_coverage(snapshot, plan)
     return plan

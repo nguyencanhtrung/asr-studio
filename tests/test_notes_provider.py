@@ -1512,14 +1512,14 @@ def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
         model="gpt-5.6-sol",
     )
 
+    # Quarter-hour fact parts: four maps, at most two in flight, then one structured final.
     assert max_active == 2
-    assert completion_order == ["detail 3", "detail 0"]
-    assert result["overview"][0]["text"] == "final"
-    assert len(final_payloads) == 1
-    source_orders = [list(item["source_order"].values()) for item in final_payloads[0]["summaries"]]
-    assert source_orders == sorted(source_orders)
+    assert completion_order == ["detail 1", "detail 2", "detail 3", "detail 0"]
+    assert final_payloads == []  # no free-form final synthesis
+    assert [item["text"] for item in result["overview"]] == [f"detail {i}" for i in range(4)]
     chunk_indices = [entry["provider_call_index"] for entry in manifests[0]["chunks"]]
-    assert sorted(chunk_indices) == [1, 2]
+    assert sorted(chunk_indices) == [1, 2, 3, 4]
+    assert manifests[0]["source_audit"]["provider_call_index"] == 5
     chunk_progress = [event["current"] for event in progress if event["stage"] == "chunking"]
     assert chunk_progress == sorted(chunk_progress)
 
@@ -2479,19 +2479,20 @@ def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tm
     )
     assert result["overview"]
     assert len(adapter.refresh_calls) == 1
-    assert len(adapter.calls) == coverage[0]["provider_calls"] == 4
+    # Two maps and the structured reconcile as the final synthesis; no free final call.
+    assert len(adapter.calls) == coverage[0]["provider_calls"] == 3
     assert coverage[0]["source_audit"] == {
         "status": "applied",
         "mode": "reconcile",
-        "provider_call_index": 4,
+        "provider_call_index": 3,
         "counts": {
-            "final": {"keep": 1, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
-            "map": {"keep": 0, "update": 0, "merge": 0, "remove": 1, "confirm": 0},
+            "final": {"keep": 0, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
+            "map": {"keep": 1, "update": 0, "merge": 0, "remove": 0, "confirm": 0},
             "additions": 0,
         },
     }
-    assert adapter.response_schemas[:3] == [None, None, None]
-    assert adapter.response_schemas[3]["required"] == [
+    assert adapter.response_schemas[:2] == [None, None]
+    assert adapter.response_schemas[2]["required"] == [
         "ledger_version",
         "dispositions",
         "additions",

@@ -8,8 +8,10 @@ the reconstructed public schema-1 document. Any invalid patch raises ``NotesDocu
 pipeline's single shared repair applies; nothing is silently reverted or dropped.
 
 The lexical guards (quote substrings, digit/name anchoring, action owner/deadline presence,
-certainty markers) are conservative checks only. They do not prove that a statement is entailed
-by its source; semantic quality is still assessed by the frozen benchmark gate.
+certainty markers, normalized-containment merges, cited multiword names, incoherent descending
+number phrases) are conservative checks only. They do not prove that a statement is entailed
+by its source, and full coverage plus a fact ledger cannot guarantee that every semantic fact
+survives; semantic quality is still assessed by the frozen benchmark gate.
 """
 
 from __future__ import annotations
@@ -38,6 +40,64 @@ _NO_REASON = "none"
 _SECTION_NAMES = tuple(section for section, _heading in nd.SECTIONS)
 _WORD_RE = re.compile(r"\S+", re.UNICODE)
 _EDGE_PUNCT_RE = re.compile(r"^[^\w]+|[^\w]+$", re.UNICODE)
+_NON_WORD_RE = re.compile(r"[^\w]+", re.UNICODE)
+_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# Digit A 'to/đến' digit B. A > B with no directional word in the clause is incoherent ASR noise.
+_RANGE_RE = re.compile(
+    r"(?<![\w.,])\$?(\d[\d,]*(?:\.\d+)?)\s*(?:to|đến|tới)\s*\$?(\d[\d,]*(?:\.\d+)?)(?!\w)",
+    re.IGNORECASE,
+)
+_POSSESSIVE_RE = re.compile(r"['’]s$")
+_NAME_INNER_RE = re.compile(r"['’-]")
+_TRAILING_PUNCT_RE = re.compile(r"[^\w'’]$")
+_CLAUSE_RE = re.compile(r"[^.;!?\n]+")
+_DIRECTION_WORDS = frozenset(
+    {
+        "from",
+        "decrease",
+        "decreased",
+        "decreases",
+        "decreasing",
+        "drop",
+        "dropped",
+        "drops",
+        "reduce",
+        "reduced",
+        "reduces",
+        "reduction",
+        "down",
+        "cut",
+        "cuts",
+        "fall",
+        "fell",
+        "falls",
+        "lower",
+        "lowered",
+        "decline",
+        "declined",
+        "shrink",
+        "từ",
+        "giảm",
+        "xuống",
+        "hạ",
+    }
+)
+_UNCLEAR_PHRASES = (
+    "unclear",
+    "uncertain",
+    "unknown",
+    "ambiguous",
+    "unverified",
+    "inaudible",
+    "garbled",
+    "không rõ",
+    "chưa rõ",
+    "không chắc",
+    "chưa xác định",
+)
+MAX_NAME_SPAN_WORDS = 6
+MAX_NAME_CANDIDATE_IDS = 3
+MAX_MERGE_TARGETS = 8
 
 
 def _error(
@@ -66,6 +126,60 @@ def _markers(text: str) -> frozenset[str]:
     return frozenset(found)
 
 
+def _normalized(text: str) -> str:
+    """Casefold and collapse punctuation/whitespace only; words, numbers and modality stay."""
+    return " ".join(_NON_WORD_RE.sub(" ", _fold(text)).split())
+
+
+def _contains(outer: str, inner: str) -> bool:
+    """Whole-word containment of one normalized text in another."""
+    return bool(inner) and f" {inner} " in f" {outer} "
+
+
+def _has_unclear_marker(text: str) -> bool:
+    normalized = _normalized(text)
+    return any(_contains(normalized, phrase) for phrase in _UNCLEAR_PHRASES)
+
+
+def _numbers(text: str) -> frozenset[str]:
+    return frozenset(match.replace(",", "") for match in _NUMBER_RE.findall(text))
+
+
+def _incoherent_ranges(text: str) -> list[tuple[str, str]]:
+    """(first number, raw span) of each descending 'A to B' with no directional clause word."""
+    found = []
+    for clause in _CLAUSE_RE.finditer(unicodedata.normalize("NFC", text)):
+        words = set(_normalized(clause.group()).split())
+        if words & _DIRECTION_WORDS:
+            continue
+        for match in _RANGE_RE.finditer(clause.group()):
+            first, second = (match.group(index).replace(",", "") for index in (1, 2))
+            if float(first) > float(second):
+                found.append((first, match.group().strip()))
+    return found
+
+
+def _capitalised_runs(text: str) -> list[list[str]]:
+    """Runs of consecutive capitalised alphabetic words; punctuation ends a run."""
+    runs: list[list[str]] = []
+    run: list[str] = []
+    for match in _WORD_RE.finditer(unicodedata.normalize("NFC", text)):
+        raw = match.group()
+        token = _POSSESSIVE_RE.sub("", _EDGE_PUNCT_RE.sub("", raw))
+        if token[:1].isupper() and _NAME_INNER_RE.sub("", token).isalpha():
+            run.append(token)
+            if _TRAILING_PUNCT_RE.search(raw):  # "Okafor," ends the run after this word
+                runs.append(run)
+                run = []
+            continue
+        if run:
+            runs.append(run)
+        run = []
+    if run:
+        runs.append(run)
+    return [item for item in runs if len(item) >= 2]
+
+
 def _anchor_tokens(text: str) -> frozenset[str]:
     """Digit-bearing tokens and mid-sentence capitalised words (likely numbers and names).
 
@@ -92,6 +206,85 @@ class LedgerEntry:
     ref: str
     section: str
     item: Mapping[str, Any]
+
+
+class _SourceIndex:
+    """Positions, normalized text and lower-case vocabulary of the full projected source."""
+
+    def __init__(self, segments: Mapping[str, Mapping[str, Any]]) -> None:
+        self.segments = segments
+        self.position = {source_id: index for index, source_id in enumerate(segments)}
+        self.text = {
+            source_id: _normalized(segment["text"]) for source_id, segment in segments.items()
+        }
+        self.full = " ".join(self.text.values())
+        self.lower_words = {
+            _fold(_EDGE_PUNCT_RE.sub("", word))
+            for segment in segments.values()
+            for word in segment["text"].split()
+            if word[:1].islower()
+        }
+        self.ranges = {
+            source_id: _incoherent_ranges(segment["text"])
+            for source_id, segment in segments.items()
+        }
+
+    def cited(self, ids: Sequence[str]) -> str:
+        parts = []
+        for source_id in ids:
+            if source_id in self.text:
+                speaker = self.segments[source_id].get("speaker_name") or ""
+                parts.append(f"{self.text[source_id]} {_normalized(speaker)}")
+        return " ".join(parts)
+
+    def uncited_names(self, text: str, ids: Sequence[str]) -> list[str]:
+        """Multiword names of `text` stated somewhere in the source but in none of `ids`.
+
+        Retrieval cue, not entailment: spans made only of words the source also uses in lower
+        case (generic titles such as a capitalised bill or committee heading) are ignored.
+        """
+        cited = self.cited(ids)
+        missing: list[str] = []
+        for run in _capitalised_runs(text):
+            run = run[:MAX_NAME_SPAN_WORDS]
+            for size in range(len(run), 1, -1):
+                for start in range(len(run) - size + 1):
+                    words = run[start : start + size]
+                    if all(_fold(word) in self.lower_words for word in words):
+                        continue
+                    span = _normalized(" ".join(words))
+                    if (
+                        _contains(self.full, span)
+                        and not _contains(cited, span)
+                        and not any(_contains(_normalized(name), span) for name in missing)
+                    ):
+                        missing.append(" ".join(words))
+        return missing
+
+    def candidates(self, phrase: str, ids: Sequence[str]) -> list[str]:
+        span = _normalized(phrase)
+        anchor = min((self.position[i] for i in ids if i in self.position), default=0)
+        found = [source_id for source_id, text in self.text.items() if _contains(text, span)]
+        found.sort(key=lambda source_id: abs(self.position[source_id] - anchor))
+        return found[:MAX_NAME_CANDIDATE_IDS]
+
+    def owner_supported(self, owner: str, ids: Sequence[str]) -> bool:
+        folded = _fold(owner.strip())
+        cited = _fold(
+            "\n".join(
+                f"{self.segments[i]['text']}\n{self.segments[i].get('speaker_name') or ''}"
+                for i in ids
+                if i in self.segments
+            )
+        )
+        return bool(folded) and folded in cited
+
+    def range_risks(self, ids: Sequence[str]) -> list[tuple[str, str, str]]:
+        return [
+            (first, span, source_id)
+            for source_id in dict.fromkeys(ids)
+            for first, span in self.ranges.get(source_id, ())
+        ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,9 +415,57 @@ class ReconcileLedger:
             }
         )
 
+    def merge_targets(self) -> dict[str, list[str]]:
+        """Same-section refs whose original text already contains each entry's full fact."""
+        normalized = {entry.ref: _normalized(entry.item["text"]) for entry in self.entries}
+        return {
+            entry.ref: [
+                other.ref
+                for other in self.entries
+                if other.ref != entry.ref
+                and other.section == entry.section
+                and _contains(normalized[other.ref], normalized[entry.ref])
+            ][:MAX_MERGE_TARGETS]
+            for entry in self.entries
+        }
+
+    def _attention(self, entry: LedgerEntry, index: _SourceIndex) -> dict[str, Any]:
+        ids = list(entry.item["source_ids"])
+        names = [
+            {"name": name, "candidate_ids": index.candidates(name, ids)}
+            for name in index.uncited_names(entry.item["text"], ids)
+        ]
+        owner = entry.item.get("owner")
+        if isinstance(owner, str) and owner.strip() and not index.owner_supported(owner, ids):
+            names.append({"name": owner, "candidate_ids": index.candidates(owner, ids)})
+        numbers = _numbers(entry.item["text"])
+        ranges = [
+            {"value": first, "source_id": source_id, "span": span}
+            for first, span, source_id in index.range_risks(ids)
+            if first in numbers
+        ]
+        cues: dict[str, Any] = {}
+        if names:
+            cues["uncited_names"] = names
+        if ranges:
+            cues["unclear_ranges"] = ranges
+        return cues
+
     def prompt_payload(self) -> dict[str, Any]:
+        index = _SourceIndex(self._segments())
+        targets = self.merge_targets()
+
         def entry_payload(entry: LedgerEntry) -> dict[str, Any]:
-            return {"ref": entry.ref, "section": entry.section, **_thawed(entry.item)}
+            payload = {
+                "ref": entry.ref,
+                "section": entry.section,
+                **_thawed(entry.item),
+                "allowed_merge_targets": targets[entry.ref],
+            }
+            attention = self._attention(entry, index)
+            if attention:
+                payload["attention"] = attention
+            return payload
 
         return {
             "ledger_version": LEDGER_VERSION,
@@ -280,6 +521,7 @@ class ReconcileLedger:
     def apply(self, patch: object) -> ReconcileResult:
         """Validate the whole patch, then the reconstructed schema-1 document."""
         segments = self._segments()
+        index = _SourceIndex(segments)
         dispositions, additions = self._shape(patch)
         by_ref = {entry.ref: entry for entry in self.entries}
         seen: dict[str, dict[str, Any]] = {}
@@ -298,6 +540,8 @@ class ReconcileLedger:
             **{section: [] for section in _SECTION_NAMES},
         }
         placed: dict[str, dict[str, Any]] = {}
+        # Each published item with the source IDs and evidence its grounding is checked against.
+        grounding: list[tuple[str, dict[str, Any], Sequence[str], Sequence[dict[str, str]]]] = []
         counts: dict[str, Any] = {
             "final": dict.fromkeys(ACTIONS, 0),
             "map": dict.fromkeys(ACTIONS, 0),
@@ -318,6 +562,10 @@ class ReconcileLedger:
                     and set(ids) == set(original)
                 ):
                     disposition = {**disposition, "source_ids": []}
+            if action == "remove" and disposition["reason"] == "superseded":
+                self._require_empty(disposition, text=True, citations=False, action_fields=True)
+                self._check_superseded(entry, disposition, segments, index)
+                continue
             if action in {"merge", "remove"}:
                 self._require_empty(disposition, text=True, citations=True, action_fields=True)
                 continue
@@ -334,8 +582,22 @@ class ReconcileLedger:
                 section = "confirmation_items"
             result[section].append(item)
             placed[entry.ref] = item
+            evidence = disposition["evidence"] if action != "keep" else []
+            grounding.append((section, item, entry.item["source_ids"], evidence))
 
         for disposition in dispositions:
+            entry = by_ref[disposition["ref"]]
+            if disposition["action"] == "merge" or (
+                disposition["action"] == "remove" and disposition["reason"] == "duplicate"
+            ):
+                target_ref = disposition["target"]
+                # Lossless only: the applied target text must contain this whole fact.
+                if by_ref[target_ref].section != entry.section or not _contains(
+                    _normalized(placed[target_ref]["text"]), _normalized(entry.item["text"])
+                ):
+                    raise _error(
+                        "A merge or duplicate target does not contain the full merged fact."
+                    )
             if disposition["action"] == "merge":
                 target = placed[disposition["target"]]
                 merged = list(
@@ -346,7 +608,12 @@ class ReconcileLedger:
                 target["source_ids"] = merged
 
         for addition in additions:
-            result[addition["section"]].append(self._added(addition, segments))
+            item = self._added(addition, segments)
+            result[addition["section"]].append(item)
+            grounding.append((addition["section"], item, (), addition["evidence"]))
+
+        for section, item, original_ids, evidence in grounding:
+            self._check_grounding(section, item, original_ids, evidence, index)
 
         document = nd.validate_document(
             result,
@@ -466,6 +733,67 @@ class ReconcileLedger:
         # Only kept/updated refs can be targets, so a merge chain or cycle is impossible.
         if seen[target]["action"] not in {"keep", "update"}:
             raise _error("A merge or duplicate target must be kept or updated.")
+
+    def _check_superseded(
+        self,
+        entry: LedgerEntry,
+        disposition: dict[str, Any],
+        segments: Mapping[str, Mapping[str, Any]],
+        index: _SourceIndex,
+    ) -> None:
+        """A superseded item needs an exact quote of a later replacement or cancellation."""
+        if not disposition["source_ids"]:
+            raise _error(
+                "A superseded removal needs the later replacing source.",
+                reason_code="source_ids",
+                detail_code="required_source_missing",
+            )
+        self._evidence_text(disposition, segments, require_evidence=True)
+        first = min(
+            (index.position[i] for i in entry.item["source_ids"] if i in index.position),
+            default=-1,
+        )
+        if any(index.position[quote["source_id"]] <= first for quote in disposition["evidence"]):
+            raise _error(
+                "A superseded removal needs evidence later than the superseded item.",
+                reason_code="source_ids",
+                detail_code="required_source_missing",
+            )
+
+    @staticmethod
+    def _check_grounding(
+        section: str,
+        item: Mapping[str, Any],
+        original_ids: Sequence[str],
+        evidence: Sequence[Mapping[str, str]],
+        index: _SourceIndex,
+    ) -> None:
+        """Final-item checks: cited names, literal cited owners and unclear numeric ranges."""
+        ids = item["source_ids"]
+        if index.uncited_names(item["text"], ids):
+            raise _error("A named span is stated only in segments the item does not cite.")
+        owner = item.get("owner") if section == "action_items" else None
+        if isinstance(owner, str) and not index.owner_supported(owner, ids):
+            raise _error(
+                "Reconcile action owner is not stated by its cited sources.",
+                reason_code="action_fields",
+                field_name="owner",
+            )
+        numbers = _numbers(item["text"])
+        if not numbers or _has_unclear_marker(item["text"]):
+            return
+        # The original entry's sources count too, so dropping the ambiguous ID is no bypass.
+        for first, _span, source_id in index.range_risks([*original_ids, *ids]):
+            if first not in numbers:
+                continue
+            clarified = any(
+                index.position.get(quote["source_id"], -1) > index.position[source_id]
+                and first in _numbers(quote["quote"])
+                and not _incoherent_ranges(quote["quote"])
+                for quote in evidence
+            )
+            if not clarified:
+                raise _error("An incoherent source number range is stated as a confident quantity.")
 
     def _evidence_text(
         self,
@@ -669,7 +997,21 @@ def _instructions(output_language: str) -> str:
             "and number in the item is in its cited segments.\n"
             "Prefer keep for correct items. A map item already represented by a final item is "
             "merge or remove duplicate with that target. Never drop a material map fact "
-            "silently.\n"
+            "silently. When final_items is empty, map_items are the only notes: keep each "
+            "distinct fact as its own item.\n"
+            "Lossless merge: merge or remove duplicate may only name a target from the item's "
+            "allowed_merge_targets (same section, text already contains the whole fact), or a "
+            "same-section target you update so its text contains this item's whole text. "
+            "Otherwise keep the fact as its own item; never fold distinct facts into one vague "
+            "topic.\n"
+            "superseded means a later transcript segment explicitly replaces or cancels the item; "
+            "accepting a plan or a person is not superseding. Give that later segment in "
+            "source_ids with an exact evidence quote.\n"
+            "attention.uncited_names: the name occurs in the transcript but not in the item's "
+            "cited segments. Update to cite a candidate segment that states it, or remove the "
+            "name. An owner must be stated in a cited segment or be its speaker.\n"
+            "attention.unclear_ranges: the cited transcript has an incoherent descending number "
+            "phrase. Never state that value as a count: remove the quantity or mark it unclear.\n"
             f"additions: at most {MAX_RECONCILE_ADDITIONS} material facts that appear in the "
             "transcript but in no item. Each needs section, text, source_ids and evidence.\n"
             "Evidence: each quote is copied exactly from the transcript text of a source_id in "
@@ -701,7 +1043,20 @@ def _instructions(output_language: str) -> str:
         "không chắc chắn mà transcript hỗ trợ; không giữ chi tiết bịa. text chỉ được null khi "
         "mọi tên và số của mục có trong segment được trích.\n"
         "Ưu tiên keep cho mục đúng. Map item đã có trong final item là merge hoặc remove "
-        "duplicate với target đó. Không lặng lẽ bỏ ý quan trọng của map.\n"
+        "duplicate với target đó. Không lặng lẽ bỏ ý quan trọng của map. Khi final_items rỗng, "
+        "map_items là toàn bộ ghi chú: keep mỗi ý riêng thành một mục.\n"
+        "Gộp không mất mát: merge hoặc remove duplicate chỉ được nêu target trong "
+        "allowed_merge_targets của mục (cùng nhóm, text đã chứa trọn ý), hoặc target cùng nhóm "
+        "được update để text chứa trọn text của mục này. Nếu không, keep ý đó thành mục riêng; "
+        "không gộp các ý khác nhau thành một chủ đề chung chung.\n"
+        "superseded nghĩa là một segment transcript sau đó thay thế hoặc hủy rõ ràng mục này; "
+        "chấp nhận một kế hoạch hay một người không phải là superseded. Đưa segment sau đó vào "
+        "source_ids kèm trích nguyên văn evidence.\n"
+        "attention.uncited_names: tên có trong transcript nhưng không có trong segment mục trích. "
+        "Update để trích segment ứng viên nêu tên đó, hoặc bỏ tên. owner phải được nêu trong "
+        "segment được trích hoặc là người nói của segment đó.\n"
+        "attention.unclear_ranges: transcript được trích có cụm số giảm dần thiếu mạch lạc. "
+        "Không nêu giá trị đó như số lượng: bỏ số lượng hoặc ghi rõ là chưa rõ.\n"
         f"additions: tối đa {MAX_RECONCILE_ADDITIONS} ý quan trọng có trong transcript nhưng "
         "không có trong mục nào. Mỗi ý cần section, text, source_ids và evidence.\n"
         "Evidence: mỗi quote chép nguyên văn từ text transcript của một source_id trong "

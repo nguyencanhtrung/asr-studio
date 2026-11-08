@@ -1634,6 +1634,60 @@ không thêm lại vẫn mất. Thêm một model call cho nguồn dài; latency
 
 Tag: kiến trúc, chất lượng Notes. Tài liệu đích: `docs/backend-contract.md`.
 
+### #79 / PR #181 — Map theo phần 15 phút và reconcile là bước tổng hợp cuối (`notes-hierarchical-v21`)
+
+#### Vấn đề
+
+Bản v20 đã cố định định dạng (replay SDK đã ghi lại không cần call mới), nhưng nội dung vẫn mất
+ý ở hai chỗ: map theo phần một giờ gộp nhiều ý thành chủ đề chung, và final tự do gộp thô trước
+khi reconcile chạy. Baseline chỉ đọc từ file, chấm tài liệu (tạm thời) của output v20
+(`/tmp/asr-notes-reconcile-20261108/score-long/report.md`): ca dài found 8/12 (cần ≥10),
+critical 7/7, strict material 1 (tên chỉ có trong segment không được trích), còn cụm số nhiễu
+dạng "A to B" giảm dần bị nêu như số lượng chắc chắn. Số liệu sau thay đổi **chưa công bố** cho
+tới lượt chạy frozen của root.
+
+#### Thay đổi
+
+- Chỉ nguồn ChatGPT có budget token đã biết và khoảng thời gian > 3.600 giây
+  (`NotesPlan.fact_inventory`): plan chia toàn nguồn thành phần ≤ `FACT_PART_SPAN_SECONDS`
+  (900 giây), segment nguyên vẹn, owned ID một lần, overlap ≤ 2.000 byte; tối đa 2 map song
+  song và trần call giữ nguyên. Prompt map có thêm quy tắc danh mục sự kiện (mỗi mục một ý;
+  tách yêu cầu, ủng hộ/phản đối kèm lý do, việc sau quyết định và lập trường các bên khỏi kết
+  quả chính thức; không sửa tên/số nhiễu, ghi phần chưa rõ). Prompt ≤ 1 giờ, prompt reduce/final
+  và mọi đường Antigravity/model không rõ giữ nguyên từng byte.
+- Với đường đó, reconcile **thay** final tự do: ledger dựng từ seed schema 1 rỗng + mọi mục map,
+  kèm toàn nguồn đã chiếu; đúng một call `reconcile` có cấu trúc, khôi phục ID đúng một lần rồi
+  kết thúc. Không có final/reduce tự do. Provider khác và ChatGPT chunk ≤ 1 giờ giữ final +
+  reconcile/reduction như v20. Schema công khai 1 và `ledger_version` 1 không đổi.
+- Gộp không mất mát: payload cho mỗi mục `allowed_merge_targets` (cùng nhóm, text gốc chứa trọn
+  text mục sau khi chỉ casefold và gộp khoảng trắng/dấu câu). `merge`/`remove duplicate` chỉ
+  hợp lệ khi text **đã áp dụng** của target cùng nhóm chứa trọn ý; nếu không thì giữ riêng hoặc
+  update target đầy đủ hơn rồi merge. `remove superseded` cần source ID và quote nguyên văn từ
+  segment đứng sau mục bị thay; target tùy chọn và echo trích dẫn của bản compat vẫn giữ.
+- Gợi ý và guard nguồn (tất định, không dùng tên/ID của bộ dữ liệu):
+  - Tên nhiều từ viết hoa có trong toàn nguồn nhưng không có trong segment mục trích: payload
+    `attention.uncited_names` kèm tối đa 3 ID ứng viên gần nhất. Bỏ qua cụm chỉ gồm từ mà nguồn
+    cũng dùng ở dạng chữ thường (tiêu đề chung), tiêu đề dịch không có trong nguồn và tên một từ.
+    Mọi mục cuối (kể cả `keep`) bị từ chối nếu tên đó chỉ có ở segment không trích; merge có thể
+    sửa trích dẫn. Owner của action luôn phải có nguyên văn trong segment trích hoặc là speaker
+    của segment đó, kể cả khi không đổi.
+  - Cụm "A to/đến B" với A > B và không có từ chỉ hướng (from/từ, giảm, drop, reduce, down…)
+    trong cùng mệnh đề: payload `attention.unclear_ranges` (giá trị, segment, span thô). Mục cuối
+    nêu A mà không có dấu chưa rõ bị từ chối, xét cả nguồn của mục gốc nên bỏ ID không lách được;
+    chỉ một quote nguyên văn từ segment sau có A và không có cụm nhiễu mới giải được.
+- `PROMPT_VERSION` = `notes-hierarchical-v21`.
+
+#### Kiểm chứng và giới hạn
+
+Fixture tổng hợp, tên và câu đều bịa. Test mới đỏ trên `0d8f5b5`, xanh sau thay đổi; replay
+SDK đã ghi: 4 ca ngắn khớp byte và tài liệu, ca dài cache-miss như dự kiến vì request mới.
+Guard là kiểm tra từ vựng, không chứng minh entailment. Toàn nguồn + ledger không đảm bảo giữ
+mọi ý ngữ nghĩa: ý map bỏ sót và model không thêm lại vẫn mất. Guard tên có thể từ chối nhầm
+(cụm viết hoa có cả ở nguồn mà mục trích sai segment), khi đó dùng repair chung hoặc task lỗi và
+giữ Notes cũ. Guard số có thể bắt nhầm cụm giảm dần hợp lệ không có từ chỉ hướng (ví dụ giờ
+"10 to 5"). Nhiều map hơn làm ledger lớn hơn; nguồn + ledger vượt ngân sách vẫn là lỗi giới hạn
+có biên. Latency và chất lượng chưa đo.
+
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
 - Problem: the original dataset issue mixed Notes-from-transcript checks with

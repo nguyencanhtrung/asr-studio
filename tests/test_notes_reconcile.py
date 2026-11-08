@@ -171,12 +171,68 @@ def test_merge_and_removal_targets_are_validated(m1, f0):
         ledger.apply(_keep_all(ledger, **overrides))
 
 
+def _merge_ledger(text="Pilot ships in 3 regions.", source_ids=("s3",), section="decisions"):
+    """f0..f2 from _final(); m0 restates a final fact (or not) with its own citation."""
+    map_doc = _empty()
+    map_doc[section] = [{"text": text, "source_ids": list(source_ids)}]
+    return ReconcileLedger.build(SOURCE, _final(), [map_doc])
+
+
 def test_merge_unions_citations_into_a_kept_target():
-    ledger = _ledger()
+    ledger = _merge_ledger()
+    assert ledger.merge_targets()["m0"] == ["f0"]
     result = ledger.apply(_keep_all(ledger, m0=reconcile_disposition("m0", "merge", target="f0")))
     assert result.document["decisions"][0]["text"] == "Pilot ships in 3 regions."
     assert result.document["decisions"][0]["source_ids"] == ["s1", "s3"]
-    assert result.document["key_topics"] == []
+    assert len(result.document["decisions"]) == 1
+
+
+@pytest.mark.parametrize("action", ["merge", "duplicate"])
+@pytest.mark.parametrize(
+    ("text", "section"),
+    [
+        pytest.param("Budget review at finance board.", "decisions", id="distinct-fact"),
+        pytest.param("Pilot ships in 3 regions.", "key_topics", id="other-section"),
+        pytest.param("Pilot ships in 3 regions by May.", "decisions", id="target-lacks-detail"),
+        pytest.param("Pilot may ship in 3 regions.", "decisions", id="modality-differs"),
+    ],
+)
+def test_lossy_merge_or_duplicate_is_rejected(action, text, section):
+    ledger = _merge_ledger(text, section=section)
+    assert ledger.merge_targets()["m0"] == []
+    if action == "merge":
+        disposition = reconcile_disposition("m0", "merge", target="f0")
+    else:
+        disposition = reconcile_disposition("m0", "remove", reason="duplicate", target="f0")
+    with pytest.raises(nd.NotesDocumentError, match="full merged fact"):
+        ledger.apply(_keep_all(ledger, m0=disposition))
+    # Keeping the distinct fact separately stays valid.
+    assert ledger.apply(_keep_all(ledger)).document[section][-1]["text"] == text
+
+
+def test_merge_into_a_target_updated_to_contain_the_whole_fact_is_accepted():
+    ledger = _merge_ledger("Pilot ships in 3 regions; budget review at finance board.")
+    update = _update(
+        "f0",
+        "Pilot ships in 3 regions; budget review at finance board.",
+        ["s1", "s3"],
+        [("s1", "ship the pilot in 3 regions"), ("s3", "Budget review moves")],
+    )
+    result = ledger.apply(
+        _keep_all(ledger, f0=update, m0=reconcile_disposition("m0", "merge", target="f0"))
+    )
+    assert result.document["decisions"] == [
+        {
+            "text": "Pilot ships in 3 regions; budget review at finance board.",
+            "source_ids": ["s1", "s3"],
+        }
+    ]
+
+
+def test_merge_containment_ignores_only_case_whitespace_and_punctuation():
+    ledger = _merge_ledger("pilot  SHIPS in 3 regions")
+    assert ledger.merge_targets()["m0"] == ["f0"]
+    assert _merge_ledger("Pilot ships in 4 regions.").merge_targets()["m0"] == []
 
 
 def _update(ref, text, source_ids, quotes, **fields):
@@ -379,7 +435,7 @@ def test_confirm_demotes_an_item_unchanged():
         _keep_all(
             ledger,
             f0=reconcile_disposition("f0", "confirm"),
-            m1=reconcile_disposition("m1", "remove", reason="superseded"),
+            m1=reconcile_disposition("m1", "remove", reason="nonmaterial"),
         )
     )
     assert result.document["decisions"] == []
@@ -588,7 +644,9 @@ def test_long_chatgpt_runs_one_reconcile_with_projected_ids_and_restores_once():
     result = _run(_long_transport(calls, reconcile), coverage=coverage)
 
     stages = [call["stage"] for call in calls]
-    assert stages.count("reconcile") == 1 and stages[-1] == "reconcile"
+    # Quarter-hour maps, then the structured reconcile is the final synthesis.
+    assert stages == ["chunk", "chunk", "reconcile"]
+    assert reconcile_payload(calls[-1]["prompt"])["final_items"] == []
     assert all("response_schema" not in call for call in calls[:-1])
     assert calls[-1]["response_schema"]["required"] == [
         "ledger_version",
@@ -598,7 +656,10 @@ def test_long_chatgpt_runs_one_reconcile_with_projected_ids_and_restores_once():
     assert result["open_questions"] == [
         {"text": "Vendor contract renewal still open.", "source_ids": [f"{2:032x}"]}
     ]
-    assert result["overview"][0]["source_ids"][0] == f"{1:032x}"
+    assert result["key_topics"] == [
+        {"text": "Launch plan is approved.", "source_ids": [f"{1:032x}"]},
+        {"text": "Vendor contract renewal is still open.", "source_ids": [f"{2:032x}"]},
+    ]
     audit = coverage[0]["source_audit"]
     assert (audit["status"], audit["mode"], audit["provider_call_index"]) == (
         "applied",
@@ -685,7 +746,7 @@ def _evidence(sid, quote):
 
 
 def test_merge_may_echo_exactly_its_original_source_ids():
-    ledger = _ledger()
+    ledger = _merge_ledger()
     echo = reconcile_disposition("m0", "merge", target="f0", source_ids=["s3"])
     plain = ledger.apply(_keep_all(ledger, m0=reconcile_disposition("m0", "merge", target="f0")))
     echoed = ledger.apply(_keep_all(ledger, m0=echo))
@@ -711,16 +772,14 @@ def test_merge_may_echo_exactly_its_original_source_ids():
     ],
 )
 def test_merge_echo_rejects_anything_but_the_exact_original_ids(fields):
-    ledger = _ledger()
+    ledger = _merge_ledger()
     merge = reconcile_disposition("m0", "merge", target="f0", **fields)
     with pytest.raises(nd.NotesDocumentError):
         ledger.apply(_keep_all(ledger, m0=merge))
 
 
 def test_merge_echo_of_a_subset_of_several_original_ids_is_rejected():
-    map_doc = _empty()
-    map_doc["key_topics"] = [{"text": "Pilot and budget.", "source_ids": ["s1", "s3"]}]
-    ledger = ReconcileLedger.build(SOURCE, _final(), [map_doc])
+    ledger = _merge_ledger(source_ids=("s1", "s3"))
     ref = ledger.refs[-1]
 
     def run(ids):
@@ -732,15 +791,44 @@ def test_merge_echo_of_a_subset_of_several_original_ids_is_rejected():
         run(["s1"])
 
 
+def _superseded(ref="m1", target=None, sid="s3", quote="Budget review moves", **fields):
+    """A superseded removal citing a later replacing segment (m1 cites s1)."""
+    return reconcile_disposition(
+        ref,
+        "remove",
+        reason="superseded",
+        target=target,
+        source_ids=[sid],
+        evidence=_evidence(sid, quote),
+        **fields,
+    )
+
+
 @pytest.mark.parametrize("target", ["f0", "f1"])
 def test_superseded_removal_may_name_a_kept_target_without_citation_union(target):
     ledger = _ledger()
-    before = ledger.apply(
-        _keep_all(ledger, m1=reconcile_disposition("m1", "remove", reason="superseded"))
-    )
-    named = reconcile_disposition("m1", "remove", reason="superseded", target=target)
-    after = ledger.apply(_keep_all(ledger, m1=named))
+    before = ledger.apply(_keep_all(ledger, m1=_superseded()))
+    after = ledger.apply(_keep_all(ledger, m1=_superseded(target=target)))
     assert after.document == before.document
+    assert after.document["decisions"][0]["source_ids"] == ["s1"]
+
+
+@pytest.mark.parametrize(
+    "m1",
+    [
+        pytest.param(reconcile_disposition("m1", "remove", reason="superseded"), id="no-evidence"),
+        pytest.param(
+            reconcile_disposition("m1", "remove", reason="superseded", source_ids=["s3"]),
+            id="ids-without-quote",
+        ),
+        pytest.param(_superseded(sid="s1", quote="ship the pilot"), id="not-later"),
+        pytest.param(_superseded(quote="Budget review is cancelled"), id="inexact-quote"),
+    ],
+)
+def test_superseded_removal_needs_a_later_exact_replacing_quote(m1):
+    ledger = _ledger()
+    with pytest.raises(nd.NotesDocumentError):
+        ledger.apply(_keep_all(ledger, m1=m1))
 
 
 def test_superseded_target_may_be_an_updated_item():
@@ -752,7 +840,7 @@ def test_superseded_target_may_be_an_updated_item():
         _keep_all(
             ledger,
             f0=update,
-            m1=reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
+            m1=_superseded(target="f0"),
         )
     )
     assert result.document["decisions"][0]["text"] == "Pilot ships in 3 regions now."
@@ -760,33 +848,31 @@ def test_superseded_target_may_be_an_updated_item():
 
 def test_superseded_removal_without_a_target_stays_allowed():
     ledger = _ledger()
-    ledger.apply(_keep_all(ledger, m1=reconcile_disposition("m1", "remove", reason="superseded")))
+    ledger.apply(_keep_all(ledger, m1=_superseded()))
 
 
 @pytest.mark.parametrize(
     ("m1", "f0"),
     [
+        pytest.param(_superseded(target="m1"), None, id="self"),
         pytest.param(
-            reconcile_disposition("m1", "remove", reason="superseded", target="m1"), None, id="self"
-        ),
-        pytest.param(
-            reconcile_disposition("m1", "remove", reason="superseded", target="zz"),
+            _superseded(target="zz"),
             None,
             id="unknown",
         ),
         pytest.param(
-            reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
+            _superseded(target="f0"),
             reconcile_disposition("f0", "remove", reason="unsupported"),
             id="removed-target",
         ),
         pytest.param(
-            reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
+            _superseded(target="f0"),
             reconcile_disposition("f0", "merge", target="f1"),
             id="merged-target",
         ),
         pytest.param(
-            reconcile_disposition("m1", "remove", reason="superseded", target="f0"),
-            reconcile_disposition("f0", "remove", reason="superseded", target="m1"),
+            _superseded(target="f0"),
+            _superseded("f0", target="m1"),
             id="chain-cycle",
         ),
         pytest.param(
@@ -805,7 +891,7 @@ def test_superseded_removal_without_a_target_stays_allowed():
             id="duplicate-no-target",
         ),
         pytest.param(
-            reconcile_disposition("m1", "remove", reason="superseded", target="f0", text="x"),
+            _superseded(target="f0", text="x"),
             None,
             id="superseded-with-text",
         ),
@@ -818,3 +904,193 @@ def test_superseded_target_is_validated_like_merge_and_duplicate(m1, f0):
         overrides["f0"] = f0
     with pytest.raises(nd.NotesDocumentError):
         ledger.apply(_keep_all(ledger, **overrides))
+
+
+# --- notes79 atomic: source-support cues and guards ---
+
+CUE_SOURCE = {
+    "meeting_date": "2026-01-05",
+    "segments": [
+        {"id": "n1", "start_seconds": 0.0, "end_seconds": 1.0, "text": "Next is Priya Okafor."},
+        {
+            "id": "n2",
+            "start_seconds": 1.0,
+            "end_seconds": 2.0,
+            "text": "I am Priya Okafor and I coordinate the garden survey.",
+        },
+        {
+            "id": "n3",
+            "start_seconds": 2.0,
+            "end_seconds": 3.0,
+            "text": "Ms. Okafor, I will send you the survey form.",
+            "speaker_name": "Chair Ito",
+        },
+        {
+            "id": "n4",
+            "start_seconds": 3.0,
+            "end_seconds": 4.0,
+            "text": "Library Board 4471 met. The library voted on the board seats.",
+        },
+        {
+            "id": "n5",
+            "start_seconds": 4.0,
+            "end_seconds": 5.0,
+            "text": "This adds 40 to 2 storage shelves for volunteers.",
+        },
+        {
+            "id": "n6",
+            "start_seconds": 5.0,
+            "end_seconds": 6.0,
+            "text": "Fees fell from 50 to 30 percent. Visits dropped 40 to 20 after the change.",
+        },
+        {
+            "id": "n7",
+            "start_seconds": 6.0,
+            "end_seconds": 7.0,
+            "text": "To clarify, the order is 40 shelves in total.",
+        },
+    ],
+}
+
+
+def _cue_ledger(section, text, source_ids, **fields):
+    map_doc = _empty()
+    item = {"text": text, "source_ids": list(source_ids)}
+    if section == "action_items":
+        item.update({"owner": None, "deadline_text": None, "deadline_date": None, **fields})
+    map_doc[section] = [item]
+    return ReconcileLedger.build(CUE_SOURCE, _empty(), [map_doc])
+
+
+def _cue_payload(ledger):
+    return ledger.prompt_payload()["map_items"][0]
+
+
+def test_uncited_source_name_is_cued_with_closest_candidates_and_rejected_on_keep():
+    ledger = _cue_ledger("key_topics", "Priya Okafor shared survey results.", ["n3"])
+    assert _cue_payload(ledger)["attention"] == {
+        "uncited_names": [{"name": "Priya Okafor", "candidate_ids": ["n2", "n1"]}]
+    }
+    with pytest.raises(nd.NotesDocumentError, match="named span"):
+        ledger.apply(_keep_all(ledger))
+    repaired = _update(
+        "m0", "Priya Okafor shared survey results.", ["n2", "n3"], [("n2", "Priya Okafor")]
+    )
+    assert ledger.apply(_keep_all(ledger, m0=repaired)).document["key_topics"][0]["source_ids"] == [
+        "n2",
+        "n3",
+    ]
+
+
+def test_merge_citation_union_can_repair_an_uncited_name():
+    final = _empty()
+    final["key_topics"] = [{"text": "Priya Okafor shared results.", "source_ids": ["n3"]}]
+    map_doc = _empty()
+    map_doc["key_topics"] = [{"text": "Priya Okafor shared results.", "source_ids": ["n2"]}]
+    ledger = ReconcileLedger.build(CUE_SOURCE, final, [map_doc])
+    with pytest.raises(nd.NotesDocumentError, match="named span"):
+        ledger.apply(
+            _keep_all(ledger, m0=reconcile_disposition("m0", "remove", reason="unsupported"))
+        )
+    merged = ledger.apply(_keep_all(ledger, m0=reconcile_disposition("m0", "merge", target="f0")))
+    assert merged.document["key_topics"] == [
+        {"text": "Priya Okafor shared results.", "source_ids": ["n3", "n2"]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("Library Board 4471 met.", id="generic-capitalised-title"),
+        pytest.param("Hội Đồng Thành Phố bàn về khu vườn.", id="translated-heading"),
+        pytest.param("Okafor follow-up planned.", id="single-word"),
+    ],
+)
+def test_generic_titles_translated_headings_and_single_words_are_not_name_cues(text):
+    ledger = _cue_ledger("key_topics", text, ["n3"])
+    assert "attention" not in _cue_payload(ledger)
+    ledger.apply(_keep_all(ledger))
+
+
+def test_translated_item_still_needs_the_cited_source_name():
+    ledger = _cue_ledger("key_topics", "Bà Priya Okafor chia sẻ kết quả.", ["n3"])
+    assert _cue_payload(ledger)["attention"]["uncited_names"][0]["name"] == "Priya Okafor"
+    with pytest.raises(nd.NotesDocumentError):
+        ledger.apply(_keep_all(ledger))
+
+
+def test_owner_needs_literal_cited_text_or_speaker_even_when_unchanged():
+    uncited = _cue_ledger("action_items", "Send the survey form.", ["n3"], owner="Priya Okafor")
+    assert _cue_payload(uncited)["attention"]["uncited_names"] == [
+        {"name": "Priya Okafor", "candidate_ids": ["n2", "n1"]}
+    ]
+    with pytest.raises(nd.NotesDocumentError) as failure:
+        uncited.apply(_keep_all(uncited))
+    assert failure.value.field_name == "owner"
+    speaker = _cue_ledger("action_items", "Send the survey form.", ["n3"], owner="Chair Ito")
+    assert speaker.apply(_keep_all(speaker)).document["action_items"][0]["owner"] == "Chair Ito"
+
+
+def test_incoherent_descending_range_detection_is_generic_and_clause_scoped():
+    from asr_studio.notes_reconcile import _incoherent_ranges
+
+    assert _incoherent_ranges("This adds 50 to 3 storage shelves.") == [("50", "50 to 3")]
+    assert _incoherent_ranges("Tạo 12 đến 2 căn hộ.") == [("12", "12 đến 2")]
+    assert _incoherent_ranges("Budget 15 to $2500 a month; 2 to 5 people.") == []
+    assert _incoherent_ranges("Fees fell from 50 to 30 percent.") == []
+    assert _incoherent_ranges("Units dropped 40 to 20. Then 9 to 1 rooms.") == [("9", "9 to 1")]
+    assert _incoherent_ranges("Giảm từ 50 đến 30 căn.") == []
+
+
+def test_incoherent_range_value_cannot_be_published_as_a_confident_count():
+    ledger = _cue_ledger("key_topics", "Order adds 40 shelves.", ["n5"])
+    assert _cue_payload(ledger)["attention"] == {
+        "unclear_ranges": [{"value": "40", "source_id": "n5", "span": "40 to 2"}]
+    }
+    with pytest.raises(nd.NotesDocumentError, match="confident quantity"):
+        ledger.apply(_keep_all(ledger))
+    # Dropping the ambiguous source ID is no bypass: the original entry's risk still applies.
+    bypass = _update("m0", "Order adds 40 shelves.", ["n4"], [("n4", "Library Board")])
+    with pytest.raises(nd.NotesDocumentError, match="confident quantity"):
+        ledger.apply(_keep_all(ledger, m0=bypass))
+
+
+@pytest.mark.parametrize(
+    ("text", "ids", "quotes"),
+    [
+        pytest.param(
+            "Order adds shelves; count unclear.",
+            ["n5"],
+            [("n5", "storage shelves")],
+            id="quantity-removed",
+        ),
+        pytest.param(
+            "Order adds '40 to 2 storage' shelves (unclear).",
+            ["n5"],
+            [("n5", "40 to 2 storage shelves")],
+            id="quoted-as-unclear",
+        ),
+        pytest.param(
+            "Order adds 40 shelves.",
+            ["n5", "n7"],
+            [("n7", "the order is 40 shelves")],
+            id="later-exact-clarification",
+        ),
+    ],
+)
+def test_incoherent_range_may_be_removed_marked_unclear_or_clarified_later(text, ids, quotes):
+    ledger = _cue_ledger("key_topics", "Order adds 40 shelves.", ["n5"])
+    document = ledger.apply(_keep_all(ledger, m0=_update("m0", text, ids, quotes))).document
+    assert document["key_topics"][0]["text"] == text
+
+
+def test_legitimate_descending_change_is_allowed_and_additions_are_checked():
+    ledger = _cue_ledger("key_topics", "Fees fell from 50 to 30 percent.", ["n6"])
+    assert "attention" not in _cue_payload(ledger)
+    ledger.apply(_keep_all(ledger))
+    patch = _keep_all(ledger)
+    patch["additions"] = [
+        _addition("key_topics", "Order adds 40 shelves.", ["n5"], [("n5", "40 to 2 storage")])
+    ]
+    with pytest.raises(nd.NotesDocumentError, match="confident quantity"):
+        ledger.apply(patch)

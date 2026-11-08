@@ -670,6 +670,7 @@ def generate_notes_document(
             budget=synthesis_budget,
             max_unit_size=max_unit_size,
             max_output_bytes=chunk_output_bytes,
+            fact_inventory=plan.fact_inventory,
         )
 
         def repair_chunk(
@@ -689,6 +690,7 @@ def generate_notes_document(
                 budget=synthesis_budget,
                 max_unit_size=max_unit_size,
                 max_output_bytes=chunk_output_bytes,
+                fact_inventory=plan.fact_inventory,
             )
 
         prepared_chunks.append((projected_chunk, prompt, repair_chunk))
@@ -855,6 +857,19 @@ def generate_notes_document(
             "counts": counts[-1],
         }
         return document
+
+    if plan.fact_inventory:
+        # Long known-ChatGPT: the structured reconcile over every map fact and the full source
+        # is the final synthesis; no lossy free-form final or reduction runs before it.
+        empty_seed: dict[str, Any] = {
+            "schema_version": nd.SCHEMA_VERSION,
+            **{section: [] for section, _heading in nd.SECTIONS},
+        }
+        reduction_calls += 1
+        final_document = reconcile(empty_seed)
+        final_document = restore_final_document(final_document, stage="reconcile")
+        progress("merging", reduction_calls, None, "calls")
+        return finish(final_document)
 
     documents = summaries
     for _level in range(nd.MAX_REDUCTION_LEVELS):

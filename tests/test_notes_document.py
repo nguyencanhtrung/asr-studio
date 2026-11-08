@@ -1017,7 +1017,7 @@ def test_chunk_and_reduction_prompts_keep_untrusted_source_and_chronology(snapsh
     assert f"aiming for {MAX_REDUCTION_TARGET_BYTES} bytes or less" in intermediate_prompt
     assert "Private title" not in chunk_prompt + reduction_prompt
     assert "private/audio" not in chunk_prompt + reduction_prompt
-    assert PROMPT_VERSION == "notes-hierarchical-v20"
+    assert PROMPT_VERSION == "notes-hierarchical-v21"
     assert MAX_CHUNK_OUTPUT_BYTES <= MAX_REPAIR_OUTPUT_BYTES
     assert MAX_REDUCTION_TARGET_BYTES < MAX_REDUCTION_OUTPUT_BYTES <= MAX_OUTPUT_BYTES
 
@@ -1335,3 +1335,67 @@ def test_full_source_reduction_does_not_restrict_evidence_to_drafts(snapshot, do
     assert "The reducer sees summaries, not the transcript" not in prompt
     assert "Chỉ dùng mã nguồn được trích dẫn trong các bản tóm tắt" not in prompt
     assert "gọn chỉ thấy các bản tóm tắt, không thấy transcript" not in prompt
+
+
+def _timed_snapshot(span_seconds, step=300.0):
+    return {
+        "meeting_date": "2026-01-05",
+        "segments": [
+            {
+                "id": f"{index:032x}",
+                "start_seconds": index * step,
+                "end_seconds": index * step + 10.0,
+                "text": f"point {index}",
+            }
+            for index in range(int(span_seconds // step) + 1)
+        ],
+    }
+
+
+def test_known_chatgpt_over_an_hour_plans_complete_quarter_hour_fact_parts():
+    import json as _json
+
+    from asr_studio.notes_document import FACT_PART_SPAN_SECONDS, NOTES_OVERLAP_BYTES
+
+    snapshot = _timed_snapshot(7_200.0)
+    plan = plan_source(snapshot, provider="chatgpt", model="gpt-5.6-sol")
+    assert plan.hourly and plan.fact_inventory and FACT_PART_SPAN_SECONDS == 900.0
+    owned_positions = []
+    for entry, chunk in zip(plan.manifest["chunks"], plan.chunks, strict=True):
+        owned = [segment for segment in chunk["segments"] if not segment.get("overlap")]
+        overlap = [segment for segment in chunk["segments"] if segment.get("overlap")]
+        assert all("part" not in segment for segment in chunk["segments"])  # whole segments
+        assert owned[-1]["end_seconds"] - owned[0]["start_seconds"] <= 900.0
+        assert sum(len(_json.dumps(s).encode()) for s in overlap) <= NOTES_OVERLAP_BYTES * 2
+        owned_positions.extend(range(*entry["owned"]))
+    assert owned_positions == list(range(len(snapshot["segments"])))  # complete, once each
+    assert len(plan.chunks) == 9  # 25 segments, three whole ones per <= 900 s part
+
+    # Antigravity and unknown budgets keep hourly parts; <= 1 h known ChatGPT is unchanged.
+    for provider, model in (("antigravity", "gemini-3.8-flash"), (None, None)):
+        other = plan_source(snapshot, provider=provider, model=model)
+        assert not other.fact_inventory
+    assert plan_source(snapshot, provider="antigravity", model="gemini-3.8-flash").hourly
+    short = _timed_snapshot(3_590.0)
+    short_plan = plan_source(short, provider="chatgpt", model="gpt-5.6-sol")
+    assert not short_plan.fact_inventory and not short_plan.chunked
+
+
+def test_fact_inventory_rule_is_only_in_flagged_map_prompts(snapshot):
+    for language, marker in (("en", "Fact inventory:"), ("vi", "Danh mục sự kiện:")):
+        plain = build_chunk_prompt(snapshot, chunk_index=1, chunk_count=2, output_language=language)
+        flagged = build_chunk_prompt(
+            snapshot, chunk_index=1, chunk_count=2, output_language=language, fact_inventory=True
+        )
+        assert marker not in plain and marker in flagged
+        assert flagged.replace(_fact_rule(language), "") == plain
+        for prompt in _step_prompts(
+            snapshot, {"schema_version": 1, **{k: [] for k, _ in SECTIONS}}, language
+        ).values():
+            assert marker not in prompt
+
+
+def _fact_rule(language):
+    from asr_studio.notes_document import _FACT_INVENTORY_RULE
+
+    return _FACT_INVENTORY_RULE[language]

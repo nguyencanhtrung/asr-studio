@@ -264,14 +264,15 @@ def reconcile_disposition(ref: str, action: str = "keep", **fields: object) -> d
 
 
 def reconcile_keep_patch(prompt: str) -> str:
-    """Keep every final item; each map item is a duplicate of the first final item, else kept."""
+    """Keep every final item; a map item is a duplicate of an allowed final target, else kept."""
     payload = reconcile_payload(prompt)
     finals = [item["ref"] for item in payload["final_items"]]
     dispositions = [reconcile_disposition(ref) for ref in finals]
     for item in payload["map_items"]:
+        targets = [ref for ref in item["allowed_merge_targets"] if ref in finals]
         dispositions.append(
-            reconcile_disposition(item["ref"], "remove", reason="duplicate", target=finals[0])
-            if finals
+            reconcile_disposition(item["ref"], "remove", reason="duplicate", target=targets[0])
+            if targets
             else reconcile_disposition(item["ref"])
         )
     return json.dumps({"ledger_version": 1, "dispositions": dispositions, "additions": []})
