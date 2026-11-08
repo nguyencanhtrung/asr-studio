@@ -1,4 +1,25 @@
-# Báo cáo nghiệm thu các phép đo lịch sử — v0.1.0 (không phải đo lại)
+# Báo cáo nghiệm thu
+
+## Notes — 08/11/2026
+
+ChatGPT gpt-5.6-sol, medium; transcript công khai khoảng 2 giờ. **Đạt phạm vi #79/#88.**
+
+| Chỉ tiêu | Kết quả cuối |
+| --- | ---: |
+| Nội dung | 11/12 (1 mục một phần) |
+| Ý quan trọng | 7/7 |
+| Khẳng định quan trọng thiếu nguồn | 0 |
+| ID trích dẫn không tồn tại | 0 |
+| Nội dung mẫu ngắn | 9/9 |
+| VietMed | 2/2 |
+| Notes đo thực tế (v23) | 474,498 giây; 11 lượt gọi |
+
+v24 kiểm lại từ phản hồi đã lưu; chưa đo lại thời gian toàn chuỗi. Không chứng nhận ASR/audio.
+
+Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
+
+<details>
+<summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>
 
 ## 0. Phạm vi và nguyên tắc công bố
 
@@ -219,3 +240,5 @@ AC-13: bản ghi 2 giờ có transcript và notes sẵn để duyệt trong tố
 | #104 / PR #109 | `b78711d` | mẫu ghép 2 giờ, số đo ghép | **651,7 s transcript (lần chạy timed) + 0,2 s + 81,3 s notes = 733,2 s (12,2 phút)**; một lần chạy timed trên candidate trước là 723,3 s | đạt về thời gian, nhưng số đo 733,2 s là composed, không phải một lần chạy liên tục |
 
 Nguồn: mục tương ứng của từng PR ở mục 3; `docs/acceptance-report.md` mục 6.1, 6.5 và 6.6. #74 (PR #91) không nhằm giảm thời gian và đã có trong image đo của #99. Bước chậm nhất chuyển từ diarization (#16) sang notes (#99), rồi notes còn 67,2–116,5 s ở các lượt single-pass final. #104 có mốc thời gian composed dưới 30 phút; chất lượng AC-5 còn theo dõi ở #107 và phương án nguồn dài ở #108.
+
+</details>
