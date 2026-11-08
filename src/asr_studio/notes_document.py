@@ -15,7 +15,9 @@ SCHEMA_VERSION = 1
 # v35: registered Gemini fact-inventory reconcile runs as at most two owned ledger views.
 # v36: registered Gemini fact-inventory maps keep follow-up dependencies and per-object roles;
 # the semantic audit runs as at most four parts with an explicit decision for every item.
-PROMPT_VERSION = "notes-hierarchical-v36"
+# v37: each semantic-audit part shows only its visible source (own citations, strict context
+# candidates, bounded neighbours, explicit omissions); final context links complete bindings.
+PROMPT_VERSION = "notes-hierarchical-v37"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.

@@ -46,6 +46,23 @@ Strict mode also adds three provenance links after all others, each one complete
   outcome within the structured window, with no other header between them, the first segment
   in that span stating each item word the pool lacks is linked, with no bridge.
 
+Opt-in binding completion (`complete_bindings=True` with strict mode only) appends two more
+provenance links after every other link, each one complete or none, for an item that does not
+quote a cited segment verbatim:
+
+- an explicit typed record ("Council Bill 12345", "Resolution 318", "CB 12345" with a legal
+  cue in the item or pool) whose number the pool lacks links the nearest explicit agenda header
+  in the structured back window that states it, with no bridge; any other header first stops
+  the search. After a record label, whitespace three-digit groups ("12 345") read as one
+  number. A generic agenda header may state the primary number untyped (a misheard label);
+  differently labelled records of another family are ignored, while a second primary number,
+  a different number of the same family or a technical label ("permit 12345") rejects it.
+  This is the only new link the overview gets;
+- an amount with its noun phrase ("four accessible entrances") the pool lacks links the first
+  segment strictly between two cited runs, at most `MAX_STRUCTURED_SEGMENTS` segments and
+  `MAX_STRUCTURED_SECONDS` seconds apart with no header or agenda break, that states the same
+  whole phrase (case, NFC and number words folded; never part of a number list).
+
 `unverified_vote_names` is a check, not a link: it lists each person an item says is voting (or
 will vote) who is not recognised for any cited first-person vote statement by an exact handoff
 before that turn or an exact "Thank you, <name>" after it. A thank-you elsewhere is no proof.
@@ -57,6 +74,7 @@ from __future__ import annotations
 
 import copy
 import re
+import unicodedata
 from typing import Any
 
 MAX_BACK_SEGMENTS = 16
@@ -662,12 +680,220 @@ def _agenda_span(text: str, cited: list[int], segments: list[dict[str, Any]]) ->
     return None
 
 
+# Opt-in binding completion: typed record numbers and quantitative phrases.
+_RECORD_LABELS = {"council bill": "bill", "bill": "bill", "cb": "bill"}
+_RECORD_REF = re.compile(
+    r"\b(council\s+bill|bills?|cb|resolutions?|ordinances?|appointments?)\s+"
+    r"(?:no\.?\s*|number\s+|#\s*)?(?<![\d.])(\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?![\d]|\.\d)",
+    re.IGNORECASE,
+)
+_LEGAL_CUE = re.compile(
+    r"\b(?:bill|legislation|legislative|ordinance|resolution|amend\w*|enact\w*|statute"
+    r"|municipal\s+code)\b",
+    re.IGNORECASE,
+)
+_GENERIC_HEADER = re.compile(r"\bagenda\s+items?\b|\bitems?\s+(?:no\.?\s*)?\d", re.IGNORECASE)
+# A long number after one of these words is a technical identifier, never a record.
+_TECHNICAL_LABELS = frozenset(
+    """
+    file permit project case docket section sections account contract parcel phone ticket code
+    version id number no page zip route
+    """.split()  # noqa: SIM905 - a readable word list
+)
+
+
+def _record_refs(text: str) -> list[tuple[str, str, str, tuple[int, int]]]:
+    """(family, canonical number, label, span) for each explicitly labelled record."""
+    refs = []
+    for match in _RECORD_REF.finditer(text):
+        label = re.sub(r"\s+", " ", match[1].lower()).removesuffix("s")
+        number = re.sub(r"\D", "", match[2])
+        refs.append((_RECORD_LABELS.get(label, label), number, label, match.span()))
+    return refs
+
+
+def _header_states_record(family: str, number: str, text: str) -> bool:
+    """The header's primary record is exactly this one; another family's record is secondary."""
+    refs = _record_refs(text)
+    primary = {canonical for kind, canonical, _label, _span in refs if kind == family}
+    if _GENERIC_HEADER.search(text):
+        for match in _LONG_NUMBER.finditer(text):
+            if any(start <= match.start() < end for *_ref, (start, end) in refs):
+                continue
+            before = re.findall(r"[\w#]+", text[: match.start()].lower())
+            if before and before[-1].rstrip(".") in _TECHNICAL_LABELS:
+                continue
+            primary.add(match[0])
+    return primary == {number}
+
+
+def _record_header_before(
+    family: str, number: str, segments: list[dict[str, Any]], start: int
+) -> int | None:
+    """Nearest explicit agenda header stating the record; any other header first stops it."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - MAX_STRUCTURED_SEGMENTS, 0) - 1, -1):
+        if start_time - float(segments[back]["start_seconds"]) > MAX_STRUCTURED_SECONDS:
+            return None
+        text = segments[back]["text"]
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            return back if _header_states_record(family, number, text) else None
+    return None
+
+
+_QUANTITY_WORDS = {
+    word: str(value)
+    for value, word in enumerate(
+        """one two three four five six seven eight nine ten eleven twelve thirteen fourteen
+        fifteen sixteen seventeen eighteen nineteen twenty""".split(),  # noqa: SIM905
+        start=1,
+    )
+}
+_PHRASE_STOP = (
+    frozenset(
+        """
+    the and for are was were has had have not but with from that this than more less into onto
+    over each per its their our your his her who whom which what when where while about also
+    such very some any all both other
+    """.split()  # noqa: SIM905 - a readable word list
+    )
+    | _FUNCTION_WORDS
+)
+_QUANTITY_LABELS = frozenset({"number", "no", "item", "items", "section", "page", "bill"})
+_TOKEN = re.compile(r"[^\W_]+(?:[.,'’][^\W_]+)*")
+MAX_PHRASE_WORDS = 3
+MIN_EXCERPT_CHARS = 20
+
+
+def _tokens(text: str) -> list[tuple[str, str]]:
+    """(normalized token, separator before it); amounts become digits ("two" -> "2")."""
+    text = unicodedata.normalize("NFC", text).casefold()
+    found, end = [], 0
+    for match in _TOKEN.finditer(text):
+        token = match[0]
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+|\d+", token):
+            token = token.replace(",", "")
+        found.append((_QUANTITY_WORDS.get(token, token), text[end : match.start()]))
+        end = match.end()
+    return found
+
+
+def _phrase_word(token: str) -> bool:
+    return token.isalpha() and len(token) >= 3 and token not in _PHRASE_STOP
+
+
+def _quantity_phrases(text: str) -> list[list[tuple[str, ...]]]:
+    """Per stated amount, its amount+noun phrases, longest first; lists and labels skipped."""
+    tokens = _tokens(text)
+    phrases = []
+    for index, (token, _sep) in enumerate(tokens):
+        previous = tokens[index - 1][0] if index and not _sep.strip(" ,") else ""
+        if not token.isdigit() or previous.isdigit() or previous in _QUANTITY_LABELS:
+            continue  # not an amount, a spoken number list or a label ("item 4")
+        words = []
+        for word, sep in tokens[index + 1 : index + 1 + MAX_PHRASE_WORDS]:
+            if sep.strip() or not _phrase_word(word):
+                break
+            words.append(word)
+        # The amount alone or with a short function word is never a phrase.
+        candidates = [
+            (token, *words[:size]) for size in range(len(words), 0, -1) if len(words[size - 1]) >= 4
+        ]
+        if candidates:
+            phrases.append(candidates)
+    return phrases
+
+
+def _states_phrase(phrase: tuple[str, ...], text: str) -> bool:
+    """The whole phrase, not inside a number list and not followed by more of the noun phrase."""
+    tokens = _tokens(text)
+    size = len(phrase)
+    for index in range(len(tokens) - size + 1):
+        if tuple(token for token, _sep in tokens[index : index + size]) != phrase:
+            continue
+        if any(sep.strip() for _token, sep in tokens[index + 1 : index + size]):
+            continue
+        before = tokens[index - 1] if index else None
+        if before and not tokens[index][1].strip(" ,") and before[0].isdigit():
+            continue  # part of a spoken number list: "50 to 3", "101, two"
+        after = tokens[index + size] if index + size < len(tokens) else None
+        if after and not after[1].strip() and _phrase_word(after[0]):
+            continue  # the noun phrase goes on: a different head noun
+        return True
+    return False
+
+
+def _interior_spans(cited: list[int], segments: list[dict[str, Any]]) -> list[range]:
+    """Segments strictly between two cited runs of one agenda item, within the window."""
+    spans = []
+    runs = _runs(cited)
+    for left, right in zip(runs, runs[1:], strict=False):
+        low, high = left[-1], right[0]
+        if (
+            high - low > MAX_STRUCTURED_SEGMENTS
+            or float(segments[high]["start_seconds"]) - float(segments[low]["start_seconds"])
+            > MAX_STRUCTURED_SECONDS
+            or _TOPIC_BREAK.search(segments[high]["text"])
+            or any(
+                _HEADER.search(segments[i]["text"]) or _TOPIC_BREAK.search(segments[i]["text"])
+                for i in range(low + 1, high)
+            )
+        ):
+            continue
+        spans.append(range(low + 1, high))
+    return spans
+
+
+def _completion_links(
+    item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]], *, overview: bool
+) -> list[set[int]]:
+    """Opt-in typed record and quantitative phrase links (only records for the overview)."""
+    text = item["text"]
+    pool = " ".join(segments[i]["text"] for i in cited)
+    excerpts = [segments[i]["text"].strip() for i in cited]
+    if not cited or any(len(raw) >= MIN_EXCERPT_CHARS and raw in text for raw in excerpts):
+        return []  # a raw source excerpt (needs-review notice) is already its own evidence
+    links: list[set[int]] = []
+    pool_numbers = {number for _family, number, _label, _span in _record_refs(pool)}
+    records = dict.fromkeys(
+        (family, number, label) for family, number, label, _ in _record_refs(text)
+    )
+    for family, number, label in records:
+        if len(number) < 3 or number in pool_numbers or _match("number", number, pool):
+            continue
+        if label == "cb" and not (_LEGAL_CUE.search(text) or _LEGAL_CUE.search(pool)):
+            continue  # an abbreviation is a bill only in a legal context
+        found = [
+            (run[0] - back, back)
+            for run in _runs(cited)
+            if (back := _record_header_before(family, number, segments, run[0])) is not None
+        ]
+        if found:
+            links.append({min(found)[1]})
+    if overview:
+        return links
+    spans = _interior_spans(cited, segments)
+    for candidates in _quantity_phrases(text):
+        for phrase in candidates:
+            if _states_phrase(phrase, pool):
+                break  # already covered
+            witness = next(
+                (i for span in spans for i in span if _states_phrase(phrase, segments[i]["text"])),
+                None,
+            )
+            if witness is not None:
+                links.append({witness})
+                break
+    return links
+
+
 def _context_for_item(
     item: dict[str, Any],
     segments: list[dict[str, Any]],
     position: dict[str, int],
     *,
     strict: bool = False,
+    complete_bindings: bool = False,
 ) -> tuple[list[int], list[set[int]]]:
     """Generic context IDs (unchanged rules) and the complete strict structured links."""
     cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
@@ -717,6 +943,8 @@ def _context_for_item(
             structured.append(set(blocks.pop()))
     if strict:
         structured += _provenance_links(item, cited, segments, overview=False)
+    if strict and complete_bindings:
+        structured += _completion_links(item, cited, segments, overview=False)
     added -= set(cited)
     if len(added) > MAX_ADDED_PER_ITEM:
         added = set()  # An over-wide chain is left unresolved, not truncated.
@@ -729,11 +957,13 @@ def link_antecedent_context(
     *,
     max_refs_per_item: int,
     strict: bool = False,
+    complete_bindings: bool = False,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """Return a copy with local antecedent IDs added, and bounded counts.
 
     The overview is a cross-item summary, so only the detail sections get context links, except
-    strict acronym links.
+    strict acronym links and, with `complete_bindings`, strict typed record links.
+    `complete_bindings` without `strict` changes nothing.
     """
     segments = snapshot["segments"]  # saved transcript order
     position = {segment["id"]: index for index, segment in enumerate(segments)}
@@ -747,9 +977,13 @@ def link_antecedent_context(
                 cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
                 generic = []
                 links = _provenance_links(item, cited, segments, overview=True)
+                if complete_bindings:
+                    links += _completion_links(item, cited, segments, overview=True)
                 structured = [link - set(cited) for link in links]
             else:
-                generic, structured = _context_for_item(item, segments, position, strict=strict)
+                generic, structured = _context_for_item(
+                    item, segments, position, strict=strict, complete_bindings=complete_bindings
+                )
             fits = len(item["source_ids"]) + len(generic) <= max_refs_per_item
             added = set(generic) if fits else set()
             # Generic links are kept as before; each complete structured link joins only if the

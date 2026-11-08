@@ -20,23 +20,23 @@ Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
 
 ## Gemini Flash 3.8 — 08/11/2026
 
-gemini-3.8-flash, medium, v35 đo mới; cùng transcript/gold với ChatGPT. **Chưa đạt.**
+gemini-3.8-flash, medium, v36 đo mới; cùng transcript/gold với ChatGPT. **Chưa đạt.**
 
 | Chỉ tiêu | Kết quả cuối |
 | --- | ---: |
-| Nội dung mẫu dài | 10/12 (2 mục một phần) |
+| Nội dung mẫu dài | 12/12 |
 | Ý quan trọng | 7/7 |
 | Khẳng định quan trọng thiếu nguồn | 3 |
 | ID trích dẫn không tồn tại | 0 |
-| Nội dung mẫu ngắn | 9/9 |
-| VietMed | 2/2 |
-| Notes đo thực tế (v35) | 598,342213 giây; 14 lượt gọi; 0 cache |
+| Mục đã kiểm | 181 |
+| Notes đo thực tế (v36) | 636,865098 giây; 15 lượt gọi; 0 cache |
 
-v36 (kiểm ngữ nghĩa bốn phần, quyết định rõ cho mọi mục): chờ lần đo thực tế.
+v37 (liên kết hồ sơ/số lượng đầy đủ, kiểm ngữ nghĩa trên nguồn hiển thị có giới hạn): chờ lần đo
+thực tế.
 
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
-hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/v35-physical-qualification.json`,
-`v35-score-a/report.md`, `v35-score-b/report.md`.
+hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/v36-physical-qualification.json`,
+`v36-score-a/report.md`, `v36-score-b/report.md`.
 
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>

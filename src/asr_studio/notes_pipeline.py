@@ -980,8 +980,9 @@ def generate_notes_document(
     def semantic_audit(final_document: dict[str, Any]) -> dict[str, Any]:
         """The mandatory sparse source-binding pass (registered Gemini only).
 
-        At most four disjoint item partitions run concurrently, each over the full source; their
-        validated patches are merged and applied once. Any failed part fails the whole task.
+        At most four disjoint item partitions run concurrently, each shown only its visible
+        source (also its citation scope); their validated patches are merged and applied once.
+        Any failed part fails the whole task.
         """
         audit = SemanticAudit(
             projected_snapshot,
@@ -1013,7 +1014,7 @@ def generate_notes_document(
             try:
                 return request_document(
                     prompt,
-                    projected_snapshot,
+                    part.visible_snapshot(),
                     max_output_bytes=MAX_SEMANTIC_OUTPUT_BYTES,
                     stage="semantic_audit",
                     repair_prompt=audit_prompt,
@@ -1094,6 +1095,7 @@ def generate_notes_document(
             snapshot,
             max_refs_per_item=nd.MAX_SOURCE_REFS_PER_ITEM,
             strict=nd._is_known_gemini(synthesis_budget),
+            complete_bindings=nd._is_known_gemini(synthesis_budget),
         )
         try:
             final_document = nd.validate_document(

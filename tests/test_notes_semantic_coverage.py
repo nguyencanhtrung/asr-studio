@@ -37,11 +37,11 @@ def _audit(n: int) -> SemanticAudit:
     return SemanticAudit(SOURCE, nd.validate_document(document, SOURCE))
 
 
-def _change(ref: str) -> dict:
+def _change(ref: str, added: str = ID[0]) -> dict:
     return {
         "ref": ref,
         "text_ref": f"{ref}.o",
-        "add_source_ids": [ID[0]],
+        "add_source_ids": [added],
         "clear_owner": False,
         "clear_deadline": False,
     }
@@ -155,13 +155,12 @@ def test_four_complete_parts_merge_once_and_equal_one_full_patch():
     parts = audit.partitions()
     assert len(parts) == 4
     patches = []
-    for part in parts:
+    # Each part appends the first segment it was shown: an unshown ID would fail the part.
+    changes = [_change(_refs(p)[0], p.visible_snapshot()["segments"][0]["id"]) for p in parts]
+    for part, change in zip(parts, changes, strict=True):
         own = _refs(part)
-        patches.append(
-            (part, part.validated_patch(json.dumps(_patch(own, [_change(own[0])], [own[-1]]))))
-        )
+        patches.append((part, part.validated_patch(json.dumps(_patch(own, [change], [own[-1]])))))
     merged = audit.combine_patches(patches)
-    changes = [_change(_refs(p)[0]) for p in parts]
     unresolved = [_refs(p)[-1] for p in parts]
     assert merged == audit.parse(json.dumps(_patch(_refs(audit), changes, unresolved)))
     assert merged[1]["reviewed"] == 9 and merged[1]["model_verified"] == 1

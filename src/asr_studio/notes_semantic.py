@@ -1,7 +1,11 @@
 """One bounded source-binding audit for registered-Gemini long notes, as sparse immutable refs.
 
 The pass may split the final items into at most four balanced, disjoint partitions; each one
-reads the full source but sees and may patch only its own items under their global refs. Every
+sees and may patch only its own items under their global refs. A view's prompt shows only its
+visible source: every segment its items cite, the read-only strict context candidates of those
+items and one bounded neighbour on each side of each cited run, under their global IDs and order,
+with explicit original positions and omitted ranges. Only visible IDs may be appended; the
+deterministic guards still read the full source. Every
 part returns an explicit Boolean decision for each of its refs (``verified``), so an omitted
 item fails the part. The validated part patches are merged and applied once, so every item is
 audited exactly once. The verified map proves decision coverage only, never semantic truth.
@@ -28,7 +32,15 @@ from typing import Any
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_audit import _source_excerpt_text
-from asr_studio.notes_context import ATTRIBUTION_FORMS, unverified_speakers, unverified_vote_names
+from asr_studio.notes_context import (
+    _HEADER,
+    _TOPIC_BREAK,
+    ATTRIBUTION_FORMS,
+    MAX_FORWARD_SECONDS,
+    link_antecedent_context,
+    unverified_speakers,
+    unverified_vote_names,
+)
 
 AUDIT_VERSION = 2
 MAX_SEMANTIC_OUTPUT_BYTES = 64_000  # one part's response and the merged patch alike
@@ -860,6 +872,8 @@ class SemanticAudit:
         self._source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in self.source["segments"])
         )
+        self._position = {s["id"]: index for index, s in enumerate(self.source["segments"])}
+        self._visible = self._visible_ids(self.items)
 
     def _responsibility_texts(self, texts: list[tuple[str, str]]) -> list[tuple[str, str]]:
         """'.p' over the original, '.pr' over '.r', '.aNp'/'.aNpr' over anonymous ones; capped."""
@@ -902,7 +916,85 @@ class SemanticAudit:
         view.items = items
         view._by_ref = {item.ref: item for item in items}
         view._text_refs = {r: (item, text) for item in items for r, text in item.texts}
+        view._visible = view._visible_ids(items)
         return view
+
+    # ----- visible source ---------------------------------------------------------------------
+
+    def _visible_ids(self, items: tuple[_Item, ...]) -> tuple[str, ...]:
+        """Own cited IDs, strict context candidates and bounded +-1 neighbours, in source order.
+
+        Every own cited ID is kept, never truncated. Candidates come from a read-only run of the
+        strict context linker over a deep copy holding only these items; nothing is published.
+        A neighbour joins only within the same agenda (no header or topic break between) and
+        the existing 120 s gap. No items: the whole source, never an empty snapshot.
+        """
+        if not items:
+            return self._source_ids
+        segments = self.source["segments"]
+        part: dict[str, Any] = {section: [] for section in _SECTION_NAMES}
+        for item in items:
+            part[item.section].append(self.document[item.section][item.position])
+        cited: set[int] = set()
+        for entries in part.values():
+            for entry in entries:
+                if any(i not in self._position for i in entry["source_ids"]):
+                    raise _error(
+                        "The semantic audit item cites an unknown source ID.", "source_ids"
+                    )
+                cited.update(self._position[i] for i in entry["source_ids"])
+        linked, _counts = link_antecedent_context(
+            copy.deepcopy(part),
+            self.source,
+            max_refs_per_item=nd._source_ref_limit(self.max_unit_size),
+            strict=True,
+            complete_bindings=True,
+        )
+        shown = set(cited)
+        for entries in linked.values():
+            if isinstance(entries, list):
+                shown.update(
+                    self._position[i]
+                    for entry in entries
+                    for i in entry["source_ids"]
+                    if i in self._position
+                )
+
+        def boundary(index: int) -> bool:
+            text = str(segments[index].get("text", ""))
+            return bool(_HEADER.search(text) or _TOPIC_BREAK.search(text))
+
+        def close(earlier: int, later: int) -> bool:
+            gap = float(segments[later]["start_seconds"]) - float(segments[earlier]["end_seconds"])
+            return gap <= MAX_FORWARD_SECONDS
+
+        for index in cited:
+            # Before: the cited segment must not open a new agenda; after: nor the neighbour.
+            if index > 0 and not boundary(index) and close(index - 1, index):
+                shown.add(index - 1)
+            if index + 1 < len(segments) and not boundary(index + 1) and close(index, index + 1):
+                shown.add(index + 1)
+        return tuple(segments[index]["id"] for index in sorted(shown))
+
+    def visible_snapshot(self) -> dict[str, Any]:
+        """The source restricted to this view's visible segments: the prompt and citation scope."""
+        visible = set(self._visible)
+        return {
+            **self.source,
+            "segments": [s for s in self.source["segments"] if s["id"] in visible],
+        }
+
+    def source_scope(self) -> dict[str, Any]:
+        """Original 0-based positions of the shown segments and the omitted position ranges."""
+        total = len(self.source["segments"])
+        shown = [self._position[i] for i in self._visible]
+        omitted = [[a + 1, b - 1] for a, b in itertools.pairwise([-1, *shown, total]) if b - a > 1]
+        return {
+            "full_segment_count": total,
+            "shown_positions": shown,
+            "omitted_position_ranges": omitted,
+            "note": _SCOPE_NOTE[self.output_language],
+        }
 
     def _language(self, output_language: str | None) -> str:
         """The constructor's language; a different one would mix marker and label languages."""
@@ -928,7 +1020,17 @@ class SemanticAudit:
         changes: list[Any] = []
         unresolved: list[Any] = []
         verified: dict[str, Any] = {}
-        for (_view, patch), scope in zip(parts, scopes, strict=True):
+        for (view, patch), scope in zip(parts, scopes, strict=True):
+            visible = set(view._visible)
+            if any(
+                not isinstance(i, str) or i not in visible
+                for c in patch["changes"]
+                if isinstance(c, dict) and isinstance(c.get("add_source_ids"), list)
+                for i in c["add_source_ids"]
+            ):
+                raise _error(
+                    "The semantic audit part cites a source ID it was not shown.", "source_ids"
+                )
             refs = [c.get("ref") for c in patch["changes"] if isinstance(c, dict)]
             decided = patch.get("verified")
             if (
@@ -1010,7 +1112,8 @@ class SemanticAudit:
         return {
             "audit_version": AUDIT_VERSION,
             "meeting_date": self.source.get("meeting_date"),
-            "source": nd.provider_source(dict(self.source)),
+            "source": nd.provider_source(self.visible_snapshot()),
+            "source_scope": self.source_scope(),
             "items": [entry(item) for item in self.items],
         }
 
@@ -1032,7 +1135,7 @@ class SemanticAudit:
         )
         return nd._check_prompt(
             nd._repair_prompt(prompt, invalid_output, output_language=output_language),
-            allowed_source_ids=self._source_ids,
+            allowed_source_ids=self._visible,
             output_language=output_language,
             budget=budget,
             max_unit_size=self.max_unit_size,
@@ -1097,7 +1200,7 @@ class SemanticAudit:
             raise _error("The semantic audit must decide every item exactly once.")
 
         document = copy.deepcopy(self.document)
-        scope = set(self._source_ids)
+        scope = set(self._visible)  # an unshown ID fails even when it exists in the full source
         seen: set[str] = set()
         counts = dict.fromkeys(
             (
@@ -1248,12 +1351,27 @@ class SemanticAudit:
         return validated, counts
 
 
+_SCOPE_NOTE = {
+    "en": (
+        "source shows only the segments at shown_positions of the full transcript; segments in "
+        "omitted_position_ranges are not shown. Segments on either side of an omission are not "
+        "adjacent: never infer continuity, a handoff, a turn or the same speaker across one."
+    ),
+    "vi": (
+        "source chỉ gồm các segment ở shown_positions của toàn bộ bản ghi; các segment trong "
+        "omitted_position_ranges không được hiển thị. Hai segment ở hai bên một khoảng bị lược "
+        "không liền kề: không bao giờ suy ra sự tiếp nối, lời chuyển lượt, lượt nói hay cùng "
+        "người nói qua khoảng đó."
+    ),
+}
+
 _INSTRUCTIONS = {
     "en": (
         "Final source-binding audit of meeting notes. Return one sparse JSON patch, never a "
-        "document or new wording. AUDIT_INPUT_JSON.source is the full transcript; items are the "
-        "final notes assigned to this request. Each item has immutable text_refs: '.o' is its "
-        "original text, '.aN' an "
+        "document or new wording. AUDIT_INPUT_JSON.source contains the shown transcript segments; "
+        "source_scope identifies omitted ranges. Never infer continuity across omissions. Items "
+        "are the final notes assigned to this request. Each item has immutable text_refs: '.o' "
+        "is its original text, '.aN' an "
         "anonymous variant that only drops a leading speaker or group attribution or a leading "
         "qualifier, '.r' only replaces labelled secondary legal reference identifiers (code, "
         "section, article or clause numbers) with a fixed reference-unclear marker, and '.aNr' "
@@ -1316,7 +1434,8 @@ _INSTRUCTIONS = {
     ),
     "vi": (
         "Kiểm tra cuối cùng việc gắn nguồn của biên bản họp. Trả về một bản vá JSON thưa, không "
-        "trả về tài liệu hay câu chữ mới. AUDIT_INPUT_JSON.source là toàn bộ bản ghi; items là "
+        "trả về tài liệu hay câu chữ mới. AUDIT_INPUT_JSON.source gồm các segment được hiển thị; "
+        "source_scope chỉ rõ khoảng bị lược. Không suy ra sự tiếp nối qua khoảng bị lược. items là "
         "các mục biên bản cuối được giao cho yêu cầu này. Mỗi mục có text_refs bất biến: '.o' "
         "là văn bản gốc, '.aN' là "
         "biến thể ẩn danh chỉ bỏ phần ghi người nói hoặc nhóm ở đầu, hoặc bổ ngữ ở đầu; '.r' chỉ "

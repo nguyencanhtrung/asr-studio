@@ -1936,6 +1936,48 @@ nhãn không chắc chắn, không khẳng định vai trò. Chất lượng và
 quả thực tế mới nhất. Nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/`
 (`v35-physical-qualification.json`, `v35-score-a/report.md`, `v35-score-b/report.md`).
 
+### #183 (tiếp) — Liên kết hồ sơ/số lượng đầy đủ và nguồn hiển thị có giới hạn (`notes-hierarchical-v37`)
+
+**Vấn đề.** Lần đo thực tế v36 chưa đạt: 12/12, 7/7 ý quan trọng, 3 khẳng định quan trọng thiếu
+căn cứ, 0 ID sai, 181 mục, 636,865098 giây (trên 600), 15 call, 0 cache. Cả ba lỗi là thiếu trích
+dẫn: sự kiện có trong nguồn nhưng không nằm trong nguồn của chính mục (một mục overview, hai mục
+key_topics). Mỗi phần kiểm ngữ nghĩa gửi lại toàn nguồn: 557 segment, tổng 771.809 byte prompt
+cho bốn phần.
+
+**Thiết kế.** Chỉ với Gemini đã đăng ký:
+
+- Liên kết ngữ cảnh sau call cuối thêm chế độ `complete_bindings` (mặc định tắt, chỉ bật cùng
+  strict trên nhánh fact inventory). Số hồ sơ có nhãn rõ (bill, resolution, ordinance,
+  appointment...) mà nguồn của mục chưa có được nối với tiêu đề nghị sự gần nhất phía trước có
+  đúng số hồ sơ đó, trong cửa sổ 32 segment/360 giây, dừng khi đổi mục nghị sự. Cụm số lượng
+  nguyên văn (con số cùng danh từ cụ thể) nằm giữa hai đoạn đã trích của mục, cùng mục nghị sự,
+  được nối với segment chứa đúng cụm đó. Không đoán hay sửa chữ số, không ghép danh sách, không
+  suy ra số lượng hay vai trò. Overview chỉ nhận thêm liên kết hồ sơ có nhãn trong chế độ này.
+  Liên kết mới xét sau liên kết cũ, giữ thứ tự ID cũ, thêm trọn nhóm hoặc không thêm, trong trần
+  12 ID thêm/mục và trần tham chiếu. Đây là liên kết nguồn, không phải bằng chứng ngữ nghĩa;
+  không sửa câu chữ/metadata.
+- Mỗi phần kiểm ngữ nghĩa chỉ thấy nguồn hiển thị: mọi segment các mục của phần trích dẫn, ứng
+  viên liên kết strict (chạy chỉ đọc trên bản sao chỉ có các mục của phần, cùng
+  `complete_bindings`) và một segment kề trước/sau mỗi đoạn đã trích, cùng mục nghị sự và cách
+  không quá 120 giây. Không bỏ hay cắt ID của mục; ID, thứ tự và thời điểm toàn cục giữ nguyên.
+  `source_scope` nêu tổng số segment, vị trí gốc của segment hiển thị và các khoảng bị lược;
+  hai segment ở hai bên một khoảng lược không liền kề, không suy ra lượt nói hay cùng người nói.
+  Nguồn hiển thị cũng là phạm vi trích dẫn của request: ID không hiển thị bị từ chối kể cả khi có
+  trong toàn nguồn, rồi đi vào repair dùng chung; bản gộp từ chối ID mà phần đó không được thấy.
+  Phần không có mục dùng toàn nguồn. Các kiểm tra tất định của mã vẫn đọc toàn nguồn.
+
+**Đánh đổi.** Trên bốn phần thực tế của v36 (call 12-15, dựng lại đúng từng mục), nguồn hiển thị
+giảm prompt từ 771.809 xuống 323.790 byte (0,4195), giữ mọi ID của mục; 7/9 ID mà model v36 đã
+thêm vẫn hiển thị, 2 ID ở xa hơn sẽ bị từ chối và đi vào repair hoặc mục giữ nguyên. Đây là giảm
+dữ liệu đầu vào, không phải bằng chứng về thời gian: thời gian v36 theo token đầu ra/suy luận.
+Model có thể không thấy segment ở xa làm rõ hoặc mâu thuẫn; chất lượng cần chấm mù. Reconcile hai
+view vẫn đọc toàn nguồn. Không thêm call, pass hay model; `MAX_PROVIDER_CALLS` 54, bản gộp 64.000
+byte, một repair dùng chung và fixture 15 call (+1 repair, tối đa 16) không đổi. ChatGPT và ca ngắn
+giữ đúng request cũ. Chất lượng và thời gian v37 chưa đo. Nguồn cục bộ:
+`reports/.notes-gemini-fix-local-20261108/` (`v36-physical-qualification.json`,
+`v36-runtime-proof.json`, `v36-score-a/report.md`, `v36-score-b/report.md`,
+`v37-scope-plan/report.md`, `v37-audit-scope/scope-measure.json`).
+
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 
 Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)

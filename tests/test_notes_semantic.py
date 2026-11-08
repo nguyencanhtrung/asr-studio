@@ -527,7 +527,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v36"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v37"
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------
@@ -608,7 +608,7 @@ def test_partitions_are_balanced_disjoint_and_cover_every_global_ref_once(n, siz
         assert part.source is audit.source and part.document is audit.document
 
 
-def test_part_prompt_and_schema_carry_the_full_source_but_only_its_own_items():
+def test_part_prompt_and_schema_carry_their_visible_source_and_only_their_own_items():
     audit = _quarantine_audit()
     budget = nd.notes_budget(*GEMINI)
     parts = audit.partitions()
@@ -619,7 +619,11 @@ def test_part_prompt_and_schema_carry_the_full_source_but_only_its_own_items():
         others = [item for item in audit.items if item.ref not in own]
         payload = semantic_payload(part.build_prompt(budget=budget))
         assert {item["ref"] for item in payload["items"]} == own
-        assert payload["source"] == audit.prompt_payload()["source"]  # full source
+        shown = [segment["id"] for segment in payload["source"]["segments"]]
+        assert shown == list(part._visible)  # the visible source, global IDs in source order
+        cited = {i for item in payload["items"] for i in item["source_ids"]}
+        assert cited <= set(shown)  # every own cited ID is shown
+        assert part.source is audit.source  # the guards keep the full source
         schema = part.schema()
         change = schema["properties"]["changes"]["items"]["properties"]
         assert set(change["ref"]["enum"]) == own
@@ -669,7 +673,8 @@ def _part_patches(audit, changes=(), unresolved=()):
 def test_merged_part_patches_equal_one_full_patch_without_index_shift():
     audit = _quarantine_audit()
     original = copy.deepcopy(audit.document)
-    change, unresolved = _change("i2", "i2.o", ids=[ID[0]]), ["i4", "i0", "i3"]
+    # i2's part sees ID[1] (its bounded neighbour), never the unshown ID[0].
+    change, unresolved = _change("i2", "i2.o", ids=[ID[1]]), ["i4", "i0", "i3"]
     parts = _part_patches(audit, [change], unresolved)
     assert len(parts) == 4
     merged = audit.combine_patches(parts)
@@ -949,7 +954,7 @@ def _wide_run(semantic, calls, coverage, reconcile=None):
     )
 
 
-def test_four_audit_parts_run_concurrently_over_the_full_source_and_decide_every_ref_once():
+def test_four_audit_parts_run_concurrently_over_their_visible_source_and_decide_every_ref_once():
     calls: list[dict] = []
     coverage: list[dict] = []
     barrier = threading.Barrier(4, timeout=10)  # breaks unless all four parts are in flight
@@ -966,10 +971,26 @@ def test_four_audit_parts_run_concurrently_over_the_full_source_and_decide_every
     owned = [semantic_refs(c["prompt"]) for c in audits]
     assert len(audits) == 4 and sorted(len(refs) for refs in owned) == [1, 1, 1, 2]
     assert sorted(sum(owned, [])) == [f"i{k}" for k in range(5)]  # disjoint, each once
-    sources = [semantic_payload(c["prompt"])["source"] for c in audits]
-    assert all(source == sources[0] for source in sources)
-    texts = [s["text"] for s in sources[0]["segments"]]
-    assert texts == [s["text"] for s in _wide_snapshot()["segments"]]  # the full source
+    texts = [s["text"] for s in _wide_snapshot()["segments"]]
+    shown = {}
+    for call in audits:
+        payload = semantic_payload(call["prompt"])
+        segments = payload["source"]["segments"]
+        assert list(call["allowed_source_ids"]) == [s["id"] for s in segments]  # citation scope
+        positions = [texts.index(s["text"]) for s in segments]
+        assert payload["source_scope"]["shown_positions"] == positions  # global order
+        assert payload["source_scope"]["full_segment_count"] == 5
+        for item in payload["items"]:
+            shown[item["text_refs"][0]["text"]] = [texts[p] for p in positions]
+    # Own segment plus a neighbour within 120 s; the 3,581 s gap is never crossed.
+    first, second, third, fourth, fifth = (text.rstrip(".") for text in texts)
+    assert shown == {
+        first: texts[:3],
+        second: texts[:3],
+        third: texts[1:3],
+        fourth: texts[3:],
+        fifth: texts[3:],
+    }
     assert len(result["key_topics"]) == 5
     audit = coverage[0]["semantic_audit"]
     assert audit["part_count"] == 4 and len(audit["provider_call_indices"]) == 4
