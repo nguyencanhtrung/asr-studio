@@ -1852,6 +1852,18 @@ Issue [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183).
 Tag: architecture, quality, performance. Đích: `docs/backend-contract.md`,
 [báo cáo nghiệm thu](acceptance-report.md). Dữ liệu chi tiết chỉ lưu cục bộ, không đưa vào tài liệu.
 
+### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
+
+Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)
+bị HTTP 504 ở URL release OMP. Cùng asset với `?download=1` trả HTTP 200 và khớp SHA-256
+hiện hành (nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/final-test/arm64-attempt2.log`,
+`omp-arm64-body-sha256.txt`). Dockerfile dùng tham số tải asset và retry hữu hạn cho cả
+binary/license: 3 retry, chờ 2 giây, cửa sổ retry 180 giây, connect 15 giây, mỗi transfer 180 giây.
+Giữ OMP 18.5.0, SHA-256, HTTPS/TLS và license; lỗi cuối/checksum vẫn làm build thất bại.
+Đánh đổi: lỗi mạng có thể kéo dài build trong giới hạn trên, không bỏ kiểm tra hay dùng mirror.
+Issue [#185](https://github.com/nguyencanhtrung/asr-studio/issues/185).
+Tag: operations. Đích: `Dockerfile`.
+
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
 - Problem: the original dataset issue mixed Notes-from-transcript checks with
