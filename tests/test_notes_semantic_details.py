@@ -95,6 +95,18 @@ def test_the_guard_is_generic_over_values_units_and_families(cited, claim):
     assert marks == 1 and Q in text and claim.split()[0] not in text
 
 
+@pytest.mark.parametrize("value", ["243", "240", "24"])
+@pytest.mark.parametrize("language,marker", [("en", Q), ("vi", "[số lượng chưa rõ]")])
+def test_repeated_ambiguous_counts_are_all_marked(value, language, marker):
+    text, marks = mark_unclear_quantities(
+        f"{value} vehicles and {value} vehicles; {value} electric vehicles", FLEET, language
+    )
+    assert (text, marks) == (
+        f"{marker} vehicles and {marker} vehicles; {marker} electric vehicles",
+        3,
+    )
+
+
 def test_marker_follows_the_output_language():
     text, marks = mark_unclear_quantities("Kho thêm 243 xe điện", FLEET, "vi")
     assert (text, marks) == ("Kho thêm [số lượng chưa rõ] xe điện", 1)

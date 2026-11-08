@@ -329,7 +329,7 @@ def _number(value: int) -> str:
 
 def _count_claims(text: str, value: int, family: str) -> list[re.Match[str]]:
     """Definite counts of ``value`` objects of ``family``: the number, then <= 3 words, a noun."""
-    pattern = re.compile(_number(value) + r"(?P<tail>(?:[\s-]+[\w'’-]+){1,4})", re.UNICODE)
+    pattern = re.compile(_number(value) + r"(?=(?P<tail>(?:[\s-]+[\w'’-]+){1,4}))", re.UNICODE)
     return [
         match
         for match in pattern.finditer(text)
@@ -379,7 +379,7 @@ def mark_unclear_quantities(
     spans: set[tuple[int, int]] = set()
     for value, family in ambiguous_quantities(cited_text):
         for match in _count_claims(text, value, family):
-            spans.add((match.start(), match.start() + len(match.group()) - len(match["tail"])))
+            spans.add(match.span())
     for start, end in sorted(spans, reverse=True):
         text = text[:start] + marker + text[end:]
     return text, len(spans)
