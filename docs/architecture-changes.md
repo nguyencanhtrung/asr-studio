@@ -1571,3 +1571,19 @@ nội dung nên #79 vẫn mở. Các ngưỡng cohort riêng tư và thời gian
 đo vẫn chưa được công nhận; #88 theo dõi audio đại diện và duyệt của người dùng.
 
 Tag: kiến trúc, chất lượng Notes. Tài liệu đích: `docs/specification.md`, báo cáo nghiệm thu.
+
+## Notes transcript acceptance scope — issue #88 (2026-11-08)
+
+- Problem: the original dataset issue mixed Notes-from-transcript checks with
+  audio, diarization and end-to-end acceptance, so a usable transcript benchmark
+  could not resolve it.
+- Decision: the operator narrowed #88 to a public continuous meeting transcript,
+  immutable source/gold prepared before output, and a real bounded Notes run with
+  valid schema and citation IDs. Content-quality acceptance remains in #79.
+- Evidence: [the resolved criteria and measured receipt in #88](https://github.com/nguyencanhtrung/asr-studio/issues/88).
+  Original audio requirements remain in that issue's historical section and are
+  outside this Notes task; this change does not certify ASR accuracy or audio
+  processing time.
+- Trade-off: this closes the transcript-fixture gap without claiming representative
+  audio coverage. It does not relax the frozen content gate for #79.
+- Follow-up: #79 and PR #181; tag: acceptance; target: Notes acceptance documentation.
