@@ -18,7 +18,7 @@ SCHEMA_VERSION = 1
 # v37: each semantic-audit part shows only its visible source (own citations, strict context
 # candidates, bounded neighbours, explicit omissions); final context links complete bindings.
 # v38: the semantic audit runs as at most eight parts (min(8, N)), same per-part contract.
-PROMPT_VERSION = "notes-hierarchical-v40"
+PROMPT_VERSION = "notes-hierarchical-v41"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.

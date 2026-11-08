@@ -331,3 +331,34 @@ def test_max_chunk_run_charges_every_view_and_stays_under_the_global_cap(monkeyp
     assert [call for call in calls if call[1] == "repair"] == [("reconcile", "repair")]
     assert coverage[0]["source_audit"]["part_count"] == 4
     assert coverage[0]["provider_calls"] == len(calls) <= nd.MAX_PROVIDER_CALLS
+
+
+def test_chatgpt_fact_maps_run_exactly_three_at_a_time():
+    lock = threading.Lock()
+    in_flight = high_water = 0
+    # Six maps in two full rounds: breaks with fewer than three workers in flight.
+    barrier = threading.Barrier(3, timeout=10)
+
+    def transport(prompt, **kwargs):
+        nonlocal in_flight, high_water
+        if kwargs["stage"] != "chunk":
+            return reconcile_keep_patch(prompt)
+        with lock:
+            in_flight += 1
+            high_water = max(high_water, in_flight)
+        barrier.wait()
+        time.sleep(0.05)  # a fourth worker would be counted in flight here
+        with lock:
+            in_flight -= 1
+        return _map_reply(prompt)
+
+    generate_notes_document(
+        snapshot=_wide_snapshot(6),
+        output_language="en",
+        provider="chatgpt",
+        model="gpt-5.6-sol",
+        transport=transport,
+        invalid_output_error=lambda diagnostics: AssertionError(diagnostics),
+        limit_error=RuntimeError,
+    )
+    assert high_water == 3

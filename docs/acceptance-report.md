@@ -31,8 +31,8 @@ gemini-3.8-flash, medium, v39; cùng transcript/gold. **Chưa đạt chất lư�
 | Mục đã kiểm | 179 |
 | Notes đo thực tế | 701,858427 giây; 20 lượt gọi; 0 cache |
 
-v40 (bốn view reconcile, năm worker map, `cue_checked`, quy tắc sửa trạng thái/mức độ): chưa đo
-thực tế, đang chờ.
+v40 lỗi `notes_invalid_output`: 298,034664 giây; 14 lượt gọi; 0 cache; không có Notes.
+v41 gom lỗi các phần vào một repair chung: chưa đo thực tế.
 
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
 hồ sơ cục bộ (không theo dõi) `reports/.notes-gemini-fix-local-20261108/`:

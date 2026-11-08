@@ -19,6 +19,7 @@ from asr_studio.notes_reconcile import (
     MAX_RECONCILE_OUTPUT_BYTES,
     ReconcileLedger,
     ReconcileRepair,
+    ReconcileRepairBundle,
     ReconcileResult,
 )
 from asr_studio.notes_semantic import MAX_SEMANTIC_OUTPUT_BYTES, SemanticAudit
@@ -31,6 +32,19 @@ _NOTES_VALIDATION_STAGES = frozenset(
 )
 _NOTES_VALIDATION_ATTEMPTS = frozenset({"primary", "repair", "recovery"})
 _NOTES_REPAIR_STATES = frozenset({"unavailable", "already_consumed"})
+
+
+class _DeferredInvalid(Exception):
+    """An invalid split-reconcile primary whose repair is pooled after every sibling returns."""
+
+    def __init__(
+        self, error: Exception, raw_output: object, provider_call_index: int, prompt_bytes: int
+    ) -> None:
+        super().__init__("deferred invalid reconcile view")
+        self.error = error
+        self.raw_output = raw_output
+        self.provider_call_index = provider_call_index
+        self.prompt_bytes = prompt_bytes
 
 
 def _bounded_diagnostic_int(value: object, *, minimum: int, maximum: int) -> int | None:
@@ -393,13 +407,16 @@ def generate_notes_document(
         response_schema: Mapping[str, Any] | None = None,
         parse: Callable[[object], dict[str, Any]] | None = None,
         repair_schema: Callable[[], Mapping[str, Any] | None] | None = None,
+        defer_invalid: bool = False,
     ) -> tuple[dict[str, Any], int]:
         """Run one logical request; `parse` replaces schema-1 parsing for an internal schema.
 
         `repair_schema`, called after the repair prompt is built, gives that prompt's schema;
-        None keeps `response_schema` for the repair too.
+        None keeps `response_schema` for the repair too. `defer_invalid` (split reconcile views
+        only) raises `_DeferredInvalid` for an invalid answer while the repair is still free,
+        so the caller can pool the one repair across every failed view.
         """
-        nonlocal last_successful_response, repair_used
+        nonlocal last_successful_response
         allowed_source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in citation_scope["segments"])
         )
@@ -471,69 +488,109 @@ def generate_notes_document(
                     if lowered is not None:
                         attempt, sent = "recovery", lowered
                         continue
-                with ledger_lock:
-                    can_repair = not repair_used
-                    if can_repair:
-                        repair_used = True
-                if not can_repair:
-                    raise invalid_output(
-                        validation_error,
-                        stage=stage,
-                        provider_call_index=provider_call_index,
-                        attempt=attempt,
-                        raw_output=raw_output,
-                        repair_state="already_consumed",
-                        prompt_bytes=len(sent.encode("utf-8")),
-                        response_limit=max_output_bytes,
-                    ) from None
-                progress("repairing", 0, 1, "repairs")
-                try:
-                    bounded_repair_prompt = repair_prompt(raw_output)
-                except (nd.NotesDocumentError, TypeError, AttributeError):
-                    raise invalid_output(
-                        validation_error,
-                        stage=stage,
-                        provider_call_index=provider_call_index,
-                        attempt=attempt,
-                        raw_output=raw_output,
-                        repair_state="unavailable",
-                        prompt_bytes=len(sent.encode("utf-8")),
-                        response_limit=max_output_bytes,
-                    ) from None
-                repaired_output, repair_call_index = request(
-                    bounded_repair_prompt,
-                    allowed_source_ids=allowed_source_ids,
-                    max_output_bytes=max_output_bytes,
-                    stage=stage,
-                    attempt="repair",
-                    budget=budget,
-                    response_schema=response_schema if repair_schema is None else repair_schema(),
-                )
-                try:
-                    validated = validate(repaired_output)
+                if defer_invalid:
                     with ledger_lock:
-                        if (
-                            last_successful_response is None
-                            or repair_call_index >= last_successful_response[0]
-                        ):
-                            last_successful_response = (
-                                repair_call_index,
-                                "repair",
-                                repaired_output,
-                            )
-                    progress("repairing", 1, 1, "repairs")
-                    return validated, repair_call_index
-                except (nd.NotesDocumentError, TypeError) as repair_error:
-                    raise invalid_output(
-                        repair_error,
-                        stage=stage,
-                        provider_call_index=repair_call_index,
-                        attempt="repair",
-                        raw_output=repaired_output,
-                        repair_state="already_consumed",
-                        prompt_bytes=len(bounded_repair_prompt.encode("utf-8")),
-                        response_limit=max_output_bytes,
-                    ) from None
+                        consumed = repair_used
+                    if not consumed:  # else fail now, exactly as an undeferred request
+                        raise _DeferredInvalid(
+                            validation_error,
+                            raw_output,
+                            provider_call_index,
+                            len(sent.encode("utf-8")),
+                        ) from None
+                return repair_once(
+                    validation_error,
+                    stage=stage,
+                    provider_call_index=provider_call_index,
+                    attempt=attempt,
+                    raw_output=raw_output,
+                    prompt_bytes=len(sent.encode("utf-8")),
+                    max_output_bytes=max_output_bytes,
+                    allowed_source_ids=allowed_source_ids,
+                    budget=budget,
+                    repair_prompt=lambda raw=raw_output: repair_prompt(raw),
+                    repair_schema=(lambda: response_schema)
+                    if repair_schema is None
+                    else repair_schema,
+                    validate=validate,
+                )
+
+    def repair_once(
+        validation_error: Exception,
+        *,
+        stage: str,
+        provider_call_index: int,
+        attempt: str,
+        raw_output: object,
+        prompt_bytes: int,
+        max_output_bytes: int,
+        allowed_source_ids: Sequence[str],
+        budget: nd.NotesBudget,
+        repair_prompt: Callable[[], str],
+        repair_schema: Callable[[], Mapping[str, Any] | None],
+        validate: Callable[[object], Any],
+    ) -> tuple[Any, int]:
+        """Reserve the task's one repair, then send and validate it; any failure is final."""
+        nonlocal last_successful_response, repair_used
+        with ledger_lock:
+            can_repair = not repair_used
+            if can_repair:
+                repair_used = True
+        if not can_repair:
+            raise invalid_output(
+                validation_error,
+                stage=stage,
+                provider_call_index=provider_call_index,
+                attempt=attempt,
+                raw_output=raw_output,
+                repair_state="already_consumed",
+                prompt_bytes=prompt_bytes,
+                response_limit=max_output_bytes,
+            ) from None
+        progress("repairing", 0, 1, "repairs")
+        try:
+            bounded_repair_prompt = repair_prompt()
+        except (nd.NotesDocumentError, TypeError, AttributeError):
+            raise invalid_output(
+                validation_error,
+                stage=stage,
+                provider_call_index=provider_call_index,
+                attempt=attempt,
+                raw_output=raw_output,
+                repair_state="unavailable",
+                prompt_bytes=prompt_bytes,
+                response_limit=max_output_bytes,
+            ) from None
+        repaired_output, repair_call_index = request(
+            bounded_repair_prompt,
+            allowed_source_ids=allowed_source_ids,
+            max_output_bytes=max_output_bytes,
+            stage=stage,
+            attempt="repair",
+            budget=budget,
+            response_schema=repair_schema(),
+        )
+        try:
+            validated = validate(repaired_output)
+            with ledger_lock:
+                if (
+                    last_successful_response is None
+                    or repair_call_index >= last_successful_response[0]
+                ):
+                    last_successful_response = (repair_call_index, "repair", repaired_output)
+            progress("repairing", 1, 1, "repairs")
+            return validated, repair_call_index
+        except (nd.NotesDocumentError, TypeError) as repair_error:
+            raise invalid_output(
+                repair_error,
+                stage=stage,
+                provider_call_index=repair_call_index,
+                attempt="repair",
+                raw_output=repaired_output,
+                repair_state="already_consumed",
+                prompt_bytes=len(bounded_repair_prompt.encode("utf-8")),
+                response_limit=max_output_bytes,
+            ) from None
 
     def restore_final_document(document: dict[str, Any], *, stage: str) -> dict[str, Any]:
         restored = nd.restore_source_refs(document, projection.alias_to_original)
@@ -843,7 +900,8 @@ def generate_notes_document(
         With `split` (registered Gemini fact inventory only) the ledger is cut into at most
         `MAX_RECONCILE_PARTS` (four) balanced owned views, each over the full source with the
         rest of the ledger as read-only context. They run concurrently; every view must
-        validate before `combine_results` merges them, and any failed view fails the task.
+        validate before `combine_results` merges them. Invalid primaries share the one repair
+        call as a `ReconcileRepairBundle`; any invalid repaired part fails the task.
         """
         nonlocal reduction_calls
         ledger = ReconcileLedger.build(
@@ -911,25 +969,21 @@ def generate_notes_document(
 
         prepared = [prepare(view) for view in views]
 
-        def run(
-            view: ReconcileLedger,
-            prompt: str,
-            repair_prompt: Callable[[str | None], str],
-            parse: Callable[[object], dict[str, Any]],
-            repair_schema: Callable[[], Mapping[str, Any]],
-        ) -> tuple[dict[str, Any], int]:
+        def run(view: ReconcileLedger, prompt: str, parse: Callable[[object], dict[str, Any]]):
             try:
                 return request_document(
                     prompt,
                     projected_snapshot,
                     max_output_bytes=MAX_RECONCILE_OUTPUT_BYTES,
                     stage="reconcile",
-                    repair_prompt=repair_prompt,
+                    repair_prompt=lambda _raw: "",  # unused: an invalid view is deferred
                     budget=synthesis_budget,
                     response_schema=view.schema(),
                     parse=parse,
-                    repair_schema=repair_schema,
-                )
+                    defer_invalid=True,
+                )[1]
+            except _DeferredInvalid as deferred:
+                return deferred
             except BaseException:
                 aborted.set()  # a sibling view sends no further request
                 raise
@@ -951,31 +1005,67 @@ def generate_notes_document(
             indices = [call_index]
             counts = accepted[-1].counts
         else:
-            results: list[tuple[dict[str, Any], int] | None] = [None] * len(views)
+            # Every primary returns before the one shared repair is reserved; it then repairs
+            # all failed views in one call. Valid views are kept and never resent.
+            outcomes: list[int | _DeferredInvalid | None] = [None] * len(views)
             executor = ThreadPoolExecutor(
                 max_workers=len(views), thread_name_prefix="notes-reconcile"
             )
             futures = {
-                executor.submit(run, view, prompt, repair_prompt, parse, repair_schema): index
-                for index, (
-                    view,
-                    (prompt, repair_prompt, parse, _accepted, repair_schema),
-                ) in enumerate(zip(views, prepared, strict=True))
+                executor.submit(run, view, prompt, parse): index
+                for index, (view, (prompt, _repair, parse, _accepted, _schema)) in enumerate(
+                    zip(views, prepared, strict=True)
+                )
             }
             try:
                 for future in as_completed(futures):
-                    results[futures[future]] = future.result()
+                    outcomes[futures[future]] = future.result()
             except BaseException:
                 aborted.set()
                 executor.shutdown(wait=True, cancel_futures=True)
                 raise
             executor.shutdown(wait=True)
-            indices = [result[1] for result in results if result is not None]
-            if len(indices) != len(views) or not all(item[3] for item in prepared):
+            results: list[ReconcileResult | None] = [
+                item[3][-1] if isinstance(outcome, int) and item[3] else None
+                for outcome, item in zip(outcomes, prepared, strict=True)
+            ]
+            failed = [
+                (index, outcome)
+                for index, outcome in enumerate(outcomes)
+                if isinstance(outcome, _DeferredInvalid)
+            ]
+            if failed:
+                bundle = ReconcileRepairBundle.plan(
+                    ledger, [(views[index], deferred.raw_output) for index, deferred in failed]
+                )
+                first = failed[0][1]
+                repaired, repair_call_index = repair_once(
+                    first.error,
+                    stage="reconcile",
+                    provider_call_index=first.provider_call_index,
+                    attempt="primary",
+                    raw_output=first.raw_output,
+                    prompt_bytes=first.prompt_bytes,
+                    max_output_bytes=MAX_RECONCILE_OUTPUT_BYTES,
+                    allowed_source_ids=nd._unique_source_ids(
+                        tuple(segment["id"] for segment in projected_snapshot["segments"])
+                    ),
+                    budget=synthesis_budget,
+                    repair_prompt=lambda: bundle.prompt(
+                        output_language=output_language, budget=synthesis_budget
+                    ),
+                    repair_schema=bundle.schema,
+                    validate=bundle.parse,
+                )
+                for (index, _deferred), (_view, result) in zip(failed, repaired, strict=True):
+                    outcomes[index], results[index] = repair_call_index, result
+            # One shared repair call is the accepted call of every view it repaired.
+            indices = [outcome for outcome in outcomes if isinstance(outcome, int)]
+            if len(indices) != len(views) or any(result is None for result in results):
                 raise limit_error("The notes reconciliation did not return every partition.")
             try:
                 combined = ledger.combine_results(
-                    [(view, item[3][-1]) for view, item in zip(views, prepared, strict=True)]
+                    [(view, result) for view, result in zip(views, results, strict=True)]
                 )
             except nd.NotesDocumentError as error:
                 raise invalid_output(

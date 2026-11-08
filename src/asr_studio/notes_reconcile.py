@@ -2030,9 +2030,138 @@ _CUE_COUNTS = ("checked", "accepted", "declined")
 _PATCH_ERRORS = (KeyError, TypeError, ValueError, AttributeError, RecursionError, IndexError)
 
 
-def _decode(raw_output: object) -> object:
+@dataclass(frozen=True, slots=True)
+class BundlePart:
+    """One failed primary view: its raw output and its sparse plan, or None for generic."""
+
+    view: ReconcileLedger
+    raw_output: object
+    plan: ReconcileRepair | None
+
+    @property
+    def key(self) -> str:
+        assert self.view.part is not None
+        return f"part_{self.view.part[0]}"
+
+    def prompt(self, output_language: str, budget: nd.NotesBudget | None) -> str:
+        if self.plan is not None:
+            return self.view.build_repair_prompt(
+                self.plan, output_language=output_language, budget=budget
+            )
+        # Generic fallback: the bounded raw-output cap of _repair_prompt still applies.
+        return self.view.build_prompt(
+            output_language=output_language,
+            invalid_output=self.raw_output,  # type: ignore[arg-type]
+            budget=budget,
+        )
+
+    def parse(self, raw_output: object) -> ReconcileResult:
+        if self.plan is not None:
+            return self.view.parse_repair(raw_output, self.plan)
+        return self.view.parse(raw_output)
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileRepairBundle:
+    """The one shared repair of every failed view of a split ledger; all or nothing.
+
+    Each part keeps its own view, sparse plan (accepted ops, retained cue decisions, failing
+    refs, visible source) and schema. One failed view is sent exactly as its own repair; two or
+    more are sent as one request whose response maps each part key, in order, to that part's
+    patch. Each patch is validated by its own view's parser; valid views are never resent.
+    """
+
+    ledger: ReconcileLedger
+    parts: tuple[BundlePart, ...]
+
+    @classmethod
+    def plan(
+        cls, ledger: ReconcileLedger, failed: Sequence[tuple[ReconcileLedger, object]]
+    ) -> ReconcileRepairBundle:
+        views = ledger.partitions()
+        indices = [views.index(view) if view in views else -1 for view, _raw in failed]
+        if not failed or -1 in indices or indices != sorted(set(indices)):
+            raise _error("A bundled reconcile repair needs distinct, ordered, own views.")
+        return cls(
+            ledger, tuple(BundlePart(view, raw, view.plan_repair(raw)) for view, raw in failed)
+        )
+
+    def schema(self) -> dict[str, Any]:
+        if len(self.parts) == 1:
+            return self.parts[0].view.schema(self.parts[0].plan)
+        return {
+            "type": "object",
+            "properties": {part.key: part.view.schema(part.plan) for part in self.parts},
+            "required": [part.key for part in self.parts],
+            "additionalProperties": False,
+        }
+
+    def prompt(self, *, output_language: str = "en", budget: nd.NotesBudget | None = None) -> str:
+        output_language = nd.validate_output_language(output_language)
+        if len(self.parts) == 1:
+            return self.parts[0].prompt(output_language, budget)
+        keys = [part.key for part in self.parts]
+        prompt = _BUNDLE_RULE[output_language].format(
+            count=len(keys), keys=json.dumps(keys)
+        ) + "".join(
+            f"{BUNDLE_PART_MARKER}{part.key}:\n{part.prompt(output_language, budget)}\n"
+            for part in self.parts
+        )
+        return nd._check_prompt(
+            prompt,
+            allowed_source_ids=nd._unique_source_ids(
+                tuple(segment["id"] for segment in self.ledger.source["segments"])
+            ),
+            output_language=output_language,
+            budget=budget,
+            max_unit_size=self.ledger.max_unit_size,
+            response_schema=self.schema(),
+        )
+
+    def parse(self, raw_output: object) -> list[tuple[ReconcileLedger, ReconcileResult]]:
+        raw_output = _bounded_response(raw_output)
+        if len(self.parts) == 1:
+            return [(self.parts[0].view, self.parts[0].parse(raw_output))]
+        objects: list[list[str]] = []
+
+        def keyed(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            objects.append([key for key, _value in pairs])
+            return dict(pairs)
+
+        try:
+            value = json.loads(raw_output, object_pairs_hook=keyed)
+        except (json.JSONDecodeError, RecursionError):
+            raise _error("The reconcile response must be valid JSON.", reason_code="json") from None
+        # The outermost object closes last: its keys, duplicates and order must be exact.
+        if not isinstance(value, dict) or objects[-1] != [part.key for part in self.parts]:
+            raise _error(
+                "The bundled reconcile repair must return every failed view once, in order.",
+                reason_code="fields",
+            )
+        return [
+            (
+                part.view,
+                part.parse(json.dumps(value[part.key], ensure_ascii=False, separators=(",", ":"))),
+            )
+            for part in self.parts
+        ]
+
+
+def _bounded_response(raw_output: object) -> str:
+    """Enforce the raw UTF-8 cap even when the provider ignores its requested limit."""
     if not isinstance(raw_output, str):
         raise _error("The reconcile response must be text.", reason_code="json")
+    try:
+        raw_bytes = len(raw_output.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise _error("The reconcile response is not valid UTF-8.", reason_code="json") from None
+    if raw_bytes > MAX_RECONCILE_OUTPUT_BYTES:
+        raise _error("The reconcile response exceeds its output cap.", reason_code="size")
+    return raw_output
+
+
+def _decode(raw_output: object) -> object:
+    raw_output = _bounded_response(raw_output)
     try:
         return json.loads(raw_output)
     except (json.JSONDecodeError, RecursionError):
@@ -2302,6 +2431,27 @@ _SPLIT_RULE = {
         "Target của merge và duplicate phải là ref được sở hữu. Nếu mục được sở hữu lặp lại "
         "một mục chỉ đọc, không liệt kê nó; mã sẽ gộp các bản trùng y hệt. additions phải rỗng "
         "trong yêu cầu này; yêu cầu khác bổ sung ý còn thiếu.\n",
+    ),
+}
+
+
+BUNDLE_PART_MARKER = "RECONCILE_REPAIR_PART="
+_BUNDLE_RULE = {
+    "en": (
+        "BUNDLED REPAIR: {count} independent reconcile requests failed validation. Each part "
+        "below starts with RECONCILE_REPAIR_PART and its key and is one complete, separate "
+        "request with its own rules, input and refs; solve each one only from its own part. "
+        "Return one JSON object whose keys are exactly {keys}, in that order, each once; "
+        "each value is the complete JSON patch that part asks for. Never move a ref, source "
+        "ID, cue decision or addition between parts.\n"
+    ),
+    "vi": (
+        "SỬA GỘP: {count} yêu cầu đối chiếu độc lập không qua kiểm tra. Mỗi phần bên dưới bắt "
+        "đầu bằng RECONCILE_REPAIR_PART và khóa của nó, là một yêu cầu đầy đủ, riêng biệt với "
+        "quy tắc, đầu vào và ref riêng; chỉ giải mỗi phần từ chính phần đó. Trả về một đối "
+        "tượng JSON có khóa đúng là {keys}, theo đúng thứ tự, mỗi khóa một lần; mỗi giá trị "
+        "là bản vá JSON đầy đủ mà phần đó yêu cầu. Không chuyển ref, source ID, quyết định "
+        "cue hay addition giữa các phần.\n"
     ),
 }
 

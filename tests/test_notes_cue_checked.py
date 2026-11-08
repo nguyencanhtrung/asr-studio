@@ -407,7 +407,7 @@ def _map_reply(prompt):
 
 def _run(omit_cues_in, count=5):
     """A primary omits the cue decisions of the refs in ``omit_cues_in``."""
-    from notes_helpers import reconcile_keep_patch, semantic_keep_patch
+    from notes_helpers import reconcile_keep_patch, reconcile_repair_reply, semantic_keep_patch
 
     from asr_studio.notes_pipeline import generate_notes_document
 
@@ -420,12 +420,7 @@ def _run(omit_cues_in, count=5):
         if kwargs["stage"] == "semantic_audit":
             return semantic_keep_patch(prompt)
         if kwargs["attempt"] == "repair":
-            payload = json.JSONDecoder().raw_decode(prompt.split("REPAIR_INPUT_JSON:\n", 1)[1])[0]
-            refs = [failure["ref"] for failure in payload["failures"]]
-            return _patch(
-                *(reconcile_disposition(ref, "confirm") for ref in refs),
-                cue_checked=dict.fromkeys(refs, False),
-            )
+            return reconcile_repair_reply(prompt)
         patch = json.loads(reconcile_keep_patch(prompt))
         decisions = {k: v for k, v in patch["cue_checked"].items() if k not in omit_cues_in}
         patch["cue_checked"] = decisions
@@ -472,12 +467,15 @@ def test_missing_cue_decisions_of_one_view_recover_under_the_shared_repair():
     assert counts == {"checked": 5, "accepted": 0, "declined": 5}  # decisions, not truth
 
 
-def test_a_second_view_missing_cue_decisions_finds_the_repair_consumed():
+def test_two_views_missing_cue_decisions_recover_under_one_pooled_repair():
     calls, coverage, error = _run({"m0", "m2"})  # two different views fail
-    # The later failing view finds the repair consumed, or the abort stops its sibling first.
-    assert error == "The notes request was stopped after a failed request." or (
-        error["stage"] == "reconcile" and error["repair_state"] == "already_consumed"
-    )
-    attempts = [(c["stage"], c["attempt"]) for c in calls]
-    assert attempts.count(("reconcile", "repair")) <= 1
-    assert "semantic_audit" not in {c["stage"] for c in calls} and coverage == []
+    assert error is None  # v41: both failed views share the one repair call
+    (repair,) = [c for c in calls if c["stage"] == "reconcile" and c["attempt"] == "repair"]
+    parts = repair["response_schema"]["properties"]
+    assert list(parts) == ["part_0", "part_1"]
+    assert [parts[key]["properties"]["cue_checked"]["required"] for key in parts] == [
+        ["m0"],
+        ["m2"],
+    ]
+    counts = coverage[0]["source_audit"]["counts"]["cue_checked"]
+    assert counts == {"checked": 5, "accepted": 0, "declined": 5}

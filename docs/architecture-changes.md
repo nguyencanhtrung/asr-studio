@@ -2174,12 +2174,9 @@ trạng thái cũ.
   ≤ 48 và ≤ 16.384 byte/view, ≤ 200 ký tự. Ở 24 chunk: 24 map + 4 reconcile (1 + 3 view thêm vào
   trần reduction) + ≤ 8 kiểm + 1 repair ≤ 54 (`tests/test_notes_parallel_reconcile.py`).
 
-**Ước tính (không phải đo).** Từ `v39-timing/report.md`: map ≤ -54 giây nếu provider cho 5 call
-song song; reconcile ước 180-230 giây nếu thời gian theo disposition/view (≈ 45 mục/view thay 90),
-nhưng quyết định gợi ý nhiều hơn làm tăng disposition; kiểm ngữ nghĩa ~186 giây không đổi. Tổng
-dự kiến 480-560 giây khi repair không nằm trên đường găng. Chất lượng mục tiêu (G09, G12, #92)
-chỉ là dự đoán; #155 dựa vào quy tắc không có gợi ý, kém chắc nhất; G11 (lỗi chữ trong text bất
-biến) không xử lý ở v40.
+**Đo thực tế v40 — chưa đạt.** 298,034664 giây, 14 lượt gọi, 0 cache; lỗi
+`notes_invalid_output`, không tạo Notes. Không có điểm chất lượng hoặc thời gian toàn chuỗi thành
+công cho v40. Nguồn cục bộ: `v40-physical-qualification.json`.
 
 **Đánh đổi.** Bốn lần prefill toàn nguồn (~0,92 MB prompt reconcile) có thể chậm nếu provider giới
 hạn; nhiều view hơn thì nhiều cơ hội một view lỗi, trong khi vẫn chỉ một repair; `cue_checked`
@@ -2189,6 +2186,28 @@ thực tế mới. Nguồn: `src/asr_studio/notes_reconcile.py`, `src/asr_studio
 `src/asr_studio/notes_semantic.py`, `tests/test_notes_cue_checked.py`,
 `tests/test_notes_partitioned_reconcile.py`, `tests/test_notes_parallel_reconcile.py`; hồ sơ cục
 bộ `v39-physical-qualification.json`, `v39-timing/report.md`, `v40-design/report.md`.
+
+### #183 (tiếp) — Gom lỗi các view vào một repair dùng chung (`notes-hierarchical-v41`)
+
+**Nguyên nhân.** V40 dừng sau 298,034664 giây, 14 lượt gọi, 0 cache, không có Notes
+(`v40-physical-qualification.json`). Phát lại đúng phản hồi primary đã lưu: hai view hợp lệ,
+hai view có tổng bốn ref lỗi tên/số chưa đủ nguồn. Mỗi view tự xin repair làm một view dùng hết
+lượt sửa trong khi view khác vẫn lỗi (`v40-failure-diagnosis/primary-errors.json`).
+
+**Thiết kế.** Thu kết quả primary của các view trước; giữ nguyên view hợp lệ và gom view lỗi
+vào một request repair. Mỗi phần sửa vẫn dùng ledger, ref, quyết định gợi ý đã chấp nhận,
+nguồn hiển thị, schema và bộ kiểm riêng. Mọi phần phải hợp lệ trước khi gộp/công bố; không nới
+kiểm tra nguồn, không thêm lượt repair hay bước đối chiếu toàn nguồn. Trần phản hồi repair áp
+dụng cho toàn gói theo byte UTF-8; primary cũng dùng cùng guard raw 64.000 byte. `provider_call_indices` vẫn theo view: chỉ số repair lặp nếu cùng request
+sửa nhiều view, không phải nhiều lượt gọi; `provider_calls` đếm request thực tế. Mặc định và
+ChatGPT giữ hành vi cũ.
+
+**Đánh đổi và nghiệm thu.** Chờ đủ primary rồi mới sửa có thể làm repair bắt đầu muộn hơn;
+gói không vừa ngân sách hoặc còn lỗi sau sửa vẫn dừng toàn tác vụ. Chưa đo v41; điểm chất lượng
+9/12, 7/7 ý quan trọng và 3 khẳng định thiếu nguồn vẫn thuộc lần Notes hoàn chỉnh v39, không
+phải v40/v41 (`v39-physical-qualification.json`). Tag: architecture; đích: `docs/backend-contract.md`;
+[issue #183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184).
 
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 

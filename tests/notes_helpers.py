@@ -11,6 +11,7 @@ from seeding import seed_meeting
 
 from asr_studio.notes import accept_notes_task, get_notes_source, publish_notes_revision
 from asr_studio.notes_document import build_citations, render_markdown
+from asr_studio.notes_reconcile import BUNDLE_PART_MARKER
 from asr_studio.storage import database_path, initialize
 from asr_studio.tasks import claim_next_task
 
@@ -315,3 +316,23 @@ def semantic_keep_patch(prompt_or_audit) -> str:
 def semantic_payload(prompt: str) -> dict:
     """The audit JSON of one semantic-audit prompt; a repair suffix may follow it."""
     return json.JSONDecoder().raw_decode(prompt.split("AUDIT_INPUT_JSON:\n", 1)[1])[0]
+
+
+def reconcile_repair_reply(prompt: str) -> str:
+    """Confirm every failing ref (declining its cue), keep a generic view; a bundle per part."""
+    if BUNDLE_PART_MARKER in prompt:
+        parts = (part.split(":\n", 1) for part in prompt.split(BUNDLE_PART_MARKER)[1:])
+        return json.dumps({key: json.loads(reconcile_repair_reply(body)) for key, body in parts})
+    if "REPAIR_INPUT_JSON:\n" not in prompt:
+        return reconcile_keep_patch(prompt)
+    payload = json.JSONDecoder().raw_decode(prompt.split("REPAIR_INPUT_JSON:\n", 1)[1])[0]
+    refs = [failure["ref"] for failure in payload["failures"]]
+    patch = {
+        "ledger_version": 2,
+        "dispositions": [reconcile_disposition(ref, "confirm") for ref in refs],
+        "additions": [],
+    }
+    cued = [f["ref"] for f in payload["failures"] if "unstated_clauses" in f.get("attention", {})]
+    if cued:
+        patch["cue_checked"] = dict.fromkeys(cued, False)
+    return json.dumps(patch)
