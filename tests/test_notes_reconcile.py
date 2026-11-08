@@ -1094,3 +1094,121 @@ def test_legitimate_descending_change_is_allowed_and_additions_are_checked():
     ]
     with pytest.raises(nd.NotesDocumentError, match="confident quantity"):
         ledger.apply(patch)
+
+
+# --- action metadata: merge/duplicate must not lose owner or deadline -----------------------
+
+META_SOURCE = {
+    "meeting_date": "2026-01-05",
+    "segments": [
+        {
+            "id": "t1",
+            "start_seconds": 0.0,
+            "end_seconds": 4.0,
+            "text": "I will send memo by tomorrow.",
+            "speaker_name": "Ada",
+        },
+        {
+            "id": "t2",
+            "start_seconds": 4.0,
+            "end_seconds": 8.0,
+            "text": "I will send memo by tomorrow.",
+            "speaker_name": "Mia",
+        },
+    ],
+}
+
+
+def _action(owner, deadline_text, deadline_date=None, source_id="t1"):
+    return {
+        "text": "Send memo.",
+        "source_ids": [source_id],
+        "owner": owner,
+        "deadline_text": deadline_text,
+        "deadline_date": deadline_date,
+    }
+
+
+def _meta_ledger(final_action, map_action):
+    final, mapped = _empty(), _empty()
+    final["action_items"] = [final_action]
+    mapped["action_items"] = [map_action]
+    return ReconcileLedger.build(META_SOURCE, final, [mapped])
+
+
+def _dup(ledger, f0=None, action="remove"):
+    return {
+        "ledger_version": 1,
+        "dispositions": [
+            f0 or reconcile_disposition("f0"),
+            reconcile_disposition(
+                "m0", action, reason="duplicate" if action == "remove" else "none", target="f0"
+            ),
+        ],
+        "additions": [],
+    }
+
+
+def _targets(ledger):
+    return ledger.prompt_payload()["map_items"][0]["allowed_merge_targets"]
+
+
+@pytest.mark.parametrize(
+    ("final_meta", "map_meta"),
+    [
+        pytest.param(("Ada", "tomorrow"), ("Mia", "tomorrow"), id="distinct-owners"),
+        pytest.param(("Ada", "tomorrow"), ("Ada", "Friday"), id="deadline-text-mismatch"),
+        pytest.param(("Ada", "tomorrow"), ("Ada", None), id="deadline-vs-null"),
+        pytest.param(("Ada", None), ("Mia", None), id="owners-no-deadline"),
+        pytest.param((None, "tomorrow"), ("Ada", "tomorrow"), id="owner-null-vs-set"),
+        pytest.param(("Ada", "2026-01-06"), ("Ada", "tomorrow"), id="canonical-date-text-differs"),
+    ],
+)
+@pytest.mark.parametrize("action", ["remove", "merge"])
+def test_incompatible_action_metadata_is_not_a_merge_target_and_is_rejected(
+    final_meta, map_meta, action
+):
+    ledger = _meta_ledger(_action(*final_meta), _action(*map_meta, source_id="t2"))
+    assert _targets(ledger) == []
+    with pytest.raises(nd.NotesDocumentError):
+        ledger.apply(_dup(ledger, action=action))
+
+
+@pytest.mark.parametrize(
+    "map_date",
+    [pytest.param(None, id="map-date-unresolved"), pytest.param("2026-01-06", id="map-date-set")],
+)
+@pytest.mark.parametrize("action", ["remove", "merge"])
+def test_equal_action_metadata_stays_a_valid_target(map_date, action):
+    ledger = _meta_ledger(
+        _action("Ada", "tomorrow", "2026-01-06"), _action("Ada", "tomorrow", map_date)
+    )
+    assert _targets(ledger) == ["f0"]
+    document = ledger.apply(_dup(ledger, action=action)).document
+    assert document["action_items"] == [_action("Ada", "tomorrow", "2026-01-06")] or [
+        item["owner"] for item in document["action_items"]
+    ] == ["Ada"]
+    assert len(document["action_items"]) == 1
+
+
+def test_update_that_changes_target_owner_rejects_duplicate_removal():
+    ledger = _meta_ledger(_action("Ada", "tomorrow"), _action("Ada", "tomorrow"))
+    update = _update(
+        "f0", "Send memo.", ["t2"], [("t2", "send memo")], owner="Mia", deadline_text="tomorrow"
+    )
+    with pytest.raises(nd.NotesDocumentError):
+        ledger.apply(_dup(ledger, f0=update))
+
+
+def test_update_keeping_metadata_compares_canonical_date_not_none():
+    # Updated target has deadline_date None until the final validation; the map item carries 01-06.
+    ledger = _meta_ledger(
+        _action("Ada", "tomorrow", "2026-01-06"), _action("Ada", "tomorrow", "2026-01-06")
+    )
+    update = _update(
+        "f0", "Send memo.", ["t1"], [("t1", "send memo")], owner="Ada", deadline_text="tomorrow"
+    )
+    document = ledger.apply(_dup(ledger, f0=update)).document
+    assert [(i["owner"], i["deadline_date"]) for i in document["action_items"]] == [
+        ("Ada", "2026-01-06")
+    ]

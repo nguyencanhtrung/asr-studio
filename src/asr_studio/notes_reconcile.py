@@ -415,15 +415,45 @@ class ReconcileLedger:
             }
         )
 
+    def _metadata(self, entry_ref: str, section: str, item: Mapping[str, Any]) -> object:
+        """Action owner, deadline phrase and canonical date; None for other sections."""
+        if section != "action_items":
+            return None
+        # Resolve the date through the public validator on a one-action document.
+        probe = {
+            "schema_version": nd.SCHEMA_VERSION,
+            **{name: [] for name in _SECTION_NAMES},
+            "action_items": [
+                {
+                    "text": "x",
+                    "source_ids": ["x"],
+                    "owner": item.get("owner"),
+                    "deadline_text": item.get("deadline_text"),
+                    "deadline_date": None,
+                }
+            ],
+        }
+        snapshot = {"meeting_date": self.source.get("meeting_date"), "segments": [{"id": "x"}]}
+        try:
+            action = nd.validate_document(probe, snapshot)["action_items"][0]
+        except nd.NotesDocumentError:
+            return ("invalid", entry_ref)  # never equal to another entry's metadata
+        return (action["owner"], action["deadline_text"], action["deadline_date"])
+
     def merge_targets(self) -> dict[str, list[str]]:
-        """Same-section refs whose original text already contains each entry's full fact."""
+        """Same-section refs whose text holds each entry's full fact with equal action metadata."""
         normalized = {entry.ref: _normalized(entry.item["text"]) for entry in self.entries}
+        metadata = {
+            entry.ref: self._metadata(entry.ref, entry.section, entry.item)
+            for entry in self.entries
+        }
         return {
             entry.ref: [
                 other.ref
                 for other in self.entries
                 if other.ref != entry.ref
                 and other.section == entry.section
+                and metadata[other.ref] == metadata[entry.ref]
                 and _contains(normalized[other.ref], normalized[entry.ref])
             ][:MAX_MERGE_TARGETS]
             for entry in self.entries
@@ -597,6 +627,13 @@ class ReconcileLedger:
                 ):
                     raise _error(
                         "A merge or duplicate target does not contain the full merged fact."
+                    )
+                if self._metadata(entry.ref, entry.section, entry.item) != self._metadata(
+                    entry.ref, entry.section, placed[target_ref]
+                ):
+                    raise _error(
+                        "A merge or duplicate target loses the action owner or deadline.",
+                        reason_code="action_fields",
                     )
             if disposition["action"] == "merge":
                 target = placed[disposition["target"]]
