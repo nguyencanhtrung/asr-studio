@@ -167,3 +167,21 @@ def test_the_audit_marks_a_confirmation_item_and_counts_it_once():
         "Bill 207311 amending Ordinance 431778 pending vote",
     ]
     assert counts["reference_unclear"] == 1 and counts["quarantined"] == 0
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        " to 6 months",
+        " and 6-month extension",
+        ", 6-month extension",
+        " through 6 months",
+        " & 6 months",
+    ],
+)
+def test_a_duration_after_the_modified_id_is_not_a_record_list(tail):
+    cited = "Bill 403827 amends Ordinance 980210. Bill 403827 amends Ordinance 980216."
+    claim = "Bill 403827 amending Ordinance 980210" + tail
+    text, marks = mark_conflicting_modified_records(claim, cited)
+    assert text == "Bill 403827 amending Ordinance [reference unclear]" + tail
+    assert marks == 1

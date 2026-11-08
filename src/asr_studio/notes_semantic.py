@@ -503,7 +503,8 @@ _RECORD_KINDS = {
 }
 _MODIFY = r"amend\w*|repeal\w*|replac\w*|supersed\w*|sửa\s+đổi|bãi\s+bỏ|thay\s+thế"
 # A plain or 3-digit-grouped integer ("480210", "480 216", "480,216"); never a plural label.
-_RECORD_NUMBER = r"(?<![\w.,])(?P<n>\d{1,3}(?:[ ,]\d{3})+|\d{4,})(?![\w]|[.,]\d)"
+_RECORD_INTEGER = r"(?:\d{1,3}(?:[ ,]\d{3})+|\d{4,})"
+_RECORD_NUMBER = rf"(?<![\w.,])(?P<n>{_RECORD_INTEGER})(?![\w]|[.,]\d)"
 _MODIFIED_RECORD_RE = {
     kind: re.compile(
         rf"(?<!\w)(?:{_MODIFY})\s+(?:(?:to|of|the|existing)\s+){{0,2}}(?:{label})\s+"
@@ -515,7 +516,7 @@ _MODIFIED_RECORD_RE = {
 # "Ordinance 480210 and 480216": one label, further IDs of the same list.
 _LIST_CONTINUES_RE = re.compile(
     r"\s*(?:,\s*(?:(?:and|or|và|hoặc)\s*)?|\s+(?:and|or|through|to|và|hoặc|đến)\s*|&\s*)"
-    r"(?:(?:no\.?|number|số)\s*|#\s*)?\d",
+    rf"(?:(?:no\.?|number|số)\s*|#\s*)?{_RECORD_INTEGER}(?![\w]|[.,]\d)",
     re.IGNORECASE | re.UNICODE,
 )
 _LABELLED_RECORD_RE = {
