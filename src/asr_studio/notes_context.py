@@ -35,6 +35,17 @@ Strict mode also adds two short binding links, ahead of any other structured lin
   `MAX_FORWARD_SEGMENTS` segments before the run. The handoff is provenance only: its words are
   never matched to the name.
 
+Strict mode also adds three provenance links after all others, each one complete or none:
+
+- an acronym ("ABC") absent from the pool links the nearest segment in the back window that
+  states it or its capitalised full name (connectors such as "of" dropped), with no bridge;
+  this is the only context the overview gets. A name is never read as a person;
+- a duration ("6-month", "six months", "6 tháng") absent from the pool links the nearest
+  segment in the back window that states the same amount and unit, plus the bridge;
+- when the pool cites an explicit agenda header stating the item's record number and a later
+  outcome within the structured window, with no other header between them, the first segment
+  in that span stating each item word the pool lacks is linked, with no bridge.
+
 `unverified_vote_names` is a check, not a link: it lists each person an item says is voting (or
 will vote) who is not recognised for any cited first-person vote statement by an exact handoff
 before that turn or an exact "Thank you, <name>" after it. A thank-you elsewhere is no proof.
@@ -138,6 +149,54 @@ def _anchors(item: dict[str, Any], *, strict: bool = False) -> list[tuple[str, s
     return list(dict.fromkeys(found))
 
 
+_ACRONYM = re.compile(r"\b[A-Z]{2,6}\b")
+_CONNECTORS = frozenset({"of", "the", "for", "and", "on", "at", "in", "de", "&"})
+_AMOUNTS = {
+    word: value
+    for value, word in enumerate(
+        "one two three four five six seven eight nine ten eleven twelve".split(),  # noqa: SIM905
+        start=1,
+    )
+}
+_UNITS = {"ngày": "day", "tuần": "week", "tháng": "month", "năm": "year"}
+_DURATION = re.compile(
+    rf"(?<!\w)(\d{{1,3}}|{'|'.join(_AMOUNTS)})[\s-]+(day|week|month|year)s?(?!\w)"
+    rf"|(?<!\w)(\d{{1,3}})\s+({'|'.join(_UNITS)})(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _durations(text: str) -> set[str]:
+    """Canonical "<amount> <unit>" for each stated duration: "six-month" -> "6 month"."""
+    found = set()
+    for match in _DURATION.finditer(text):
+        amount, unit = (match[1], match[2]) if match[1] else (match[3], match[4])
+        amount = amount.lower()
+        value = _AMOUNTS.get(amount) or int(amount)
+        found.add(f"{value} {_UNITS.get(unit.lower(), unit.lower())}")
+    return found
+
+
+def _names_acronym(acronym: str, text: str) -> bool:
+    """The acronym itself, or capitalised words whose initials spell it ("Bay Area Rail")."""
+    if re.search(rf"\b{acronym}\b", text):
+        return True
+    words = re.findall(r"[\w'&-]+", text)
+    for first in range(len(words)):
+        initials, index = "", first
+        while index < len(words) and len(initials) < len(acronym):
+            word = words[index]
+            index += 1
+            if initials and word.lower() in _CONNECTORS:
+                continue
+            if not word[0].isupper():
+                break
+            initials += word[0]
+        if initials == acronym:
+            return True
+    return False
+
+
 def _near_spelling(heard: str, wanted: str) -> bool:
     """One internal ASR letter substitution in a long word: "Lanternes"/"Lanturnes"."""
     if len(heard) != len(wanted) or len(wanted) < 6 or heard[:2] != wanted[:2]:
@@ -149,6 +208,10 @@ def _near_spelling(heard: str, wanted: str) -> bool:
 
 def _match(kind: str, value: str, text: str) -> str | frozenset[str] | None:
     """Return "exact", all near organization spellings, or None."""
+    if kind == "acronym":
+        return "exact" if _names_acronym(value, text) else None
+    if kind == "duration":
+        return "exact" if value in _durations(text) else None
     if kind == "number":
         found = re.search(rf"{_NUMBER_EDGES[0]}{value}{_NUMBER_EDGES[1]}", text)
         return "exact" if found else None
@@ -398,6 +461,68 @@ def _binding_links(
     return links
 
 
+def _provenance_links(
+    item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]], *, overview: bool
+) -> list[set[int]]:
+    """Strict acronym, duration and same-agenda word links (only acronyms for the overview)."""
+    text = item["text"]
+    anchors = [("acronym", value) for value in dict.fromkeys(_ACRONYM.findall(text))]
+    if not overview:
+        anchors += [("duration", value) for value in sorted(_durations(text))]
+    links: list[set[int]] = []
+    for kind, value in anchors:
+        if any(_match(kind, value, segments[index]["text"]) for index in cited):
+            continue
+        # The nearest statement before any cited run; a full name identifies itself (no bridge).
+        found = [
+            (run[0] - back, back, run[0])
+            for run in _runs(cited)
+            if (back := _antecedent(kind, value, segments, run[0])) is not None
+        ]
+        if found:
+            _gap, back, start = min(found)
+            links.append({back} if kind == "acronym" else set(range(back, start)))
+    if not overview and (span := _agenda_span(text, cited, segments)) is not None:
+        missing = _words(text) - _words(" ".join(segments[i]["text"] for i in cited))
+        found = {
+            next((i for i in span if word in _words(segments[i]["text"])), None)
+            for word in sorted(missing)
+        }
+        if found - {None}:
+            links.append(found - {None})
+    return links
+
+
+def _agenda_span(text: str, cited: list[int], segments: list[dict[str, Any]]) -> range | None:
+    """Segments between a cited header of the item's record and its cited outcome."""
+    numbers = set(_LONG_NUMBER.findall(text)) | set(_LABELED_NUMBER.findall(text))
+    for header in cited:
+        head_text = segments[header]["text"]
+        if not _HEADER.search(head_text) or not any(
+            _match("number", value, head_text) for value in numbers
+        ):
+            continue
+        start_time = float(segments[header]["start_seconds"])
+        for ahead in range(
+            header + 1, min(header + MAX_STRUCTURED_SEGMENTS, len(segments) - 1) + 1
+        ):
+            if float(segments[ahead]["start_seconds"]) - start_time > MAX_STRUCTURED_SECONDS:
+                return None
+            ahead_text = segments[ahead]["text"]
+            if _HEADER.search(ahead_text) or _TOPIC_BREAK.search(ahead_text):
+                stated = set(_LONG_NUMBER.findall(ahead_text)) | set(
+                    _LABELED_NUMBER.findall(ahead_text)
+                )
+                # Another agenda item ends the span, even with an outcome word in that segment;
+                # only a header restating this item's record alone may carry its outcome.
+                if not stated or not stated <= numbers:
+                    return None
+            if ahead in cited and _SOURCE_OUTCOME.search(ahead_text):
+                return range(header + 1, ahead)
+        return None
+    return None
+
+
 def _context_for_item(
     item: dict[str, Any],
     segments: list[dict[str, Any]],
@@ -451,6 +576,8 @@ def _context_for_item(
         }
         if len(blocks) == 1:  # two different blocks for one item conflict: unresolved
             structured.append(set(blocks.pop()))
+    if strict:
+        structured += _provenance_links(item, cited, segments, overview=False)
     added -= set(cited)
     if len(added) > MAX_ADDED_PER_ITEM:
         added = set()  # An over-wide chain is left unresolved, not truncated.
@@ -466,17 +593,24 @@ def link_antecedent_context(
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """Return a copy with local antecedent IDs added, and bounded counts.
 
-    The overview is a cross-item summary, so only the detail sections get context links.
+    The overview is a cross-item summary, so only the detail sections get context links, except
+    strict acronym links.
     """
     segments = snapshot["segments"]  # saved transcript order
     position = {segment["id"]: index for index, segment in enumerate(segments)}
     result = copy.deepcopy(document)
     counts = {"items": 0, "added_ids": 0}
     for section, value in result.items():
-        if section == "overview" or not isinstance(value, list):
+        if not isinstance(value, list) or (section == "overview" and not strict):
             continue
         for item in value:
-            generic, structured = _context_for_item(item, segments, position, strict=strict)
+            if section == "overview":
+                cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
+                generic = []
+                links = _provenance_links(item, cited, segments, overview=True)
+                structured = [link - set(cited) for link in links]
+            else:
+                generic, structured = _context_for_item(item, segments, position, strict=strict)
             fits = len(item["source_ids"]) + len(generic) <= max_refs_per_item
             added = set(generic) if fits else set()
             # Generic links are kept as before; each complete structured link joins only if the

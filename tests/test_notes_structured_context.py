@@ -164,3 +164,112 @@ def test_two_voters_with_different_blocks_conflict():
 def test_voter_stops_at_each_header_before_or_inside_the_vote_block(header, during_block):
     snapshot = _voter(roll=[ROLL[0], header, *ROLL[1:]]) if during_block else _voter(header)
     assert _link(snapshot, VOTER_ITEM, [0], section="key_topics") == [0]
+
+
+# ----- (3) acronym, duration and same-agenda provenance links ------------------------------
+
+
+def _overview(snapshot, text, cited, *, strict=True):
+    document = {"schema_version": 1, "overview": [{"text": text, "source_ids": []}]}
+    document["overview"][0]["source_ids"] = [f"{i:032x}" for i in cited]
+    linked, _ = link_antecedent_context(document, snapshot, max_refs_per_item=200, strict=strict)
+    assert linked["overview"][0]["text"] == text
+    return [int(ref, 16) for ref in linked["overview"][0]["source_ids"]]
+
+
+def test_acronym_links_its_full_name_without_a_bridge_and_only_strict_in_the_overview():
+    snapshot = _snapshot(
+        [
+            "I speak for the Board of Water Works today.",
+            FILLER,
+            FILLER,
+            "The board asks you to approve the pipe plan.",
+        ]
+    )
+    text = "BWW asks council to approve the pipe plan"
+    assert _link(snapshot, text, [3], section="key_topics") == [0, 3]
+    assert _overview(snapshot, text, [3]) == [0, 3]
+    assert _overview(snapshot, text, [3], strict=False) == [3]  # default unchanged
+    assert _link(snapshot, text, [3], strict=False, section="key_topics") == [3]
+    assert _link(snapshot, text, [0, 3], section="key_topics") == [0, 3]  # already cited
+    other = _snapshot(["I speak for the Board of Water Rights today.", FILLER, FILLER, FILLER])
+    assert _link(other, text, [3], section="key_topics") == [3]  # initials differ
+
+
+def test_acronym_takes_the_nearest_run_and_ignores_an_earlier_far_mention():
+    snapshot = _snapshot(
+        [
+            "Hi, I run the Valley Transit League.",
+            *[FILLER] * 5,
+            "The fare survey closed.",
+            "Speaking for Valley Transit League now.",
+            "We support the fare change.",
+        ]
+    )
+    assert _overview(snapshot, "VTL supports fare change", [6, 8]) == [6, 7, 8]
+
+
+def test_duration_links_the_same_amount_and_unit_with_its_bridge():
+    snapshot = _snapshot(
+        [
+            "We propose an eight week pilot of the night bus.",
+            "Riders asked for it.",
+            "So I support giving the department more time.",
+        ]
+    )
+    text = "Member supports 8-week pilot giving more time"
+    assert _link(snapshot, text, [2], section="key_topics") == [0, 1, 2]
+    assert _link(snapshot, text, [2], strict=False, section="key_topics") == [2]
+    assert _link(snapshot, "Member supports 9-week pilot", [2], section="key_topics") == [2]
+    assert _link(snapshot, "Member supports 8-day pilot", [2], section="key_topics") == [2]
+    vi = _snapshot(["Chúng tôi đề xuất thí điểm 3 tháng.", "Tôi ủng hộ thêm thời gian."])
+    assert _link(vi, "Ủng hộ thí điểm three-month", [1], section="key_topics") == [0, 1]
+    far = _snapshot(["We propose an eight week pilot.", *[FILLER] * 16, "I support it."])
+    assert _link(far, text, [17], section="key_topics") == [17]  # outside 16 segments
+
+
+SPAN_HEADER = "Agenda item two. Council Bill 300417 relating to bike lanes. Requiring a lane audit."
+
+
+def test_same_agenda_word_links_the_span_between_cited_header_and_outcome():
+    texts = [
+        SPAN_HEADER,
+        FILLER,
+        "The committee voted for a reroute of the corridor.",
+        "Seven in favor, none opposed.",
+        "The bill passed.",
+        "Later someone mentioned a detour on another street.",
+    ]
+    text = "Passed Council Bill 300417 requiring lane audit with reroute and detour"
+
+    def snap(rows):
+        return _snapshot(rows, gap=50)  # header 200 s back: past the generic 180 s window
+
+    assert _link(snap(texts), text, [0, 4]) == [0, 2, 4]  # "detour" after the outcome stays out
+    assert _link(snap(texts), text, [0, 4], strict=False) == [0, 4]
+    other = [*texts[:2], "Agenda item three. Council Bill 300418.", *texts[2:]]
+    assert _link(snap(other), text, [0, 5]) == [0, 5]  # another header between
+    assert _link(snap(texts), text, [0]) == [0]  # no cited outcome: no span
+    wrong = [SPAN_HEADER.replace("300417", "300419"), *texts[1:]]
+    assert _link(snap(wrong), text, [0, 4]) == [0, 4]  # header is another record
+    assert _link(_snapshot(texts, gap=100), text, [0, 4]) == [0, 4]  # outcome past 360 s
+    # A different agenda header with an outcome word is not this item's outcome.
+    next_item = [*texts[:4], "Agenda item three. Council Bill 300418 approved.", *texts[5:]]
+    assert _link(snap(next_item), text, [0, 4]) == [0, 4]
+    same = [*texts[:4], "Council Bill 300417 passed.", *texts[5:]]
+    assert _link(snap(same), text, [0, 4]) == [0, 2, 4]  # restates this record: allowed
+
+
+def test_new_links_never_displace_prior_links_or_exceed_the_cap():
+    snapshot = _snapshot(
+        ["Board of Parks here.", "We propose a six month review.", *[FILLER] * 9, "Go ahead."]
+    )
+    text = "Board of Parks backs six-month review"
+    # Generic organization link (11 IDs) is kept; the 10-ID duration link does not also fit.
+    assert _link(snapshot, text, [11], section="key_topics", max_refs=12) == list(range(12))
+    assert _link(snapshot, "Members back six-month review", [11], section="key_topics") == [
+        *range(1, 12)
+    ]
+    # The generic link no longer fits; the complete duration link still does, never truncated.
+    assert _link(snapshot, text, [11], section="key_topics", max_refs=11) == [*range(1, 12)]
+    assert _link(snapshot, text, [11], section="key_topics", max_refs=10) == [11]
