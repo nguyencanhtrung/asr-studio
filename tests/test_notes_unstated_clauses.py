@@ -89,26 +89,56 @@ def test_flag_off_payload_schema_and_prompt_are_byte_identical_to_the_default():
     assert nr._CLAUSE_CUE_RULE["en"] not in prompt
 
 
-def test_flag_on_adds_the_conditional_rule_once_and_leaves_the_schema_unchanged():
-    on = _ledger(_maps("cause"), include_clause_cues=True)
-    prompt = on.build_prompt(output_language="vi")
-    assert prompt.count(nr._CLAUSE_CUE_RULE["vi"]) == 1
-    assert nr._CLAUSE_CUE_RULE["en"] not in prompt
-    assert on.schema() == _ledger(_maps("cause")).schema()
+def test_flag_on_adds_the_rules_once_and_requires_cue_checked_for_exactly_the_cued_refs():
+    on = _ledger(_maps("cause", "filler"), include_clause_cues=True)
+    assert list(on.clause_cues()) == ["m0"]  # filler has no cue
+    for language in ("en", "vi"):
+        prompt = on.build_prompt(output_language=language)
+        assert prompt.count(nr._CLAUSE_CUE_RULE[language]) == 1
+        assert prompt.count(nr._CORRECTION_RULE[language]) == 1
+    assert nr._CLAUSE_CUE_RULE["en"] not in on.build_prompt(output_language="vi")
+    off = _ledger(_maps("cause", "filler")).schema()
+    schema = on.schema()
+    assert schema["required"] == [*off["required"], "cue_checked"]
+    assert schema["properties"]["cue_checked"] == {
+        "type": "object",
+        "properties": {"m0": {"type": "boolean"}},
+        "required": ["m0"],
+        "additionalProperties": False,
+    }
+    assert {k: v for k, v in schema["properties"].items() if k != "cue_checked"} == off[
+        "properties"
+    ]
+    prompt = on.build_prompt()
     assert "unstated_clauses" in reconcile_payload(prompt)["map_items"][0]["attention"]
+    # No cued ref: no cue_checked key at all, and a sent map is an invalid field.
+    bare = _ledger(_maps("filler"), include_clause_cues=True)
+    assert "cue_checked" not in bare.schema()["properties"]
+    with pytest.raises(nd.NotesDocumentError, match="invalid fields"):
+        bare.parse(_patch(cue_checked={}))
+    assert bare.parse(_patch()).counts["cue_checked"] == {
+        "checked": 0,
+        "accepted": 0,
+        "declined": 0,
+    }
 
 
-def test_repair_prompt_carries_no_clause_cues_or_rule():
-    ledger = _ledger(_maps("cause"), include_clause_cues=True)
-    bad = reconcile_disposition("m0", "update", text="Extension requested", source_ids=["s3"])
-    bad["evidence"] = [{"source_id": "s3", "quote": "an invented quote"}]
-    repair = ledger.plan_repair(
-        json.dumps({"ledger_version": 2, "dispositions": [bad], "additions": []})
-    )
-    assert repair is not None
-    prompt = ledger.build_repair_prompt(repair)
-    assert "unstated_clauses" not in prompt
-    assert nr._CLAUSE_CUE_RULE["en"] not in prompt
+def test_flag_off_rejects_cue_checked_and_records_no_cue_counts():
+    off = _ledger(_maps("cause"))
+    with pytest.raises(nd.NotesDocumentError, match="invalid fields"):
+        off.parse(_patch(cue_checked={"m0": False}))
+    assert "cue_checked" not in off.parse(_patch()).counts
+
+
+def test_correction_rule_names_modality_outcome_and_stale_pending_status():
+    for language, phrases in (
+        ("en", ("unsupported subclause", "not an achieved", "still pending", "previously pending")),
+        ("vi", ("mệnh đề phụ", "không phải là kết quả đã đạt", "vẫn đang chờ", "bổ ngữ lịch sử")),
+    ):
+        rule = nr._CORRECTION_RULE[language]
+        assert all(phrase in rule for phrase in phrases)
+    assert "superseded" in nr._CORRECTION_RULE["en"]
+    assert nr._CORRECTION_RULE["en"] not in _ledger(_maps("cause")).build_prompt()
 
 
 # ----- cue selection --------------------------------------------------------------------------
@@ -447,7 +477,7 @@ def test_source_ids_and_item_text_are_never_altered_by_cues():
 def test_each_view_cues_only_its_owned_entries_and_read_only_items_carry_none():
     ledger = _ledger(_maps(*_TEXTS), include_clause_cues=True)
     views = ledger.partitions()
-    assert len(views) == 2 and all(view.include_clause_cues for view in views)
+    assert len(views) == 4 and all(view.include_clause_cues for view in views)
     for view in views:
         owned = {entry.ref for entry in view.entries}
         assert set(view.clause_cues()) <= owned
@@ -457,24 +487,28 @@ def test_each_view_cues_only_its_owned_entries_and_read_only_items_carry_none():
 
 
 def test_view_budgets_are_per_owned_view():
-    source, maps = _many(120, "Work pauses until the inspection because of safety rules.")
+    source, maps = _many(240, "Work pauses until the inspection because of safety rules.")
     views = _ledger(maps, source=source, include_clause_cues=True).partitions()
     counts = [sum(map(len, view.clause_cues().values())) for view in views]
-    assert counts == [nr.MAX_CLAUSE_CUES_PER_VIEW, nr.MAX_CLAUSE_CUES_PER_VIEW]
+    assert counts == [nr.MAX_CLAUSE_CUES_PER_VIEW] * 4
 
 
 # ----- response validation is unchanged -------------------------------------------------------
 
 
-def _patch(*dispositions):
-    return json.dumps({"ledger_version": 2, "dispositions": list(dispositions), "additions": []})
+def _patch(*dispositions, cue_checked=None):
+    patch = {"ledger_version": 2, "dispositions": list(dispositions), "additions": []}
+    if cue_checked is not None:
+        patch["cue_checked"] = cue_checked
+    return json.dumps(patch)
 
 
-def test_an_unlisted_cued_ref_stays_valid_and_unchanged():
+def test_an_unlisted_cued_ref_declined_in_cue_checked_stays_valid_and_unchanged():
     ledger = _ledger(_maps("cause"), include_clause_cues=True)
     assert ledger.clause_cues()
-    result = ledger.parse(_patch())
+    result = ledger.parse(_patch(cue_checked={"m0": False}))
     assert [item["text"] for item in result.document["key_topics"]] == ["Extension requested"]
+    assert result.counts["cue_checked"] == {"checked": 1, "accepted": 0, "declined": 1}
 
 
 def test_a_cue_guided_exact_quote_update_applies():
@@ -489,8 +523,9 @@ def test_a_cue_guided_exact_quote_update_applies():
             {"source_id": cue["source_id"], "quote": "because the review has not been completed"}
         ],
     )
-    result = ledger.parse(_patch(update))
+    result = ledger.parse(_patch(update, cue_checked={"m0": True}))
     assert result.document["key_topics"][0]["text"].endswith("review not completed yet")
+    assert result.counts["cue_checked"] == {"checked": 1, "accepted": 1, "declined": 0}
 
 
 @pytest.mark.parametrize(
@@ -509,8 +544,8 @@ def test_existing_validators_still_reject_invented_or_uncited_evidence(source_id
         source_ids=["s3"],
         evidence=[{"source_id": source_id, "quote": quote}],
     )
-    with pytest.raises(nd.NotesDocumentError):
-        ledger.parse(_patch(update))
+    with pytest.raises(nd.NotesDocumentError, match="exact source evidence|not cited|quote"):
+        ledger.parse(_patch(update, cue_checked={"m0": True}))
 
 
 def test_an_update_that_drops_a_negation_is_still_rejected():
@@ -524,7 +559,7 @@ def test_an_update_that_drops_a_negation_is_still_rejected():
         evidence=[{"source_id": "s3", "quote": "The extension is needed"}],
     )
     with pytest.raises(nd.NotesDocumentError, match="marker"):
-        ledger.parse(_patch(update))
+        ledger.parse(_patch(update, cue_checked=dict.fromkeys(ledger.clause_cues(), True) or None))
 
 
 # ----- pipeline gating ------------------------------------------------------------------------
@@ -588,8 +623,9 @@ def _reconcile_prompts(provider, model):
 
 def test_registered_gemini_fact_inventory_views_carry_cues_and_the_rule():
     prompts = _reconcile_prompts("antigravity", "gemini-3.8-flash")
-    assert len(prompts) == 2
+    assert len(prompts) == 2  # two map facts: min(4, N) views
     assert all(prompt.count(nr._CLAUSE_CUE_RULE["en"]) == 1 for prompt in prompts)
+    assert all(prompt.count(nr._CORRECTION_RULE["en"]) == 1 for prompt in prompts)
     cued = [
         item["attention"]["unstated_clauses"]
         for prompt in prompts
@@ -601,8 +637,9 @@ def test_registered_gemini_fact_inventory_views_carry_cues_and_the_rule():
 
 def test_chatgpt_long_reconcile_has_no_clause_cues_or_rule():
     (prompt,) = _reconcile_prompts("chatgpt", "gpt-5.6-sol")
-    assert "unstated_clauses" not in prompt
+    assert "unstated_clauses" not in prompt and "cue_checked" not in prompt
     assert nr._CLAUSE_CUE_RULE["en"] not in prompt
+    assert nr._CORRECTION_RULE["en"] not in prompt
 
 
 def test_a_high_overlap_phase_cue_names_only_the_phase_not_incidental_material():

@@ -1,4 +1,4 @@
-"""Registered Gemini fact inventory: the reconcile runs as two concurrent owned ledger views."""
+"""Registered Gemini fact inventory: the reconcile runs as up to four concurrent owned views."""
 
 from __future__ import annotations
 
@@ -232,3 +232,102 @@ def test_chatgpt_long_reconcile_stays_one_unsplit_request():
     assert "read_only_items" not in reconcile_payload(reconciles[0]["prompt"])
     assert _owned(reconciles[0]["prompt"]) == ["m0", "m1"]
     assert set(coverage[0]["source_audit"]) == {"status", "mode", "provider_call_index", "counts"}
+
+
+# ----- v40: up to four views, five map workers ------------------------------------------------
+
+
+def _wide_snapshot(count: int) -> dict:
+    # One quarter-hour fact part per segment, so the ledger holds `count` map entries.
+    return {
+        "meeting_date": "2026-01-05",
+        "speakers": [],
+        "segments": [
+            _segment(index + 1, 1_000.0 * index, f"Topic {index} is reviewed.")
+            for index in range(count)
+        ],
+    }
+
+
+def _run_wide(transport, count: int, coverage: list):
+    return generate_notes_document(
+        snapshot=_wide_snapshot(count),
+        output_language="en",
+        provider="antigravity",
+        model=GEMINI_MODEL,
+        transport=transport,
+        invalid_output_error=lambda diagnostics: AssertionError(diagnostics),
+        limit_error=RuntimeError,
+        on_coverage=coverage.append,
+    )
+
+
+def test_four_balanced_views_and_five_map_workers_run_concurrently():
+    calls: list[dict] = []
+    lock = threading.Lock()
+    map_barrier = threading.Barrier(5, timeout=10)  # breaks unless five maps are in flight
+    view_barrier = threading.Barrier(4, timeout=10)
+
+    def transport(prompt, **kwargs):
+        with lock:
+            calls.append({"prompt": prompt, **kwargs})
+        if kwargs["stage"] == "chunk":
+            map_barrier.wait()
+            return _map_reply(prompt)
+        if kwargs["stage"] == "semantic_audit":
+            return semantic_keep_patch(prompt)
+        view_barrier.wait()
+        return reconcile_keep_patch(prompt)
+
+    coverage: list[dict] = []
+    result = _run_wide(transport, 5, coverage)
+    reconciles = sorted(
+        (call for call in calls if call["stage"] == "reconcile"),
+        key=lambda call: _owned(call["prompt"]),
+    )
+    owned = [_owned(call["prompt"]) for call in reconciles]
+    assert owned == [["m0", "m1"], ["m2"], ["m3"], ["m4"]]  # contiguous, balanced, global refs
+    for call, refs in zip(reconciles, owned, strict=True):
+        payload = reconcile_payload(call["prompt"])
+        assert len(payload["source"]["segments"]) == 5  # full source on every view
+        assert len(payload["read_only_items"]) == 5 - len(refs)
+        caps = call["response_schema"]["properties"]["additions"]["maxItems"]
+        assert (caps > 0) == (refs[0] == "m0")  # only the first view adds
+    audit = coverage[0]["source_audit"]
+    assert audit["part_count"] == 4 and len(audit["provider_call_indices"]) == 4
+    assert audit["counts"]["map"]["keep"] == 5
+    assert len(result["key_topics"]) == 5
+
+
+def test_max_chunk_run_charges_every_view_and_stays_under_the_global_cap(monkeypatch):
+    calls: list[tuple[str, str]] = []
+    lock = threading.Lock()
+    repaired = threading.Event()
+
+    def transport(prompt, **kwargs):
+        with lock:
+            calls.append((kwargs["stage"], kwargs["attempt"]))
+        if kwargs["stage"] == "chunk":
+            return _map_reply(prompt)
+        if kwargs["stage"] == "semantic_audit":
+            return semantic_keep_patch(prompt)
+        if _owned(prompt)[0] == "m0" and not repaired.is_set():
+            repaired.set()
+            return "not json"  # the task's one shared repair
+        return reconcile_keep_patch(prompt)
+
+    count = nd.MAX_NOTES_CHUNKS
+    # One planned reconcile call plus three more views must fit the reduction budget.
+    monkeypatch.setattr(nd, "MAX_REDUCTION_CALLS", 3)
+    with pytest.raises(RuntimeError, match="reduction limit"):
+        _run_wide(transport, count, coverage := [])
+    assert ("reconcile", "primary") not in calls and coverage == []
+
+    calls.clear()
+    monkeypatch.setattr(nd, "MAX_REDUCTION_CALLS", 4)
+    _run_wide(transport, count, coverage := [])
+    assert calls.count(("chunk", "primary")) == count
+    assert calls.count(("reconcile", "primary")) == 4
+    assert [call for call in calls if call[1] == "repair"] == [("reconcile", "repair")]
+    assert coverage[0]["source_audit"]["part_count"] == 4
+    assert coverage[0]["provider_calls"] == len(calls) <= nd.MAX_PROVIDER_CALLS

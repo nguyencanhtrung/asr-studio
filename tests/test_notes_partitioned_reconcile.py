@@ -135,32 +135,45 @@ def test_ordinary_ledger_payload_schema_prompt_and_parse_are_byte_identical():
     assert "Split ledger" not in _ledger().build_prompt()
 
 
-def test_partitions_are_two_balanced_contiguous_views_over_the_full_source():
+def test_partitions_are_four_balanced_contiguous_views_over_the_full_source():
     ledger = _ledger(strict_names=True, reference_evidence=True, max_unit_size=2)
     views = ledger.partitions()
-    assert nr.MAX_RECONCILE_PARTS == 2 and len(views) == 2
-    assert [view.refs for view in views] == [("f0", "f1", "m0"), ("m1", "m2", "m3")]
-    assert views[0].refs + views[1].refs == ledger.refs  # stable global refs, in order
+    assert nr.MAX_RECONCILE_PARTS == 4 and len(views) == 4
+    assert [view.refs for view in views] == [("f0", "f1"), ("m0", "m1"), ("m2",), ("m3",)]
+    assert sum((view.refs for view in views), ()) == ledger.refs  # stable global refs, in order
     for index, view in enumerate(views):
         assert view.source == ledger.source
         assert view.prompt_payload()["source"] == ledger.prompt_payload()["source"]
         assert (view.strict_names, view.reference_evidence, view.max_unit_size) == (True, True, 2)
-        assert view.context == views[1 - index].entries  # read-only context: the other entries
-        assert view.part == (index, 2)
-    assert [view.additions_allowed for view in views] == [True, False]
-    odd = _ledger(maps=MAPS[:1]).partitions()
-    assert [len(view.entries) for view in odd] == [2, 1]
+        # Read-only context: every other entry, in canonical ledger order.
+        assert view.context == tuple(e for e in ledger.entries if e not in view.entries)
+        assert view.part == (index, 4)
+    assert [view.additions_allowed for view in views] == [True, False, False, False]
+
+
+@pytest.mark.parametrize(
+    ("count", "sizes"),
+    [(2, [1, 1]), (3, [1, 1, 1]), (4, [1, 1, 1, 1]), (5, [2, 1, 1, 1]), (9, [3, 2, 2, 2])],
+)
+def test_small_and_uneven_ledgers_split_into_min_four_n_nonempty_views(count, sizes):
+    final = _doc(key_topics=[_item(f"Topic {index}.", "s1") for index in range(count)])
+    ledger = _ledger(final=final, maps=[])
+    views = ledger.partitions()
+    assert [len(view.entries) for view in views] == sizes
+    assert [view.part for view in views] == [(index, len(sizes)) for index in range(len(sizes))]
+    assert sum((view.refs for view in views), ()) == ledger.refs
 
 
 def test_view_payload_shows_other_entries_read_only_without_refs():
-    first, second = _ledger().partitions()
+    first, second, *_rest = _ledger().partitions()
     payload = second.prompt_payload()
-    assert [item["ref"] for item in payload["map_items"]] == ["m1", "m2", "m3"]
+    assert [item["ref"] for item in payload["map_items"]] == ["m0", "m1"]
     assert payload["final_items"] == []
-    assert payload["read_only_items"] == [
+    assert payload["read_only_items"] == [  # all three other views, in ledger order
         {"section": "decisions", **FINAL["decisions"][0]},
         {"section": "action_items", **FINAL["action_items"][0]},
-        {"section": "key_topics", **MAPS[0]["key_topics"][0]},
+        {"section": "key_topics", **MAPS[1]["key_topics"][1]},
+        {"section": "decisions", **MAPS[1]["decisions"][0]},
     ]
     for view, phrase in ((first, "additions are allowed only"), (second, "additions must be")):
         prompt = view.build_prompt()
@@ -179,13 +192,15 @@ def test_view_merge_targets_are_only_owned_refs():
 
 
 def test_only_the_first_view_allows_additions():
-    first, second = _ledger().partitions()
+    first, *later = _ledger().partitions()
     schema = lambda view: view.schema()["properties"]["additions"]["maxItems"]  # noqa: E731
-    assert (schema(_ledger()), schema(first), schema(second)) == (16, 16, 0)
+    assert (schema(_ledger()), schema(first)) == (16, 16)
+    assert [schema(view) for view in later] == [0, 0, 0]
     assert first.parse(_patch(additions=[_addition()])).counts["additions"] == 1
-    with pytest.raises(nd.NotesDocumentError, match="only the first view"):
-        second.parse(_patch(additions=[_addition()]))
-    assert second.plan_repair(_patch(additions=[_addition()])) is None
+    for view in later:
+        with pytest.raises(nd.NotesDocumentError, match="only the first view"):
+            view.parse(_patch(additions=[_addition()]))
+        assert view.plan_repair(_patch(additions=[_addition()])) is None
 
 
 def test_later_view_repair_rejects_additions():
@@ -195,7 +210,7 @@ def test_later_view_repair_rejects_additions():
     fixed = reconcile_disposition("m1")
     with pytest.raises(nd.NotesDocumentError, match="only the first view"):
         second.parse_repair(_patch([fixed], [_addition()]), plan)
-    assert second.parse_repair(_patch([fixed]), plan).counts["map"]["keep"] == 3
+    assert second.parse_repair(_patch([fixed]), plan).counts["map"]["keep"] == 2
 
 
 @pytest.mark.parametrize(
@@ -206,9 +221,9 @@ def test_later_view_repair_rejects_additions():
     ],
 )
 def test_a_view_cannot_dispose_a_read_only_ref(disposition):
-    second = _ledger().partitions()[1]
+    last = _ledger().partitions()[-1]
     with pytest.raises(nr.ReconcilePatchError, match="read-only ref") as caught:
-        second.parse(_patch([disposition]))
+        last.parse(_patch([disposition]))
     assert [f.ref for f in caught.value.failures] == [disposition["ref"]]
 
 
@@ -219,10 +234,10 @@ def test_a_view_cannot_merge_into_a_read_only_target(action):
     reason = "duplicate" if action == "remove" else "none"
     unsplit = _patch([reconcile_disposition("m2", action, target="f0", reason=reason)])
     assert ledger.parse(unsplit).counts["map"][action] == 1
-    second = ledger.partitions()[1]
-    assert "m2" in second.refs and "f0" not in second.refs
+    (owner,) = [view for view in ledger.partitions() if "m2" in view.refs]
+    assert "f0" not in owner.refs
     with pytest.raises(nr.ReconcilePatchError, match="another valid target"):
-        second.parse(_patch([reconcile_disposition("m2", action, target="f0", reason=reason)]))
+        owner.parse(_patch([reconcile_disposition("m2", action, target="f0", reason=reason)]))
 
 
 def test_empty_and_single_entry_ledgers_are_their_own_only_view():
@@ -257,8 +272,10 @@ def test_combine_merges_sections_and_sums_counts():
         evidence=[{"source_id": "s5", "quote": "Training sessions start next month for 40 staff."}],
     )
     patches = (
-        _patch([reconcile_disposition("m0", "remove", reason="nonmaterial")], [_addition()]),
-        _patch([update, reconcile_disposition("m2", "remove", reason="nonmaterial")]),
+        _patch(additions=[_addition()]),
+        _patch([reconcile_disposition("m0", "remove", reason="nonmaterial"), update]),
+        _patch([reconcile_disposition("m2", "remove", reason="nonmaterial")]),
+        _patch(),
     )
     combined = ledger.combine_results(_results(ledger, patches))
     document = combined.document
@@ -277,20 +294,23 @@ def test_combine_merges_sections_and_sums_counts():
 
 
 def _foreign(ledger):
-    first, second = _results(ledger)
+    first, second, third, fourth = _results(ledger)
     other = _ledger(strict_names=True)
     other_view = other.partitions()[1]
     moved = dict(SOURCE, meeting_date="2026-02-01")
     foreign_source = ReconcileLedger.build(moved, FINAL, MAPS).partitions()[1]
     return {
-        "missing": [first],
-        "duplicate": [first, first],
-        "reordered": [second, first],
-        "flags": [first, (other_view, other_view.parse(_patch()))],
-        "source": [first, (foreign_source, foreign_source.parse(_patch()))],
-        "swapped_result": [(first[0], second[1]), (second[0], first[1])],
-        "not_pair": [first, second[1]],
-        "unsplit": [(ledger, ledger.parse(_patch())), second],
+        "missing": [first, second, third],
+        "omitted_middle": [first, third, fourth],
+        "extra": [first, second, third, fourth, fourth],
+        "duplicate": [first, first, third, fourth],
+        "reordered": [first, second, fourth, third],
+        "flags": [first, (other_view, other_view.parse(_patch())), third, fourth],
+        "source": [first, (foreign_source, foreign_source.parse(_patch())), third, fourth],
+        "swapped_result": [(first[0], second[1]), (second[0], first[1]), third, fourth],
+        "not_pair": [first, second[1], third, fourth],
+        "unsplit": [(ledger, ledger.parse(_patch())), second, third, fourth],
+        "two_view_split": [first, second],
     }
 
 
@@ -298,6 +318,8 @@ def _foreign(ledger):
     "case",
     [
         "missing",
+        "omitted_middle",
+        "extra",
         "duplicate",
         "reordered",
         "flags",
@@ -305,6 +327,7 @@ def _foreign(ledger):
         "swapped_result",
         "not_pair",
         "unsplit",
+        "two_view_split",
     ],
 )
 def test_combine_rejects_foreign_missing_duplicate_or_reordered_parts(case):
@@ -333,7 +356,7 @@ def _tampered(ledger, mutate):
             lambda d, c: (c.update(additions=1), d["key_topics"].append(_item("Extra.", "s6"))),
             "only the first view",
         ),
-        (lambda d, c: c["map"].update(keep=2), "own entries"),
+        (lambda d, c: c["map"].update(keep=3), "own entries"),
         (lambda d, c: c["final"].update(keep=1), "own entries"),
         (lambda d, c: c.update(default_kept=7), "outside its own scope"),
         (lambda d, c: c.pop("default_kept"), "invalid counts"),
@@ -364,4 +387,4 @@ def test_combined_document_is_revalidated_against_output_and_reference_caps(monk
     document = json.loads(json.dumps(result.document))
     document["decisions"][0]["source_ids"] = ["s1", "s2"]
     with pytest.raises(nd.NotesDocumentError):
-        capped.combine_results([(view, ReconcileResult(document, result.counts)), parts[1]])
+        capped.combine_results([(view, ReconcileResult(document, result.counts)), *parts[1:]])

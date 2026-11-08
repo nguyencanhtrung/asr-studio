@@ -529,7 +529,23 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v39"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v40"
+
+
+@pytest.mark.parametrize(
+    ("language", "phrases"),
+    [
+        ("en", ("Modality, completion and current status", "committee recommendation alone")),
+        ("vi", ("Mức độ, sự hoàn thành và trạng thái hiện tại", "riêng kiến nghị của ủy ban")),
+    ],
+)
+def test_prompt_requires_support_for_modality_completion_and_current_pending_status(
+    language, phrases
+):
+    prompt = _audit(language).build_prompt(
+        output_language=language, budget=nd.notes_budget(*GEMINI)
+    )
+    assert all(phrase in prompt for phrase in phrases)
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------

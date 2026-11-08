@@ -392,8 +392,13 @@ def generate_notes_document(
         extra_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         response_schema: Mapping[str, Any] | None = None,
         parse: Callable[[object], dict[str, Any]] | None = None,
+        repair_schema: Callable[[], Mapping[str, Any] | None] | None = None,
     ) -> tuple[dict[str, Any], int]:
-        """Run one logical request; `parse` replaces schema-1 parsing for an internal schema."""
+        """Run one logical request; `parse` replaces schema-1 parsing for an internal schema.
+
+        `repair_schema`, called after the repair prompt is built, gives that prompt's schema;
+        None keeps `response_schema` for the repair too.
+        """
         nonlocal last_successful_response, repair_used
         allowed_source_ids = nd._unique_source_ids(
             tuple(segment["id"] for segment in citation_scope["segments"])
@@ -502,7 +507,7 @@ def generate_notes_document(
                     stage=stage,
                     attempt="repair",
                     budget=budget,
-                    response_schema=response_schema,
+                    response_schema=response_schema if repair_schema is None else repair_schema(),
                 )
                 try:
                     validated = validate(repaired_output)
@@ -715,9 +720,10 @@ def generate_notes_document(
     )
     if parallel_maps:
         progress("chunking", 0, len(prepared_chunks), "chunks")
-        executor = ThreadPoolExecutor(
-            max_workers=3 if plan.fact_inventory else 2, thread_name_prefix="notes-map"
-        )
+        map_workers = 2
+        if plan.fact_inventory:
+            map_workers = 5 if nd._is_known_gemini(synthesis_budget) else 3
+        executor = ThreadPoolExecutor(max_workers=map_workers, thread_name_prefix="notes-map")
         futures: dict[Future[tuple[dict[str, Any], int]], int] = {}
         try:
             for index, (projected_chunk, prompt, repair_chunk) in enumerate(prepared_chunks):
@@ -835,9 +841,9 @@ def generate_notes_document(
         """One structured patch over the projected final draft, map ledger and full source.
 
         With `split` (registered Gemini fact inventory only) the ledger is cut into at most
-        `MAX_RECONCILE_PARTS` owned views, each over the full source with the rest of the
-        ledger as read-only context. They run concurrently; every view must validate before
-        `combine_results` merges them, and any failed view fails the task.
+        `MAX_RECONCILE_PARTS` (four) balanced owned views, each over the full source with the
+        rest of the ledger as read-only context. They run concurrently; every view must
+        validate before `combine_results` merges them, and any failed view fails the task.
         """
         nonlocal reduction_calls
         ledger = ReconcileLedger.build(
@@ -858,7 +864,13 @@ def generate_notes_document(
 
         def prepare(
             view: ReconcileLedger,
-        ) -> tuple[str, Callable[[str | None], str], Callable[[object], dict[str, Any]], list[Any]]:
+        ) -> tuple[
+            str,
+            Callable[[str | None], str],
+            Callable[[object], dict[str, Any]],
+            list[Any],
+            Callable[[], Mapping[str, Any]],
+        ]:
             # Each view owns its repair plan and accepted result; the one repair stays global.
             repairs: list[ReconcileRepair] = []
             accepted: list[ReconcileResult] = []
@@ -883,6 +895,10 @@ def generate_notes_document(
                 accepted.append(result)
                 return result.document
 
+            def repair_schema() -> Mapping[str, Any]:
+                # A targeted repair decides only its failing cued refs; a generic one, all.
+                return view.schema(repairs[-1]) if repairs else view.schema()
+
             try:
                 prompt = reconcile_prompt()
             except nd.NotesDocumentError:
@@ -891,7 +907,7 @@ def generate_notes_document(
                 raise limit_error(
                     "This transcript exceeds the bounded notes source reconciliation limit."
                 ) from None
-            return prompt, reconcile_prompt, parse, accepted
+            return prompt, reconcile_prompt, parse, accepted, repair_schema
 
         prepared = [prepare(view) for view in views]
 
@@ -900,6 +916,7 @@ def generate_notes_document(
             prompt: str,
             repair_prompt: Callable[[str | None], str],
             parse: Callable[[object], dict[str, Any]],
+            repair_schema: Callable[[], Mapping[str, Any]],
         ) -> tuple[dict[str, Any], int]:
             try:
                 return request_document(
@@ -911,6 +928,7 @@ def generate_notes_document(
                     budget=synthesis_budget,
                     response_schema=view.schema(),
                     parse=parse,
+                    repair_schema=repair_schema,
                 )
             except BaseException:
                 aborted.set()  # a sibling view sends no further request
@@ -918,7 +936,7 @@ def generate_notes_document(
 
         progress("merging", reduction_calls, None, "calls")
         if len(views) == 1:
-            prompt, repair_prompt, parse, accepted = prepared[0]
+            prompt, repair_prompt, parse, accepted, repair_schema = prepared[0]
             document, call_index = request_document(
                 prompt,
                 projected_snapshot,
@@ -928,6 +946,7 @@ def generate_notes_document(
                 budget=synthesis_budget,
                 response_schema=views[0].schema(),
                 parse=parse,
+                repair_schema=repair_schema,
             )
             indices = [call_index]
             counts = accepted[-1].counts
@@ -937,10 +956,11 @@ def generate_notes_document(
                 max_workers=len(views), thread_name_prefix="notes-reconcile"
             )
             futures = {
-                executor.submit(run, view, prompt, repair_prompt, parse): index
-                for index, (view, (prompt, repair_prompt, parse, _accepted)) in enumerate(
-                    zip(views, prepared, strict=True)
-                )
+                executor.submit(run, view, prompt, repair_prompt, parse, repair_schema): index
+                for index, (
+                    view,
+                    (prompt, repair_prompt, parse, _accepted, repair_schema),
+                ) in enumerate(zip(views, prepared, strict=True))
             }
             try:
                 for future in as_completed(futures):

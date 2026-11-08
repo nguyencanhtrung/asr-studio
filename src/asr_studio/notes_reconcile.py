@@ -36,7 +36,7 @@ MAX_RECONCILE_QUOTE_CHARS = 500
 MIN_RECONCILE_QUOTE_CHARS = 4
 MAX_RECONCILE_OUTPUT_BYTES = 64_000
 # Registered Gemini fact inventory only: at most two concurrent reconcile views of one ledger.
-MAX_RECONCILE_PARTS = 2
+MAX_RECONCILE_PARTS = 4
 ACTIONS = ("keep", "update", "merge", "remove", "confirm")
 REMOVE_REASONS = ("duplicate", "unsupported", "superseded", "nonmaterial")
 _NO_REASON = "none"
@@ -567,6 +567,8 @@ class ReconcileRepair:
     prior: Mapping[str, Any]  # failing ledger ref -> its prior raw disposition
     failed_additions: tuple[tuple[RefFailure, Any], ...]
     ledger_refs: frozenset[str]
+    # Clause-cue ledger only: accepted cue_checked decisions of refs outside the repair.
+    cue_checked: Mapping[str, bool] = MappingProxyType({})
 
     @property
     def refs(self) -> tuple[str, ...]:
@@ -658,25 +660,34 @@ class ReconcileLedger:
     # ----- partitioned views ------------------------------------------------------------------
 
     def partitions(self) -> tuple[ReconcileLedger, ...]:
-        """At most two balanced, contiguous views; each owns its entries over the full source.
+        """At most ``MAX_RECONCILE_PARTS`` balanced, contiguous, non-empty owned views.
 
-        Each view sees the other view's entries as read-only context and keeps their global refs.
-        Only the first view may add facts, so the global additions cap still holds. An empty or
-        single-entry ledger is its own only view.
+        Each view owns its entries over the full source, keeps their global refs and sees every
+        other entry, in ledger order, as read-only context. Only the first view may add facts,
+        so the global additions cap still holds. ``part`` is (index, actual view count); an
+        empty or single-entry ledger is its own only view.
         """
         if self.part is not None:
             raise _error("A reconcile view cannot be partitioned again.", reason_code="fields")
-        if len(self.entries) < 2:
+        count = min(MAX_RECONCILE_PARTS, len(self.entries))
+        if count < 2:
             return (self,)
-        half = (len(self.entries) + 1) // 2
-        chunks = (self.entries[:half], self.entries[half:])
+        size, extra = divmod(len(self.entries), count)
+        chunks: list[tuple[LedgerEntry, ...]] = []
+        start = 0
+        for index in range(count):  # larger views first; sizes differ by at most one
+            stop = start + size + (index < extra)
+            chunks.append(self.entries[start:stop])
+            start = stop
         return tuple(
             dataclasses.replace(
                 self,
                 entries=chunk,
-                context=chunks[1 - index],
+                context=tuple(
+                    entry for other, rest in enumerate(chunks) if other != index for entry in rest
+                ),
                 additions_allowed=index == 0,
-                part=(index, MAX_RECONCILE_PARTS),
+                part=(index, count),
             )
             for index, chunk in enumerate(chunks)
         )
@@ -706,6 +717,8 @@ class ReconcileLedger:
             "additions": 0,
             "default_kept": 0,
         }
+        if self.include_clause_cues:
+            counts["cue_checked"] = dict.fromkeys(_CUE_COUNTS, 0)
         for (view, result), expected in zip(parts, views, strict=True):
             # Exact equality with self.partitions() proves a disjoint, ordered, complete cover.
             if view != expected:
@@ -733,6 +746,8 @@ class ReconcileLedger:
                     counts[kind][action] += part_counts[kind][action]
             counts["additions"] += part_counts["additions"]
             counts["default_kept"] += part_counts["default_kept"]
+            for name in counts.get("cue_checked", ()):
+                counts["cue_checked"][name] += part_counts["cue_checked"][name]
         # Only the first view may add (checked per view), so the global additions cap holds.
         document = nd.validate_document(
             combined,
@@ -749,9 +764,10 @@ class ReconcileLedger:
         def is_count(value: object) -> bool:
             return type(value) is int and value >= 0
 
+        cue_key = {"cue_checked"} if self.include_clause_cues else set()
         if (
             not isinstance(counts, dict)
-            or set(counts) != {*kinds, "additions", "default_kept"}
+            or set(counts) != {*kinds, "additions", "default_kept", *cue_key}
             or any(
                 not isinstance(counts[kind], dict)
                 or set(counts[kind]) != set(ACTIONS)
@@ -770,6 +786,18 @@ class ReconcileLedger:
             raise _error("A reconcile view result has items outside its own scope.")
         if counts["additions"] > self._max_additions:
             raise _error("This reconcile view cannot add facts; only the first view may.")
+        if cue_key:
+            cue = counts["cue_checked"]
+            if (
+                not isinstance(cue, dict)
+                or set(cue) != set(_CUE_COUNTS)
+                or not all(is_count(value) for value in cue.values())
+                or cue["checked"] != cue["accepted"] + cue["declined"]
+                or cue["checked"] != len(self._cued_refs())
+            ):
+                raise _error(
+                    "A reconcile view result has invalid cue counts.", reason_code="fields"
+                )
         return counts
 
     def _segments(self) -> dict[str, Mapping[str, Any]]:
@@ -786,12 +814,29 @@ class ReconcileLedger:
         split = ""
         if self.part is not None:
             split = _SPLIT_RULE[output_language][0 if self.additions_allowed else 1]
-        return _instructions(output_language) + strict + split
+        status = _CORRECTION_RULE[output_language] if self.include_clause_cues else ""
+        return _instructions(output_language) + strict + split + status
 
     # ----- provider contract ------------------------------------------------------------------
 
-    def schema(self) -> dict[str, Any]:
-        """Strict internal response schema; refs and IDs stay strings validated by code."""
+    def _cued_refs(self, repair: ReconcileRepair | None = None) -> tuple[str, ...]:
+        """Owned refs with clause cues, in ledger order; of a repair, only its failing refs."""
+        if not self.include_clause_cues:
+            return ()
+        cued = self.clause_cues()
+        scope = set(repair.refs) if repair is not None else None
+        return tuple(
+            entry.ref
+            for entry in self.entries
+            if entry.ref in cued and (scope is None or entry.ref in scope)
+        )
+
+    def schema(self, repair: ReconcileRepair | None = None) -> dict[str, Any]:
+        """Strict internal response schema; refs and IDs stay strings validated by code.
+
+        A clause-cue ledger with cued refs in scope also requires ``cue_checked``: one Boolean
+        per cued owned ref, or per failing cued ref of a targeted repair.
+        """
         source_ref_limit = nd._source_ref_limit(self.max_unit_size)
         nullable = {"type": ["string", "null"]}
         evidence = {
@@ -837,21 +882,23 @@ class ReconcileLedger:
                 "additionalProperties": False,
             }
 
-        return obj(
-            {
-                "ledger_version": {"type": "integer", "enum": [LEDGER_VERSION]},
-                "dispositions": {
-                    "type": "array",
-                    "maxItems": count,  # sparse overlay: unlisted refs are kept by code
-                    "items": obj(disposition),
-                },
-                "additions": {
-                    "type": "array",
-                    "maxItems": self._max_additions,
-                    "items": obj(addition),
-                },
-            }
-        )
+        properties: dict[str, Any] = {
+            "ledger_version": {"type": "integer", "enum": [LEDGER_VERSION]},
+            "dispositions": {
+                "type": "array",
+                "maxItems": count,  # sparse overlay: unlisted refs are kept by code
+                "items": obj(disposition),
+            },
+            "additions": {
+                "type": "array",
+                "maxItems": self._max_additions,
+                "items": obj(addition),
+            },
+        }
+        cued = self._cued_refs(repair)
+        if cued:
+            properties["cue_checked"] = obj({ref: {"type": "boolean"} for ref in cued})
+        return obj(properties)
 
     def _metadata(self, entry_ref: str, section: str, item: Mapping[str, Any]) -> object:
         """Action owner, deadline phrase and canonical date; None for other sections."""
@@ -1103,6 +1150,13 @@ class ReconcileLedger:
             else:
                 accepted.append(disposition)
         additions = patch["additions"]
+        cued = set(self._cued_refs())
+        decisions = patch.get("cue_checked")
+        retained = (
+            {ref: value for ref, value in decisions.items() if ref in cued and ref not in failing}
+            if cued and isinstance(decisions, dict)
+            else {}
+        )
         return ReconcileRepair(
             failures=failures,
             dispositions=tuple(accepted),
@@ -1114,6 +1168,7 @@ class ReconcileLedger:
                 if f.ref.startswith("addition:")
             ),
             ledger_refs=frozenset(self.refs),
+            cue_checked=MappingProxyType(retained),
         )
 
     def build_repair_prompt(
@@ -1129,6 +1184,8 @@ class ReconcileLedger:
         index = self._index(segments)
         targets = self.merge_targets()
         by_ref = {entry.ref: entry for entry in self.entries}
+        cue_scope = self._cued_refs(repair)
+        clauses = self.clause_cues() if cue_scope else {}
         wanted: set[str] = set()
 
         def ids_of(value: object) -> list[str]:
@@ -1166,6 +1223,8 @@ class ReconcileLedger:
                 "allowed_merge_targets": targets[ref],
             }
             attention = self._attention(entry, index)
+            if ref in cue_scope:  # its own cited segments are already shown
+                attention["unstated_clauses"] = clauses[ref]
             if attention:
                 payload["attention"] = attention
                 for cue in attention.get("uncited_names", ()):
@@ -1193,9 +1252,15 @@ class ReconcileLedger:
             ],
             "source": source,
         }
+        cue_rules = (
+            _CLAUSE_CUE_RULE[output_language] + _REPAIR_CUE_RULE[output_language]
+            if cue_scope
+            else ""
+        )
         prompt = (
             self._rules(output_language)
             + _repair_instructions(output_language, repair.addition_slots)
+            + cue_rules
             + "REPAIR_INPUT_JSON:\n"
             + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         )
@@ -1207,13 +1272,20 @@ class ReconcileLedger:
             output_language=output_language,
             budget=budget,
             max_unit_size=self.max_unit_size,
-            response_schema=self.schema(),
+            response_schema=self.schema(repair),
         )
 
     def parse_repair(self, raw_output: object, repair: ReconcileRepair) -> ReconcileResult:
         """Overlay a repair on the accepted ops, then validate the whole ledger; all or nothing."""
         try:
-            patch = _decode(raw_output)
+            scope = self._cued_refs(repair)
+            patch, decisions = self._take_cue_decisions(_decode(raw_output), scope)
+            if set(decisions) != set(scope):
+                raise _error(
+                    "The reconcile repair must decide cue_checked for exactly its failing cued "
+                    "refs.",
+                    reason_code="fields",
+                )
             dispositions, additions, failed = self._shape(patch, self._max_additions)
             if failed:
                 raise _error("The reconcile repair has an invalid operation.", reason_code="fields")
@@ -1229,13 +1301,15 @@ class ReconcileLedger:
                 # it back to exact per-segment fragments; never rewrite its words or sources.
                 dispositions = [self._bind_repair_quotes(d) for d in dispositions]
                 additions = [(i, self._bind_repair_quotes(a)) for i, a in additions]
-            return self.apply(
-                {
-                    "ledger_version": LEDGER_VERSION,
-                    "dispositions": [*repair.dispositions, *dispositions],
-                    "additions": [*repair.additions, *(a for _i, a in additions)],
-                }
-            )
+            merged: dict[str, Any] = {
+                "ledger_version": LEDGER_VERSION,
+                "dispositions": [*repair.dispositions, *dispositions],
+                "additions": [*repair.additions, *(a for _i, a in additions)],
+            }
+            if self._cued_refs():
+                # Retained decisions plus the repair's; apply checks the exact full map again.
+                merged["cue_checked"] = {**repair.cue_checked, **decisions}
+            return self.apply(merged)
         except nd.NotesDocumentError:
             raise
         except _PATCH_ERRORS as error:
@@ -1356,6 +1430,8 @@ class ReconcileLedger:
         """
         segments = self._segments()
         index = self._index(segments)
+        cued = self._cued_refs()
+        patch, decisions = self._take_cue_decisions(patch, cued)
         dispositions, additions, failed = self._shape(patch, self._max_additions)
         if self.reference_evidence:
             dispositions = [self._reference_evidence(d, segments) for d in dispositions]
@@ -1372,6 +1448,23 @@ class ReconcileLedger:
                 failed.setdefault(
                     disposition["ref"], _error("The reconcile patch names an unknown ref.")
                 )
+        actions = {d["ref"]: d["action"] for d in dispositions if d["ref"] not in failed}
+        for ref in decisions:
+            if ref not in cued:
+                failed.setdefault(
+                    ref, _error("cue_checked names a ref without unstated_clauses cues.")
+                )
+        for ref in cued:  # a model decision per cued ref, never proof that the item is true
+            if type(decisions.get(ref)) is not bool:
+                failed.setdefault(
+                    ref,
+                    _error(
+                        "cue_checked must decide this cued ref with true or false.",
+                        reason_code="fields",
+                    ),
+                )
+            elif decisions[ref] and actions.get(ref) != "update":
+                failed.setdefault(ref, _error("cue_checked true requires an update of this ref."))
         dispositions = [d for d in dispositions if d["ref"] not in failed]
         seen: dict[str, dict[str, Any]] = {d["ref"]: d for d in dispositions}
         # Sparse overlay: every unlisted ref is kept by code, never dropped.
@@ -1396,6 +1489,13 @@ class ReconcileLedger:
             "additions": len(additions),
             "default_kept": default_kept,
         }
+        if self.include_clause_cues:  # decision coverage only, not truth
+            accepted = sum(decisions.get(ref) is True for ref in cued)
+            counts["cue_checked"] = {
+                "checked": len(cued),
+                "accepted": accepted,
+                "declined": len(cued) - accepted,
+            }
         for entry in self.entries:  # ledger order keeps final items first, in their order
             if entry.ref in failed:
                 continue
@@ -1525,6 +1625,23 @@ class ReconcileLedger:
             target["source_ids"] = list(
                 dict.fromkeys([*target["source_ids"], *entry.item["source_ids"]])
             )
+
+    def _take_cue_decisions(
+        self, patch: object, cued: Sequence[str]
+    ) -> tuple[object, dict[str, Any]]:
+        """Split ``cue_checked`` off a patch with cued refs in scope; otherwise leave the patch.
+
+        Without cued refs the key stays in the patch, so ``_shape`` rejects it as a field.
+        Missing, extra, non-Boolean or unsupported decisions fail per ref in ``apply``; an
+        extra key outside the owned refs, or a non-object map, has no ref and fails globally.
+        """
+        if not cued or not isinstance(patch, dict) or "cue_checked" not in patch:
+            return patch, {}
+        patch = dict(patch)
+        decisions = patch.pop("cue_checked")
+        if not isinstance(decisions, dict) or not set(decisions) <= set(self.refs):
+            raise _error("The reconcile cue_checked map is invalid.", reason_code="fields")
+        return patch, decisions
 
     @staticmethod
     def _shape(
@@ -1909,6 +2026,7 @@ class ReconcileLedger:
         return item
 
 
+_CUE_COUNTS = ("checked", "accepted", "declined")
 _PATCH_ERRORS = (KeyError, TypeError, ValueError, AttributeError, RecursionError, IndexError)
 
 
@@ -2063,35 +2181,93 @@ _STRICT_NAME_RULE = {
 }
 
 
-# Appended to the reconcile prompt (not the repair prompt) of a clause-cue ledger only.
+# Appended to the reconcile prompt of a clause-cue ledger, and to a repair with cued failures.
 _CLAUSE_CUE_RULE = {
     "en": (
         "attention.unstated_clauses: code-selected clauses of the item's own cited segments that "
         "its text may omit; reasons names what the clause has (phase, date, sequence, cause, "
         "attribution, stance, number, entity); an explicit step, stage or phase and a date or "
-        "deadline matter most. A cue is a pointer, not a fact, and alone never requires "
-        "listing the ref. Read the full cited segment, always when truncated is true, for "
-        "negation, actor and conditions. If the clause states a material dependency, trigger or "
-        "sequence, cause or purpose, who someone speaks for, a stated support or opposition, or "
-        "a date that the item lacks, update the item to add it: keep every existing fact, "
-        "negation, modality and actor-object relation, and add an exact evidence quote from that "
-        "cited segment. Otherwise leave the ref unlisted. Never treat a speaker label as an "
-        "identity, and never assign a speaker's own work or statement to a person the speaker "
-        "names.\n"
+        "deadline matter most. A cue is a pointer, not a fact or proof, and its excerpt may be "
+        "cut: read the full cited segment, always when truncated is true, for negation, actor "
+        "and conditions. Decide every cue of every ref that has unstated_clauses. If a clause "
+        "states a material dependency, trigger or sequence, cause or purpose, who someone speaks "
+        "for, a stated support or opposition, or a date that the item lacks, update the item to "
+        "add it: keep every existing fact, negation, modality and actor-object relation, and add "
+        "an exact evidence quote from that cited segment. cue_checked must hold exactly every "
+        "ref that has attention.unstated_clauses, each with a Boolean: true when that ref's "
+        "update adds at least one material cue (true requires an update of that ref); false "
+        "when its cues are not material for this item, and the ref then has any disposition or "
+        "stays unlisted. cue_checked records your decision, it is not proof of truth. Never "
+        "treat a speaker label as an identity, and never assign a speaker's own work or "
+        "statement to a person the speaker names.\n"
     ),
     "vi": (
         "attention.unstated_clauses: mệnh đề do mã chọn từ chính segment mục trích mà text của "
         "mục có thể bỏ sót; reasons nêu mệnh đề có gì (phase, date, sequence, cause, "
         "attribution, stance, number, entity); bước, giai đoạn và ngày hoặc hạn được nói rõ là "
-        "quan trọng nhất. Cảnh báo này chỉ là gợi ý, không phải sự kiện, và tự nó không "
-        "bắt buộc liệt kê ref. Đọc toàn bộ segment được trích, nhất là khi truncated là true, để "
-        "biết phủ định, chủ thể và điều kiện. Nếu mệnh đề nêu phụ thuộc, điều kiện kích hoạt "
-        "hoặc trình tự, nguyên nhân hoặc mục đích, người được đại diện, sự ủng hộ hoặc phản đối "
-        "được nói rõ, hoặc ngày mà mục còn thiếu và là chi tiết quan trọng, update mục để bổ "
-        "sung: giữ mọi ý, phủ định, mức chắc chắn và quan hệ chủ thể-đối tượng đã có, và thêm "
-        "evidence trích nguyên văn từ segment đó. Nếu không, không liệt kê ref. Không coi nhãn "
-        "người nói là danh tính, và không gán việc hay lời của người nói cho người mà họ nhắc "
-        "tên.\n"
+        "quan trọng nhất. Cảnh báo này chỉ là gợi ý, không phải sự kiện hay bằng chứng, và đoạn "
+        "trích có thể bị cắt: đọc toàn bộ segment được trích, nhất là khi truncated là true, để "
+        "biết phủ định, chủ thể và điều kiện. Quyết định mọi cảnh báo của mọi ref có "
+        "unstated_clauses. Nếu mệnh đề nêu phụ thuộc, điều kiện kích hoạt hoặc trình tự, nguyên "
+        "nhân hoặc mục đích, người được đại diện, sự ủng hộ hoặc phản đối được nói rõ, hoặc "
+        "ngày mà mục còn thiếu và là chi tiết quan trọng, update mục để bổ sung: giữ mọi ý, phủ "
+        "định, mức chắc chắn và quan hệ chủ thể-đối tượng đã có, và thêm evidence trích nguyên "
+        "văn từ segment đó. cue_checked phải chứa đúng mọi ref có attention.unstated_clauses, "
+        "mỗi ref một giá trị Boolean: true khi update của ref đó bổ sung ít nhất một cảnh báo "
+        "quan trọng (true bắt buộc ref đó có update); false khi các cảnh báo không quan trọng "
+        "với mục này, và khi đó ref có disposition bất kỳ hoặc không được liệt kê. cue_checked "
+        "ghi nhận quyết định của bạn, không phải bằng chứng về tính đúng. Không coi nhãn người "
+        "nói là danh tính, và không gán việc hay lời của người nói cho người mà họ nhắc tên.\n"
+    ),
+}
+
+# Appended to a targeted repair whose failing refs include cued refs.
+_REPAIR_CUE_RULE = {
+    "en": (
+        "Repair cue_checked: decide exactly the failing refs that have "
+        "attention.unstated_clauses, each true or false; code keeps the accepted decisions of "
+        "every other ref.\n"
+    ),
+    "vi": (
+        "cue_checked của bản sửa: quyết định đúng các ref lỗi có attention.unstated_clauses, "
+        "mỗi ref true hoặc false; mã giữ quyết định đã được chấp nhận của mọi ref khác.\n"
+    ),
+}
+
+
+# Appended to reconcile and repair prompts of a clause-cue ledger only.
+_CORRECTION_RULE = {
+    "en": (
+        "Corrections: an update corrects every unsupported subclause of the item and keeps its "
+        "grounded content. An effort, wish, urging, request or opportunity is not an achieved "
+        "outcome, a formal mandate or a requirement; keep the stated modality. Check a pending, "
+        "recommended, proposed or expected status against later segments of the full source "
+        "about the same record. When a later segment records its outcome (a vote, approval, "
+        "confirmation, rejection or completion), update the item to add that outcome as the "
+        "current status, citing both the earlier and the later segment with exact evidence "
+        "quotes. Code keeps every original certainty and negation word such as pending or "
+        "proposed: retain it as a historical qualification (previously pending ...; later "
+        "confirmed, or previously proposed ...; later rejected), never delete it. When another "
+        "item already states that "
+        "outcome, you may instead remove this item as superseded, citing that later segment. "
+        "This refines the superseded rule: an accepted plan or person itself is not superseded "
+        "or obsolete, but a claim that it is still pending can be outdated.\n"
+    ),
+    "vi": (
+        "Sửa: update sửa mọi mệnh đề phụ không có căn cứ của mục và giữ nội dung có căn cứ. Nỗ "
+        "lực, mong muốn, lời kêu gọi, yêu cầu hay cơ hội không phải là kết quả đã đạt, chỉ thị "
+        "chính thức hay quy định bắt buộc; giữ đúng mức độ đã nêu. Đối chiếu trạng thái đang "
+        "chờ, được kiến nghị, được đề xuất hay dự kiến với các segment sau trong toàn bộ nguồn "
+        "về cùng hồ sơ. Khi một segment sau ghi nhận kết quả (biểu quyết, phê duyệt, xác nhận, "
+        "bác bỏ hoặc hoàn thành), update mục để thêm kết quả đó làm trạng thái hiện tại và "
+        "trích cả segment trước và segment sau kèm evidence nguyên văn. Mã giữ mọi từ chỉ mức "
+        "chắc chắn và phủ định của text gốc như pending hay proposed: giữ nó như một bổ ngữ "
+        "lịch sử (previously pending ...; later confirmed, hoặc previously proposed ...; "
+        "later rejected), không bao giờ xóa. Khi một mục khác đã nêu kết quả đó, có thể "
+        "remove mục này với "
+        "reason superseded, trích segment sau đó. Điều này làm rõ quy tắc superseded: bản thân "
+        "kế hoạch hay người đã được chấp nhận không bị thay thế hay lỗi thời, nhưng khẳng định "
+        "rằng nó vẫn đang chờ có thể đã lỗi thời.\n"
     ),
 }
 

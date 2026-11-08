@@ -2089,7 +2089,8 @@ tích của người được đề cử; khẳng định còn lại thiếu s�
 unresolved; cách đó bị bỏ vì mã ghi đè từ chối của model. Các bản vá v38 thô nay giữ nguyên
 unresolved (trích đoạn); không điều chỉnh chúng để chọn `.c` và không có kết luận phục hồi chất
 lượng. Ba lõi ứng viên đã biết vẫn được đề xuất cho lần chọn thật sau của model. Đây không phải đo
-chất lượng hay thời gian; v39 chưa đo thực tế, kết quả đang chờ.
+chất lượng hay thời gian. Đo thực tế v39 sau đó: 9/12 mẫu, 7/7 ý quan trọng, 3 khẳng định thiếu
+nguồn, 701,858427 giây, 20 lượt gọi, 0 cache (`v39-physical-qualification.json`); chưa đạt, xem v40.
 
 **Đánh đổi.** Lõi bỏ chi tiết phụ đúng của quyết định (tên, chức danh, mục đích); kết quả biểu quyết
 xa hơn segment liền trước, gắn với lượt biểu quyết khác hoặc bị ASR làm sai không được giữ; câu
@@ -2121,6 +2122,73 @@ từ vựng, nhiều gợi ý nguyên nhân/ngày là nhiễu; mục nhiều hơ
 có thể bỏ qua. Nguồn: `src/asr_studio/notes_reconcile.py`, `src/asr_studio/notes_pipeline.py`,
 `tests/test_notes_unstated_clauses.py`; hồ sơ cục bộ `v39-omissions/report.md`,
 `v39-clause-cues/engineering/cues-v38.json`, `v39-clause-cues/engineering/prompt-check.json`.
+
+### #183 (tiếp) — Bốn view reconcile, năm worker map và quyết định gợi ý bắt buộc (`notes-hierarchical-v40`)
+
+**Nguyên nhân đo được (v39).** Lần đo v39 (`v39-physical-qualification.json`): 9/12 mẫu (3 một
+phần), 7/7 ý quan trọng, 3 khẳng định quan trọng thiếu nguồn, 0 ID sai, 701,858427 giây, 20 lượt
+gọi, 0 cache. Thời gian (`v39-timing/report.md`, cộng theo đường găng): map 163,3 giây (3 worker,
+chuỗi 3 call), reconcile 308,8 giây (2 view, thời gian theo số disposition xuất ra), repair 42,8
+giây nằm trên đường găng, kiểm ngữ nghĩa 186,4 giây (phần chậm nhất trong 8). Chất lượng
+(`v40-design/report.md`): view 0 liệt kê 26/26 ref chỉ có gợi ý mệnh đề, view 1 liệt kê 0/21, vì
+prompt cho phép bỏ qua gợi ý; hai mẫu một phần và một khẳng định sai mức độ (mong muốn thành kết
+quả) có gợi ý không được quyết định. Một khẳng định "đang chờ biểu quyết" còn giữ dù segment sau
+ghi kết quả; câu superseded hiện hành ("chấp nhận một người không phải superseded") đẩy model giữ
+trạng thái cũ.
+
+**Thiết kế.**
+
+- `ReconcileLedger.partitions`: tối đa `MAX_RECONCILE_PARTS` = 4 view liên tục, cân bằng (chênh
+  nhau tối đa 1 mục, view lớn trước), không rỗng, `part` = (chỉ số, số view thật = `min(4, N)`).
+  Mỗi view có toàn nguồn, giữ ref toàn cục, thấy mọi mục của view khác là ngữ cảnh chỉ đọc theo
+  thứ tự sổ; chỉ view đầu được thêm mục (trần 16 cũ). `combine_results` vẫn đòi đúng các view theo
+  thứ tự, không thiếu/lặp/lạ, đếm khớp phần sở hữu, kiểm lại tài liệu gộp với cùng trần. Chỉ nhánh
+  fact inventory của Gemini đã đăng ký chia; mặc định và ChatGPT không đổi.
+- Map fact inventory Gemini đã đăng ký chạy tối đa 5 worker (trước 3); ChatGPT giữ 3,
+  map khác vẫn 2. Nội dung request không đổi.
+- `cue_checked` (chỉ khi `include_clause_cues`): schema thêm object bắt buộc gồm đúng ref sở hữu
+  có `attention.unstated_clauses`, mỗi ref một boolean; không có ref gợi ý thì không có khóa. `true`
+  = update của ref bổ sung ít nhất một gợi ý quan trọng, bắt buộc có update; `false` = gợi ý không
+  quan trọng với mục, mọi disposition hoặc không liệt kê. Thiếu, thừa (ref sở hữu không gợi ý),
+  sai kiểu, `true` không có update làm ref đó lỗi; khóa ngoài ref sở hữu hoặc map không phải object
+  là lỗi toàn cục (repair chung có giới hạn). Prompt (EN/VI) yêu cầu quyết định mọi gợi ý, gợi ý
+  chỉ là chỉ dẫn, đọc toàn segment kể cả khi bị cắt. Manifest `source_audit.counts.cue_checked`
+  đếm `checked`/`accepted`/`declined`: độ phủ quyết định của model, không phải bằng chứng đúng.
+- Repair thưa giữ tính chất cũ: chỉ ref lỗi. Quyết định đã chấp nhận của ref khác được giữ trong
+  `ReconcileRepair.cue_checked`; repair chỉ quyết định ref lỗi có gợi ý, thấy gợi ý và nguồn của
+  chính chúng, với schema riêng (`schema(repair)`, pipeline gửi qua `repair_schema`); mã gộp rồi
+  kiểm lại toàn bộ map. Vẫn một repair dùng chung cho mọi view và kiểm ngữ nghĩa; một view lỗi làm
+  tác vụ lỗi, không công bố gì.
+- Quy tắc sửa (EN/VI, chỉ ledger có gợi ý, cả prompt chính và repair): update sửa mọi mệnh đề phụ
+  không có căn cứ và giữ phần có căn cứ; nỗ lực/mong muốn/kêu gọi/cơ hội không phải kết quả hay chỉ
+  thị; trạng thái đang chờ/kiến nghị/đề xuất/dự kiến phải đối chiếu kết quả ghi ở segment sau của
+  cùng hồ sơ trong toàn nguồn, trích cả hai giai đoạn. Guard dùng chung giữ mọi từ chắc chắn/phủ
+  định của text gốc (pending, proposed, may, ...) vẫn giữ nguyên, nên prompt dạy giữ từ đó như bổ
+  ngữ lịch sử ("previously pending ...; later confirmed"), hoặc remove superseded khi mục khác đã nêu
+  kết quả; câu superseded được làm rõ: người/kế hoạch đã chấp nhận không lỗi thời, khẳng định "vẫn
+  đang chờ" thì có thể. Prompt `_instructions` chung không đổi byte, nên ChatGPT không đổi.
+- Kiểm ngữ nghĩa (EN/VI) thêm: mức độ, hoàn thành và trạng thái hiện tại là khẳng định trọng yếu;
+  riêng kiến nghị của ủy ban không xác lập quyết định cuối còn chờ. Không thêm rewrite/xóa chữ,
+  vá tên từ vựng hay ghi đè quarantine.
+- Không đổi: trần 54 call, 24 reduction, một repair, 8 phần kiểm, 64.000 byte, gợi ý ≤ 2/mục,
+  ≤ 48 và ≤ 16.384 byte/view, ≤ 200 ký tự. Ở 24 chunk: 24 map + 4 reconcile (1 + 3 view thêm vào
+  trần reduction) + ≤ 8 kiểm + 1 repair ≤ 54 (`tests/test_notes_parallel_reconcile.py`).
+
+**Ước tính (không phải đo).** Từ `v39-timing/report.md`: map ≤ -54 giây nếu provider cho 5 call
+song song; reconcile ước 180-230 giây nếu thời gian theo disposition/view (≈ 45 mục/view thay 90),
+nhưng quyết định gợi ý nhiều hơn làm tăng disposition; kiểm ngữ nghĩa ~186 giây không đổi. Tổng
+dự kiến 480-560 giây khi repair không nằm trên đường găng. Chất lượng mục tiêu (G09, G12, #92)
+chỉ là dự đoán; #155 dựa vào quy tắc không có gợi ý, kém chắc nhất; G11 (lỗi chữ trong text bất
+biến) không xử lý ở v40.
+
+**Đánh đổi.** Bốn lần prefill toàn nguồn (~0,92 MB prompt reconcile) có thể chậm nếu provider giới
+hạn; nhiều view hơn thì nhiều cơ hội một view lỗi, trong khi vẫn chỉ một repair; `cue_checked`
+thêm ~10 byte/ref gợi ý và buộc update/không cho mỗi gợi ý. Bản phát lại reconcile Gemini v39
+thiếu `cue_checked` nên không phát lại được; cần đo
+thực tế mới. Nguồn: `src/asr_studio/notes_reconcile.py`, `src/asr_studio/notes_pipeline.py`,
+`src/asr_studio/notes_semantic.py`, `tests/test_notes_cue_checked.py`,
+`tests/test_notes_partitioned_reconcile.py`, `tests/test_notes_parallel_reconcile.py`; hồ sơ cục
+bộ `v39-physical-qualification.json`, `v39-timing/report.md`, `v40-design/report.md`.
 
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 

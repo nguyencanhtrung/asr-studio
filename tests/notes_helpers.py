@@ -275,7 +275,15 @@ def reconcile_keep_patch(prompt: str) -> str:
             if targets
             else reconcile_disposition(item["ref"])
         )
-    return json.dumps({"ledger_version": 2, "dispositions": dispositions, "additions": []})
+    patch = {"ledger_version": 2, "dispositions": dispositions, "additions": []}
+    cued = [
+        item["ref"]
+        for item in payload["final_items"] + payload["map_items"]
+        if "unstated_clauses" in item.get("attention", {})
+    ]
+    if cued:  # a clause-cue ledger: decline every cue (decision coverage, not truth)
+        patch["cue_checked"] = dict.fromkeys(cued, False)
+    return json.dumps(patch)
 
 
 def semantic_patch(refs, changes=(), unresolved=()) -> str:
