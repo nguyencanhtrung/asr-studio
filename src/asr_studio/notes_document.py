@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v28"
+PROMPT_VERSION = "notes-hierarchical-v29"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.
@@ -166,7 +166,8 @@ MAX_REDUCTION_CALLS = 24
 # request and this many calls per task. They come on top of the planned calls and the one repair.
 MAX_OUTPUT_RECOVERY_ATTEMPTS = 2
 MAX_OUTPUT_RECOVERY_CALLS = 4
-# A bounded run may use maps, reductions, one final request and one reference audit. Recovery
+# A bounded run may use maps, reductions, one final request and one reference audit (a
+# fact-inventory run: maps, one reconcile and at most two semantic-audit parts). Recovery
 # attempts are additional calls and share the same global ceiling.
 MAX_PROVIDER_CALLS = MAX_NOTES_CHUNKS + MAX_REDUCTION_CALLS + 2 + MAX_OUTPUT_RECOVERY_CALLS
 MAX_REDUCTION_LEVELS = 8
@@ -1217,6 +1218,25 @@ _FACT_INVENTORY_RULE = {
 }
 
 
+# Registered-Gemini fact-inventory maps only: short Gemini, ChatGPT and unknown models keep
+# their source-prompt bytes.
+_GEMINI_FACT_INVENTORY_RULE = {
+    "en": (
+        "Never join a transcribed number with a following spoken list into one quantity, and "
+        "never split, merge or complete garbled digits of a count or identifier; quote such a "
+        "number as said and mark it unclear. Supporting, endorsing, voting for or thanking is "
+        "not sponsoring, introducing or bringing forward; keep each actor's stated role.\n"
+    ),
+    "vi": (
+        "Không bao giờ ghép một số được ghi âm với danh sách đọc liền sau thành một số lượng, và "
+        "không bao giờ tách, gộp hay điền thêm chữ số bị ghi sai của một số lượng hoặc số hiệu; "
+        "giữ nguyên con số như đã nói và ghi là chưa rõ. Ủng hộ, tán thành, bỏ phiếu thuận hay "
+        "cảm ơn không phải là bảo trợ, giới thiệu hay đưa ra; giữ đúng vai trò được nêu của "
+        "từng người.\n"
+    ),
+}
+
+
 # Source prompts (single and map) for a registered Gemini budget only, so ChatGPT and unknown
 # models keep their request bytes. The explicit change of plan is a decision distinct from the
 # task it creates; the task itself still appears once.
@@ -1376,6 +1396,8 @@ def _source_instructions(
             )
         if fact_inventory:
             instructions += _FACT_INVENTORY_RULE[output_language]
+            if _is_known_gemini(budget):
+                instructions += _GEMINI_FACT_INVENTORY_RULE[output_language]
     return instructions
 
 

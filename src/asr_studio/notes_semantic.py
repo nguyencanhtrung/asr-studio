@@ -1,5 +1,9 @@
 """One bounded source-binding audit for registered-Gemini long notes, as sparse immutable refs.
 
+The pass may split the final items into at most two balanced, disjoint partitions; each one
+reads the full source but sees and may patch only its own items under their global refs. The
+validated part patches are merged and applied once, so every item is audited exactly once.
+
 The model never writes text. Each final item has an original text ref and, at most, a few
 anonymous variants that code derived: exact suffixes of the original that drop only a leading
 proper-name attribution or leading proper qualifiers. A sparse patch selects a text ref, adds
@@ -14,7 +18,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,7 +26,8 @@ from asr_studio import notes_document as nd
 from asr_studio.notes_audit import _source_excerpt_text
 
 AUDIT_VERSION = 1
-MAX_SEMANTIC_OUTPUT_BYTES = 64_000
+MAX_SEMANTIC_OUTPUT_BYTES = 64_000  # one part's response and the merged patch alike
+MAX_AUDIT_PARTS = 2
 MAX_LEADING_NAME_TOKENS = 4
 MAX_VARIANTS_PER_ITEM = 4
 _NEEDS_REVIEW = {
@@ -230,6 +235,55 @@ class SemanticAudit:
 
     def _cited(self, item: Mapping[str, Any]) -> str:
         return " ".join(self._segment_text.get(i, "") for i in item.get("source_ids", []))
+
+    # ----- partitions -------------------------------------------------------------------------
+
+    def partitions(self) -> tuple[SemanticAudit, ...]:
+        """At most two balanced, contiguous, disjoint item views; fewer than two items: itself.
+
+        A view shares this audit's full source and document and keeps the global refs; its
+        schema, prompt and parse admit only its own refs and text refs.
+        """
+        if len(self.items) < MAX_AUDIT_PARTS:
+            return (self,)
+        half = (len(self.items) + 1) // 2
+        return (self._view(self.items[:half]), self._view(self.items[half:]))
+
+    def _view(self, items: tuple[_Item, ...]) -> SemanticAudit:
+        view = copy.copy(self)  # parse deep-copies the shared document; nothing mutates it
+        view.items = items
+        view._by_ref = {item.ref: item for item in items}
+        view._text_refs = {r: (item, text) for item in items for r, text in item.texts}
+        return view
+
+    def validated_patch(self, raw_output: object, *, output_language: str = "en") -> dict:
+        """This view's patch after the full parse guard; the canonical decoded JSON object."""
+        self.parse(raw_output, output_language=output_language)
+        return json.loads(raw_output)  # type: ignore[arg-type] - parse proved it is JSON text
+
+    def combine_patches(
+        self, parts: Sequence[tuple[SemanticAudit, dict]], *, output_language: str = "en"
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        """Merge the validated patches of disjoint views covering every item; parse it once."""
+        scopes = [set(view._by_ref) for view, _patch in parts]
+        if sum(map(len, scopes)) != len(self._by_ref) or set().union(*scopes) != set(self._by_ref):
+            raise _error("The semantic audit parts do not cover every item exactly once.")
+        changes: list[Any] = []
+        unresolved: list[Any] = []
+        for (_view, patch), scope in zip(parts, scopes, strict=True):
+            refs = [c.get("ref") for c in patch["changes"] if isinstance(c, dict)]
+            if not {*refs, *patch["unresolved_refs"]} <= scope:
+                raise _error("The semantic audit names a ref outside its partition.")
+            changes += patch["changes"]
+            unresolved += patch["unresolved_refs"]
+        merged = json.dumps(
+            {"audit_version": AUDIT_VERSION, "changes": changes, "unresolved_refs": unresolved},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if len(merged.encode("utf-8")) > MAX_SEMANTIC_OUTPUT_BYTES:
+            raise _error("The merged semantic audit patch exceeds its output limit.", "size")
+        return self.parse(merged, output_language=output_language)
 
     # ----- provider contract ------------------------------------------------------------------
 
@@ -448,11 +502,26 @@ _INSTRUCTIONS = {
     "en": (
         "Final source-binding audit of meeting notes. Return one sparse JSON patch, never a "
         "document or new wording. AUDIT_INPUT_JSON.source is the full transcript; items are the "
-        "final notes. Each item has immutable text_refs: '.o' is its original text, '.aN' an "
+        "final notes assigned to this request. Each item has immutable text_refs: '.o' is its "
+        "original text, '.aN' an "
         "anonymous variant that only drops a leading speaker or group attribution or a leading "
         "qualifier. Check only material bindings: every named person, role, organization, "
         "number, duration, date, vote, owner, deadline and commitment must be stated by the "
-        "item's cited segments. To fix an item, list one change for its ref: keep the original "
+        "item's cited segments. Check every listed item in every section, including overview "
+        "titles, headings and confirmation_items; a section or heading never makes an "
+        "unsupported fact acceptable, and only a needs-review literal source quote is exempt. "
+        "A nominee, candidate or other name in the cited segments does not identify the "
+        "speaker, even when the item calls the statement that person's vision, remarks or "
+        "testimony. Supporting, endorsing, voting for or thanking is not sponsoring, "
+        "introducing or bringing forward legislation; never move one actor's role to another. "
+        "Every number, quantity, count and bill, ordinance, statute or section identifier must "
+        "appear in the cited segments; never split, merge or reinterpret garbled transcribed "
+        "digits or a spoken list to create a count, and never guess, correct or complete "
+        "identifier digits. When such a fact is ambiguous and no variant drops it, list the ref "
+        "in unresolved_refs. A procedural approval, requirement or commitment needs its own "
+        "cited statement; when that statement continues in the next segment, add that "
+        "segment's source ID. Never supply background legal or procedural assumptions. "
+        "To fix an item, list one change for its ref: keep the original "
         "text_ref when its wording is fully supported and put the source IDs that state the "
         "missing fact in add_source_ids (code adds them to the cited IDs; already cited IDs are "
         "ignored); choose an anonymous variant only when a leading name or qualifier is not "
@@ -475,11 +544,27 @@ _INSTRUCTIONS = {
     "vi": (
         "Kiểm tra cuối cùng việc gắn nguồn của biên bản họp. Trả về một bản vá JSON thưa, không "
         "trả về tài liệu hay câu chữ mới. AUDIT_INPUT_JSON.source là toàn bộ bản ghi; items là "
-        "các mục biên bản cuối. Mỗi mục có text_refs bất biến: '.o' là văn bản gốc, '.aN' là "
+        "các mục biên bản cuối được giao cho yêu cầu này. Mỗi mục có text_refs bất biến: '.o' "
+        "là văn bản gốc, '.aN' là "
         "biến thể ẩn danh chỉ bỏ phần ghi người nói hoặc nhóm ở đầu, hoặc bổ ngữ ở đầu. Chỉ kiểm "
         "tra các gắn kết trọng yếu: mọi người được nêu tên, vai trò, tổ chức, con số, thời lượng, "
         "ngày, kết quả biểu quyết, người phụ trách, hạn chót và cam kết phải được segment được "
-        "trích nêu rõ. Để sửa một mục, liệt kê một thay đổi cho ref của nó: giữ text_ref gốc khi "
+        "trích nêu rõ. Kiểm tra mọi mục được liệt kê trong mọi phần, kể cả tiêu đề tổng quan, "
+        "đề mục và confirmation_items; một phần hay đề mục không bao giờ làm cho dữ kiện không "
+        "được hỗ trợ trở nên chấp nhận được, chỉ trích dẫn nguyên văn cần xem lại mới được "
+        "miễn. Một người được đề cử, ứng viên hay tên khác trong các segment được trích không "
+        "xác định người nói, kể cả khi mục gọi phát biểu đó là tầm nhìn, nhận xét hay lời khai "
+        "của người đó. Ủng hộ, tán thành, bỏ phiếu thuận hay cảm ơn không phải là bảo trợ, giới "
+        "thiệu hay đưa ra dự luật; không bao giờ chuyển vai trò của người này sang người khác. "
+        "Mọi con số, số lượng, phép đếm và số hiệu dự luật, sắc lệnh, luật hay điều khoản phải "
+        "xuất hiện trong segment được trích; không bao giờ tách, gộp hay diễn giải lại chữ số "
+        "bị ghi sai hoặc một danh sách được đọc để tạo ra một phép đếm, và không bao giờ đoán, "
+        "sửa hay điền thêm chữ số của số hiệu. Khi dữ kiện như vậy mơ hồ và không biến thể nào "
+        "bỏ được nó, liệt kê ref đó trong unresolved_refs. Một phê duyệt, yêu cầu hay cam kết "
+        "theo thủ tục cần chính phát biểu được trích của nó; khi phát biểu đó tiếp tục ở "
+        "segment kế tiếp, hãy thêm source ID của segment đó. Không bao giờ tự bổ sung giả định "
+        "pháp lý hay thủ tục nền. "
+        "Để sửa một mục, liệt kê một thay đổi cho ref của nó: giữ text_ref gốc khi "
         "câu chữ được hỗ trợ đầy đủ và đưa source ID nêu dữ kiện còn thiếu vào add_source_ids "
         "(mã cộng chúng vào ID đã trích; ID đã trích được bỏ qua); chỉ chọn biến thể ẩn danh khi "
         "tên hoặc bổ ngữ ở đầu không được hỗ trợ. Khi việc quy người nói không chắc chắn và có "

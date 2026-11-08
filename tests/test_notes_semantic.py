@@ -1,9 +1,11 @@
-"""Registered-Gemini long notes: one sparse immutable-reference source-binding audit."""
+"""Registered-Gemini long notes: one sparse immutable-reference source-binding audit pass."""
 
 from __future__ import annotations
 
 import copy
 import json
+import threading
+import time
 
 import pytest
 from notes_helpers import SEMANTIC_KEEP_PATCH, reconcile_keep_patch, semantic_payload
@@ -296,24 +298,35 @@ def _transport(calls, semantic):
     return transport
 
 
-def test_long_gemini_runs_exactly_one_audit_after_reconcile_and_publishes_the_variant():
+def _tarrow_ref(prompt: str) -> str | None:
+    """The ref of the attributed item when this audit part owns it."""
+    for item in semantic_payload(prompt)["items"]:
+        if item["text_refs"][0]["text"].startswith("Tarrow"):
+            return item["ref"]
+    return None
+
+
+def test_long_gemini_runs_one_audit_pass_of_two_parts_after_reconcile_and_publishes_variant():
     calls: list[dict] = []
     coverage: list[dict] = []
 
     def semantic(prompt, _kwargs):
-        item = semantic_payload(prompt)["items"][1]
-        return _patch(_change(item["ref"], f"{item['ref']}.a1"))
+        ref = _tarrow_ref(prompt)
+        return _patch(_change(ref, f"{ref}.a1")) if ref else SEMANTIC_KEEP_PATCH
 
     result = _run(_transport(calls, semantic), coverage=coverage)
 
-    assert [c["stage"] for c in calls] == ["chunk", "chunk", "reconcile", "semantic_audit"]
+    stages = [c["stage"] for c in calls]
+    assert stages == ["chunk", "chunk", "reconcile", "semantic_audit", "semantic_audit"]
     assert [i["text"] for i in result["key_topics"]] == [
         "Launch plan approved",
         "Noted renewal still open",
     ]
-    assert coverage[0]["semantic_audit"]["provider_call_index"] == 4
-    assert coverage[0]["semantic_audit"]["counts"]["anonymized"] == 1
-    assert coverage[0]["provider_calls"] == 4 <= nd.MAX_PROVIDER_CALLS
+    audit = coverage[0]["semantic_audit"]
+    assert audit["provider_call_index"] == 5 and sorted(audit["provider_call_indices"]) == [4, 5]
+    assert audit["part_count"] == 2
+    assert audit["counts"]["anonymized"] == 1
+    assert coverage[0]["provider_calls"] == 5 <= nd.MAX_PROVIDER_CALLS
 
 
 @pytest.mark.parametrize("provider", [CHATGPT, ("antigravity", "gemini-test")])
@@ -342,11 +355,12 @@ def test_unresolved_audit_ref_is_published_as_a_quarantined_source_excerpt():
     coverage: list[dict] = []
 
     def semantic(prompt, _kwargs):
-        return _patch(unresolved=[semantic_payload(prompt)["items"][1]["ref"]])
+        ref = _tarrow_ref(prompt)
+        return _patch(unresolved=[ref]) if ref else SEMANTIC_KEEP_PATCH
 
     result = _run(_transport(calls, semantic), coverage=coverage)
 
-    assert [c["stage"] for c in calls] == ["chunk", "chunk", "reconcile", "semantic_audit"]
+    assert [c["stage"] for c in calls].count("semantic_audit") == 2
     assert [i["text"] for i in result["key_topics"]] == ["Launch plan approved"]
     snapshot = _long_snapshot()["segments"]
     assert result["confirmation_items"][0]["source_ids"][:2] == [s["id"] for s in snapshot[1:]]
@@ -365,15 +379,14 @@ def test_invalid_unresolved_audit_uses_the_shared_repair_once_then_fails_unpubli
     coverage: list[dict] = []
 
     def semantic(prompt, _kwargs):
-        ref = semantic_payload(prompt)["items"][1]["ref"]
-        return _patch(unresolved=[ref, ref])
+        ref = _tarrow_ref(prompt)
+        return _patch(unresolved=[ref, ref]) if ref else SEMANTIC_KEEP_PATCH
 
     with pytest.raises(AssertionError) as failure:
         _run(_transport(calls, semantic), coverage=coverage)
-    assert [(c["stage"], c["attempt"]) for c in calls[-2:]] == [
-        ("semantic_audit", "primary"),
-        ("semantic_audit", "repair"),
-    ]
+    audit_calls = [c for c in calls if c["stage"] == "semantic_audit"]
+    assert sorted(c["attempt"] for c in audit_calls) == ["primary", "primary", "repair"]
+    assert _tarrow_ref(audit_calls[-1]["prompt"])  # the repair is for the failed part only
     assert failure.value.args[0]["stage"] == "semantic_audit"
     assert failure.value.args[0]["repair_state"] == "already_consumed"
     assert coverage == []
@@ -393,7 +406,8 @@ def test_audit_after_a_used_repair_gets_no_second_repair():
     with pytest.raises(AssertionError) as failure:
         _run(transport)
     assert [c["attempt"] for c in calls].count("repair") == 1
-    assert [c["stage"] for c in calls].count("semantic_audit") == 1
+    # Each part sends at most its primary; a failed part stops a not-yet-sent sibling.
+    assert 1 <= [c["stage"] for c in calls].count("semantic_audit") <= 2
     assert failure.value.args[0]["repair_state"] == "already_consumed"
 
 
@@ -480,7 +494,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     prompt = _audit().build_prompt(output_language=language, budget=nd.notes_budget(*GEMINI))
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v28"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v29"
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------
@@ -519,3 +533,291 @@ def test_reference_evidence_is_enabled_only_with_the_mandatory_gemini_audit(
     _run(transport, provider=provider)
     # Registered Gemini and ChatGPT reconcile once; an unregistered model has no reconcile.
     assert flags == ([expected] if provider != ("antigravity", "gemini-test") else [])
+
+
+# ----- disjoint audit partitions ---------------------------------------------------------------
+
+
+def _n_item_audit(n: int) -> SemanticAudit:
+    document = _empty()
+    document["key_topics"] = [
+        {"text": f"Topic {k} reviewed", "source_ids": [ID[k % len(ID)]]} for k in range(n)
+    ]
+    return SemanticAudit(SOURCE, nd.validate_document(document, SOURCE))
+
+
+@pytest.mark.parametrize("n", [0, 1, 2, 3, 4, 7])
+def test_partitions_are_balanced_disjoint_and_cover_every_global_ref_once(n):
+    audit = _n_item_audit(n)
+    parts = audit.partitions()
+    if n < 2:
+        assert parts == (audit,)
+        return
+    refs = [[item.ref for item in part.items] for part in parts]
+    assert len(parts) == 2 and [len(r) for r in refs] == [(n + 1) // 2, n // 2]
+    assert refs[0] + refs[1] == [f"i{k}" for k in range(n)]  # global refs, document order
+    for part, own in zip(parts, refs, strict=True):
+        assert set(part._by_ref) == set(own)
+        assert {key.split(".")[0] for key in part._text_refs} == set(own)
+        assert part.source is audit.source and part.document is audit.document
+
+
+def test_part_prompt_and_schema_carry_the_full_source_but_only_its_own_items():
+    audit = _quarantine_audit()
+    budget = nd.notes_budget(*GEMINI)
+    first, second = audit.partitions()
+    full_texts = {i["ref"]: i["text_refs"][0]["text"] for i in audit.prompt_payload()["items"]}
+    for part, other in ((first, second), (second, first)):
+        payload = semantic_payload(part.build_prompt(budget=budget))
+        own = {item.ref for item in part.items}
+        assert {item["ref"] for item in payload["items"]} == own
+        assert payload["source"] == audit.prompt_payload()["source"]  # full source
+        change = part.schema()["properties"]["changes"]["items"]["properties"]
+        assert set(change["ref"]["enum"]) == own
+        assert {r.split(".")[0] for r in change["text_ref"]["enum"]} == own
+        assert set(part.schema()["properties"]["unresolved_refs"]["items"]["enum"]) == own
+        prompt = part.build_prompt(budget=budget)
+        for item in other.items:
+            assert f'"ref":"{item.ref}"' not in prompt
+            assert full_texts[item.ref] not in prompt
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        _patch(_change("i3")),  # another part's ref
+        _patch(_change("i0", "i3.o")),  # another part's text ref
+        _patch(unresolved=["i4"]),  # another part's unresolved ref
+    ],
+)
+def test_a_part_rejects_refs_outside_its_partition(patch):
+    first, _second = _quarantine_audit().partitions()
+    with pytest.raises(nd.NotesDocumentError):
+        first.validated_patch(patch)
+
+
+def test_merged_part_patches_equal_one_full_patch_without_index_shift():
+    audit = _quarantine_audit()
+    first, second = audit.partitions()
+    original = copy.deepcopy(audit.document)
+    parts = [
+        (
+            first,
+            first.validated_patch(_patch(_change("i2", "i2.o", ids=[ID[0]]), unresolved=["i0"])),
+        ),
+        (second, second.validated_patch(_patch(unresolved=["i4", "i3"]))),
+    ]
+    merged = audit.combine_patches(parts)
+    expected = audit.parse(
+        _patch(_change("i2", "i2.o", ids=[ID[0]]), unresolved=["i4", "i0", "i3"])
+    )
+    assert merged == expected
+    assert merged[1]["quarantined"] == 3 and merged[1]["changes"] == 1
+    assert audit.document == original
+
+
+def test_combine_rejects_overlap_gaps_cross_scope_and_an_oversized_merge(monkeypatch):
+    audit = _quarantine_audit()
+    first, second = audit.partitions()
+    keep = json.loads(SEMANTIC_KEEP_PATCH)
+    bad = [
+        [(first, keep)],  # a missing part
+        [(first, keep), (first, keep)],  # an overlapping part
+        [(first, keep), (second, keep), (second, keep)],
+        [(first, {**keep, "unresolved_refs": ["i4"]}), (second, keep)],  # cross-part ref
+        [(first, {**keep, "changes": [_change("i3")]}), (second, keep)],
+    ]
+    for parts in bad:
+        with pytest.raises(nd.NotesDocumentError):
+            audit.combine_patches(parts)
+    big = [
+        (first, first.validated_patch(_patch(_change("i0", "i0.o", ids=[ID[2]])))),
+        (second, keep),
+    ]
+    monkeypatch.setattr(notes_semantic, "MAX_SEMANTIC_OUTPUT_BYTES", 120)
+    with pytest.raises(nd.NotesDocumentError) as failure:
+        audit.combine_patches(big)
+    assert failure.value.reason_code == "size"
+
+
+def test_the_two_audit_parts_run_concurrently_and_each_checks_its_items_once():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+    barrier = threading.Barrier(2, timeout=10)  # breaks unless both parts are in flight at once
+    in_flight = [0, 0]  # current, maximum
+    lock = threading.Lock()
+
+    def semantic(prompt, _kwargs):
+        with lock:
+            in_flight[0] += 1
+            in_flight[1] = max(in_flight)
+        barrier.wait()
+        with lock:
+            in_flight[0] -= 1
+        return SEMANTIC_KEEP_PATCH
+
+    _run(_transport(calls, semantic), coverage=coverage)
+    audited = [
+        item["ref"]
+        for call in calls
+        if call["stage"] == "semantic_audit"
+        for item in semantic_payload(call["prompt"])["items"]
+    ]
+    assert sorted(audited) == ["i0", "i1"] and in_flight[1] == 2
+    assert coverage[0]["semantic_audit"]["part_count"] == 2
+
+
+def test_one_malformed_part_uses_the_single_shared_repair_and_the_pass_succeeds():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+
+    def semantic(prompt, kwargs):
+        ref = _tarrow_ref(prompt)
+        if ref and kwargs["attempt"] == "primary":
+            return "not json"
+        return _patch(_change(ref, f"{ref}.a1")) if ref else SEMANTIC_KEEP_PATCH
+
+    result = _run(_transport(calls, semantic), coverage=coverage)
+    assert [c["attempt"] for c in calls if c["stage"] == "semantic_audit"].count("repair") == 1
+    assert result["key_topics"][1]["text"] == "Noted renewal still open"
+    assert coverage[0]["semantic_audit"]["provider_call_index"] == 6
+
+
+def test_a_failed_part_stops_the_other_part_from_sending_more_requests():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+    failed = threading.Event()
+
+    def semantic(prompt, kwargs):
+        if _tarrow_ref(prompt):
+            failed.set()
+            raise RuntimeError("provider down")
+        failed.wait(10)
+        time.sleep(0.2)  # let the failed part mark the task aborted
+        return "not json"  # would earn the unused shared repair without the stop
+
+    with pytest.raises(RuntimeError, match="provider down"):
+        _run(_transport(calls, semantic), coverage=coverage)
+    assert [c["attempt"] for c in calls if c["stage"] == "semantic_audit"] == [
+        "primary",
+        "primary",
+    ]
+    assert coverage == []
+
+
+def test_an_over_budget_part_fails_the_task_before_any_audit_request(monkeypatch):
+    calls: list[dict] = []
+    build = SemanticAudit.build_prompt
+
+    def second_too_large(self, **kwargs):
+        if self.items[0].ref != "i0":
+            raise nd.NotesDocumentError("The notes prompt exceeds the provider request-size guard.")
+        return build(self, **kwargs)
+
+    monkeypatch.setattr(SemanticAudit, "build_prompt", second_too_large)
+    with pytest.raises(RuntimeError, match="semantic audit limit"):
+        _run(_transport(calls, lambda _p, _k: SEMANTIC_KEEP_PATCH))
+    assert "semantic_audit" not in [c["stage"] for c in calls]
+
+
+# ----- generic source-binding regressions across every section ---------------------------------
+
+_CASE_SOURCE = {
+    "meeting_date": "2026-02-02",
+    "speakers": [],
+    "segments": [
+        _segment(1, 0.0, "Today we advance the confirmation of nominee Dana Quill as director."),
+        _segment(2, 4.0, "Thank you. Our office will help everyone navigate the new economy."),
+        _segment(
+            3, 8.0, "I thank Ames, who supported my ordinance, and Brook, who brought this bill."
+        ),
+        _segment(4, 12.0, "These are 101, two and three bedroom apartments for renters."),
+        _segment(5, 16.0, "The plan adds Section 7.20 4.0 24 to the code, which would"),
+        _segment(6, 20.0, "come back to the council for final approval later."),
+    ],
+}
+_CID = [segment["id"] for segment in _CASE_SOURCE["segments"]]
+
+
+def _case_document() -> dict:
+    document = _empty()
+    document["overview"] = [
+        {"text": "Incoming Director Dana Quill vision for the new economy", "source_ids": _CID[:2]}
+    ]
+    document["key_topics"] = [
+        {"text": "Speaker thanked Ames, Brook for sponsoring the bill", "source_ids": [_CID[2]]}
+    ]
+    document["decisions"] = [
+        {"text": "Plan includes 100 1-, 2- and 3-bedroom apartments", "source_ids": [_CID[3]]}
+    ]
+    document["open_questions"] = [
+        {"text": "Whether SMC 7.20.020 needs amendment", "source_ids": [_CID[4]]}
+    ]
+    document["confirmation_items"] = [
+        {"text": "Plan requires final council approval", "source_ids": [_CID[4]]}
+    ]
+    return nd.validate_document(document, _CASE_SOURCE)
+
+
+def test_every_section_is_audited_and_unsupported_bindings_become_literal_excerpts():
+    audit = SemanticAudit(_CASE_SOURCE, _case_document())
+    parts = audit.partitions()
+    sections = [item.section for part in parts for item in part.items]
+    assert sections == [
+        "overview",
+        "key_topics",
+        "decisions",
+        "open_questions",
+        "confirmation_items",
+    ]
+    # The audit's correct answer: no variant removes the nominee-as-speaker, sponsor role,
+    # merged ASR count or guessed identifier; the procedural item gains its continuation.
+    patches = []
+    for part in parts:
+        own = {item.ref: item for item in part.items}
+        changes = [
+            _change(ref, ids=[_CID[5]])
+            for ref, item in own.items()
+            if item.section == "confirmation_items"
+        ]
+        unresolved = [ref for ref, item in own.items() if item.section != "confirmation_items"]
+        patches.append((part, part.validated_patch(_patch(*changes, unresolved=unresolved))))
+    document, counts = audit.combine_patches(patches)
+    published = json.dumps(document, ensure_ascii=False)
+    for invented in ("Director Dana Quill vision", "sponsoring", "100 1-", "7.20.020"):
+        assert invented not in published
+    assert counts["quarantined"] == 4 and counts["added_ids"] == 1
+    assert document["confirmation_items"][0] == {
+        "text": "Plan requires final council approval",
+        "source_ids": [_CID[4], _CID[5]],
+    }
+    excerpts = [item["text"] for item in document["confirmation_items"][1:]]
+    assert any("101, two and three bedroom" in text for text in excerpts)
+    assert any("Section 7.20 4.0 24" in text for text in excerpts)
+
+
+@pytest.mark.parametrize("language", ["en", "vi"])
+def test_prompt_states_the_generic_section_role_number_and_procedure_rules(language):
+    prompt = _audit().build_prompt(output_language=language, budget=nd.notes_budget(*GEMINI))
+    markers = {
+        "en": (
+            "including overview titles, headings and confirmation_items",
+            "nominee, candidate",
+            "is not sponsoring",
+            "never guess, correct or complete identifier digits",
+            "garbled transcribed digits",
+            "continues in the next segment",
+            "Never supply background legal",
+        ),
+        "vi": (
+            "kể cả tiêu đề tổng quan",
+            "người được đề cử",
+            "không phải là bảo trợ",
+            "không bao giờ đoán",
+            "chữ số bị ghi sai",
+            "tiếp tục ở segment kế tiếp",
+            "giả định pháp lý",
+        ),
+    }[language]
+    for marker in markers:
+        assert marker in prompt

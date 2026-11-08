@@ -1805,7 +1805,7 @@ thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Kế
 Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ, không phải lượt đo
 end-to-end mới. Mốc ngoài cửa sổ hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
 
-### #183 — Gemini giữ sự kiện và kiểm gắn nguồn (`notes-hierarchical-v28`)
+### #183 — Gemini giữ sự kiện và kiểm gắn nguồn (`notes-hierarchical-v29`)
 
 **Vấn đề.** Cùng transcript/gold đã khóa, bản trước đạt 8/12 nội dung, 6/7 ý quan trọng,
 9 khẳng định quan trọng thiếu căn cứ; mẫu ngắn 8/9. Map theo giờ bỏ mất sự kiện, final tự do
@@ -1821,8 +1821,14 @@ quyết định đổi lịch với công việc phát sinh; ca ngắn giữ s�
   kiểm ngữ nghĩa, trích dẫn lỗi định dạng có thể được gắn lại bằng toàn bộ segment nguồn
   đã khai báo và đã trích, trong giới hạn độ dài hiện hành. Không thay câu chữ, ID hoặc
   metadata; các kiểm số, tên, modality vẫn áp dụng. Hợp đồng mặc định giữ kiểm quote nguyên văn.
-- `notes_semantic.py` dùng schema riêng: model chỉ chọn câu gốc hoặc hậu tố ẩn danh do mã
-  sinh, nối thêm ID nguồn và xóa owner/deadline. Không sinh câu mới hay suy người nói từ nhãn.
+- `notes_semantic.py` chia một lượt kiểm thành tối đa hai tập mục cân bằng, không chồng lặp,
+  chạy song song. Mỗi tập có toàn nguồn nhưng chỉ ref/text ref của mình; mọi mục được kiểm
+  đúng một lần. Bản vá chỉ chọn câu gốc/hậu tố ẩn danh do mã sinh, nối ID và xóa owner/deadline.
+  Mã kiểm đủ tập, không chồng lặp, đúng scope và tổng patch tối đa 64.000 byte trước khi áp
+  một lần. Lỗi một tập làm cả tác vụ lỗi; một repair dùng chung, các trần khác giữ nguyên.
+  Không sinh câu mới hay suy người nói từ nhãn. Kiểm cả tiêu đề/mục xác nhận, phân biệt ủng hộ
+  với bảo trợ, không tách số ASR ghép thành số lượng hay đoán chữ số mã văn bản. Prompt nguồn
+  Gemini danh mục sự kiện cũng giữ các phân biệt này; prompt ngắn/ChatGPT/fallback giữ nguyên.
   Mục chưa đủ căn cứ chuyển sang confirmation bằng trích đoạn nguồn nguyên văn, bỏ khẳng định
   chưa xác minh và metadata. Ref sai/lặp/chéo, ID sai, xung đột thao tác hoặc quá giới hạn vẫn lỗi.
 - `notes_context.py` thêm neo số hồ sơ ngắn có nhãn và câu kết quả gần kiến nghị cho Gemini.
@@ -1834,13 +1840,12 @@ quyết định đổi lịch với công việc phát sinh; ca ngắn giữ s�
 - Antigravity gửi và đếm đúng schema tùy chọn trong ngân sách RPC. ChatGPT/model fallback giữ
   thông điệp mặc định; schema công khai 1, ledger 2, một lượt repair dùng chung và các trần giữ nguyên.
 
-**Đo và đánh đổi.** Kết quả cuối 12/12, 7/7 ý quan trọng, 0 khẳng định quan trọng thiếu nguồn,
-0 ID sai; mẫu ngắn 9/9, VietMed 2/2. Số đo thành phần 546,46 giây, 11 lượt logic:
-10 phản hồi cũ trùng từng byte request, một lượt kiểm ngữ nghĩa mới, rồi replay sau sửa liên kết.
-Không phải phép đo mới toàn chuỗi. Bỏ lượt repair chỉ sửa quote tiết kiệm 106,272 giây,
-không đổi nội dung hay ID ở bản reconcile. Nguồn cục bộ:
-`reports/.notes-gemini-fix-local-20261108/qualification/report.md`,
-`replay-v28-context/long.json`, `reference-evidence-probe.json`, `short-replay/summary.json`.
+**Đo và đánh đổi.** Lượt physical v28 mới: 534,47 giây, 11 call thực tế, 0 cache;
+11/12 nội dung, 7/7 ý quan trọng nhưng còn
+5 khẳng định quan trọng thiếu nguồn. Chưa đạt; đây là nguyên nhân siết kiểm nguồn và chia
+nhỏ danh sách để kiểm song song. Nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/`
+`eval-final-physical/results/long.json`, `physical-score-a/assessment.json`,
+`physical-score-b/assessment.json`. Kết quả thực tế v29 sẽ được bổ sung sau kiểm chứng.
 
 Thêm một lượt kiểm ngữ nghĩa giúp sửa việc gắn tên/ngữ cảnh mà kiểm từ vựng không xác định
 được; chi phí tăng so với bản final tự do. Không dùng tóm tắt mạnh hơn vì làm mất sự kiện.

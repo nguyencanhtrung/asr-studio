@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import suppress
-from threading import Lock
+from threading import Event, Lock
 from typing import Any, Protocol
 
 # Limits are read through the module at call time so tests can lower them.
@@ -204,6 +204,7 @@ def generate_notes_document(
     output_recoveries = 0
     last_successful_response: tuple[int, str, str] | None = None
     ledger_lock = Lock()
+    aborted = Event()
     progress_lock = Lock()
     progress_high_water: dict[tuple[str, str], int] = {}
 
@@ -231,6 +232,8 @@ def generate_notes_document(
     ) -> tuple[str, int]:
         nonlocal call_count
         with ledger_lock:
+            if aborted.is_set():  # a concurrent semantic-audit part already failed the task
+                raise limit_error("The notes request was stopped after a failed request.")
             if call_count >= nd.MAX_PROVIDER_CALLS:
                 raise limit_error(
                     "This transcript exceeds the bounded notes synthesis request limit."
@@ -886,44 +889,89 @@ def generate_notes_document(
         return document
 
     def semantic_audit(final_document: dict[str, Any]) -> dict[str, Any]:
-        """One sparse immutable-reference source-binding audit (registered Gemini only)."""
+        """The mandatory sparse source-binding pass (registered Gemini only).
+
+        At most two disjoint item partitions run concurrently, each over the full source; their
+        validated patches are merged and applied once. Any failed part fails the whole task.
+        """
         audit = SemanticAudit(projected_snapshot, final_document, max_unit_size=max_unit_size)
+        parts: list[tuple[SemanticAudit, str, Callable[[str | None], str]]] = []
+        for part in audit.partitions():
 
-        def audit_prompt(invalid_output: str | None = None) -> str:
-            return audit.build_prompt(
-                output_language=output_language,
-                invalid_output=invalid_output,
-                budget=synthesis_budget,
-            )
+            def audit_prompt(invalid_output: str | None = None, part: SemanticAudit = part) -> str:
+                return part.build_prompt(
+                    output_language=output_language,
+                    invalid_output=invalid_output,
+                    budget=synthesis_budget,
+                )
 
+            try:
+                parts.append((part, audit_prompt(), audit_prompt))
+            except nd.NotesDocumentError:
+                # Required for this path: skipping it would publish an unaudited binding.
+                raise limit_error(
+                    "This transcript exceeds the bounded notes semantic audit limit."
+                ) from None
+
+        def run(
+            part: SemanticAudit, prompt: str, audit_prompt: Callable[[str | None], str]
+        ) -> tuple[dict[str, Any], int]:
+            try:
+                return request_document(
+                    prompt,
+                    projected_snapshot,
+                    max_output_bytes=MAX_SEMANTIC_OUTPUT_BYTES,
+                    stage="semantic_audit",
+                    repair_prompt=audit_prompt,
+                    budget=synthesis_budget,
+                    response_schema=part.schema(),
+                    parse=lambda raw: part.validated_patch(raw, output_language=output_language),
+                )
+            except BaseException:
+                aborted.set()  # the other part sends no further request
+                raise
+
+        results: list[tuple[dict[str, Any], int] | None] = [None] * len(parts)
+        if len(parts) == 1:
+            results[0] = run(*parts[0])
+        else:
+            executor = ThreadPoolExecutor(max_workers=len(parts), thread_name_prefix="notes-audit")
+            futures = {executor.submit(run, *part): index for index, part in enumerate(parts)}
+            try:
+                for future in as_completed(futures):
+                    results[futures[future]] = future.result()
+            except BaseException:
+                aborted.set()
+                executor.shutdown(wait=True, cancel_futures=True)
+                raise
+            executor.shutdown(wait=True)
+        indices = [result[1] for result in results if result is not None]
+        if len(indices) != len(parts):
+            raise limit_error("The notes semantic audit did not return every partition.")
         try:
-            prompt = audit_prompt()
-        except nd.NotesDocumentError:
-            # Required for this path: skipping it would publish an unaudited binding.
-            raise limit_error(
-                "This transcript exceeds the bounded notes semantic audit limit."
+            document, counts = audit.combine_patches(
+                [
+                    (part, result[0])
+                    for (part, _p, _r), result in zip(parts, results, strict=True)
+                    if result is not None
+                ],
+                output_language=output_language,
+            )
+        except nd.NotesDocumentError as error:
+            raise invalid_output(
+                error,
+                stage="semantic_audit",
+                provider_call_index=max(indices),
+                attempt=None,
+                raw_output=None,
+                repair_state=None,
             ) from None
-        counts: list[dict[str, int]] = []
-
-        def parse(raw: object) -> dict[str, Any]:
-            document, result_counts = audit.parse(raw, output_language=output_language)
-            counts.append(result_counts)
-            return document
-
-        document, call_index = request_document(
-            prompt,
-            projected_snapshot,
-            max_output_bytes=MAX_SEMANTIC_OUTPUT_BYTES,
-            stage="semantic_audit",
-            repair_prompt=audit_prompt,
-            budget=synthesis_budget,
-            response_schema=audit.schema(),
-            parse=parse,
-        )
         coverage["semantic_audit"] = {
             "status": "applied",
-            "provider_call_index": call_index,
-            "counts": counts[-1],
+            "provider_call_index": max(indices),
+            "provider_call_indices": indices,
+            "part_count": len(parts),
+            "counts": counts,
         }
         return document
 

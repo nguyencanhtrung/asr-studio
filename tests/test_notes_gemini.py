@@ -134,18 +134,20 @@ def test_long_known_gemini_runs_fact_inventory_then_one_reconcile_and_context_li
     result = _run(transport, model=GEMINI[1], snapshot=snapshot, coverage=coverage)
 
     stages = [call["stage"] for call in calls]
-    # parts + reconcile + one semantic audit, no free-form final
-    assert stages == ["chunk", "chunk", "reconcile", "semantic_audit"]
+    # parts + reconcile + one semantic pass over two disjoint item parts, no free-form final
+    assert stages == ["chunk", "chunk", "reconcile", "semantic_audit", "semantic_audit"]
     for call in calls[:2]:
         assert "Fact inventory:" in call["prompt"]
         assert SUPERSESSION in call["prompt"]
+        assert nd._GEMINI_FACT_INVENTORY_RULE["en"] in call["prompt"]
         assert "response_schema" not in call
-    assert calls[-1]["response_schema"]["required"] == [
-        "audit_version",
-        "changes",
-        "unresolved_refs",
-    ]
-    assert calls[-2]["response_schema"]["required"] == [
+    for call in calls[-2:]:
+        assert call["response_schema"]["required"] == [
+            "audit_version",
+            "changes",
+            "unresolved_refs",
+        ]
+    assert calls[2]["response_schema"]["required"] == [
         "ledger_version",
         "dispositions",
         "additions",
@@ -321,14 +323,15 @@ def test_antigravity_long_run_sends_the_reconcile_ledger_schema(tmp_path):
         on_coverage=coverage.append,
     )
 
-    assert len(adapter.messages) == 4
+    assert len(adapter.messages) == 5  # 2 maps, reconcile, 2 disjoint semantic-audit parts
     assert [_schema_of(m)["properties"]["schema_version"] for m in adapter.messages[:2]]
-    assert _schema_of(adapter.messages[-1])["required"] == [
-        "audit_version",
-        "changes",
-        "unresolved_refs",
-    ]
-    assert _schema_of(adapter.messages[-2])["required"] == [
+    for message in adapter.messages[-2:]:
+        assert _schema_of(message)["required"] == [
+            "audit_version",
+            "changes",
+            "unresolved_refs",
+        ]
+    assert _schema_of(adapter.messages[2])["required"] == [
         "ledger_version",
         "dispositions",
         "additions",
@@ -597,3 +600,35 @@ def test_long_gemini_reconcile_is_strict_and_chatgpt_reconcile_is_not():
         on_coverage=lambda _c: None,
     )
     assert "Strict names:" not in next(iter(prompts.values()))
+
+
+@pytest.mark.parametrize("language", ["en", "vi"])
+def test_anti_inference_map_rule_reaches_only_registered_gemini_fact_inventory_maps(language):
+    snapshot = _short_snapshot()
+    rule = nd._GEMINI_FACT_INVENTORY_RULE[language]
+    gemini = nd.notes_budget(*GEMINI)
+    others = (
+        nd.notes_budget("chatgpt", "gpt-5.6-sol"),
+        nd.notes_budget("antigravity", "gemini-test"),
+        None,
+    )
+
+    def chunk(budget, fact_inventory):
+        return nd.build_chunk_prompt(
+            snapshot,
+            chunk_index=1,
+            chunk_count=2,
+            output_language=language,
+            budget=budget,
+            fact_inventory=fact_inventory,
+        )
+
+    long_map = chunk(gemini, True)
+    assert long_map.count(rule) == 1
+    # It follows the shared fact-inventory rule, which every provider's long map keeps.
+    assert nd._FACT_INVENTORY_RULE[language] + rule in long_map
+    assert rule not in chunk(gemini, False)
+    assert rule not in nd.build_prompt(snapshot, output_language=language, budget=gemini)
+    for other in others:
+        assert rule not in chunk(other, True)
+        assert rule not in nd.build_prompt(snapshot, output_language=language, budget=other)
