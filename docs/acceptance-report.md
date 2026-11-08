@@ -18,6 +18,25 @@ v24 kiểm lại từ phản hồi đã lưu; chưa đo lại thời gian toàn 
 
 Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
 
+## Gemini Flash 3.8 — 08/11/2026
+
+gemini-3.8-flash, medium; main `699da0e`, v24; cùng dữ liệu/gold với ChatGPT. **Chưa đạt.**
+
+| Chỉ tiêu | Kết quả cuối |
+| --- | ---: |
+| Nội dung mẫu dài | 8/12 (3 một phần, 1 thiếu) |
+| Ý quan trọng | 6/7 |
+| Khẳng định quan trọng thiếu nguồn ở mẫu dài | 9 |
+| ID trích dẫn không tồn tại, toàn bộ mẫu | 0 |
+| Nội dung mẫu ngắn | 8/9 (1 một phần) |
+| VietMed | 2/2 |
+| Notes mẫu dài, đo thực tế | 63,049 giây; 4 lượt gọi |
+| Toàn bộ lượt chạy | 5/5 tạo Notes; 12 lượt gọi; 0 cache |
+
+Thiếu nội dung, thêm số liệu từ ASR mơ hồ và thiếu ngữ cảnh trích dẫn. Một lượt/mẫu; không chứng nhận ASR/audio.
+
+Nguồn: hồ sơ cục bộ `reports/.notes-gemini-local-20261108/`: `mechanical-verification.json`, `score-long/assessment.json`, `score-short/assessment.json`.
+
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>
 
