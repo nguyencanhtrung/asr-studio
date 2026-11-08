@@ -2010,7 +2010,7 @@ lượt chưa trích chỉ có biến thể ASR tách chữ).
 
 **Đánh đổi.** Tám phần nghĩa là gấp đôi request song song và lặp lại chỉ dẫn/schema cùng segment
 kề ở mỗi phần (tốn thêm token đầu vào, tăng rủi ro giới hạn tốc độ provider); mỗi phần ít mục hơn
-nên thấy ít ngữ cảnh lân cận hơn. Thời gian và chất lượng v38 chưa đo; không ước tính độ trễ. Quy
+nên thấy ít ngữ cảnh lân cận hơn. Quy
 tắc tên vắng mặt là so khớp từ vựng: tên được model sửa đúng từ biến thể ASR cũng bị bỏ hoặc chuyển
 kiểm tra; nhãn đầu câu viết hoa kết thúc bằng dấu hai chấm mà nguồn không có (ví dụ "Quote:") cũng
 bị bỏ như một tên. Trên tài liệu v37 đã đóng băng, chạy lại bước kiểm tất định chỉ đổi đúng hai mục
@@ -2019,6 +2019,20 @@ request, tài liệu giống hệt. Nguồn: `src/asr_studio/notes_semantic.py`,
 `src/asr_studio/notes_context.py`, `src/asr_studio/notes_document.py`; hồ sơ cục bộ
 `reports/.notes-gemini-fix-local-20261108/` (`v37-runtime-proof.json`,
 `eval-v37-physical/capture/`, `v37-score-a/assessment.json`, `v37-score-b/assessment.json`).
+
+**Kết quả đo v38 (09/11/2026, chưa đạt).** Lần đo thực tế gemini-3.8-flash trên cùng transcript cố
+định (nguồn sha256 `c0a4de56…`, 557 segment): 517,149696 giây (≤ 600), 20 lượt gọi thật, 0 cache,
+178 mục cuối (179 mục vào kiểm, 1 mục trùng nguyên văn được gộp), tám phần kiểm 23/23/23/22/22/22/22/22
+mục với cùng guard, reconcile toàn nguồn, bản gộp 64.000 byte, trần 54 call. 20 call gồm 9 map,
+2 reconcile, 1 repair reconcile dùng chung (call 12; `source_audit.provider_call_indices` [10, 12])
+và 8 phần kiểm (call 13-20). So với v37 (cùng nguồn, mẫu đo): 660,67189 → 517,149696 giây; phần
+kiểm dài nhất 273,53 → 163,754 giây; kiểm bắt đầu sau 386,775 → 353,095 giây. Không quy toàn bộ
+chênh lệch cho việc chia phần: đầu ra, suy luận và số mục (193 → 178) khác nhau giữa hai lần.
+Chấm mù độc lập (A, B; 89 + 89 = 178 mục): 7/12 mẫu (5 một phần, 0 thiếu), 5/7 ý quan trọng,
+2 khẳng định quan trọng thiếu nguồn, 0 ID không hợp lệ. Tiêu chí chất lượng chưa đạt nên v38 không
+được ghi là đạt; các mục lịch sử v36/v37 giữ nguyên. Hồ sơ cục bộ: `v38-runtime-proof.json`,
+`v38-performance-comparison.json`, `eval-v38-physical/results/long.json`, `v38-score-a/assessment.json`,
+`v38-score-b/assessment.json`.
 
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 

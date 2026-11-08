@@ -18,26 +18,23 @@ v24 kiểm lại từ phản hồi đã lưu; chưa đo lại thời gian toàn 
 
 Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
 
-## Gemini Flash 3.8 — 08/11/2026
+## Gemini Flash 3.8 — 09/11/2026
 
-gemini-3.8-flash, medium, v37 đo mới; cùng transcript/gold với ChatGPT. **Chưa đạt** (thời gian
-và 2 khẳng định thiếu nguồn).
+gemini-3.8-flash, medium, v38; cùng transcript/gold. **Chưa đạt chất lượng; đạt thời gian.**
 
-| Chỉ tiêu | Kết quả cuối (v37) |
+| Chỉ tiêu | Kết quả cuối (v38) |
 | --- | ---: |
-| Nội dung mẫu dài | 10/12 (1 một phần, 1 thiếu) |
-| Ý quan trọng | 7/7 |
+| Nội dung mẫu dài | 7/12 (5 một phần, 0 thiếu) |
+| Ý quan trọng | 5/7 |
 | Khẳng định quan trọng thiếu nguồn | 2 |
 | ID trích dẫn không tồn tại | 0 |
-| Mục đã kiểm | 193 |
-| Notes đo thực tế | 660,67189 giây; 15 lượt gọi; 0 cache |
-
-v38 (kiểm ngữ nghĩa tối đa tám phần, tên quy cho người nói phải có trong nguồn): thời gian và chất
-lượng chờ đo thực tế.
+| Mục đã kiểm | 178 |
+| Notes đo thực tế | 517,149696 giây; 20 lượt gọi; 0 cache |
 
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
-hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/v37-runtime-proof.json`,
-`v37-score-a/assessment.json`, `v37-score-b/assessment.json`.
+hồ sơ cục bộ (không theo dõi) `reports/.notes-gemini-fix-local-20261108/`:
+`eval-v38-physical/results/long.json`, `v38-runtime-proof.json`, `v38-score-a/assessment.json`,
+`v38-score-b/assessment.json`.
 
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>
