@@ -169,6 +169,7 @@ def test_sparse_patch_keeps_unlisted_items_and_only_selects_appends_and_clears()
         "core_preserved": 0,
         "reviewed": 4,
         "model_verified": 1,  # i2 only: every listed ref is decided false
+        "owner_unverified": 0,
     }
     assert audit.parse(semantic_keep_patch(audit))[0] == _document()
 
@@ -529,7 +530,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v41"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v42"
 
 
 @pytest.mark.parametrize(

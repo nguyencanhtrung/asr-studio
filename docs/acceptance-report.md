@@ -20,24 +20,23 @@ Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
 
 ## Gemini Flash 3.8 — 09/11/2026
 
-gemini-3.8-flash, medium, v39; cùng transcript/gold. **Chưa đạt chất lượng và thời gian.**
+gemini-3.8-flash, medium, v41; cùng transcript/gold. **Chưa đạt chất lượng; đạt thời gian.**
 
-| Chỉ tiêu | Kết quả cuối (v39) |
+| Chỉ tiêu | Kết quả cuối (v41) |
 | --- | ---: |
-| Nội dung mẫu dài | 9/12 (3 một phần, 0 thiếu) |
+| Nội dung mẫu dài | 11/12 (1 một phần) |
 | Ý quan trọng | 7/7 |
-| Khẳng định quan trọng thiếu nguồn | 3 |
+| Khẳng định quan trọng thiếu nguồn | 2 |
 | ID trích dẫn không tồn tại | 0 |
-| Mục đã kiểm | 179 |
-| Notes đo thực tế | 701,858427 giây; 20 lượt gọi; 0 cache |
+| Mục đã kiểm | 140 |
+| Notes đo thực tế | 420,57 giây; 22 lượt gọi; 0 cache |
 
-v40 lỗi `notes_invalid_output`: 298,034664 giây; 14 lượt gọi; 0 cache; không có Notes.
-v41 gom lỗi các phần vào một repair chung: chưa đo thực tế.
+v42 sửa nguồn biểu quyết và xác minh người phụ trách; chưa đo lại.
 
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
 hồ sơ cục bộ (không theo dõi) `reports/.notes-gemini-fix-local-20261108/`:
-`v39-physical-qualification.json`, `eval-v39-physical/results/long.json`,
-`v39-score-a/assessment.json`, `v39-score-b/assessment.json`.
+`v41-physical-qualification.json`, `v41-runtime-proof.json`, `v41-score-a/assessment.json`,
+`v41-score-a/g04-clarification.md`, `v41-score-b/assessment.json`.
 
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>

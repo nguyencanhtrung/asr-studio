@@ -2209,6 +2209,30 @@ phải v40/v41 (`v39-physical-qualification.json`). Tag: architecture; đích: `
 [issue #183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
 [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184).
 
+### #183 (tiếp) — Nguồn tally của overview và bằng chứng owner cục bộ (`notes-hierarchical-v42`)
+
+**Nguyên nhân đo được.** V41 hoàn chỉnh: 420.570653 giây, 22 lượt gọi,
+0 cache; 11/12 nội dung, 7/7 ý quan trọng nhưng còn 2
+khẳng định thiếu nguồn (`v41-physical-qualification.json`, `v41-score-a/g04-clarification.md`).
+Một overview nêu nhất trí nhưng chỉ trích tiêu đề/kết luận, thiếu tally ngay trước kết luận;
+một owner dựa vào lời tự giới thiệu ở xa, không gắn với lượt cam kết được trích.
+
+**Thiết kế.** Chỉ Gemini đã đăng ký: overview có claim biểu quyết được nối thêm đúng segment
+ngay trước kết luận nếu nêu tally rõ, cùng hồ sơ đã chứng minh, trong cửa sổ cũ. Bỏ qua kết quả
+có phản đối/mơ hồ, hồ sơ khác hoặc ID của mục tiếp theo sau kết luận; không suy diễn số hay sửa
+text, giữ các trần ID. Guard `unverified_owner` giữ bằng chứng giao việc/nêu tên trực tiếp hoặc
+nhận diện trong lượt nói cục bộ; nhãn speaker chỉ chia lượt. Lời tự giới thiệu xa hay lượt cam
+kết chưa xác định không đủ để giữ owner. Mơ hồ thì chỉ đặt owner null, giữ text/deadline/nguồn.
+`owner_unverified` đếm guard này; `cleared_owner` vẫn chỉ đếm lệnh của model, `model_verified`
+vẫn là tổng Boolean gốc. Không thêm lượt gọi, không sửa prompt ChatGPT.
+
+**Kiểm chứng và đánh đổi.** Ngoại tuyến trên đầu ra v41: nối đúng 3 ID tally, giữ câu chữ và
+bỏ owner không chứng minh được (`v42-root-engineering.json`); không phải phép đo v42. Owner có
+thể bị bỏ khi thiếu nhận diện cục bộ, ưu tiên không gán sai người. V42 chưa đo thực tế; không
+ghép thời gian v41 với kiểm tra mã mới. Tag: architecture; đích: `docs/backend-contract.md`;
+[issue #183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184).
+
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 
 Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)

@@ -38,6 +38,7 @@ from asr_studio.notes_context import (
     ATTRIBUTION_FORMS,
     MAX_FORWARD_SECONDS,
     link_antecedent_context,
+    unverified_owner,
     unverified_speakers,
     unverified_vote_names,
 )
@@ -1328,6 +1329,7 @@ class SemanticAudit:
                 "core_preserved",  # retired: always 0, kept for manifest compatibility
                 "reviewed",
                 "model_verified",
+                "owner_unverified",  # deterministic guard, never part of model_verified
             ),
             0,
         )
@@ -1396,7 +1398,8 @@ class SemanticAudit:
         # of its first-person statement is quarantined like an unresolved ref; an attributed
         # speaker the pool does not locally identify is dropped as a literal suffix, or the
         # item is quarantined; a confirmation or action item with an uncited leading group
-        # actor or a completion the pool states only as partial progress is quarantined.
+        # actor or a completion the pool states only as partial progress is quarantined; an
+        # action owner the pool does not tie to its own cited turn is cleared, nothing else.
         segments = self.source["segments"]
         position = {segment["id"]: index for index, segment in enumerate(segments)}
         forced: set[str] = set()
@@ -1431,6 +1434,9 @@ class SemanticAudit:
                     continue
                 published["text"] = variant
                 counts["anonymized"] += 1
+            if item.section == "action_items" and unverified_owner(published, segments, position):
+                published["owner"] = None  # never renamed; text, deadline and IDs are kept
+                counts["owner_unverified"] += 1
             if item.section in {"confirmation_items", "action_items"}:
                 cited = self._cited(published)
                 if unverified_group_actor(published["text"], cited) or strengthened_completion(
