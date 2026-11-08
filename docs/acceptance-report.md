@@ -32,13 +32,14 @@ gemini-3.8-flash, medium, v33 đo mới; cùng transcript/gold với ChatGPT. **
 | VietMed | 2/2 |
 | Notes đo thực tế (v33) | 503,474 giây; 12 lượt gọi; 0 cache |
 
-v34 sửa năm lỗi v33 bằng guard tất định (người nói được quy tên, chủ thể là nhóm, tiến độ
-một phần). Mới có replay kỹ thuật từ 12 phản hồi v33 đã lưu (10 request trùng khớp, 2 request
-kiểm ngữ nghĩa đổi do biến thể mới): 157 mục, 0 ID sai, 7 ý quan trọng không đổi. Đây không
-phải lần đo mới; v34 chưa được nghiệm thu, còn chờ lần chạy thực tế.
+v34 đo thực tế: **lỗi**, bị ngắt ở hạn 660 giây (wall 665,271 giây), không có Notes cuối nên
+không chấm. 12 phản hồi đã ghi; reconcile chính 309,379 giây, repair 98,588 giây.
+
+v35 (reconcile hai view song song): chờ lần đo thực tế.
 
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
-hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/v33-score-a/report.md`, `v33-score-b/report.md`.
+hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/v33-score-a/report.md`, `v33-score-b/report.md`,
+`eval-v34-physical/interrupted.json`, `eval-v34-physical/capture/call-0010.json`, `call-0011.json`.
 
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>

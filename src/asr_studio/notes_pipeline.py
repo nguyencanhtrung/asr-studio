@@ -19,6 +19,7 @@ from asr_studio.notes_reconcile import (
     MAX_RECONCILE_OUTPUT_BYTES,
     ReconcileLedger,
     ReconcileRepair,
+    ReconcileResult,
 )
 from asr_studio.notes_semantic import MAX_SEMANTIC_OUTPUT_BYTES, SemanticAudit
 
@@ -825,9 +826,19 @@ def generate_notes_document(
         return reduced
 
     def reconcile(
-        final_document: dict[str, Any], *, reference_evidence: bool = False
+        final_document: dict[str, Any],
+        *,
+        reference_evidence: bool = False,
+        split: bool = False,
     ) -> dict[str, Any]:
-        """One structured patch over the projected final draft, map ledger and full source."""
+        """One structured patch over the projected final draft, map ledger and full source.
+
+        With `split` (registered Gemini fact inventory only) the ledger is cut into at most
+        `MAX_RECONCILE_PARTS` owned views, each over the full source with the rest of the
+        ledger as read-only context. They run concurrently; every view must validate before
+        `combine_results` merges them, and any failed view fails the task.
+        """
+        nonlocal reduction_calls
         ledger = ReconcileLedger.build(
             projected_snapshot,
             final_document,
@@ -836,56 +847,134 @@ def generate_notes_document(
             strict_names=nd._is_known_gemini(synthesis_budget),
             reference_evidence=reference_evidence,
         )
+        views = ledger.partitions() if split else (ledger,)
+        if len(views) > 1:
+            # The caller charged one reconcile call; every further view is one more.
+            if reduction_calls + len(views) - 1 > nd.MAX_REDUCTION_CALLS:
+                raise limit_error("This transcript exceeds the bounded notes reduction limit.")
+            reduction_calls += len(views) - 1
 
-        repairs: list[ReconcileRepair] = []
+        def prepare(
+            view: ReconcileLedger,
+        ) -> tuple[str, Callable[[str | None], str], Callable[[object], dict[str, Any]], list[Any]]:
+            # Each view owns its repair plan and accepted result; the one repair stays global.
+            repairs: list[ReconcileRepair] = []
+            accepted: list[ReconcileResult] = []
 
-        def reconcile_prompt(invalid_output: str | None = None) -> str:
-            # Per-ref failures get a sparse repair over the accepted ops; a global failure keeps
-            # the bounded generic repair, which is unavailable above its raw-output cap.
-            plan = None if invalid_output is None else ledger.plan_repair(invalid_output)
-            if plan is not None:
-                repairs.append(plan)
-                return ledger.build_repair_prompt(
-                    plan, output_language=output_language, budget=synthesis_budget
+            def reconcile_prompt(invalid_output: str | None = None) -> str:
+                # Per-ref failures get a sparse repair over the accepted ops; a global failure
+                # keeps the bounded generic repair, unavailable above its raw-output cap.
+                plan = None if invalid_output is None else view.plan_repair(invalid_output)
+                if plan is not None:
+                    repairs.append(plan)
+                    return view.build_repair_prompt(
+                        plan, output_language=output_language, budget=synthesis_budget
+                    )
+                return view.build_prompt(
+                    output_language=output_language,
+                    invalid_output=invalid_output,
+                    budget=synthesis_budget,
                 )
-            return ledger.build_prompt(
-                output_language=output_language,
-                invalid_output=invalid_output,
-                budget=synthesis_budget,
-            )
 
-        try:
-            prompt = reconcile_prompt()
-        except nd.NotesDocumentError:
-            # The long known-budget path requires this audit; publishing the unchecked draft would
-            # misreport it, so the bounded limit fails the task instead.
-            raise limit_error(
-                "This transcript exceeds the bounded notes source reconciliation limit."
-            ) from None
-        counts: list[dict[str, Any]] = []
+            def parse(raw: object) -> dict[str, Any]:
+                result = view.parse_repair(raw, repairs[-1]) if repairs else view.parse(raw)
+                accepted.append(result)
+                return result.document
 
-        def parse(raw: object) -> dict[str, Any]:
-            result = ledger.parse_repair(raw, repairs[-1]) if repairs else ledger.parse(raw)
-            counts.append(result.counts)
-            return result.document
+            try:
+                prompt = reconcile_prompt()
+            except nd.NotesDocumentError:
+                # The long known-budget path requires this audit; publishing the unchecked draft
+                # would misreport it, so the bounded limit fails the task instead.
+                raise limit_error(
+                    "This transcript exceeds the bounded notes source reconciliation limit."
+                ) from None
+            return prompt, reconcile_prompt, parse, accepted
+
+        prepared = [prepare(view) for view in views]
+
+        def run(
+            view: ReconcileLedger,
+            prompt: str,
+            repair_prompt: Callable[[str | None], str],
+            parse: Callable[[object], dict[str, Any]],
+        ) -> tuple[dict[str, Any], int]:
+            try:
+                return request_document(
+                    prompt,
+                    projected_snapshot,
+                    max_output_bytes=MAX_RECONCILE_OUTPUT_BYTES,
+                    stage="reconcile",
+                    repair_prompt=repair_prompt,
+                    budget=synthesis_budget,
+                    response_schema=view.schema(),
+                    parse=parse,
+                )
+            except BaseException:
+                aborted.set()  # a sibling view sends no further request
+                raise
 
         progress("merging", reduction_calls, None, "calls")
-        document, call_index = request_document(
-            prompt,
-            projected_snapshot,
-            max_output_bytes=MAX_RECONCILE_OUTPUT_BYTES,
-            stage="reconcile",
-            repair_prompt=reconcile_prompt,
-            budget=synthesis_budget,
-            response_schema=ledger.schema(),
-            parse=parse,
-        )
-        coverage["source_audit"] = {
+        if len(views) == 1:
+            prompt, repair_prompt, parse, accepted = prepared[0]
+            document, call_index = request_document(
+                prompt,
+                projected_snapshot,
+                max_output_bytes=MAX_RECONCILE_OUTPUT_BYTES,
+                stage="reconcile",
+                repair_prompt=repair_prompt,
+                budget=synthesis_budget,
+                response_schema=views[0].schema(),
+                parse=parse,
+            )
+            indices = [call_index]
+            counts = accepted[-1].counts
+        else:
+            results: list[tuple[dict[str, Any], int] | None] = [None] * len(views)
+            executor = ThreadPoolExecutor(
+                max_workers=len(views), thread_name_prefix="notes-reconcile"
+            )
+            futures = {
+                executor.submit(run, view, prompt, repair_prompt, parse): index
+                for index, (view, (prompt, repair_prompt, parse, _accepted)) in enumerate(
+                    zip(views, prepared, strict=True)
+                )
+            }
+            try:
+                for future in as_completed(futures):
+                    results[futures[future]] = future.result()
+            except BaseException:
+                aborted.set()
+                executor.shutdown(wait=True, cancel_futures=True)
+                raise
+            executor.shutdown(wait=True)
+            indices = [result[1] for result in results if result is not None]
+            if len(indices) != len(views) or not all(item[3] for item in prepared):
+                raise limit_error("The notes reconciliation did not return every partition.")
+            try:
+                combined = ledger.combine_results(
+                    [(view, item[3][-1]) for view, item in zip(views, prepared, strict=True)]
+                )
+            except nd.NotesDocumentError as error:
+                raise invalid_output(
+                    error,
+                    stage="reconcile",
+                    provider_call_index=max(indices),
+                    attempt=None,
+                    raw_output=None,
+                    repair_state=None,
+                ) from None
+            document, counts = combined.document, combined.counts
+        source_audit: dict[str, Any] = {
             "status": "applied",
             "mode": "reconcile",
-            "provider_call_index": call_index,
-            "counts": counts[-1],
+            "provider_call_index": max(indices),
+            "counts": counts,
         }
+        if split:
+            source_audit["provider_call_indices"] = indices
+            source_audit["part_count"] = len(views)
+        coverage["source_audit"] = source_audit
         return document
 
     def semantic_audit(final_document: dict[str, Any]) -> dict[str, Any]:
@@ -990,7 +1079,9 @@ def generate_notes_document(
         reduction_calls += 1
         # Registered Gemini: the semantic audit is mandatory, so reconcile may rebind evidence.
         semantic_required = nd._is_known_gemini(synthesis_budget)
-        final_document = reconcile(empty_seed, reference_evidence=semantic_required)
+        final_document = reconcile(
+            empty_seed, reference_evidence=semantic_required, split=semantic_required
+        )
         if semantic_required:
             final_document = semantic_audit(final_document)
         final_document = restore_final_document(

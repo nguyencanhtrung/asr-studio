@@ -12,7 +12,8 @@ from datetime import date, timedelta
 from typing import Any
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "notes-hierarchical-v34"
+# v35: registered Gemini fact-inventory reconcile runs as at most two owned ledger views.
+PROMPT_VERSION = "notes-hierarchical-v35"
 LEGACY_ENGLISH_PROMPT_VERSION = "notes-hierarchical-v4"
 _MAX_PROMPT_HARD_LIMIT_BYTES = 48_000
 # max_output_tokens includes hidden reasoning as well as the visible JSON.

@@ -17,6 +17,7 @@ survives; semantic quality is still assessed by the frozen benchmark gate.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import re
 import unicodedata
@@ -34,6 +35,8 @@ MAX_RECONCILE_EVIDENCE = 8
 MAX_RECONCILE_QUOTE_CHARS = 500
 MIN_RECONCILE_QUOTE_CHARS = 4
 MAX_RECONCILE_OUTPUT_BYTES = 64_000
+# Registered Gemini fact inventory only: at most two concurrent reconcile views of one ledger.
+MAX_RECONCILE_PARTS = 2
 ACTIONS = ("keep", "update", "merge", "remove", "confirm")
 REMOVE_REASONS = ("duplicate", "unsupported", "superseded", "nonmaterial")
 _NO_REASON = "none"
@@ -428,6 +431,11 @@ class ReconcileLedger:
     # Registered Gemini fact inventory with its mandatory semantic audit only: a well-shaped
     # quote that is not exact is replaced by the whole text of its declared, cited segment.
     reference_evidence: bool = False
+    # Partition view only (see ``partitions``); the defaults are an ordinary, unsplit ledger
+    # and leave its payload, schema and parsing byte-identical.
+    context: tuple[LedgerEntry, ...] = ()  # other views' entries, shown read-only
+    additions_allowed: bool = True  # only the first view may add facts
+    part: tuple[int, int] | None = None  # (index, count) of a view
 
     @classmethod
     def build(
@@ -469,6 +477,127 @@ class ReconcileLedger:
     def refs(self) -> tuple[str, ...]:
         return tuple(entry.ref for entry in self.entries)
 
+    @property
+    def _max_additions(self) -> int:
+        return MAX_RECONCILE_ADDITIONS if self.additions_allowed else 0
+
+    # ----- partitioned views ------------------------------------------------------------------
+
+    def partitions(self) -> tuple[ReconcileLedger, ...]:
+        """At most two balanced, contiguous views; each owns its entries over the full source.
+
+        Each view sees the other view's entries as read-only context and keeps their global refs.
+        Only the first view may add facts, so the global additions cap still holds. An empty or
+        single-entry ledger is its own only view.
+        """
+        if self.part is not None:
+            raise _error("A reconcile view cannot be partitioned again.", reason_code="fields")
+        if len(self.entries) < 2:
+            return (self,)
+        half = (len(self.entries) + 1) // 2
+        chunks = (self.entries[:half], self.entries[half:])
+        return tuple(
+            dataclasses.replace(
+                self,
+                entries=chunk,
+                context=chunks[1 - index],
+                additions_allowed=index == 0,
+                part=(index, MAX_RECONCILE_PARTS),
+            )
+            for index, chunk in enumerate(chunks)
+        )
+
+    def combine_results(
+        self, parts: Sequence[tuple[ReconcileLedger, ReconcileResult]]
+    ) -> ReconcileResult:
+        """Merge the validated results of exactly ``self.partitions()``; all or nothing.
+
+        Every view must be present once, in order, unchanged. Each result is revalidated and
+        its counts must account for exactly its own entries; the combined document is
+        revalidated against the full source and the same output, reference and unit caps.
+        """
+        views = self.partitions()
+        parts = tuple(parts)
+        if len(parts) != len(views) or any(
+            not isinstance(part, tuple) or len(part) != 2 for part in parts
+        ):
+            raise _error("The reconcile result does not cover every view once.")
+        combined: dict[str, Any] = {
+            "schema_version": nd.SCHEMA_VERSION,
+            **{section: [] for section in _SECTION_NAMES},
+        }
+        counts: dict[str, Any] = {
+            "final": dict.fromkeys(ACTIONS, 0),
+            "map": dict.fromkeys(ACTIONS, 0),
+            "additions": 0,
+            "default_kept": 0,
+        }
+        for (view, result), expected in zip(parts, views, strict=True):
+            # Exact equality with self.partitions() proves a disjoint, ordered, complete cover.
+            if view != expected:
+                raise _error("A reconcile result belongs to a foreign or reordered view.")
+            if not isinstance(result, ReconcileResult):
+                raise _error("A reconcile view result is invalid.", reason_code="fields")
+            document = nd.validate_document(
+                result.document,
+                dict(self.source),
+                max_output_bytes=nd.MAX_OUTPUT_BYTES,
+                max_unit_size=self.max_unit_size,
+            )
+            part_counts = view._checked_counts(result.counts)
+            placed = sum(
+                part_counts[kind][action]
+                for kind in ("final", "map")
+                for action in ("keep", "update", "confirm")
+            )
+            if sum(len(document[s]) for s in _SECTION_NAMES) != placed + part_counts["additions"]:
+                raise _error("A reconcile view result has items outside its own scope.")
+            for section in _SECTION_NAMES:
+                combined[section].extend(document[section])
+            for kind in ("final", "map"):
+                for action in ACTIONS:
+                    counts[kind][action] += part_counts[kind][action]
+            counts["additions"] += part_counts["additions"]
+            counts["default_kept"] += part_counts["default_kept"]
+        # Only the first view may add (checked per view), so the global additions cap holds.
+        document = nd.validate_document(
+            combined,
+            dict(self.source),
+            max_output_bytes=nd.MAX_OUTPUT_BYTES,
+            max_unit_size=self.max_unit_size,
+        )
+        return ReconcileResult(document=document, counts=counts)
+
+    def _checked_counts(self, counts: object) -> dict[str, Any]:
+        """Counts of one view's result must account for exactly its own entries."""
+        kinds = {"final": "f", "map": "m"}
+
+        def is_count(value: object) -> bool:
+            return type(value) is int and value >= 0
+
+        if (
+            not isinstance(counts, dict)
+            or set(counts) != {*kinds, "additions", "default_kept"}
+            or any(
+                not isinstance(counts[kind], dict)
+                or set(counts[kind]) != set(ACTIONS)
+                or not all(is_count(value) for value in counts[kind].values())
+                for kind in kinds
+            )
+            or not is_count(counts["additions"])
+            or not is_count(counts["default_kept"])
+        ):
+            raise _error("A reconcile view result has invalid counts.", reason_code="fields")
+        for kind, prefix in kinds.items():
+            owned = sum(entry.ref.startswith(prefix) for entry in self.entries)
+            if sum(counts[kind].values()) != owned:
+                raise _error("A reconcile view result does not account for its own entries.")
+        if counts["default_kept"] > len(self.entries):
+            raise _error("A reconcile view result has items outside its own scope.")
+        if counts["additions"] > self._max_additions:
+            raise _error("This reconcile view cannot add facts; only the first view may.")
+        return counts
+
     def _segments(self) -> dict[str, Mapping[str, Any]]:
         # provider_source resolves speaker_name from the speaker list, as the prompt shows it.
         return {
@@ -480,7 +609,10 @@ class ReconcileLedger:
 
     def _rules(self, output_language: str) -> str:
         strict = _STRICT_NAME_RULE[output_language] if self.strict_names else ""
-        return _instructions(output_language) + strict
+        split = ""
+        if self.part is not None:
+            split = _SPLIT_RULE[output_language][0 if self.additions_allowed else 1]
+        return _instructions(output_language) + strict + split
 
     # ----- provider contract ------------------------------------------------------------------
 
@@ -541,7 +673,7 @@ class ReconcileLedger:
                 },
                 "additions": {
                     "type": "array",
-                    "maxItems": MAX_RECONCILE_ADDITIONS,
+                    "maxItems": self._max_additions,
                     "items": obj(addition),
                 },
             }
@@ -629,13 +761,19 @@ class ReconcileLedger:
                 payload["attention"] = attention
             return payload
 
-        return {
+        payload = {
             "ledger_version": LEDGER_VERSION,
             "meeting_date": self.source.get("meeting_date"),
             "source": nd.provider_source(dict(self.source)),
             "final_items": [entry_payload(e) for e in self.entries if e.ref.startswith("f")],
             "map_items": [entry_payload(e) for e in self.entries if e.ref.startswith("m")],
         }
+        if self.part is not None:
+            # No refs: these items are context only and can never be named by this view.
+            payload["read_only_items"] = [
+                {"section": entry.section, **_thawed(entry.item)} for entry in self.context
+            ]
+        return payload
 
     def build_prompt(
         self,
@@ -801,7 +939,7 @@ class ReconcileLedger:
         """Overlay a repair on the accepted ops, then validate the whole ledger; all or nothing."""
         try:
             patch = _decode(raw_output)
-            dispositions, additions, failed = self._shape(patch)
+            dispositions, additions, failed = self._shape(patch, self._max_additions)
             if failed:
                 raise _error("The reconcile repair has an invalid operation.", reason_code="fields")
             if (
@@ -943,13 +1081,19 @@ class ReconcileLedger:
         """
         segments = self._segments()
         index = self._index(segments)
-        dispositions, additions, failed = self._shape(patch)
+        dispositions, additions, failed = self._shape(patch, self._max_additions)
         if self.reference_evidence:
             dispositions = [self._reference_evidence(d, segments) for d in dispositions]
             additions = [(i, self._reference_evidence(a, segments)) for i, a in additions]
         by_ref = {entry.ref: entry for entry in self.entries}
+        read_only = {entry.ref for entry in self.context}
         for disposition in dispositions:
-            if disposition["ref"] not in by_ref:
+            if disposition["ref"] in read_only:
+                failed.setdefault(
+                    disposition["ref"],
+                    _error("The reconcile patch changes a read-only ref of another view."),
+                )
+            elif disposition["ref"] not in by_ref:
                 failed.setdefault(
                     disposition["ref"], _error("The reconcile patch names an unknown ref.")
                 )
@@ -1110,6 +1254,7 @@ class ReconcileLedger:
     @staticmethod
     def _shape(
         patch: object,
+        max_additions: int = MAX_RECONCILE_ADDITIONS,
     ) -> tuple[
         list[dict[str, Any]], list[tuple[int, dict[str, Any]]], dict[str, nd.NotesDocumentError]
     ]:
@@ -1125,7 +1270,9 @@ class ReconcileLedger:
         dispositions, additions = patch["dispositions"], patch["additions"]
         if not isinstance(dispositions, list) or not isinstance(additions, list):
             raise _error("The reconcile patch has invalid lists.", reason_code="fields")
-        if len(additions) > MAX_RECONCILE_ADDITIONS:
+        if not max_additions and additions:
+            raise _error("This reconcile view cannot add facts; only the first view may.")
+        if len(additions) > max_additions:
             raise _error("The reconcile patch has too many additions.")
         disposition_fields = {
             "ref",
@@ -1637,6 +1784,40 @@ _STRICT_NAME_RULE = {
         "có trong segment mục trích: trích segment ứng viên nêu tên, dùng đúng chính tả của "
         "segment được trích, hoặc để ẩn danh theo vai trò. Giữ mọi ý, số, phủ định và kết quả "
         "khác. Không để ref bị cảnh báo tên mà không liệt kê.\n"
+    ),
+}
+
+
+# Appended to reconcile and repair prompts of a partition view only: (first view, later view).
+_SPLIT_RULE = {
+    "en": (
+        "Split ledger: this request owns only the final_items and map_items listed here; "
+        "another request owns read_only_items. read_only_items are context only: never list, "
+        "update, merge into, target or remove them, and use them only to know which facts "
+        "already exist. Merge and duplicate targets must be owned refs. If an owned item "
+        "repeats a read-only item, leave it unlisted; code coalesces exact duplicates. "
+        "additions are allowed only in this request, for material facts in no owned or "
+        "read-only item.\n",
+        "Split ledger: this request owns only the final_items and map_items listed here; "
+        "another request owns read_only_items. read_only_items are context only: never list, "
+        "update, merge into, target or remove them, and use them only to know which facts "
+        "already exist. Merge and duplicate targets must be owned refs. If an owned item "
+        "repeats a read-only item, leave it unlisted; code coalesces exact duplicates. "
+        "additions must be empty in this request; another request adds missing facts.\n",
+    ),
+    "vi": (
+        "Ledger chia phần: yêu cầu này chỉ sở hữu final_items và map_items được liệt kê ở đây; "
+        "yêu cầu khác sở hữu read_only_items. read_only_items chỉ để tham khảo (chỉ đọc): không "
+        "liệt kê, update, merge vào, làm target hay remove chúng; chỉ dùng để biết ý nào đã có. "
+        "Target của merge và duplicate phải là ref được sở hữu. Nếu mục được sở hữu lặp lại "
+        "một mục chỉ đọc, không liệt kê nó; mã sẽ gộp các bản trùng y hệt. additions chỉ được "
+        "phép trong yêu cầu này, cho ý quan trọng không có trong mục được sở hữu hay chỉ đọc.\n",
+        "Ledger chia phần: yêu cầu này chỉ sở hữu final_items và map_items được liệt kê ở đây; "
+        "yêu cầu khác sở hữu read_only_items. read_only_items chỉ để tham khảo (chỉ đọc): không "
+        "liệt kê, update, merge vào, làm target hay remove chúng; chỉ dùng để biết ý nào đã có. "
+        "Target của merge và duplicate phải là ref được sở hữu. Nếu mục được sở hữu lặp lại "
+        "một mục chỉ đọc, không liệt kê nó; mã sẽ gộp các bản trùng y hệt. additions phải rỗng "
+        "trong yêu cầu này; yêu cầu khác bổ sung ý còn thiếu.\n",
     ),
 }
 

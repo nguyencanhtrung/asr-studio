@@ -119,6 +119,8 @@ def test_long_known_gemini_runs_fact_inventory_then_one_reconcile_and_context_li
         source = json.JSONDecoder().raw_decode(prompt.split("RECONCILE_INPUT_JSON:\n", 1)[1])[0]
         claim = source["source"]["segments"][2]["id"]
         patch = json.loads(reconcile_keep_patch(prompt))
+        if kwargs["response_schema"]["properties"]["additions"]["maxItems"] == 0:
+            return json.dumps(patch)  # only the first owned view may add a fact
         patch["additions"] = [
             {
                 "section": "key_topics",
@@ -134,8 +136,16 @@ def test_long_known_gemini_runs_fact_inventory_then_one_reconcile_and_context_li
     result = _run(transport, model=GEMINI[1], snapshot=snapshot, coverage=coverage)
 
     stages = [call["stage"] for call in calls]
-    # parts + reconcile + one semantic pass over two disjoint item parts, no free-form final
-    assert stages == ["chunk", "chunk", "reconcile", "semantic_audit", "semantic_audit"]
+    # parts + two owned reconcile views + one semantic pass over two disjoint item parts,
+    # no free-form final
+    assert stages == [
+        "chunk",
+        "chunk",
+        "reconcile",
+        "reconcile",
+        "semantic_audit",
+        "semantic_audit",
+    ]
     for call in calls[:2]:
         assert "Fact inventory:" in call["prompt"]
         assert SUPERSESSION in call["prompt"]
@@ -147,11 +157,12 @@ def test_long_known_gemini_runs_fact_inventory_then_one_reconcile_and_context_li
             "changes",
             "unresolved_refs",
         ]
-    assert calls[2]["response_schema"]["required"] == [
-        "ledger_version",
-        "dispositions",
-        "additions",
-    ]
+    for call in calls[2:4]:
+        assert call["response_schema"]["required"] == [
+            "ledger_version",
+            "dispositions",
+            "additions",
+        ]
     assert coverage[0]["source_audit"]["mode"] == "reconcile"
     assert coverage[0]["source_context"] == {"status": "applied", "items": 1, "added_ids": 1}
     assert {"text": "Councilmember: renewal open", "source_ids": [f"{9:032x}", f"{2:032x}"]} in (
@@ -196,7 +207,8 @@ def test_long_gemini_invalid_map_and_reconcile_share_the_one_repair():
     with pytest.raises(AssertionError) as failure:
         _run(transport, model=GEMINI[1], snapshot=_long_snapshot(), coverage=coverage)
     assert [c["attempt"] for c in calls].count("repair") == 1
-    assert [c["stage"] for c in calls].count("reconcile") == 1
+    # Both owned views may already be in flight when the first fails; neither is repaired.
+    assert 1 <= [c["stage"] for c in calls].count("reconcile") <= 2
     assert failure.value.args[0]["repair_state"] == "already_consumed"
     assert coverage == []  # nothing published
 
@@ -323,7 +335,8 @@ def test_antigravity_long_run_sends_the_reconcile_ledger_schema(tmp_path):
         on_coverage=coverage.append,
     )
 
-    assert len(adapter.messages) == 5  # 2 maps, reconcile, 2 disjoint semantic-audit parts
+    # 2 maps, 2 owned reconcile views, 2 disjoint semantic-audit parts
+    assert len(adapter.messages) == 6
     assert [_schema_of(m)["properties"]["schema_version"] for m in adapter.messages[:2]]
     for message in adapter.messages[-2:]:
         assert _schema_of(message)["required"] == [
@@ -331,12 +344,14 @@ def test_antigravity_long_run_sends_the_reconcile_ledger_schema(tmp_path):
             "changes",
             "unresolved_refs",
         ]
-    assert _schema_of(adapter.messages[2])["required"] == [
-        "ledger_version",
-        "dispositions",
-        "additions",
-    ]
+    for message in adapter.messages[2:4]:
+        assert _schema_of(message)["required"] == [
+            "ledger_version",
+            "dispositions",
+            "additions",
+        ]
     assert coverage[0]["source_audit"]["mode"] == "reconcile"
+    assert coverage[0]["source_audit"]["part_count"] == 2
     assert len(result["key_topics"]) == 2
 
 

@@ -321,16 +321,24 @@ def test_long_gemini_runs_one_audit_pass_of_two_parts_after_reconcile_and_publis
     result = _run(_transport(calls, semantic), coverage=coverage)
 
     stages = [c["stage"] for c in calls]
-    assert stages == ["chunk", "chunk", "reconcile", "semantic_audit", "semantic_audit"]
+    # two owned reconcile views (v35) before the two semantic-audit parts
+    assert stages == [
+        "chunk",
+        "chunk",
+        "reconcile",
+        "reconcile",
+        "semantic_audit",
+        "semantic_audit",
+    ]
     assert [i["text"] for i in result["key_topics"]] == [
         "Launch plan approved",
         "Noted renewal still open",
     ]
     audit = coverage[0]["semantic_audit"]
-    assert audit["provider_call_index"] == 5 and sorted(audit["provider_call_indices"]) == [4, 5]
+    assert audit["provider_call_index"] == 6 and sorted(audit["provider_call_indices"]) == [5, 6]
     assert audit["part_count"] == 2
     assert audit["counts"]["anonymized"] == 1
-    assert coverage[0]["provider_calls"] == 5 <= nd.MAX_PROVIDER_CALLS
+    assert coverage[0]["provider_calls"] == 6 <= nd.MAX_PROVIDER_CALLS
 
 
 @pytest.mark.parametrize("provider", [CHATGPT, ("antigravity", "gemini-test")])
@@ -500,7 +508,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v34"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v35"
 
 
 # ----- reconcile reference-evidence wiring -----------------------------------------------------
@@ -686,7 +694,7 @@ def test_one_malformed_part_uses_the_single_shared_repair_and_the_pass_succeeds(
     result = _run(_transport(calls, semantic), coverage=coverage)
     assert [c["attempt"] for c in calls if c["stage"] == "semantic_audit"].count("repair") == 1
     assert result["key_topics"][1]["text"] == "Noted renewal still open"
-    assert coverage[0]["semantic_audit"]["provider_call_index"] == 6
+    assert coverage[0]["semantic_audit"]["provider_call_index"] == 7
 
 
 def test_a_failed_part_stops_the_other_part_from_sending_more_requests():

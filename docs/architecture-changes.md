@@ -1866,6 +1866,34 @@ Issue [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183).
 Tag: architecture, quality, performance. Đích: `docs/backend-contract.md`,
 [báo cáo nghiệm thu](acceptance-report.md). Dữ liệu chi tiết chỉ lưu cục bộ, không đưa vào tài liệu.
 
+### #183 (tiếp) — Gemini reconcile hai view song song (`notes-hierarchical-v35`)
+
+**Vấn đề.** Lần đo thực tế v34 bị ngắt ở hạn 660 giây (wall 665,271395749005 giây), không có
+Notes cuối; đây là lỗi và không có điểm chất lượng. Đã ghi 12 phản hồi hoàn tất, không phải
+một lượt chạy trọn vẹn. Reconcile chính (call 10) mất 309,379 giây, 57.533 token đầu ra, trong đó
+43.683 token suy luận; repair (call 11) mất 98,588 giây, 14.716 token đầu ra, 14.412 token suy
+luận. Hai lượt này chiếm 407,967 giây. Lần đạt chất lượng gần nhất vẫn là v33: chưa đạt
+(5 khẳng định quan trọng thiếu căn cứ), 503,474369 giây, 12 call, 0 cache.
+
+**Thiết kế.** Chỉ với Gemini đã đăng ký trên nhánh fact inventory, `ReconcileLedger.partitions()`
+chia sổ thành tối đa `MAX_RECONCILE_PARTS` = 2 view liên tục, cân bằng. Mỗi view có toàn nguồn và
+giữ ref toàn cục, chỉ sở hữu mục của mình. Mục của view kia là ngữ cảnh chỉ đọc, không có ref.
+Chỉ view đầu được thêm mục; schema, parser và repair của view sau từ chối mục thêm. Hai request
+chạy song song, mỗi request có closure, kế hoạch repair, schema, parser riêng. Lượt repair
+duy nhất, trần call toàn cục và trần reduction vẫn dùng chung, cả hai view đều bị tính.
+Một view lỗi dừng view còn lại và tác vụ lỗi, không công bố gì. `combine_results` chỉ nhận đủ
+các view, kiểm lại và gộp một lần. Manifest `source_audit` thêm `part_count` và
+`provider_call_indices`. ChatGPT, model chưa đăng ký và ca ngắn giữ đúng request cũ.
+`semantic_audit` (tối đa hai phần), các trần tài liệu và cách giữ Notes cũ không đổi.
+
+**Đánh đổi.** Mỗi view gửi lại toàn nguồn và toàn sổ, nên token đầu vào gần gấp đôi. Đổi lại,
+mỗi view tạo khoảng nửa bản vá, và thời gian chờ là thời gian của view chậm hơn. Fixture dự kiến
+9 map + 2 reconcile + 2 kiểm ngữ nghĩa = 13 call, thêm 1 nếu dùng repair chung (14).
+`MAX_PROVIDER_CALLS` vẫn là 54. Request dài đổi nên không replay nguyên vẹn được, chỉ có kiểm
+tích hợp tổng hợp. Chất lượng và thời gian v35 chưa đo. Nguồn cục bộ:
+`reports/.notes-gemini-fix-local-20261108/eval-v34-physical/` (`interrupted.json`,
+`physical.log`, `capture/call-0010.json`, `capture/call-0011.json`).
+
 ### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
 
 Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)
