@@ -14,7 +14,11 @@ from typing import Any, Protocol
 # Limits are read through the module at call time so tests can lower them.
 from asr_studio import notes_document as nd
 from asr_studio.notes_audit import AuditCatalog
-from asr_studio.notes_reconcile import MAX_RECONCILE_OUTPUT_BYTES, ReconcileLedger
+from asr_studio.notes_reconcile import (
+    MAX_RECONCILE_OUTPUT_BYTES,
+    ReconcileLedger,
+    ReconcileRepair,
+)
 
 # The code a transport gives a response over its output cap.
 _OUTPUT_TOO_LARGE = "provider_output_too_large"
@@ -703,7 +707,9 @@ def generate_notes_document(
     )
     if parallel_maps:
         progress("chunking", 0, len(prepared_chunks), "chunks")
-        executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="notes-map")
+        executor = ThreadPoolExecutor(
+            max_workers=3 if plan.fact_inventory else 2, thread_name_prefix="notes-map"
+        )
         futures: dict[Future[tuple[dict[str, Any], int]], int] = {}
         try:
             for index, (projected_chunk, prompt, repair_chunk) in enumerate(prepared_chunks):
@@ -817,7 +823,17 @@ def generate_notes_document(
             projected_snapshot, final_document, summaries, max_unit_size=max_unit_size
         )
 
+        repairs: list[ReconcileRepair] = []
+
         def reconcile_prompt(invalid_output: str | None = None) -> str:
+            # Per-ref failures get a sparse repair over the accepted ops; a global failure keeps
+            # the bounded generic repair, which is unavailable above its raw-output cap.
+            plan = None if invalid_output is None else ledger.plan_repair(invalid_output)
+            if plan is not None:
+                repairs.append(plan)
+                return ledger.build_repair_prompt(
+                    plan, output_language=output_language, budget=synthesis_budget
+                )
             return ledger.build_prompt(
                 output_language=output_language,
                 invalid_output=invalid_output,
@@ -835,7 +851,7 @@ def generate_notes_document(
         counts: list[dict[str, Any]] = []
 
         def parse(raw: object) -> dict[str, Any]:
-            result = ledger.parse(raw)
+            result = ledger.parse_repair(raw, repairs[-1]) if repairs else ledger.parse(raw)
             counts.append(result.counts)
             return result.document
 

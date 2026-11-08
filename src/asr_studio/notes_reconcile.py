@@ -230,12 +230,16 @@ class _SourceIndex:
         }
 
     def cited(self, ids: Sequence[str]) -> str:
-        parts = []
-        for source_id in ids:
-            if source_id in self.text:
-                speaker = self.segments[source_id].get("speaker_name") or ""
-                parts.append(f"{self.text[source_id]} {_normalized(speaker)}")
-        return " ".join(parts)
+        """Cited text in source order; "|" (never in a normalized span) splits non-adjacent
+        segments and speaker labels, so a name may span adjacent cited segments only."""
+        known = sorted({i for i in ids if i in self.text}, key=self.position.__getitem__)
+        parts: list[str] = []
+        for previous, source_id in zip([None, *known], known, strict=False):
+            if previous is not None and self.position[source_id] != self.position[previous] + 1:
+                parts.append("|")
+            parts.append(self.text[source_id])
+        speakers = [_normalized(self.segments[i].get("speaker_name") or "") for i in known]
+        return " | ".join([" ".join(parts), *speakers])
 
     def uncited_names(self, text: str, ids: Sequence[str]) -> list[str]:
         """Multiword names of `text` stated somewhere in the source but in none of `ids`.
@@ -291,6 +295,63 @@ class _SourceIndex:
 class ReconcileResult:
     document: dict[str, Any]
     counts: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class RefFailure:
+    """First validation failure of one ref: a ledger ref, an unknown ref or ``addition:<i>``."""
+
+    ref: str
+    reason_code: str | None
+    detail_code: str | None
+    field_name: str | None
+    message: str
+    names: tuple[str, ...] = ()  # source-derived; for the repair prompt only, never diagnostics
+
+    @classmethod
+    def of(cls, ref: str, error: nd.NotesDocumentError) -> RefFailure:
+        return cls(
+            ref,
+            error.reason_code,
+            error.detail_code,
+            error.field_name,
+            str(error),
+            tuple(getattr(error, "names", ())),
+        )
+
+
+class ReconcilePatchError(nd.NotesDocumentError):
+    """Every independent per-ref failure of one patch; diagnostics follow the first one."""
+
+    def __init__(self, failures: Sequence[RefFailure]) -> None:
+        first = failures[0]
+        super().__init__(
+            f"{first.message} ({len(failures)} reconcile refs failed.)",
+            reason_code=first.reason_code,
+            detail_code=first.detail_code,
+            field_name=first.field_name,
+        )
+        self.failures = tuple(failures)
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileRepair:
+    """Accepted operations of a failed primary patch and the failing refs one repair replaces."""
+
+    failures: tuple[RefFailure, ...]
+    dispositions: tuple[dict[str, Any], ...]  # accepted, kept verbatim under the repair
+    additions: tuple[dict[str, Any], ...]
+    prior: Mapping[str, Any]  # failing ledger ref -> its prior raw disposition
+    failed_additions: tuple[tuple[RefFailure, Any], ...]
+    ledger_refs: frozenset[str]
+
+    @property
+    def refs(self) -> tuple[str, ...]:
+        return tuple(f.ref for f in self.failures if f.ref in self.ledger_refs)
+
+    @property
+    def addition_slots(self) -> int:
+        return len(self.failed_additions)
 
 
 def _frozen_item(item: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -534,40 +595,196 @@ class ReconcileLedger:
             response_schema=self.schema(),
         )
 
+    # ----- sparse repair ----------------------------------------------------------------------
+
+    def plan_repair(self, raw_output: object) -> ReconcileRepair | None:
+        """Accepted ops and per-ref failures of a failed patch; None for a global failure.
+
+        A global failure (not JSON, bad top-level shape, document-level validation) has no safe
+        partial correction, so the caller falls back to the bounded generic repair.
+        """
+        try:
+            patch = _decode(raw_output)
+            self.apply(patch)
+        except ReconcilePatchError as error:
+            failures = error.failures
+        except (nd.NotesDocumentError, *_PATCH_ERRORS):
+            return None
+        else:
+            return None
+        failing = {f.ref for f in failures}
+        accepted, prior = [], {}
+        for disposition in patch["dispositions"]:
+            ref = disposition.get("ref") if isinstance(disposition, dict) else None
+            if ref in failing:
+                prior.setdefault(ref, disposition)
+            else:
+                accepted.append(disposition)
+        additions = patch["additions"]
+        return ReconcileRepair(
+            failures=failures,
+            dispositions=tuple(accepted),
+            additions=tuple(a for i, a in enumerate(additions) if f"addition:{i}" not in failing),
+            prior=MappingProxyType(prior),
+            failed_additions=tuple(
+                (f, additions[int(f.ref.split(":", 1)[1])])
+                for f in failures
+                if f.ref.startswith("addition:")
+            ),
+            ledger_refs=frozenset(self.refs),
+        )
+
+    def build_repair_prompt(
+        self,
+        repair: ReconcileRepair,
+        *,
+        output_language: str = "en",
+        budget: nd.NotesBudget | None = None,
+    ) -> str:
+        """Failing refs with their prior ops, errors and cited/candidate source only."""
+        output_language = nd.validate_output_language(output_language)
+        segments = self._segments()
+        index = _SourceIndex(segments)
+        targets = self.merge_targets()
+        by_ref = {entry.ref: entry for entry in self.entries}
+        wanted: set[str] = set()
+
+        def ids_of(value: object) -> list[str]:
+            if not isinstance(value, dict):
+                return []
+            ids = value.get("source_ids")
+            quotes = value.get("evidence")
+            found = list(ids) if isinstance(ids, list) else []
+            if isinstance(quotes, list):
+                found += [q.get("source_id") for q in quotes if isinstance(q, dict)]
+            return [i for i in found if isinstance(i, str)]
+
+        def errors(failure: RefFailure, near: Sequence[str]) -> list[dict[str, Any]]:
+            error: dict[str, Any] = {"reason": failure.reason_code, "message": failure.message}
+            if failure.names:
+                error["names"] = list(failure.names)
+                error["candidate_ids"] = sorted(
+                    {i for name in failure.names for i in index.candidates(name, near)},
+                    key=index.position.__getitem__,
+                )
+                wanted.update(error["candidate_ids"])
+            return [error]
+
+        failures = []
+        by_failure = {f.ref: f for f in repair.failures}
+        for ref in repair.refs:
+            entry = by_ref[ref]
+            ids = list(entry.item["source_ids"])
+            prior = repair.prior.get(ref)
+            wanted.update(ids, ids_of(prior))
+            payload: dict[str, Any] = {
+                "ref": ref,
+                "section": entry.section,
+                **_thawed(entry.item),
+                "allowed_merge_targets": targets[ref],
+            }
+            attention = self._attention(entry, index)
+            if attention:
+                payload["attention"] = attention
+                for cue in attention.get("uncited_names", ()):
+                    wanted.update(cue["candidate_ids"])
+            payload["prior_disposition"] = prior
+            payload["errors"] = errors(by_failure[ref], ids or ids_of(prior))
+            failures.append(payload)
+        failed_additions = []
+        for failure, addition in repair.failed_additions:
+            wanted.update(ids_of(addition))
+            failed_additions.append(
+                {"addition": addition, "errors": errors(failure, ids_of(addition))}
+            )
+        source = nd.provider_source(dict(self.source))
+        source["segments"] = [s for s in source["segments"] if s["id"] in wanted]
+        payload = {
+            "ledger_version": LEDGER_VERSION,
+            "meeting_date": self.source.get("meeting_date"),
+            "failures": failures,
+            "failed_additions": failed_additions,
+            "dropped_refs": [
+                f.ref
+                for f in repair.failures
+                if f.ref not in repair.ledger_refs and not f.ref.startswith("addition:")
+            ],
+            "source": source,
+        }
+        prompt = (
+            _instructions(output_language)
+            + _repair_instructions(output_language, repair.addition_slots)
+            + "REPAIR_INPUT_JSON:\n"
+            + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        )
+        return nd._check_prompt(
+            prompt,
+            allowed_source_ids=nd._unique_source_ids(
+                tuple(segment["id"] for segment in self.source["segments"])
+            ),
+            output_language=output_language,
+            budget=budget,
+            max_unit_size=self.max_unit_size,
+            response_schema=self.schema(),
+        )
+
+    def parse_repair(self, raw_output: object, repair: ReconcileRepair) -> ReconcileResult:
+        """Overlay a repair on the accepted ops, then validate the whole ledger; all or nothing."""
+        try:
+            patch = _decode(raw_output)
+            dispositions, additions, failed = self._shape(patch)
+            if failed:
+                raise _error("The reconcile repair has an invalid operation.", reason_code="fields")
+            if (
+                not {d["ref"] for d in dispositions} <= set(repair.refs)
+                or len(additions) > repair.addition_slots
+            ):
+                raise _error("The reconcile repair changes a ref outside its failures.")
+            if {d["ref"] for d in dispositions} != set(repair.refs):
+                raise _error("The reconcile repair must explicitly resolve every failing ref.")
+            return self.apply(
+                {
+                    "ledger_version": LEDGER_VERSION,
+                    "dispositions": [*repair.dispositions, *dispositions],
+                    "additions": [*repair.additions, *(a for _i, a in additions)],
+                }
+            )
+        except nd.NotesDocumentError:
+            raise
+        except _PATCH_ERRORS as error:
+            raise _error("The reconcile patch is invalid.", reason_code="fields") from error
+
     # ----- patch application ------------------------------------------------------------------
 
     def parse(self, raw_output: object) -> ReconcileResult:
-        if not isinstance(raw_output, str):
-            raise _error("The reconcile response must be text.", reason_code="json")
         try:
-            patch = json.loads(raw_output)
-        except (json.JSONDecodeError, RecursionError):
-            raise _error("The reconcile response must be valid JSON.", reason_code="json") from None
-        try:
-            return self.apply(patch)
+            return self.apply(_decode(raw_output))
         except nd.NotesDocumentError:
             raise
-        except (KeyError, TypeError, ValueError, AttributeError, RecursionError) as error:
+        except _PATCH_ERRORS as error:
             raise _error("The reconcile patch is invalid.", reason_code="fields") from error
 
     def apply(self, patch: object) -> ReconcileResult:
-        """Validate the whole patch, then the reconstructed schema-1 document."""
+        """Validate every ref independently, then the reconstructed schema-1 document.
+
+        Per-ref failures are collected and raised together as ``ReconcilePatchError``; only a
+        global shape or document failure raises on its own.
+        """
         segments = self._segments()
         index = _SourceIndex(segments)
-        dispositions, additions = self._shape(patch)
+        dispositions, additions, failed = self._shape(patch)
         by_ref = {entry.ref: entry for entry in self.entries}
-        seen: dict[str, dict[str, Any]] = {}
         for disposition in dispositions:
-            ref = disposition["ref"]
-            if ref not in by_ref:
-                raise _error("The reconcile patch names an unknown ref.")
-            if ref in seen:
-                raise _error("The reconcile patch names one ref more than once.")
-            seen[ref] = disposition
+            if disposition["ref"] not in by_ref:
+                failed.setdefault(
+                    disposition["ref"], _error("The reconcile patch names an unknown ref.")
+                )
+        dispositions = [d for d in dispositions if d["ref"] not in failed]
+        seen: dict[str, dict[str, Any]] = {d["ref"]: d for d in dispositions}
         # Sparse overlay: every unlisted ref is kept by code, never dropped.
         default_kept = 0
         for ref in by_ref:
-            if ref not in seen:
+            if ref not in seen and ref not in failed:
                 seen[ref] = dict(_DEFAULT_KEEP, ref=ref)
                 default_kept += 1
 
@@ -577,7 +794,9 @@ class ReconcileLedger:
         }
         placed: dict[str, dict[str, Any]] = {}
         # Each published item with the source IDs and evidence its grounding is checked against.
-        grounding: list[tuple[str, dict[str, Any], Sequence[str], Sequence[dict[str, str]]]] = []
+        grounding: list[
+            tuple[str, str, dict[str, Any], Sequence[str], Sequence[dict[str, str]]]
+        ] = []
         counts: dict[str, Any] = {
             "final": dict.fromkeys(ACTIONS, 0),
             "map": dict.fromkeys(ACTIONS, 0),
@@ -585,80 +804,45 @@ class ReconcileLedger:
             "default_kept": default_kept,
         }
         for entry in self.entries:  # ledger order keeps final items first, in their order
-            disposition = seen[entry.ref]
-            action = disposition["action"]
-            counts["final" if entry.ref.startswith("f") else "map"][action] += 1
-            self._check_reason_and_target(disposition, seen)
-            if action == "merge":
-                ids, original = disposition["source_ids"], entry.item["source_ids"]
-                # Redundant echo of exactly the original unique IDs, no evidence: same as [].
-                if (
-                    ids
-                    and not disposition["evidence"]
-                    and len(ids) == len(set(ids))
-                    and set(ids) == set(original)
-                ):
-                    disposition = {**disposition, "source_ids": []}
-            if action == "remove" and disposition["reason"] == "superseded":
-                self._require_empty(disposition, text=True, citations=False, action_fields=True)
-                self._check_superseded(entry, disposition, segments, index)
+            if entry.ref in failed:
                 continue
-            if action in {"merge", "remove"}:
-                self._require_empty(disposition, text=True, citations=True, action_fields=True)
-                continue
-            if action == "keep":
-                self._require_empty(disposition, text=True, citations=True, action_fields=True)
-                item = _thawed(entry.item)
-                section = entry.section
-            elif action == "update":
-                item = self._updated(entry, disposition, segments)
-                section = entry.section
-            else:  # confirm: demote, never promote
-                self._require_empty(disposition, text=False, citations=False, action_fields=True)
-                item = self._confirmed(entry, disposition, segments)
-                section = "confirmation_items"
-            result[section].append(item)
-            placed[entry.ref] = item
-            evidence = disposition["evidence"] if action != "keep" else []
-            grounding.append((section, item, entry.item["source_ids"], evidence))
+            try:
+                self._apply_entry(entry, seen, segments, index, result, placed, grounding, counts)
+            except nd.NotesDocumentError as error:
+                failed[entry.ref] = error
 
         for disposition in dispositions:
-            entry = by_ref[disposition["ref"]]
-            if disposition["action"] == "merge" or (
-                disposition["action"] == "remove" and disposition["reason"] == "duplicate"
-            ):
-                target_ref = disposition["target"]
-                # Lossless only: the applied target text must contain this whole fact.
-                if by_ref[target_ref].section != entry.section or not _contains(
-                    _normalized(placed[target_ref]["text"]), _normalized(entry.item["text"])
-                ):
-                    raise _error(
-                        "A merge or duplicate target does not contain the full merged fact."
-                    )
-                if self._metadata(entry.ref, entry.section, entry.item) != self._metadata(
-                    entry.ref, entry.section, placed[target_ref]
-                ):
-                    raise _error(
-                        "A merge or duplicate target loses the action owner or deadline.",
-                        reason_code="action_fields",
-                    )
-            if disposition["action"] == "merge":
-                target = placed[disposition["target"]]
-                merged = list(
-                    dict.fromkeys(
-                        [*target["source_ids"], *by_ref[disposition["ref"]].item["source_ids"]]
-                    )
-                )
-                target["source_ids"] = merged
+            ref = disposition["ref"]
+            if ref in failed:
+                continue
+            try:
+                self._apply_merge(by_ref[ref], disposition, by_ref, placed, failed)
+            except nd.NotesDocumentError as error:
+                failed[ref] = error
 
-        for addition in additions:
-            item = self._added(addition, segments)
+        for position, addition in additions:
+            try:
+                item = self._added(addition, segments)
+            except nd.NotesDocumentError as error:
+                failed[f"addition:{position}"] = error
+                continue
             result[addition["section"]].append(item)
-            grounding.append((addition["section"], item, (), addition["evidence"]))
+            grounding.append(
+                (f"addition:{position}", addition["section"], item, (), addition["evidence"])
+            )
 
-        for section, item, original_ids, evidence in grounding:
-            self._check_grounding(section, item, original_ids, evidence, index)
+        for ref, section, item, original_ids, evidence in grounding:
+            if ref in failed:
+                continue
+            try:
+                self._check_grounding(section, item, original_ids, evidence, index)
+            except nd.NotesDocumentError as error:
+                failed[ref] = error
 
+        if failed:
+            order = {ref: position for position, ref in enumerate(by_ref)}
+            refs = sorted(failed, key=lambda ref: order.get(ref, len(order)))  # stable sort
+            raise ReconcilePatchError([RefFailure.of(ref, failed[ref]) for ref in refs])
         document = nd.validate_document(
             result,
             dict(self.source),
@@ -667,8 +851,95 @@ class ReconcileLedger:
         )
         return ReconcileResult(document=document, counts=counts)
 
+    def _apply_entry(
+        self,
+        entry: LedgerEntry,
+        seen: dict[str, dict[str, Any]],
+        segments: Mapping[str, Mapping[str, Any]],
+        index: _SourceIndex,
+        result: dict[str, Any],
+        placed: dict[str, dict[str, Any]],
+        grounding: list[Any],
+        counts: dict[str, Any],
+    ) -> None:
+        disposition = seen[entry.ref]
+        action = disposition["action"]
+        counts["final" if entry.ref.startswith("f") else "map"][action] += 1
+        self._check_reason_and_target(disposition, seen)
+        if action == "merge":
+            ids, original = disposition["source_ids"], entry.item["source_ids"]
+            # Redundant echo of exactly the original unique IDs, no evidence: same as [].
+            if (
+                ids
+                and not disposition["evidence"]
+                and len(ids) == len(set(ids))
+                and set(ids) == set(original)
+            ):
+                disposition = {**disposition, "source_ids": []}
+        if action == "remove" and disposition["reason"] == "superseded":
+            self._require_empty(disposition, text=True, citations=False, action_fields=True)
+            self._check_superseded(entry, disposition, segments, index)
+            return
+        if action in {"merge", "remove"}:
+            self._require_empty(disposition, text=True, citations=True, action_fields=True)
+            return
+        if action == "keep":
+            self._require_empty(disposition, text=True, citations=True, action_fields=True)
+            item = _thawed(entry.item)
+            section = entry.section
+        elif action == "update":
+            item = self._updated(entry, disposition, segments)
+            section = entry.section
+        else:  # confirm: demote, never promote
+            self._require_empty(disposition, text=False, citations=False, action_fields=True)
+            item = self._confirmed(entry, disposition, segments)
+            section = "confirmation_items"
+        result[section].append(item)
+        placed[entry.ref] = item
+        evidence = disposition["evidence"] if action != "keep" else []
+        grounding.append((entry.ref, section, item, entry.item["source_ids"], evidence))
+
+    def _apply_merge(
+        self,
+        entry: LedgerEntry,
+        disposition: dict[str, Any],
+        by_ref: Mapping[str, LedgerEntry],
+        placed: dict[str, dict[str, Any]],
+        failed: Mapping[str, Any],
+    ) -> None:
+        if not (
+            disposition["action"] == "merge"
+            or (disposition["action"] == "remove" and disposition["reason"] == "duplicate")
+        ):
+            return
+        target_ref = disposition["target"]
+        if target_ref in failed:
+            raise _error("A merge or duplicate target failed validation.")
+        # Lossless only: the applied target text must contain this whole fact.
+        if by_ref[target_ref].section != entry.section or not _contains(
+            _normalized(placed[target_ref]["text"]), _normalized(entry.item["text"])
+        ):
+            raise _error("A merge or duplicate target does not contain the full merged fact.")
+        if self._metadata(entry.ref, entry.section, entry.item) != self._metadata(
+            entry.ref, entry.section, placed[target_ref]
+        ):
+            raise _error(
+                "A merge or duplicate target loses the action owner or deadline.",
+                reason_code="action_fields",
+            )
+        if disposition["action"] == "merge":
+            target = placed[target_ref]
+            target["source_ids"] = list(
+                dict.fromkeys([*target["source_ids"], *entry.item["source_ids"]])
+            )
+
     @staticmethod
-    def _shape(patch: object) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _shape(
+        patch: object,
+    ) -> tuple[
+        list[dict[str, Any]], list[tuple[int, dict[str, Any]]], dict[str, nd.NotesDocumentError]
+    ]:
+        """Top-level shape raises; a bad operation fails only its own ref or addition."""
         if not isinstance(patch, dict) or set(patch) != {
             "ledger_version",
             "dispositions",
@@ -694,23 +965,46 @@ class ReconcileLedger:
             "deadline_text",
         }
         addition_fields = {"section", "text", "source_ids", "evidence", "owner", "deadline_text"}
+        failed: dict[str, nd.NotesDocumentError] = {}
+        valid: list[dict[str, Any]] = []
         for disposition in dispositions:
-            if not isinstance(disposition, dict) or set(disposition) != disposition_fields:
+            ref = disposition.get("ref") if isinstance(disposition, dict) else None
+            if not isinstance(ref, str):  # an operation without a ref cannot be attributed
                 raise _error("A reconcile disposition has invalid fields.", reason_code="fields")
-            if not isinstance(disposition["ref"], str) or disposition["action"] not in ACTIONS:
-                raise _error("A reconcile disposition is invalid.", reason_code="fields")
-            if disposition["reason"] not in (_NO_REASON, *REMOVE_REASONS):
-                raise _error("A reconcile removal reason is invalid.", reason_code="fields")
-            if disposition["target"] is not None and not isinstance(disposition["target"], str):
-                raise _error("A reconcile target is invalid.", reason_code="fields")
-            ReconcileLedger._check_common(disposition)
-        for addition in additions:
-            if not isinstance(addition, dict) or set(addition) != addition_fields:
-                raise _error("A reconcile addition has invalid fields.", reason_code="fields")
-            if addition["section"] not in _SECTION_NAMES or not isinstance(addition["text"], str):
-                raise _error("A reconcile addition is invalid.", reason_code="fields")
-            ReconcileLedger._check_common(addition)
-        return dispositions, additions
+            try:
+                if any(d["ref"] == ref for d in valid) or ref in failed:
+                    raise _error("The reconcile patch names one ref more than once.")
+                if set(disposition) != disposition_fields:
+                    raise _error(
+                        "A reconcile disposition has invalid fields.", reason_code="fields"
+                    )
+                if disposition["action"] not in ACTIONS:
+                    raise _error("A reconcile disposition is invalid.", reason_code="fields")
+                if disposition["reason"] not in (_NO_REASON, *REMOVE_REASONS):
+                    raise _error("A reconcile removal reason is invalid.", reason_code="fields")
+                if disposition["target"] is not None and not isinstance(disposition["target"], str):
+                    raise _error("A reconcile target is invalid.", reason_code="fields")
+                ReconcileLedger._check_common(disposition)
+            except nd.NotesDocumentError as error:
+                failed.setdefault(ref, error)
+                continue
+            valid.append(disposition)
+        valid = [d for d in valid if d["ref"] not in failed]  # both copies of a repeated ref
+        valid_additions: list[tuple[int, dict[str, Any]]] = []
+        for position, addition in enumerate(additions):
+            try:
+                if not isinstance(addition, dict) or set(addition) != addition_fields:
+                    raise _error("A reconcile addition has invalid fields.", reason_code="fields")
+                if addition["section"] not in _SECTION_NAMES or not isinstance(
+                    addition["text"], str
+                ):
+                    raise _error("A reconcile addition is invalid.", reason_code="fields")
+                ReconcileLedger._check_common(addition)
+            except nd.NotesDocumentError as error:
+                failed[f"addition:{position}"] = error
+                continue
+            valid_additions.append((position, addition))
+        return valid, valid_additions, failed
 
     @staticmethod
     def _check_common(value: dict[str, Any]) -> None:
@@ -814,15 +1108,20 @@ class ReconcileLedger:
     ) -> None:
         """Final-item checks: cited names, literal cited owners and unclear numeric ranges."""
         ids = item["source_ids"]
-        if index.uncited_names(item["text"], ids):
-            raise _error("A named span is stated only in segments the item does not cite.")
+        names = index.uncited_names(item["text"], ids)
+        if names:
+            error = _error("A named span is stated only in segments the item does not cite.")
+            error.names = tuple(names)  # type: ignore[attr-defined]
+            raise error
         owner = item.get("owner") if section == "action_items" else None
         if isinstance(owner, str) and not index.owner_supported(owner, ids):
-            raise _error(
+            error = _error(
                 "Reconcile action owner is not stated by its cited sources.",
                 reason_code="action_fields",
                 field_name="owner",
             )
+            error.names = (owner,)  # type: ignore[attr-defined]
+            raise error
         numbers = _numbers(item["text"])
         if not numbers or _has_unclear_marker(item["text"]):
             return
@@ -1014,6 +1313,18 @@ class ReconcileLedger:
         return item
 
 
+_PATCH_ERRORS = (KeyError, TypeError, ValueError, AttributeError, RecursionError, IndexError)
+
+
+def _decode(raw_output: object) -> object:
+    if not isinstance(raw_output, str):
+        raise _error("The reconcile response must be text.", reason_code="json")
+    try:
+        return json.loads(raw_output)
+    except (json.JSONDecodeError, RecursionError):
+        raise _error("The reconcile response must be valid JSON.", reason_code="json") from None
+
+
 _DEFAULT_KEEP: dict[str, Any] = {
     "action": "keep",
     "reason": _NO_REASON,
@@ -1038,9 +1349,7 @@ def _instructions(output_language: str) -> str:
             "final_items and map_items that you do not list is kept by code, unchanged. "
             'If nothing changes, return {"ledger_version":2,"dispositions":[],'
             '"additions":[]}.\n'
-            "Actions for a listed ref (keep is allowed but not needed):\n"
-            "- keep: the item stays unchanged. text, owner and deadline_text are null; "
-            "source_ids and evidence are empty.\n"
+            "Actions for a listed ref (leave correct refs unlisted):\n"
             "- update: replace the item text in the same section, only to correct an "
             "unsupported claim, restore a lost material detail or fix citations. Give full new "
             "text, all source_ids and exact evidence quotes.\n"
@@ -1069,11 +1378,16 @@ def _instructions(output_language: str) -> str:
             "attention.uncited_names: the name occurs in the transcript but not in the item's "
             "cited segments. Update to cite a candidate segment that states it, or remove the "
             "name. An owner must be stated in a cited segment or be its speaker.\n"
+            "Every ref that has attention must be listed: update it to resolve every cue, or "
+            "confirm or remove it. An unlisted ref is kept unchanged, so an unlisted ref with "
+            "attention fails validation. An update keeps every negation and certainty word of "
+            "the original text.\n"
             "attention.unclear_ranges: the cited transcript has an incoherent descending number "
             "phrase. Never state that value as a count: remove the quantity or mark it unclear.\n"
             f"additions: at most {MAX_RECONCILE_ADDITIONS} material facts that appear in the "
             "transcript but in no item. Each needs section, text, source_ids and evidence.\n"
-            "Evidence: each quote is copied exactly from the transcript text of a source_id in "
+            "Evidence: each quote is copied exactly, with the same letter case, from the "
+            "transcript text of a source_id in "
             "the same object's source_ids. Every new number or name must appear in the cited "
             "segments. Do not normalise ASR spellings into new names. Keep proposals, "
             "uncertainty and negation as stated; a proposal nobody accepted is never a decision. "
@@ -1090,9 +1404,7 @@ def _instructions(output_language: str) -> str:
         "Chỉ trả về các disposition có thay đổi; bỏ qua bản ghi keep không đổi. Mọi ref trong "
         "final_items và map_items mà bạn không liệt kê đều được mã giữ nguyên. Nếu không có gì "
         'thay đổi, trả về {"ledger_version":2,"dispositions":[],"additions":[]}.\n'
-        "Action cho ref được liệt kê (keep được phép nhưng không cần):\n"
-        "- keep: giữ nguyên mục. text, owner, deadline_text là null; source_ids và evidence "
-        "rỗng.\n"
+        "Action cho ref được liệt kê (không liệt kê mục đúng):\n"
         "- update: thay text trong cùng nhóm, chỉ để sửa ý không có căn cứ, khôi phục chi tiết "
         "quan trọng bị mất hoặc sửa trích dẫn. Cho text mới đầy đủ, mọi source_ids và trích "
         "nguyên văn evidence.\n"
@@ -1118,15 +1430,48 @@ def _instructions(output_language: str) -> str:
         "attention.uncited_names: tên có trong transcript nhưng không có trong segment mục trích. "
         "Update để trích segment ứng viên nêu tên đó, hoặc bỏ tên. owner phải được nêu trong "
         "segment được trích hoặc là người nói của segment đó.\n"
+        "Mọi ref có attention phải được liệt kê: update để xử lý mọi cảnh báo, hoặc confirm "
+        "hoặc remove. Ref không liệt kê được giữ nguyên, nên ref có attention mà không liệt kê "
+        "sẽ không qua kiểm tra. Update giữ mọi từ phủ định và mức chắc chắn của text gốc.\n"
         "attention.unclear_ranges: transcript được trích có cụm số giảm dần thiếu mạch lạc. "
         "Không nêu giá trị đó như số lượng: bỏ số lượng hoặc ghi rõ là chưa rõ.\n"
         f"additions: tối đa {MAX_RECONCILE_ADDITIONS} ý quan trọng có trong transcript nhưng "
         "không có trong mục nào. Mỗi ý cần section, text, source_ids và evidence.\n"
-        "Evidence: mỗi quote chép nguyên văn từ text transcript của một source_id trong "
+        "Evidence: mỗi quote chép nguyên văn, giữ đúng chữ hoa/thường, từ text transcript của "
+        "một source_id trong "
         "source_ids của cùng đối tượng. Mọi số hoặc tên mới phải có trong segment được trích. "
         "Không chuẩn hóa chính tả ASR thành tên mới. Giữ nguyên đề xuất, sự không chắc chắn và "
         "phủ định; đề xuất chưa ai đồng ý không bao giờ là quyết định. owner và deadline_text là "
         "null trừ khi transcript được trích nói rõ; chỉ dùng cho action_items.\n"
         "reason là none trừ khi action là remove; target là null trừ khi action cần. "
         f"Viết text mới bằng {language}, theo văn phong telegraph của final items.\n"
+    )
+
+
+def _repair_instructions(output_language: str, addition_slots: int) -> str:
+    """Sparse repair rules; the primary rules above still apply to every returned operation."""
+    if output_language == "en":
+        return (
+            "REPAIR: your previous patch failed validation for the refs in "
+            "REPAIR_INPUT_JSON.failures and the additions in failed_additions. Every other "
+            "operation of that patch was accepted and is kept by code; do not repeat it. "
+            "REPAIR_INPUT_JSON.source holds only the segments these items cite or may cite. "
+            "Return one complete JSON patch with exactly one disposition for each failing ref, "
+            "fixing every listed error (prior_disposition is your failed operation, errors say "
+            "why; names lists names to cite from candidate_ids or remove). Name no other ref; "
+            "never list dropped_refs. You must explicitly resolve every failing ref. If the "
+            "original item is correct, update it with unchanged text and exact supporting "
+            "citations; never omit it. "
+            f"additions replaces failed_additions: at most {addition_slots}, or none.\n"
+        )
+    return (
+        "REPAIR: bản vá trước không qua kiểm tra ở các ref trong REPAIR_INPUT_JSON.failures và "
+        "các addition trong failed_additions. Mọi thao tác khác của bản vá đó đã được chấp nhận "
+        "và được mã giữ; không lặp lại. REPAIR_INPUT_JSON.source chỉ gồm các segment mà các mục "
+        "này trích hoặc có thể trích. Trả về một bản vá JSON đầy đủ với đúng một disposition cho "
+        "mỗi ref lỗi, sửa mọi lỗi được nêu (prior_disposition là thao tác lỗi của bạn, errors nêu "
+        "lý do; names là các tên cần trích từ candidate_ids hoặc bỏ). Không nêu ref nào khác; "
+        "không liệt kê dropped_refs. Phải xử lý rõ mọi ref lỗi. Nếu mục gốc đúng, dùng update "
+        "với text không đổi và trích dẫn hỗ trợ chính xác; không bỏ qua. additions "
+        f"thay failed_additions: tối đa {addition_slots}, hoặc không có.\n"
     )

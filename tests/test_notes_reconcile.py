@@ -1265,3 +1265,282 @@ def test_sparse_wire_schema_omits_unchanged_keep_operations():
     actions = ledger.schema()["properties"]["dispositions"]["items"]["properties"]["action"]["enum"]
     assert "keep" not in actions
     assert set(actions) == {"update", "merge", "remove", "confirm"}
+
+
+# ----- targeted repair: boundary names, collected failures, sparse repair -------------------
+
+BOUNDARY_SOURCE = {
+    "meeting_date": "2026-01-05",
+    "segments": [
+        {
+            "id": "b1",
+            "start_seconds": 0.0,
+            "end_seconds": 1.0,
+            "text": "We walked into Discovery",
+            "speaker_name": "SPEAKER_05",
+        },
+        {
+            "id": "b2",
+            "start_seconds": 1.0,
+            "end_seconds": 2.0,
+            "text": "Park. It was open.",
+            "speaker_name": "SPEAKER_05",
+        },
+        {"id": "b3", "start_seconds": 2.0, "end_seconds": 3.0, "text": "Discovery Park hosts it."},
+        {"id": "b4", "start_seconds": 3.0, "end_seconds": 4.0, "text": "Park benches need paint."},
+    ],
+}
+
+
+def _boundary_ledger(source_ids):
+    map_doc = _empty()
+    map_doc["key_topics"] = [{"text": "Visit to Discovery Park.", "source_ids": source_ids}]
+    return ReconcileLedger.build(BOUNDARY_SOURCE, _empty(), [map_doc])
+
+
+def test_name_split_across_adjacent_cited_segments_is_cited():
+    ledger = _boundary_ledger(["b2", "b1"])  # order of the citation list does not matter
+    assert "attention" not in ledger.prompt_payload()["map_items"][0]
+    assert ledger.apply(EMPTY_PATCH).counts["default_kept"] == 1
+
+
+@pytest.mark.parametrize("source_ids", [["b1"], ["b2"], ["b1", "b4"]])
+def test_name_not_in_contiguous_cited_text_still_rejects(source_ids):
+    ledger = _boundary_ledger(source_ids)
+    assert ledger.prompt_payload()["map_items"][0]["attention"]["uncited_names"][0]["name"] == (
+        "Discovery Park"
+    )
+    with pytest.raises(nd.NotesDocumentError, match="named span"):
+        ledger.apply(EMPTY_PATCH)
+
+
+def _collect_ledger():
+    map_doc = _empty()
+    map_doc["key_topics"] = [
+        {"text": "Priya Okafor shared survey results.", "source_ids": ["n3"]},
+        {"text": "Library Board 4471 met.", "source_ids": ["n4"]},
+        {"text": "Garden survey coordinated.", "source_ids": ["n2"]},
+    ]
+    return ReconcileLedger.build(CUE_SOURCE, _empty(), [map_doc])
+
+
+def _bad_patch():
+    malformed = reconcile_disposition("m2", "update")
+    del malformed["evidence"]
+    return {
+        "ledger_version": 2,
+        "dispositions": [
+            # case-changed quote: not exact
+            _update("m1", "Library Board 4471 met.", ["n4"], [("n4", "library Board 4471")]),
+            malformed,
+            reconcile_disposition("m9", "remove", reason="unsupported"),
+        ],
+        "additions": [
+            _addition("decisions", "Library voted.", ["n4"], [("n4", "The library voted")]),
+            _addition("decisions", "Fees fell.", ["n6"], [("n6", "fees fell")]),
+        ],
+    }
+
+
+def test_apply_collects_every_independent_ref_failure():
+    with pytest.raises(nd.NotesDocumentError) as failure:
+        _collect_ledger().apply(_bad_patch())
+    error = failure.value
+    assert [(item.ref, item.reason_code) for item in error.failures] == [
+        ("m0", "items"),  # default keep: uncited name
+        ("m1", "source_ids"),
+        ("m2", "fields"),
+        ("m9", "items"),
+        ("addition:1", "source_ids"),
+    ]
+    assert error.failures[0].names == ("Priya Okafor",)
+    # The first failure in ledger order still sets the public diagnostics.
+    assert (error.reason_code, error.detail_code) == ("items", None)
+    assert "Okafor" not in str(error) and "5 reconcile refs" in str(error)
+
+
+def test_repair_replaces_only_failing_refs_over_accepted_operations():
+    ledger = _collect_ledger()
+    raw = json.dumps(_bad_patch()) + " " * 9_000  # beyond the generic 8 KB repair cap
+    plan = ledger.plan_repair(raw)
+    assert plan.refs == ("m0", "m1", "m2")
+    assert plan.addition_slots == 1
+    prompt = ledger.build_repair_prompt(plan)
+    payload = json.JSONDecoder().raw_decode(prompt.split("REPAIR_INPUT_JSON:\n", 1)[1])[0]
+    assert [item["ref"] for item in payload["failures"]] == ["m0", "m1", "m2"]
+    assert payload["failures"][0]["errors"][0]["names"] == ["Priya Okafor"]
+    assert payload["failures"][0]["prior_disposition"] is None
+    assert payload["dropped_refs"] == ["m9"]
+    assert len(payload["failed_additions"]) == 1
+    ids = {segment["id"] for segment in payload["source"]["segments"]}
+    assert {"n1", "n2", "n3", "n4", "n6"} <= ids and "n7" not in ids
+    assert "allowed_merge_targets" in payload["failures"][0]
+
+    good = {
+        "ledger_version": 2,
+        "dispositions": [
+            _update(
+                "m0", "Priya Okafor shared survey results.", ["n2", "n3"], [("n2", "Priya Okafor")]
+            ),
+            _update("m1", "Library Board 4471 met.", ["n4"], [("n4", "Library Board 4471")]),
+            reconcile_disposition("m2", "keep"),
+        ],
+        "additions": [_addition("decisions", "Fees fell.", ["n6"], [("n6", "Fees fell")])],
+    }
+    result = ledger.parse_repair(json.dumps(good), plan)
+    decisions = [item["text"] for item in result.document["decisions"]]
+    assert decisions == ["Library voted.", "Fees fell."]  # accepted addition retained
+    assert result.document["key_topics"][2] == {
+        "text": "Garden survey coordinated.",
+        "source_ids": ["n2"],
+    }  # m2 explicitly restores the original after its malformed primary operation
+
+
+@pytest.mark.parametrize(
+    "repair",
+    [
+        pytest.param(
+            {"dispositions": [reconcile_disposition("m3", "remove", reason="unsupported")]},
+            id="unknown-or-accepted-ref",
+        ),
+        pytest.param(
+            {
+                "additions": [
+                    _addition("decisions", "Fees fell.", ["n6"], [("n6", "Fees fell")]),
+                    _addition("decisions", "Visits dropped.", ["n6"], [("n6", "Visits dropped")]),
+                ]
+            },
+            id="extra-addition",
+        ),
+        pytest.param({"dispositions": []}, id="failing-ref-still-fails"),
+    ],
+)
+def test_bad_repair_rejects_atomically(repair):
+    ledger = _collect_ledger()
+    plan = ledger.plan_repair(json.dumps(_bad_patch()))
+    patch = {"ledger_version": 2, "dispositions": [], "additions": [], **repair}
+    with pytest.raises(nd.NotesDocumentError):
+        ledger.parse_repair(json.dumps(patch), plan)
+
+
+def test_global_failures_have_no_sparse_repair():
+    ledger = _collect_ledger()
+    assert ledger.plan_repair("not json") is None
+    assert (
+        ledger.plan_repair(json.dumps({"ledger_version": 1, "dispositions": [], "additions": []}))
+        is None
+    )
+
+
+def test_repair_prompt_is_checked_against_the_actual_schema(monkeypatch):
+    ledger = _collect_ledger()
+    plan = ledger.plan_repair(json.dumps(_bad_patch()))
+    budget = nd.notes_budget("chatgpt", "gpt-5.6-sol")
+    seen = {}
+    original = nd._check_prompt
+
+    def spy(prompt, **kwargs):
+        seen.update(kwargs)
+        return original(prompt, **kwargs)
+
+    monkeypatch.setattr(nd, "_check_prompt", spy)
+    ledger.build_repair_prompt(plan, budget=budget)
+    assert seen["response_schema"] == ledger.schema() and seen["budget"] is budget
+
+
+@pytest.mark.parametrize("language", ["en", "vi"])
+def test_primary_prompt_requires_every_attention_ref(language):
+    prompt = _collect_ledger().build_prompt(output_language=language)
+    assert ("Every ref that has attention must be listed" in prompt) == (language == "en")
+    assert ("Mọi ref có attention phải được liệt kê" in prompt) == (language == "vi")
+
+
+def _repair_transport(calls, primary, repair):
+    def reconcile(prompt, kwargs):
+        if kwargs["attempt"] == "primary":
+            return primary(prompt)
+        assert "REPAIR_INPUT_JSON:\n" in prompt and "RECONCILE_INPUT_JSON:\n" not in prompt
+        return repair(json.JSONDecoder().raw_decode(prompt.split("REPAIR_INPUT_JSON:\n", 1)[1])[0])
+
+    return _long_transport(calls, reconcile)
+
+
+def _bad_primary(prompt):
+    source = reconcile_payload(prompt)["source"]["segments"]
+    second = source[1]["id"]
+    patch = {
+        "ledger_version": 2,
+        "dispositions": [
+            _update("m1", "Vendor renewal still open.", [second], [(second, "vendor contract")])
+        ],
+        "additions": [
+            _addition(
+                "open_questions",
+                "Vendor renewal timing open.",
+                [second],
+                [(second, "renewal is still open")],
+            )
+        ],
+    }
+    return json.dumps(patch, indent=2) + " " * 9_000
+
+
+def test_pipeline_sparse_repair_fixes_a_large_reconcile_response():
+    calls: list[dict] = []
+    coverage: list[dict] = []
+
+    def repair(payload):
+        assert [item["ref"] for item in payload["failures"]] == ["m1"]
+        second = payload["failures"][0]["source_ids"][0]
+        return json.dumps(
+            {
+                "ledger_version": 2,
+                "additions": [],
+                "dispositions": [
+                    _update(
+                        "m1", "Vendor renewal still open.", [second], [(second, "Vendor contract")]
+                    )
+                ],
+            }
+        )
+
+    result = _run(_repair_transport(calls, _bad_primary, repair), coverage=coverage)
+    assert [c["attempt"] for c in calls if c["stage"] == "reconcile"] == ["primary", "repair"]
+    assert [i["text"] for i in result["key_topics"]] == [
+        "Launch plan is approved.",
+        "Vendor renewal still open.",
+    ]
+    assert [i["text"] for i in result["open_questions"]] == ["Vendor renewal timing open."]
+    assert coverage[0]["source_audit"]["provider_call_index"] == len(calls)
+
+
+def test_pipeline_repair_touching_an_accepted_ref_fails_without_publishing():
+    calls: list[dict] = []
+
+    def repair(_payload):
+        return json.dumps(
+            {
+                "ledger_version": 2,
+                "additions": [],
+                "dispositions": [reconcile_disposition("m0", "remove", reason="unsupported")],
+            }
+        )
+
+    with pytest.raises(AssertionError) as failure:
+        _run(_repair_transport(calls, _bad_primary, repair))
+    assert failure.value.args[0]["attempt"] == "repair"
+    assert failure.value.args[0]["repair_state"] == "already_consumed"
+
+
+def test_repair_must_explicitly_resolve_a_bad_update_even_if_original_was_valid():
+    ledger = _ledger()
+    invalid = {
+        "ledger_version": 2,
+        "dispositions": [_update("m0", "Invalid update.", ["s1"], [("s1", "NOT AN EXACT QUOTE")])],
+        "additions": [],
+    }
+    plan = ledger.plan_repair(json.dumps(invalid))
+    assert plan.refs == ("m0",)
+    # Omitting the failed update would otherwise quietly restore a valid original item.
+    with pytest.raises(nd.NotesDocumentError, match="every failing ref"):
+        ledger.parse_repair(json.dumps(EMPTY_PATCH), plan)

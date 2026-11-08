@@ -1451,6 +1451,7 @@ def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
         }
         for index, start in enumerate((0.0, 1_200.0, 2_400.0, 3_600.0))
     ]
+    first_maps_ready = threading.Barrier(3)
     active = 0
     max_active = 0
     state_lock = threading.Lock()
@@ -1481,6 +1482,8 @@ def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
                 active += 1
                 max_active = max(max_active, active)
             try:
+                if label != "detail 3":
+                    first_maps_ready.wait(timeout=5)
                 if label == "detail 0":
                     time.sleep(0.08)
                 completion_order.append(label)
@@ -1512,9 +1515,10 @@ def test_hourly_provider_maps_overlap_and_reduce_without_racing_state():
         model="gpt-5.6-sol",
     )
 
-    # Quarter-hour fact parts: four maps, at most two in flight, then one structured final.
-    assert max_active == 2
-    assert completion_order == ["detail 1", "detail 2", "detail 3", "detail 0"]
+    # Quarter-hour fact parts: four maps, at most three in flight, then one structured final.
+    assert max_active == 3
+    assert completion_order[-1] == "detail 0"
+    assert sorted(completion_order) == [f"detail {i}" for i in range(4)]
     assert final_payloads == []  # no free-form final synthesis
     assert [item["text"] for item in result["overview"]] == [f"detail {i}" for i in range(4)]
     chunk_indices = [entry["provider_call_index"] for entry in manifests[0]["chunks"]]
@@ -2502,3 +2506,51 @@ def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tm
     state = provider.store._read()
     assert state["connection_status"] == "connected"
     assert state["connection_version"] == 7
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected_workers"),
+    [("antigravity", "gemini-3.8-flash", [2]), ("chatgpt", "unknown-model", [])],
+)
+def test_other_map_paths_keep_their_existing_concurrency(
+    monkeypatch, provider, model, expected_workers
+):
+    from asr_studio import notes_pipeline
+
+    real_executor = notes_pipeline.ThreadPoolExecutor
+    capacities = []
+
+    def executor(*args, **kwargs):
+        capacities.append(kwargs["max_workers"])
+        return real_executor(*args, **kwargs)
+
+    monkeypatch.setattr(notes_pipeline, "ThreadPoolExecutor", executor)
+    snapshot = _snapshot()
+    snapshot["segments"] = [
+        {
+            "id": f"{index:032x}",
+            "start_seconds": float(index * 1_200),
+            "end_seconds": float(index * 1_200 + 1),
+            "text": f"Discussion detail {index}.",
+            "speaker_name": "Morgan",
+        }
+        for index in range(4)
+    ]
+
+    def transport(prompt, **kwargs):
+        result = _valid_document()
+        result["overview"] = [
+            {"text": "Discussion.", "source_ids": [kwargs["allowed_source_ids"][0]]}
+        ]
+        return json.dumps(result)
+
+    notes_pipeline.generate_notes_document(
+        snapshot=snapshot,
+        output_language="en",
+        transport=transport,
+        invalid_output_error=lambda diagnostics: AssertionError(diagnostics),
+        limit_error=RuntimeError,
+        provider=provider,
+        model=model,
+    )
+    assert capacities == expected_workers

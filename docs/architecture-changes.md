@@ -1582,9 +1582,9 @@ Liên kết: [#79](https://github.com/nguyencanhtrung/asr-studio/issues/79),
 Đường phân cấp trước đây bỏ audit sau final (`quality_not_qualified`), nên ý mà map đã trích có
 thể mất ở final và claim không có nguồn vẫn được công bố. Baseline đo trên `d726bf5`
 (nguồn: `/tmp/asr-notes-recheck-20261108/aggregate-metadata.json`, `semantic_gate`): ca dài
-`long_found` 9/12 (cần ≥10), `material_invented` 6 (cần 0), `long_critical` 7/7, Notes ca dài
-157,688 giây với 4 provider call. Chất lượng sau thay đổi **đang chờ** lượt chạy frozen 5 ca của
-root; mục này không công bố số mới.
+`long_found` 9/12 (cần ≥10), 6 vấn đề về nguồn hỗ trợ (cần 0; không đồng nghĩa 6 sự kiện bịa),
+`long_critical` 7/7, Notes ca dài
+157,688 giây với 4 provider call. Chất lượng sau thay đổi **đang chờ** lượt nghiệm thu có đầu vào khóa của 5 ca; mục này không công bố số mới.
 
 Sau final của nguồn dài, khi provider là ChatGPT với budget token đã biết, pipeline gửi đúng một
 lượt `reconcile` (module `notes_reconcile.py`) trước khi khôi phục source ID. Ledger bất biến
@@ -1644,7 +1644,7 @@ khi reconcile chạy. Baseline chỉ đọc từ file, chấm tài liệu (tạm
 (`/tmp/asr-notes-reconcile-20261108/score-long/report.md`): ca dài found 8/12 (cần ≥10),
 critical 7/7, strict material 1 (tên chỉ có trong segment không được trích), còn cụm số nhiễu
 dạng "A to B" giảm dần bị nêu như số lượng chắc chắn. Số liệu sau thay đổi **chưa công bố** cho
-tới lượt chạy frozen của root.
+tới lượt nghiệm thu có đầu vào khóa.
 
 #### Thay đổi
 
@@ -1715,7 +1715,54 @@ phải trả một disposition `keep` cho mỗi ref (294 ref map), nên phần l
 #### Kiểm chứng và giới hạn
 
 Test đơn vị đỏ trên `b2d57fb`, xanh sau thay đổi. **Không** tuyên bố chất lượng hay latency sau
-thay đổi: chưa gọi model, đo sau chờ lượt frozen của root.
+thay đổi: chưa gọi model, đo sau chờ lượt nghiệm thu có đầu vào khóa.
+
+### #79 — Reconcile gom lỗi theo ref và sửa thưa (`notes-hierarchical-v23`)
+
+#### Vấn đề quan sát
+
+Lượt v22 ca dài (call reconcile, đầu ra 26.129 byte, 40 thao tác) lỗi `notes_invalid_output`
+(`validation_reason` = `text`). Chẩn đoán offline: 6 thao tác được nêu lỗi độc lập (bỏ từ phủ định,
+owner không có trong nguồn, tên không trích, quote đổi chữ hoa/thường) và 44 ref có `attention`
+mà model không nêu, nên bị giữ mặc định rồi trượt kiểm tra grounding. Validator chỉ báo lỗi đầu
+tiên; repair chung gửi lại toàn bộ đầu ra nên vượt trần 8.000 byte và `repair_state` =
+`unavailable`. Một lỗi là dương tính giả của mã: tên bị tách giữa hai segment liền nhau
+(`… Discovery` / `Park …`) bị nhãn người nói chen vào giữa.
+
+#### Thay đổi
+
+- Văn bản trích dẫn dùng để kiểm tra tên: các segment được trích xếp theo thứ tự nguồn; chỉ segment
+  liền kề mới nối liền, segment không liền kề và nhãn người nói được ngăn bằng dấu phân cách mà
+  cụm tên không vượt qua được. Tên chỉ có trong segment không trích vẫn bị từ chối.
+- `apply` kiểm tra từng ref độc lập (thao tác sai hình dạng, ref lạ/lặp, update/confirm/remove,
+  merge, giữ mặc định, grounding, addition) và gom mọi lỗi vào `ReconcilePatchError`. Chẩn đoán
+  công khai theo lỗi đầu tiên theo thứ tự ledger; thông điệp chỉ có số ref lỗi, không có văn bản
+  nguồn. Lỗi toàn cục (không phải JSON, sai hình dạng ngoài cùng, kiểm tra tài liệu) vẫn dừng ngay.
+- Prompt chính EN/VI yêu cầu nêu mọi ref có `attention`, giữ từ phủ định/chắc chắn khi update và
+  chép quote đúng chữ hoa/thường. Bỏ sót vẫn là giữ mặc định; guard không nới.
+- Repair dùng chung duy nhất của tác vụ: lỗi theo ref → prompt thưa chỉ gồm ref lỗi (mục gốc,
+  `attention`, thao tác trước, lỗi, tên cần trích và ID ứng viên) và các segment được trích hoặc ứng
+  viên. Phản hồi chỉ được nêu ref lỗi và thay tối đa số addition lỗi; mã ghép lên các thao tác đã
+  chấp nhận rồi kiểm tra lại toàn bộ ledger. Repair sai ở bất kỳ đâu bị từ chối toàn bộ, tác vụ lỗi
+  và giữ Notes cũ. Lỗi toàn cục dùng repair chung cũ (trần 8.000 byte). Prompt repair qua cùng kiểm
+  tra ngân sách model/schema thật (`_check_prompt` với schema nội bộ); phản hồi vẫn trần 64.000 byte.
+- Repair phải nêu rõ mọi ref lỗi, kể cả khi mục gốc sẽ qua guard nếu bỏ qua thao tác lỗi;
+  thiếu ref không được âm thầm khôi phục mục gốc. Ref không lỗi vẫn giữ nguyên.
+- Riêng map danh mục sự kiện ChatGPT dài chạy tối đa 3 phần song song (v21/v22 là 2),
+  giữ nguyên số call và thứ tự kết quả theo nguồn. Các đường map khác vẫn tối đa 2.
+  Mục tiêu là giảm phần thời gian map; chưa suy ra mức tăng tốc khi chưa đo lượt chạy đầy đủ.
+- `PROMPT_VERSION` = `notes-hierarchical-v23`. Prompt ngắn không đổi.
+
+#### Kiểm chứng và giới hạn
+
+Test đơn vị mới đỏ trên `687a831`, xanh sau thay đổi. Áp lại offline phản hồi v22 thật (chỉ chẩn
+đoán, prompt chính đã đổi nên không phải replay chính xác): 49 lỗi được gom (5 thao tác nêu + 44 giữ
+mặc định), dương tính giả tên ranh giới hết, prompt repair khoảng 78 KB qua kiểm tra ngân sách.
+Lượt kiểm chứng code ở thời điểm ghi mục này chưa xác nhận chất lượng hay độ trễ ca dài;
+bằng chứng nghiệm thu cập nhật tại #79 / PR #181. Model vẫn có thể trả repair sai, khi đó tác vụ lỗi.
+Regression cũng tạo một revision đã lưu, chạy lại Notes rồi nhận `notes_invalid_output` và so toàn
+bộ revision trước/sau để xác nhận bản cũ được giữ nguyên. Đường Antigravity và model không rõ có
+kiểm tra riêng mức song song, không chỉ kiểm tra nhánh map danh mục sự kiện.
 
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
