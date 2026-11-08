@@ -49,6 +49,8 @@ Strict mode also adds three provenance links after all others, each one complete
 `unverified_vote_names` is a check, not a link: it lists each person an item says is voting (or
 will vote) who is not recognised for any cited first-person vote statement by an exact handoff
 before that turn or an exact "Thank you, <name>" after it. A thank-you elsewhere is no proof.
+`unverified_speakers` applies the same local recognition, plus a cited self-introduction or
+grammatical report, to every attributed speaker the item names.
 """
 
 from __future__ import annotations
@@ -119,6 +121,31 @@ _DIRECT_ACK = re.compile(
 )
 _NOT_AN_ADDRESSEE = {"to", "for", "all", "both", "everyone", "everybody", "the", "our"}
 _SENTENCE_END = re.compile(r"[.!?…][\"'”’)]*\s*$")
+
+
+def _inflections(base: str) -> set[str]:
+    """Base, third-person, past and -ing forms: "state" -> states/stated/stating."""
+    if base == "say":
+        return {"say", "says", "said", "saying"}
+    if base.endswith("y"):
+        return {base, f"{base[:-1]}ies", f"{base[:-1]}ied", f"{base}ing"}
+    stem = base.removesuffix("e")
+    third = f"{base}es" if base.endswith(("s", "sh", "ch")) else f"{base}s"
+    return {base, third, f"{stem}ed", f"{stem}ing"}
+
+
+# Speech-attribution verbs in every tense: "Lee states", "Lee urged", "Lee is arguing".
+ATTRIBUTION_FORMS = frozenset(
+    form
+    for base in """
+    say state ask request urge note propose argue support oppose describe raise express
+    recommend thank emphasize emphasise question suggest call warn explain testify comment
+    remark claim praise acknowledge highlight mention report condemn insist add agree
+    """.split()  # noqa: SIM905 - a readable word list
+    for form in _inflections(base)
+)
+_SPEECH_VERBS = "|".join(sorted(ATTRIBUTION_FORMS, key=len, reverse=True))
+# The generic context anchor keeps its original verbs: ChatGPT links never change.
 _ATTRIBUTION_VERBS = (
     "said|says|stated|asked|requested|urged|noted|proposed|argued|supported|opposed|described|"
     "raised|expressed|recommended|thanked|emphasized|questioned|suggested|called|warned"
@@ -410,6 +437,84 @@ def unverified_vote_names(
         for name in names
         if not any(_reports_vote(name, segments[index]["text"]) for index in cited)
         and not any(_recognized(name, index, segments, set(cited)) for index in statements)
+    ]
+
+
+_GREETING = re.compile(
+    r"^(?:hi|hello|hey|thanks?|thank\s+you|good\s+(?:morning|afternoon|evening))\b", re.I
+)
+_CALLED_NAMES = r"(?:[A-Z][\w'’-]*,?\s+){0,3}"
+
+
+def _self_introduces(name: str, text: str) -> bool:
+    """`name` introduces itself: "My name is <name>", or a first sentence that is the name."""
+    key = re.escape(name)
+    if re.search(
+        rf"\b(?i:my\s+name\s+is|i\s+am|i['’]m|this\s+is)\s+{_CALLED_NAMES}{key}\b(?!['’]s)", text
+    ):
+        return True
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    while sentences and _GREETING.match(sentences[0]) and len(sentences[0].split()) <= 5:
+        sentences.pop(0)
+    return bool(sentences) and (
+        re.fullmatch(rf"{_CALLED_NAMES}{key}\.", sentences[0]) is not None
+        or re.match(  # "Lee Ann, Acme here on behalf of ..."
+            rf"{_CALLED_NAMES}{key},\s+(?:[A-Z][\w'’&.-]*\s+){{0,3}}"
+            r"(?:here|from|with|representing|on\s+behalf)\b",
+            sentences[0],
+        )
+        is not None
+    )
+
+
+def _reports_speech(name: str, text: str) -> bool:
+    """`name` is the grammatical subject: "Lee said", "Lee, who has argued", "Lee will vote"."""
+    aux = r"(?:\s+|,\s*who\s+)(?:(?:is|was|has|had|will|would)\s+)?(?:be\s+)?"
+    verbs = rf"(?:{_SPEECH_VERBS}|vot(?:e|es|ed|ing))"
+    return re.search(rf"\b{re.escape(name)}{aux}{verbs}\b", text) is not None
+
+
+def _person_evidence(name: str, segments: list[dict[str, Any]]) -> bool:
+    """The source treats `name` as a person: an honorific, a self-introduction or a call order.
+
+    This only classifies the name; it never identifies who made a statement.
+    """
+    key = re.escape(name)
+    person = re.compile(
+        rf"\b{_HONORIFIC}\.?\s+(?:[A-Z][\w'’-]*\s+)?{key}\b"
+        rf"|\b(?i:followed\s+by|start\s+(?:off\s+)?with|next\s+(?:up\s+)?is)\s+{_CALLED_NAMES}{key}\b"
+    )
+    return any(
+        person.search(text := segment["text"]) or _self_introduces(name, text)
+        for segment in segments
+    )
+
+
+def unverified_speakers(
+    item: dict[str, Any],
+    names: list[tuple[str, bool]],
+    segments: list[dict[str, Any]],
+    position: dict[str, int],
+) -> list[str]:
+    """Attributed speakers (name, titled) the item's own pool does not locally identify.
+
+    A titled name, or one the source treats as a person, needs a cited self-introduction, a
+    cited grammatical report, an exact cited handoff before a cited turn or an exact cited
+    "Thank you, <name>" after it. A roster, roll call, thanks to someone else or a mention
+    elsewhere in the pool is no proof; an untitled organization name is out of scope.
+    """
+    cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
+    pool = set(cited)
+    return [
+        name
+        for name, titled in dict.fromkeys(names)
+        if (titled or _person_evidence(name, segments))
+        and not any(
+            _self_introduces(name, segments[index]["text"])
+            or _reports_speech(name, segments[index]["text"])
+            or _recognized(name, index, segments, pool)
+            for index in cited
+        )
     ]
 
 

@@ -24,7 +24,7 @@ from typing import Any
 
 from asr_studio import notes_document as nd
 from asr_studio.notes_audit import _source_excerpt_text
-from asr_studio.notes_context import unverified_vote_names
+from asr_studio.notes_context import ATTRIBUTION_FORMS, unverified_speakers, unverified_vote_names
 
 AUDIT_VERSION = 1
 MAX_SEMANTIC_OUTPUT_BYTES = 64_000  # one part's response and the merged patch alike
@@ -55,8 +55,9 @@ _PROTECTED_WORDS = frozenset(
     ngàn triệu tỷ không chưa chẳng đừng chớ
     """.split()  # noqa: SIM905 - a readable word list
 )
-_ATTRIBUTION_EN = frozenset(
-    """
+_ATTRIBUTION_EN = (
+    frozenset(
+        """
     noted said says stated argued asked explained urged praised thanked acknowledged emphasized
     emphasised highlighted raised questioned expressed described reported mentioned suggested
     proposed recommended warned cautioned credited criticized criticised called added agreed
@@ -65,6 +66,20 @@ _ATTRIBUTION_EN = frozenset(
     praise remarks remark comments comment concern concerns view views position question
     questions request testimony statement argument opinion thanks critique criticism support
     opposition point points recommendation proposal
+    """.split()  # noqa: SIM905 - a readable word list
+    )
+    | ATTRIBUTION_FORMS
+)  # every tense: "states", "urges", "is arguing"
+# Lower-case-in-source role words that may lead an attribution: "Councilmember Lee states".
+_LEAD_ROLES = frozenset(
+    """
+    councilmember councilman councilwoman chair chairman chairwoman chairperson president mayor
+    commissioner director mr mrs ms dr judge
+    """.split()  # noqa: SIM905 - a readable word list
+)
+_SPEECH_NOUNS = frozenset(
+    """
+    testimony testimonies comment comments remark remarks statement statements question questions
     """.split()  # noqa: SIM905 - a readable word list
 )
 _ATTRIBUTION_VI = (
@@ -159,15 +174,9 @@ def anonymous_variants(
     and the kept tail is present there, so a supported compound name is never shortened.
     """
     tokens = list(_TOKEN_RE.finditer(text))
-    run = 0
-    while run < min(len(tokens) - 1, MAX_LEADING_NAME_TOKENS) and _proper(
-        tokens[run].group(), common
-    ):
-        run += 1
-        if tokens[run - 1].group().endswith((":", ",")):
-            break  # "Name: claim" — the colon ends the attribution
-    if run == 0:
-        return []
+    run, roles = _leading_run(tokens, common)
+    if run == roles:
+        return []  # no name, or only generic role words: never dropped
     starts: list[int] = []
     if tokens[run - 1].group().endswith(":") or _starts_attribution(text[tokens[run].start() :]):
         starts.append(tokens[run].start())
@@ -175,7 +184,7 @@ def anonymous_variants(
     if run > 1 and _phrase(tokens, 0, run) not in cited:
         starts.extend(
             tokens[k].start()
-            for k in range(run - 1, 0, -1)  # shortest kept tail first
+            for k in range(run - 1, roles, -1)  # shortest kept tail first; never only a role
             if f" {_phrase(tokens, k, run)} " in f" {cited} "
         )
     variants: list[str] = []
@@ -185,6 +194,53 @@ def anonymous_variants(
             continue
         variants.append(variant)
     return variants[:MAX_VARIANTS_PER_ITEM]
+
+
+def _leading_run(tokens: list[re.Match[str]], common: frozenset[str]) -> tuple[int, int]:
+    """Leading name tokens and how many of them are lower-case-in-source role words."""
+    run = roles = 0
+    while run < min(len(tokens) - 1, MAX_LEADING_NAME_TOKENS):
+        token = tokens[run].group()
+        if not _proper(token, common):
+            if run != roles or _word(token) not in _LEAD_ROLES:
+                break
+            roles += 1
+        run += 1
+        if token.endswith((":", ",")):
+            break  # "Name: claim" — the colon ends the attribution
+    return run, roles
+
+
+def attributed_speakers(text: str, common: frozenset[str] = frozenset()) -> list[tuple[str, bool]]:
+    """(name, titled) for each person the text says spoke: a leading attribution or a name
+    before a speech noun ("Lee testimony:", "Lee's comments"). The name is its last token.
+    """
+    tokens = list(_TOKEN_RE.finditer(text))
+    found: list[tuple[str, bool]] = []
+    run, roles = _leading_run(tokens, common)
+    if (
+        run > roles
+        and _word(tokens[run - 1].group()) not in _ATTRIBUTION_EN  # "Argument: ..." names no one
+        and (
+            tokens[run - 1].group().endswith(":")
+            or _starts_attribution(text[tokens[run].start() :])
+        )
+    ):
+        found.append((_EDGE_RE.sub("", _POSSESSIVE_RE.sub("", tokens[run - 1].group())), roles > 0))
+    for index, token in enumerate(tokens):
+        if index == 0 or _word(token.group()) not in _SPEECH_NOUNS:
+            continue
+        start = index
+        while start > max(index - MAX_LEADING_NAME_TOKENS, 0) and _proper(
+            tokens[start - 1].group(), common
+        ):
+            start -= 1
+        if start == index or tokens[index - 1].group().endswith((":", ",", ".")):
+            continue
+        titled = start > 0 and _word(tokens[start - 1].group()) in _LEAD_ROLES
+        name = _EDGE_RE.sub("", _POSSESSIVE_RE.sub("", tokens[index - 1].group()))
+        found.append((name, titled))
+    return list(dict.fromkeys(found))
 
 
 # ----- secondary legal references (detail-free variants) ---------------------------------------
@@ -496,6 +552,62 @@ def unverified_roles(text: str, cited_text: str) -> set[str]:
     }
 
 
+# A group actor leading the item ("Council goal:", "The committees will"); a group word later
+# in the text is a common noun and out of scope. "Council" never matches "councilmember".
+_GROUP_CUES = {
+    "council": r"council(?!\s*-?\s*(?:members?|wom[ae]n|m[ae]n|persons?)\b)|hội\s+đồng",
+    "committee": r"committees?|ủy\s+ban",
+    "board": r"boards?",
+    "commission": r"commissions?",
+}
+_GROUP_LEAD_RE = re.compile(
+    rf"^\s*(?:the\s+)?(?:city\s+)?(?P<group>{'|'.join(_GROUP_CUES.values())})(?:['’]s?)?(?!\w)"
+    r"(?!\s+(?:bills?|resolutions?|ordinances?|files?|members?)\b)",  # a record label, not an actor
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def unverified_group_actor(text: str, cited_text: str) -> str | None:
+    """The leading group actor of the text when no cited segment literally names that group."""
+    lead = _GROUP_LEAD_RE.match(text)
+    if lead is None:
+        return None
+    for cue in _GROUP_CUES.values():
+        if re.fullmatch(cue, lead["group"], re.IGNORECASE | re.UNICODE):
+            found = re.search(rf"(?<!\w)(?:{cue})(?!\w)", cited_text, re.IGNORECASE | re.UNICODE)
+            return None if found else lead["group"]
+    return None
+
+
+# Completion of a deliverable, and a partial-progress qualifier right after the verb.
+_COMPLETION_RE = re.compile(
+    r"(?<!\w)(?:complet(?:e|es|ed|ing|ion)|finish(?:es|ed|ing)?|finali[sz](?:e|es|ed|ing|ation)"
+    r"|hoàn\s+(?:thành|tất))(?!\w)",
+    re.IGNORECASE | re.UNICODE,
+)
+_PARTIAL_RE = re.compile(
+    r"\s+(?:\w+\s+){0,2}?(?:(?:much|most|some|part|parts|portion|portions|half|a\s+lot|a\s+bit)"
+    r"\s+of|(?:the\s+)?(?:work|steps?|tasks?)\s+(?:needed|necessary|required)\s+to"
+    r"|work\s+toward|progress|một\s+phần|phần\s+lớn|một\s+số|bước\s+đầu|phần\s+việc)",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _completions(text: str) -> list[bool]:
+    """Whether each completion statement of the text carries a partial-progress qualifier."""
+    return [_PARTIAL_RE.match(text, m.end()) is not None for m in _COMPLETION_RE.finditer(text)]
+
+
+def strengthened_completion(text: str, cited_text: str) -> bool:
+    """The text states an unqualified completion while every cited completion is partial.
+
+    "will complete much of the work needed to develop X" never supports "completion of X";
+    a pool with no completion statement, or with one unqualified, is left to the model audit.
+    """
+    claims, cited = _completions(text), _completions(cited_text)
+    return bool(claims) and not all(claims) and bool(cited) and all(cited)
+
+
 _RECORD_KINDS = {
     "ordinance": r"ordinance|sắc\s+lệnh",
     "resolution": r"resolution|nghị\s+quyết",
@@ -601,7 +713,7 @@ class SemanticAudit:
         self._segment_text = {
             segment["id"]: str(segment.get("text", "")) for segment in source["segments"]
         }
-        common = _common_vocabulary(source)
+        common = self._common = _common_vocabulary(source)
         items: list[_Item] = []
         self.quantity_marks = 0
         for section in _SECTION_NAMES:
@@ -908,8 +1020,11 @@ class SemanticAudit:
             counts["cleared_owner"] += clear_owner
             counts["cleared_deadline"] += clear_deadline
         # Deterministic guards on the patched text and its own pooled citations: approximate
-        # scale wording keeps a fixed marker, and a named vote intention with no local
-        # recognition of its first-person statement is quarantined like an unresolved ref.
+        # scale wording keeps a fixed marker; a named vote intention with no local recognition
+        # of its first-person statement is quarantined like an unresolved ref; an attributed
+        # speaker the pool does not locally identify is dropped as a literal suffix, or the
+        # item is quarantined; a confirmation or action item with an uncited leading group
+        # actor or a completion the pool states only as partial progress is quarantined.
         segments = self.source["segments"]
         position = {segment["id"]: index for index, segment in enumerate(segments)}
         forced: set[str] = set()
@@ -923,7 +1038,33 @@ class SemanticAudit:
             counts["quantity_unclear"] += marks
             if unverified_vote_names(published, segments, position):
                 forced.add(item.ref)
-            elif item.section == "confirmation_items":
+                continue
+            names = attributed_speakers(published["text"], self._common)
+            if unverified_speakers(published, names, segments, position):
+                # Drop the unproven attribution as a literal suffix, or quarantine the item.
+                variant = next(
+                    (
+                        v
+                        for v in anonymous_variants(published["text"], self._common)
+                        if not unverified_speakers(
+                            published, attributed_speakers(v, self._common), segments, position
+                        )
+                    ),
+                    None,
+                )
+                if variant is None:
+                    forced.add(item.ref)
+                    continue
+                published["text"] = variant
+                counts["anonymized"] += 1
+            if item.section in {"confirmation_items", "action_items"}:
+                cited = self._cited(published)
+                if unverified_group_actor(published["text"], cited) or strengthened_completion(
+                    published["text"], cited
+                ):
+                    forced.add(item.ref)
+                    continue
+            if item.section == "confirmation_items":
                 # Uncertainty guards only: an uncited official role is quarantined, and close
                 # conflicting variants of a modified record keep a marker on its digits.
                 cited = self._cited(published)
@@ -995,7 +1136,11 @@ _INSTRUCTIONS = {
         "call, as a nominee or as a thanked person, does not identify who made a statement. A "
         "speaker is identified only by an explicit self-introduction, recognition or handoff "
         "immediately next to the cited statement; cite that segment, otherwise choose the "
-        "anonymous variant. Never infer a speaker from speaker labels. An organization modifier "
+        "anonymous variant; this holds in every tense (states, urges, said). Never infer a speaker "
+        "from speaker labels. A group owner such as a council, committee, board or commission "
+        "needs its own cited mention. Partial progress (much of the work needed to develop a "
+        "recommendation) is not completion of the deliverable; keep the qualifier or list the "
+        "ref. An organization modifier "
         "cannot be borrowed from an unrelated segment: two separate mentions are not one "
         "combined name. Set clear_owner or clear_deadline when an action owner or deadline is "
         "not stated in its cited or appended segments. Leave fully supported items unlisted; "
@@ -1043,8 +1188,12 @@ _INSTRUCTIONS = {
         "khác trong nguồn, như trong danh sách, điểm danh biểu quyết, người được đề cử hoặc người "
         "được cảm ơn, không cho biết ai đã phát biểu. Người nói chỉ được xác định bằng lời tự giới "
         "thiệu, lời mời hoặc lời chuyển lượt rõ ràng ngay cạnh phát biểu được trích; hãy trích "
-        "segment đó, nếu không thì chọn biến thể ẩn danh. Không bao giờ suy ra người nói từ nhãn "
-        "người nói. Không được mượn bổ ngữ tổ chức từ một segment không liên quan: hai lần nhắc "
+        "segment đó, nếu không thì chọn biến thể ẩn danh; điều này áp dụng ở mọi thì (nêu, kêu "
+        "gọi, đã nói). Không bao giờ suy ra người nói từ nhãn người nói. Chủ thể là nhóm như "
+        "hội đồng, ủy ban hay ban cần được chính segment được trích nêu. Tiến độ một phần (phần "
+        "lớn công việc cần để xây dựng một kiến nghị) không phải là hoàn thành sản phẩm; giữ "
+        "bổ ngữ đó hoặc liệt kê ref. Không được mượn bổ ngữ tổ chức từ một segment không liên "
+        "quan: hai lần nhắc "
         "riêng không tạo thành một tên ghép. Đặt clear_owner hoặc clear_deadline khi người phụ "
         "trách hoặc hạn chót không được nêu trong segment được trích hoặc bổ sung. Không liệt kê "
         "các mục đã được hỗ trợ đầy đủ; mục không liệt kê được giữ nguyên. Khi không text_ref, "
