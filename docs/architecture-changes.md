@@ -2229,7 +2229,11 @@ vẫn là tổng Boolean gốc. Không thêm lượt gọi, không sửa prompt 
 **Kiểm chứng và đánh đổi.** Ngoại tuyến trên đầu ra v41: nối đúng 3 ID tally, giữ câu chữ và
 bỏ owner không chứng minh được (`v42-root-engineering.json`); không phải phép đo v42. Owner có
 thể bị bỏ khi thiếu nhận diện cục bộ, ưu tiên không gán sai người. V42 chưa đo thực tế; không
-ghép thời gian v41 với kiểm tra mã mới. Tag: architecture; đích: `docs/backend-contract.md`;
+ghép thời gian v41 với kiểm tra mã mới. Lượt v42 đầy đủ đo 500.522354 giây,
+22 lượt gọi, 0 cache; 7/12 nội dung, 5/7 ý quan trọng,
+0 khẳng định quan trọng thiếu nguồn, 0 ID sai trên 141 mục:
+chưa đạt độ phủ (`v42-physical-qualification.json`, `v42-score-a/assessment.json`,
+`v42-score-b/item73-clarification.md`). Tag: architecture; đích: `docs/backend-contract.md`;
 [issue #183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
 [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184).
 
@@ -2260,3 +2264,37 @@ Tag: operations. Đích: `Dockerfile`.
 - Trade-off: this closes the transcript-fixture gap without claiming representative
   audio coverage. It does not relax the frozen content gate for #79.
 - Follow-up: #79 and PR #181; tag: acceptance; target: Notes acceptance documentation.
+
+### #183 — Sửa ngắn nội dung tại bước kiểm nguồn (`notes-hierarchical-v43`)
+
+**Nguyên nhân.** Giao thức chỉ cho chọn câu/biến thể sẵn có hoặc cách ly cả mục. Trên cùng
+đầu vào đã lưu, nhánh cũ cách ly kết luận bill trong khi nhánh mới sửa phần phụ và giữ
+kết quả có nguồn (`revised-v43/pilot/results/A-5.json`, `B-5.json`).
+
+**Thiết kế.** Semantic audit hiện có nhận `revised_text` tùy chọn, chỉ với ref `.o` được
+model đánh dấu thay đổi; không thêm lượt gọi. Giới hạn ký tự `max(300, ceil(1.5 × độ dài
+câu gốc))`, cùng trần byte/mục/tài liệu hiện hành. Giữ ID cũ, chỉ thêm ID hiển thị trong
+chính phần kiểm; owner/deadline chỉ giữ hoặc xóa. Bộ lọc token số/mã là kiểm cấu trúc,
+không chứng minh nghĩa; điều kiện/phủ định và chuẩn hóa ASR vẫn cần model và đối chiếu
+độc lập. Các guard nguồn/owner hiện hành tiếp tục chạy. Coverage ghi `model_revised`
+và `revised_refs`, bao gồm cả đề xuất sau đó bị guard cách ly; đây không phải số mục
+được chứng minh đúng. Mặc định tắt, chỉ nhánh Gemini đã đăng ký bật; map/reconcile và
+ChatGPT giữ nguyên. Nguồn hợp đồng: `revised-v43/contract.json` và mã hiện hành.
+
+**Đo kiểm có kiểm soát.** Pilot gửi 8 request thật, 0 cache, cùng đầu vào
+và 4 phần kiểm mỗi nhánh; bốn phần còn lại dùng phản hồi đã lưu.
+Nhánh cũ có 14 mục cách ly/1972 từ review; nhánh mới
+7 mục/845 từ, 3 đề xuất sửa. Không phải lượt tạo Notes đầy đủ,
+không dùng 205.301654 giây của pilot làm thời gian nghiệm thu (`revised-v43/pilot/results/summary.json`,
+`runtime-proof.json`). Đối chiếu độc lập: giữ đủ hai critical và 3/4 nhóm mục tiêu nhưng còn 1 mục thiếu nguồn, 0 ID sai; pilot không đạt. Không mở lượt đầy đủ theo giới hạn đã thống nhất (`revised-v43/pilot-qualification.json`, `pilot-assess/root-blocker-proof.json`).
+
+**Đánh đổi.** Cho sửa câu đủ khả năng giữ lõi và phục hồi quan hệ; schema không bảo đảm
+sự thật. Giữ menu biến thể cũ để giới hạn thay đổi. Không tiếp tục mở rộng nguyên văn,
+không dùng xóa token làm bằng chứng giữ nghĩa. Một mẫu A/B không chứng minh ổn định.
+
+**Theo dõi.** [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184); chỉ xem xét lượt đầy đủ
+sau pilot đạt, không tự mở vòng thử tiếp nếu thất bại. Tag: architecture; đích:
+`docs/backend-contract.md`.
+
+**Giới hạn hiện tại.** Kiểm tra adversarial xác nhận bản sửa có thể khôi phục số ASR đã bị đánh dấu chưa rõ (`revised-v43/root-quantity-regression.json`, `test/quantity_probe.txt`); đây là hồi quy bắt buộc sửa. Bộ test đầy đủ bị timeout 1.200 giây, có một dấu lỗi trước khi dừng, chưa có summary; không coi là pass (`revised-v43/test/full.rc`, `test/report.md`).

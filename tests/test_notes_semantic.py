@@ -530,7 +530,7 @@ def test_prompt_explains_the_source_excerpt_quarantine(language):
     )
     marker = {"en": "verbatim as a needs-review", "vi": "đăng nguyên văn các segment"}[language]
     assert marker in prompt
-    assert nd.PROMPT_VERSION == "notes-hierarchical-v42"
+    assert nd.PROMPT_VERSION == "notes-hierarchical-v43"
 
 
 @pytest.mark.parametrize(

@@ -1101,6 +1101,7 @@ def generate_notes_document(
             final_document,
             max_unit_size=max_unit_size,
             output_language=output_language,
+            allow_revisions=True,
         )
         parts: list[tuple[SemanticAudit, str, Callable[[str | None], str]]] = []
         for part in audit.partitions():
@@ -1179,6 +1180,8 @@ def generate_notes_document(
             "provider_call_indices": indices,
             "part_count": len(parts),
             "counts": counts,
+            # Global refs of every model-revised item (never its text), for independent audit.
+            "revised_refs": audit.revised_refs([result[0] for result in results if result]),
         }
         return document
 

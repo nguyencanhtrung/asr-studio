@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 import itertools
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -863,6 +864,22 @@ def mark_conflicting_modified_records(
     return text, len(spans)
 
 
+MIN_REVISED_CHARS = 300
+_RECORD_TOKEN_RE = re.compile(r"\w*\d\w*(?:[.,/:-]\d\w*)*|[A-Za-z]+", re.UNICODE)
+
+
+def _record_tokens(text: str) -> set[str]:
+    """Digit tokens (separators dropped), mixed code tokens and count words as digits."""
+    found: set[str] = set()
+    for token in _RECORD_TOKEN_RE.findall(text):
+        word = token.casefold()
+        if word in _SMALL_NUMBERS:
+            found.add(str(_SMALL_NUMBERS[word]))
+        elif any(c.isdigit() for c in token):
+            found.add(re.sub(r"[.,/:-]", "", word))
+    return found
+
+
 @dataclass(frozen=True, slots=True)
 class _Item:
     ref: str
@@ -881,9 +898,11 @@ class SemanticAudit:
         *,
         max_unit_size: int = 1,
         output_language: str = "en",
+        allow_revisions: bool = False,
     ) -> None:
         if not isinstance(source, dict) or not isinstance(source.get("segments"), list):
             raise _error("The semantic audit source is invalid.", "source_ids")
+        self.allow_revisions = allow_revisions  # optional change.revised_text; off: unchanged
         self.output_language = nd.validate_output_language(output_language)
         self.source = copy.deepcopy(source)
         self.document = copy.deepcopy(document)
@@ -1184,6 +1203,7 @@ class SemanticAudit:
                 },
                 "clear_owner": {"type": "boolean"},
                 "clear_deadline": {"type": "boolean"},
+                **({"revised_text": {"type": ["string", "null"]}} if self.allow_revisions else {}),
             }
         )
         return obj(
@@ -1198,6 +1218,35 @@ class SemanticAudit:
                 },
             }
         )
+
+    @staticmethod
+    def revised_refs(patches: Sequence[dict]) -> list[str]:
+        """Refs whose validated patch carries a non-null revised_text, in patch order."""
+        return [
+            c["ref"]
+            for patch in patches
+            for c in patch["changes"]
+            if c.get("revised_text") is not None
+        ]
+
+    def _revision(self, revised: object, suffix: str, original: str, cited: str) -> str:
+        """The bounded model rewrite of one '.o' text; a structural filter, never semantic proof.
+
+        Only the original may be revised, never a quoted excerpt or a label; the text stays
+        within max(300, ceil(1.5 * original)) characters, and every number or record token it
+        adds must already occur in the original or in the item's own cited source.
+        """
+        if not isinstance(revised, str) or not revised.strip():
+            raise _error("The semantic audit revised_text must be non-blank text.", "fields")
+        if suffix != "o" or any(label in original for label in _EXCERPT_LABELS):
+            raise _error("Only the original text of an item may be revised.", "fields")
+        if any(label in revised for label in _EXCERPT_LABELS):
+            raise _error("The semantic audit revised_text spoofs a source label.", "fields")
+        if len(revised) > max(MIN_REVISED_CHARS, math.ceil(1.5 * len(original))):
+            raise _error("The semantic audit revised_text is too long.", "size")
+        if not _record_tokens(revised) <= _record_tokens(f"{original} {cited}"):
+            raise _error("The semantic audit revised_text adds a number or code.", "fields")
+        return revised
 
     def _text_ref_entry(self, item: _Item, text_ref: str, text: str) -> dict[str, Any]:
         """A '.c' option also lists the source IDs choosing it would append (shown, not proof)."""
@@ -1228,6 +1277,16 @@ class SemanticAudit:
             "items": [entry(item) for item in self.items],
         }
 
+    def _instructions(self, output_language: str) -> str:
+        """The base instructions; enabled revisions lift only the no-new-wording sentence."""
+        text = _INSTRUCTIONS[output_language]
+        if not self.allow_revisions:
+            return text
+        for old, new in _REVISION_REWORDING[output_language]:
+            assert old in text
+            text = text.replace(old, new)
+        return text
+
     def build_prompt(
         self,
         *,
@@ -1238,7 +1297,8 @@ class SemanticAudit:
         """The bounded audit prompt; raises when it, with its schema, cannot fit the budget."""
         output_language = self._language(output_language)
         prompt = (
-            _INSTRUCTIONS[output_language]
+            self._instructions(output_language)
+            + (_REVISION_INSTRUCTIONS[output_language] if self.allow_revisions else "")
             + "AUDIT_INPUT_JSON:\n"
             + json.dumps(
                 self.prompt_payload(), ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -1330,6 +1390,7 @@ class SemanticAudit:
                 "reviewed",
                 "model_verified",
                 "owner_unverified",  # deterministic guard, never part of model_verified
+                *(("model_revised",) if self.allow_revisions else ()),
             ),
             0,
         )
@@ -1344,8 +1405,9 @@ class SemanticAudit:
                 "add_source_ids",
                 "clear_owner",
                 "clear_deadline",
-            }:
+            } | ({"revised_text"} if "revised_text" in change and self.allow_revisions else set()):
                 raise _error("The semantic audit change has invalid fields.", "fields")
+            revised = change.get("revised_text")
             ref, text_ref, ids = change["ref"], change["text_ref"], change["add_source_ids"]
             if not isinstance(ref, str) or ref not in self._by_ref or ref in seen:
                 raise _error("The semantic audit names an unknown or repeated ref.")
@@ -1376,6 +1438,11 @@ class SemanticAudit:
             added = [i for i in ids if i not in published["source_ids"]]
             published["text"] = target[1]
             published["source_ids"] = [*published["source_ids"], *added]
+            if revised is not None:
+                published["text"] = self._revision(
+                    revised, suffix, target[1], self._cited(published)
+                )
+                counts["model_revised"] += 1
             if clear_owner:
                 published["owner"] = None
             if clear_deadline:
@@ -1659,5 +1726,55 @@ _INSTRUCTIONS = {
         "chứa mọi ref của mục với giá trị Boolean: true chỉ khi mục được giữ nguyên và được hỗ "
         "trợ đầy đủ, false khi mục có đúng một thay đổi hoặc nằm trong unresolved_refs; đây là "
         "ghi nhận quyết định của bạn cho từng mục, không phải bằng chứng về tính đúng.\n"
+    ),
+}
+
+_REVISION_INSTRUCTIONS = {
+    "en": (
+        "Optional revised_text (a string or null in every change): when a listed item is "
+        "mostly supported but a clause, relation or detail is not, you may rewrite its text "
+        "instead of choosing a variant or unresolved_refs. Use it only with text_ref '.o'; the "
+        "item then has exactly one change and verified false, never also unresolved_refs. Check "
+        "the source binding of each atom and the material relations the visible source states "
+        "(for example who reported to, funded or opposed what). Preserve every supported core, "
+        "outcome, vote tally, actor, condition, negation, modality and phase. Remove or correct "
+        "only the unsupported atom. You may restore a related material clause that the same "
+        "visible source states; add its source IDs in add_source_ids. Normalize an ASR error "
+        "only when the context supports it, and never guess a digit. Add no number or code that "
+        "is absent from the original text and its cited source; keep the text within the "
+        "length of the original plus a small margin. Owner and deadline stay or are cleared "
+        "only. This is a structural filter that does not prove meaning: code does not check "
+        "that conditions or negations survive, so you must. Use null when you do not revise.\n"
+    ),
+    "vi": (
+        "revised_text tùy chọn (chuỗi hoặc null trong mỗi change): khi một mục được liệt kê "
+        "phần lớn được hỗ trợ nhưng một mệnh đề, quan hệ hay chi tiết thì không, bạn có thể "
+        "viết lại văn bản của nó thay vì chọn một biến thể hay unresolved_refs. Chỉ dùng với "
+        "text_ref '.o'; mục đó khi ấy có đúng một change và verified false, không bao giờ "
+        "đồng thời nằm trong unresolved_refs. Kiểm tra gắn kết nguồn của từng nguyên tử và các "
+        "quan hệ quan trọng mà nguồn hiển thị nêu (ví dụ ai báo cáo cho, tài trợ hay phản đối "
+        "điều gì). Giữ mọi lõi, kết quả, tỷ lệ biểu quyết, chủ thể, điều kiện, phủ định, mức "
+        "độ và giai đoạn đã được hỗ trợ. Chỉ bỏ hoặc sửa nguyên tử không được hỗ trợ. Bạn có thể "
+        "khôi phục một mệnh đề quan trọng liên quan mà chính nguồn hiển thị nêu; thêm source ID "
+        "của nó vào add_source_ids. Chỉ chuẩn hóa lỗi ASR khi ngữ cảnh hỗ trợ, không đoán chữ "
+        "số. Không thêm số hay mã vắng trong văn bản gốc và nguồn đã trích; giữ độ dài trong "
+        "mức của văn bản gốc cộng một biên nhỏ. Owner và deadline chỉ được giữ hoặc xóa. Đây "
+        "là bộ lọc cấu trúc, không chứng minh nghĩa: mã không kiểm điều kiện hay phủ định còn "
+        "được giữ, nên bạn phải kiểm. Dùng null khi không sửa.\n"
+    ),
+}
+
+# Enabled revisions only: the base sentences that would forbid new wording or call text immutable.
+_REVISION_REWORDING = {
+    "en": (
+        ("never a document or new wording.", "never a document; new wording only as revised_text."),
+        ("immutable text_refs: '.o'", "immutable text_refs (revised_text excepted): '.o'"),
+    ),
+    "vi": (
+        (
+            "không trả về tài liệu hay câu chữ mới.",
+            "không trả về tài liệu; câu chữ mới chỉ qua revised_text.",
+        ),
+        ("text_refs bất biến: '.o'", "text_refs bất biến (trừ revised_text): '.o'"),
     ),
 }

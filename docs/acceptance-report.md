@@ -20,23 +20,29 @@ Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
 
 ## Gemini Flash 3.8 — 09/11/2026
 
-gemini-3.8-flash, medium, v41; cùng transcript/gold. **Chưa đạt chất lượng; đạt thời gian.**
+gemini-3.8-flash, medium, v42; cùng transcript/gold. **Chưa đạt chất lượng; đạt thời gian.**
 
-| Chỉ tiêu | Kết quả cuối (v41) |
+| Chỉ tiêu | Kết quả cuối (v42) |
 | --- | ---: |
-| Nội dung mẫu dài | 11/12 (1 một phần) |
-| Ý quan trọng | 7/7 |
-| Khẳng định quan trọng thiếu nguồn | 2 |
+| Nội dung mẫu dài | 7/12 (5 một phần) |
+| Ý quan trọng | 5/7 |
+| Khẳng định quan trọng thiếu nguồn | 0 |
 | ID trích dẫn không tồn tại | 0 |
-| Mục đã kiểm | 140 |
-| Notes đo thực tế | 420,57 giây; 22 lượt gọi; 0 cache |
-
-v42 sửa nguồn biểu quyết và xác minh người phụ trách; chưa đo lại.
+| Mục đã kiểm | 141 |
+| Notes đo thực tế | 500.52 giây; 22 lượt gọi; 0 cache |
 
 Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
 hồ sơ cục bộ (không theo dõi) `reports/.notes-gemini-fix-local-20261108/`:
-`v41-physical-qualification.json`, `v41-runtime-proof.json`, `v41-score-a/assessment.json`,
-`v41-score-a/g04-clarification.md`, `v41-score-b/assessment.json`.
+`v42-physical-qualification.json`, `v42-runtime-proof.json`, `v42-score-a/assessment.json`,
+`v42-score-b/assessment.json`, `v42-score-b/item73-clarification.md`.
+
+
+**Pilot v43: chưa đạt.** 8 lượt gọi; 3/4 nhóm mục tiêu,
+2/2 ý quan trọng mục tiêu; 1 mục thiếu nguồn, 0 ID sai.
+Không chạy toàn chuỗi. Fast: 2.129 pass; full timeout 1.200 giây;
+còn hồi quy bảo vệ số ASR. Nguồn cục bộ: `revised-v43/pilot-qualification.json`,
+`revised-v43/coder/fast.log`, `revised-v43/test/report.md`,
+`revised-v43/root-quantity-regression.json`.
 
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>
