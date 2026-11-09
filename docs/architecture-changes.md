@@ -1805,6 +1805,450 @@ thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Kế
 Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ, không phải lượt đo
 end-to-end mới. Mốc ngoài cửa sổ hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
 
+### #183 — Gemini giữ sự kiện và kiểm gắn nguồn (`notes-hierarchical-v34`)
+
+**Vấn đề.** Cùng transcript/gold đã khóa, bản trước đạt 8/12 nội dung, 6/7 ý quan trọng,
+9 khẳng định quan trọng thiếu căn cứ; mẫu ngắn 8/9. Map theo giờ bỏ mất sự kiện, final tự do
+thêm số từ ASR mơ hồ và gắn tên người từ danh sách thay vì lời giới thiệu. Nguồn baseline:
+`reports/.notes-gemini-local-20261108/{score-long,score-short}/assessment.json` (cục bộ).
+
+**Thiết kế.** Chỉ Gemini đã đăng ký ngân sách, nguồn trên một giờ: map theo 900 giây thành
+sổ sự kiện → reconcile toàn nguồn → một lượt kiểm gắn nguồn bằng tham chiếu bất biến →
+khôi phục ID và nối ngữ cảnh cục bộ. Prompt nguồn yêu cầu số/tên có căn cứ và phân biệt
+quyết định đổi lịch với công việc phát sinh; ca ngắn giữ số lượt gọi hiện có.
+
+- `notes_reconcile.py` kiểm cả tên một từ và tên không có trong nguồn. Trong nhánh bắt buộc
+  kiểm ngữ nghĩa, trích dẫn lỗi định dạng có thể được gắn lại bằng toàn bộ segment nguồn
+  đã khai báo và đã trích, trong giới hạn độ dài hiện hành. Không thay câu chữ, ID hoặc
+  metadata; các kiểm số, tên, modality vẫn áp dụng. Hợp đồng mặc định giữ kiểm quote nguyên văn.
+- `notes_semantic.py` chia một lượt kiểm thành tối đa hai tập mục cân bằng, không chồng lặp,
+  chạy song song. Mỗi tập có toàn nguồn nhưng chỉ ref/text ref của mình; mọi mục được kiểm
+  đúng một lần. Bản vá chỉ chọn câu gốc/hậu tố ẩn danh do mã sinh, nối ID và xóa owner/deadline.
+  Mã kiểm đủ tập, không chồng lặp, đúng scope và tổng patch tối đa 64.000 byte trước khi áp
+  một lần. Lỗi một tập làm cả tác vụ lỗi; một repair dùng chung, các trần khác giữ nguyên.
+  Không sinh câu mới hay suy người nói từ nhãn. Kiểm cả tiêu đề/mục xác nhận, phân biệt ủng hộ
+  với bảo trợ, không tách số ASR ghép thành số lượng hay đoán chữ số mã văn bản. Prompt nguồn
+  Gemini danh mục sự kiện cũng giữ các phân biệt này; prompt ngắn/ChatGPT/fallback giữ nguyên.
+  Mục chưa đủ căn cứ chuyển sang confirmation bằng trích đoạn nguồn nguyên văn, bỏ khẳng định
+  chưa xác minh và metadata. Ref sai/lặp/chéo, ID sai, xung đột thao tác hoặc quá giới hạn vẫn lỗi.
+- Bản vá có thể chọn biến thể đánh dấu riêng mã điều khoản phụ chưa rõ, giữ phần quyết định đã có nguồn. Chỉ nhận nhãn pháp lý; tên viết tắt cần ngữ cảnh pháp lý và không có dấu hiệu phiên bản phần mềm, giữ ngày dạng chấm. Số lượng nghi do ASR ghép danh sách kích cỡ được đánh dấu riêng theo ngôn ngữ nếu không có tổng số độc lập trong nguồn của mục, trước khi sinh lựa chọn văn bản; không khôi phục số mơ hồ qua lựa chọn câu gốc. Không sửa transcript hay số hồ sơ/biểu quyết/tiền/ngày.
+- Sau bản vá, mã đánh dấu số lượng xấp xỉ bị viết thành chính xác, so đúng giá trị/đơn vị với nguồn riêng của mục. Ý định bỏ phiếu có tên phải có nhận diện cục bộ đã trích hoặc câu báo cáo trực tiếp đúng người, nếu không chuyển thành trích đoạn cần kiểm tra; tên cùng đoạn hoặc lời cảm ơn bên thứ ba không đủ; chỉ nhận lời cảm ơn gọi trực tiếp người phát biểu. Strict ưu tiên nối câu bị cắt và lời giao lượt lân cận, giữ giới hạn segment/thời gian và 12 ID thêm/mục. Không thêm lượt gọi model.
+- V33 chỉ thêm một ID cho tên tổ chức đầy đủ khớp nguyên văn trong cửa sổ riêng 32 segment/600 giây, dừng tiêu đề nghị sự; không rút ngắn cầu nối của cửa sổ cũ. Vai trò chính thức chưa có từ ngữ chứng thực trong nguồn của confirmation_items chuyển sang trích đoạn cần kiểm tra. Số hiệu phụ sau quan hệ sửa/thay văn bản được đánh dấu chưa rõ khi nguồn có các biến thể gần nhau cùng nhóm; giữ số hiệu chính, không xử lý danh sách nhiều văn bản và không sửa trích đoạn nguyên văn.
+- V34 kiểm người nói được quy tên ở mọi thì ("states", "urges", "said") và tên trước danh từ phát biểu ("X testimony", "X comments"). Tên có chức danh hoặc được nguồn coi là người (kính ngữ, tự giới thiệu, thứ tự gọi phát biểu) cần nhận diện cục bộ trong nguồn riêng của mục: lời tự giới thiệu, câu báo cáo trực tiếp, lời giao lượt đúng tên ngay trước lượt nói hoặc lời cảm ơn trực tiếp ngay sau. Danh sách, điểm danh, cảm ơn người khác, nhãn người nói hay ASR sai chính tả không đủ. Không đạt thì mã bỏ phần quy tên đầu câu bằng hậu tố nguyên văn, nếu không có thì chuyển sang trích đoạn cần kiểm tra. Tên tổ chức không chức danh nằm ngoài phạm vi. Ở confirmation/action items, chủ thể nhóm đứng đầu (hội đồng, ủy ban, ban, commission) phải được nguồn của mục nêu; nhãn hồ sơ như "Council Bill" và danh từ chung ở giữa câu không bị xét. Việc "hoàn thành" một sản phẩm mà nguồn chỉ nêu tiến độ một phần ("much of the work needed to") cũng chuyển sang trích đoạn. Prompt kiểm ngữ nghĩa thêm các quy tắc này; prompt nguồn, ChatGPT và mẫu ngắn giữ nguyên. Không thêm lượt gọi.
+- V32 thêm liên kết provenance cho tên viết tắt/tên đầy đủ và khoảng thời gian cùng số/đơn vị trong cửa sổ 16 segment/180 giây; tên viết tắt không dùng suy người nói. Cùng mục nghị sự có số hồ sơ/tiêu đề và kết quả đã trích, mã nối từ nội dung thiếu trong cửa sổ 32 segment/360 giây, dừng ở tiêu đề khác kể cả khi có từ chỉ kết quả. Overview chỉ nhận liên kết viết tắt ở strict. Tất cả liên kết mới xét sau liên kết cũ, không bỏ nguồn cũ, không cắt liên kết để vừa trần và không thêm lượt gọi.
+- `notes_context.py` thêm neo số hồ sơ ngắn có nhãn và câu kết quả gần kiến nghị cho Gemini.
+  Neo có cấu trúc tìm tối đa 32 segment/360 giây: tiêu đề cùng số hồ sơ hoặc khối biểu quyết
+  kế tiếp có đúng tên người bỏ phiếu. Dừng ở tiêu đề khác, kể cả bên trong khối; không suy
+  hướng bỏ phiếu từ ASR. Giữ cửa sổ thường 16 segment/180 giây và trần thêm 12 ID/mục;
+  khối không vừa thì không thêm, không cắt và không chiếm chỗ trích dẫn cũ. Liên kết là
+  provenance, không phải chứng minh.
+- Antigravity gửi và đếm đúng schema tùy chọn trong ngân sách RPC. ChatGPT/model fallback giữ
+  thông điệp mặc định; schema công khai 1, ledger 2, một lượt repair dùng chung và các trần giữ nguyên.
+
+**Đo và đánh đổi.** V32 toàn chuỗi mới: 459.075208 giây, 12 call thực tế, 0 cache; 141 mục,
+còn 3 vấn đề nguồn. V33 toàn chuỗi mới: 503.474369 giây, 12 call thực tế, 0 cache; 157 mục,
+11/12 nội dung (1 một phần), 7/7 ý quan trọng, 0 ID sai nhưng còn 5 khẳng định quan trọng
+thiếu căn cứ. Chưa đạt. V34 phát lại 12 phản hồi v33 đã lưu: 10 request trùng khớp, 2 request
+kiểm ngữ nghĩa đổi (chỉ thêm biến thể ẩn danh và quy tắc mới; mọi text ref được dùng giữ nguyên
+câu chữ) dùng lại phản hồi cùng bước và cùng ref. Kết quả 157 mục, 0 ID sai, chỉ năm mục lỗi
+đổi (hai bỏ quy tên, ba sang trích đoạn), quyết định giữ nguyên. Đây là replay kỹ thuật, không
+phải replay SDK nguyên vẹn hay lần đo mới; v34 chưa được nghiệm thu. Nguồn cục bộ:
+`reports/.notes-gemini-fix-local-20261108/` `v33-score-a/report.md`, `v33-score-b/report.md`,
+`v34-writer/report.md`.
+
+Thêm một lượt kiểm ngữ nghĩa giúp sửa việc gắn tên/ngữ cảnh mà kiểm từ vựng không xác định
+được; chi phí tăng so với bản final tự do. Không dùng tóm tắt mạnh hơn vì làm mất sự kiện.
+Ẩn danh chỉ bỏ phần quy thuộc/bổ ngữ đầu câu; trường hợp không có biến thể hoặc nguồn đủ rõ
+phải giữ ở mục cần xác nhận. Chất lượng phán đoán vẫn phụ thuộc model. Tác vụ ghim prompt cũ
+đang chờ sẽ lỗi `notes_contract_changed` sau nâng cấp và cần tạo lần chạy mới.
+
+Issue [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183).
+Tag: architecture, quality, performance. Đích: `docs/backend-contract.md`,
+[báo cáo nghiệm thu](acceptance-report.md). Dữ liệu chi tiết chỉ lưu cục bộ, không đưa vào tài liệu.
+
+### #183 (tiếp) — Gemini reconcile hai view song song (`notes-hierarchical-v35`)
+
+**Vấn đề.** Lần đo thực tế v34 bị ngắt ở hạn 660 giây (wall 665,271395749005 giây), không có
+Notes cuối; đây là lỗi và không có điểm chất lượng. Đã ghi 12 phản hồi hoàn tất, không phải
+một lượt chạy trọn vẹn. Reconcile chính (call 10) mất 309,379 giây, 57.533 token đầu ra, trong đó
+43.683 token suy luận; repair (call 11) mất 98,588 giây, 14.716 token đầu ra, 14.412 token suy
+luận. Hai lượt này chiếm 407,967 giây. Lần đạt chất lượng gần nhất vẫn là v33: chưa đạt
+(5 khẳng định quan trọng thiếu căn cứ), 503,474369 giây, 12 call, 0 cache.
+
+**Thiết kế.** Chỉ với Gemini đã đăng ký trên nhánh fact inventory, `ReconcileLedger.partitions()`
+chia sổ thành tối đa `MAX_RECONCILE_PARTS` = 2 view liên tục, cân bằng. Mỗi view có toàn nguồn và
+giữ ref toàn cục, chỉ sở hữu mục của mình. Mục của view kia là ngữ cảnh chỉ đọc, không có ref.
+Chỉ view đầu được thêm mục; schema, parser và repair của view sau từ chối mục thêm. Hai request
+chạy song song, mỗi request có closure, kế hoạch repair, schema, parser riêng. Lượt repair
+duy nhất, trần call toàn cục và trần reduction vẫn dùng chung, cả hai view đều bị tính.
+Một view lỗi dừng view còn lại và tác vụ lỗi, không công bố gì. `combine_results` chỉ nhận đủ
+các view, kiểm lại và gộp một lần. Manifest `source_audit` thêm `part_count` và
+`provider_call_indices`. ChatGPT, model chưa đăng ký và ca ngắn giữ đúng request cũ.
+`semantic_audit` (tối đa hai phần), các trần tài liệu và cách giữ Notes cũ không đổi.
+
+**Đánh đổi.** Mỗi view gửi lại toàn nguồn và toàn sổ, nên token đầu vào gần gấp đôi. Đổi lại,
+mỗi view tạo khoảng nửa bản vá, và thời gian chờ là thời gian của view chậm hơn. Fixture dự kiến
+9 map + 2 reconcile + 2 kiểm ngữ nghĩa = 13 call, thêm 1 nếu dùng repair chung (14).
+`MAX_PROVIDER_CALLS` vẫn là 54. Request dài đổi nên không replay nguyên vẹn được, chỉ có kiểm
+tích hợp tổng hợp. Chất lượng và thời gian v35 chưa đo. Nguồn cục bộ:
+`reports/.notes-gemini-fix-local-20261108/eval-v34-physical/` (`interrupted.json`,
+`physical.log`, `capture/call-0010.json`, `capture/call-0011.json`).
+
+### #183 (tiếp) — Kiểm ngữ nghĩa bốn phần, quyết định rõ cho mọi mục (`notes-hierarchical-v36`)
+
+**Vấn đề.** Lần đo thực tế v35 chưa đạt: 10/12 (2 mục một phần), 7/7 ý quan trọng, 3 khẳng định
+quan trọng thiếu căn cứ, 0 ID sai, 598,342213 giây, 14 call, 0 cache. Ba lỗi: tổ chức trong một
+mục overview không nằm trong nguồn của chính mục dù nguồn có; đối tác dịch vụ bị nâng thành bên
+phát triển do gộp vai trò qua hai hạng mục liền kề; một lời đề nghị gắn tên người nói chỉ dựa vào
+lời tự giới thiệu ở xa và sự liên tục vai trò, không có nhân chứng cục bộ. Bản vá thưa v1 chỉ liệt
+kê mục cần đổi, nên mục không được nhắc vẫn được giữ mà không có quyết định của model.
+
+**Thiết kế.** Chỉ với Gemini đã đăng ký:
+
+- `semantic_audit` chia mục thành tối đa `MAX_AUDIT_PARTS` = 4 phần liên tục, cân bằng, không
+  chồng lặp (`min(4, N)` phần; 0 hoặc 1 mục: một phần). Mỗi phần có toàn nguồn, giữ ref toàn cục,
+  chỉ sở hữu ref của mình và chạy song song qua controller chung (số luồng = số phần).
+- `AUDIT_VERSION` = 2: phản hồi đúng bốn trường `audit_version`, `verified`, `changes`,
+  `unresolved_refs`. `verified` là object bắt buộc có đủ mọi ref sở hữu, giá trị boolean:
+  `true` khi giữ nguyên đã kiểm, `false` khi ref có đúng một thay đổi hoặc nằm trong
+  `unresolved_refs`. Thiếu ref, ref lạ, ref của phần khác, giá trị không phải boolean hay
+  quyết định mâu thuẫn đều làm phần lỗi và đi vào repair dùng chung. Chỉ gộp `verified` của các
+  phần đủ và rời nhau, rồi parse bản gộp một lần dưới trần 64.000 byte. Manifest thêm số mục đã xét
+  và số mục model xác nhận; đây là độ phủ quyết định, không phải điểm chất lượng.
+- Vai trò phụ không chắc chắn: khi một lõi định lượng độc lập đứng trước vị ngữ trách nhiệm ở
+  cuối có tên bên thực hiện, mã sinh biến thể `.p` (và kết hợp với ẩn danh/điều khoản trong trần
+  biến thể) thay đúng một cụm đó bằng nhãn cố định `[responsibility unclear]` / `[vai trò chưa rõ]`.
+  Lõi trước/sau giữ nguyên byte; không đụng chữ số, ngày, phủ định, điều kiện, tình thái, đơn vị,
+  vai trò chính, trích dẫn, biểu quyết/phê duyệt hay số hồ sơ chính. Model chỉ chọn ref, không viết
+  câu mới; manifest đếm `responsibility_unclear` riêng.
+- Prompt map fact inventory của Gemini đã đăng ký thêm quy tắc chung: giữ bước tiếp theo cùng điều
+  kiện kích hoạt, tiên quyết hoặc lần phê duyệt sau; hạn chót không thay bước tiếp theo; gắn vai trò
+  của từng bên với đúng đối tượng/hạng mục, danh sách nhiều bên không cho mỗi bên cùng vai trò, không
+  chuyển bên hay vai trò sang ví dụ liền kề. Không có từ khóa hay thực thể của bộ dữ liệu. ChatGPT,
+  model chưa đăng ký và Gemini ca ngắn giữ đúng request cũ.
+
+**Đánh đổi.** Bốn phần nhỏ hơn mỗi phần gửi lại toàn nguồn, nên token đầu vào kiểm ngữ nghĩa tăng
+khoảng gấp đôi so với hai phần; thời gian chờ là phần chậm nhất. Chi phí và thời gian chưa đo.
+Fixture dự kiến 9 map + 2 reconcile + 4 kiểm ngữ nghĩa = 15 call, thêm 1 nếu dùng repair chung (16);
+`MAX_PROVIDER_CALLS` vẫn 54, trần mỗi request và bản gộp 64.000 byte không đổi. Quyết định rõ cho
+mọi mục chỉ chứng minh độ phủ, không chứng minh model đúng về ngữ nghĩa; biến thể vai trò chưa rõ là
+nhãn không chắc chắn, không khẳng định vai trò. Chất lượng và thời gian v36 chưa đo; v35 vẫn là kết
+quả thực tế mới nhất. Nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/`
+(`v35-physical-qualification.json`, `v35-score-a/report.md`, `v35-score-b/report.md`).
+
+### #183 (tiếp) — Liên kết hồ sơ/số lượng đầy đủ và nguồn hiển thị có giới hạn (`notes-hierarchical-v37`)
+
+**Vấn đề.** Lần đo thực tế v36 chưa đạt: 12/12, 7/7 ý quan trọng, 3 khẳng định quan trọng thiếu
+căn cứ, 0 ID sai, 181 mục, 636,865098 giây (trên 600), 15 call, 0 cache. Cả ba lỗi là thiếu trích
+dẫn: sự kiện có trong nguồn nhưng không nằm trong nguồn của chính mục (một mục overview, hai mục
+key_topics). Mỗi phần kiểm ngữ nghĩa gửi lại toàn nguồn: 557 segment, tổng 771.809 byte prompt
+cho bốn phần.
+
+**Thiết kế.** Chỉ với Gemini đã đăng ký:
+
+- Liên kết ngữ cảnh sau call cuối thêm chế độ `complete_bindings` (mặc định tắt, chỉ bật cùng
+  strict trên nhánh fact inventory). Số hồ sơ có nhãn rõ (bill, resolution, ordinance,
+  appointment...) mà nguồn của mục chưa có được nối với tiêu đề nghị sự gần nhất phía trước có
+  đúng số hồ sơ đó, trong cửa sổ 32 segment/360 giây, dừng khi đổi mục nghị sự. Cụm số lượng
+  nguyên văn (con số cùng danh từ cụ thể) nằm giữa hai đoạn đã trích của mục, cùng mục nghị sự,
+  được nối với segment chứa đúng cụm đó. Không đoán hay sửa chữ số, không ghép danh sách, không
+  suy ra số lượng hay vai trò. Overview chỉ nhận thêm liên kết hồ sơ có nhãn trong chế độ này.
+  Liên kết mới xét sau liên kết cũ, giữ thứ tự ID cũ, thêm trọn nhóm hoặc không thêm, trong trần
+  12 ID thêm/mục và trần tham chiếu. Đây là liên kết nguồn, không phải bằng chứng ngữ nghĩa;
+  không sửa câu chữ/metadata.
+- Mỗi phần kiểm ngữ nghĩa chỉ thấy nguồn hiển thị: mọi segment các mục của phần trích dẫn, ứng
+  viên liên kết strict (chạy chỉ đọc trên bản sao chỉ có các mục của phần, cùng
+  `complete_bindings`) và một segment kề trước/sau mỗi đoạn đã trích, cùng mục nghị sự và cách
+  không quá 120 giây. Không bỏ hay cắt ID của mục; ID, thứ tự và thời điểm toàn cục giữ nguyên.
+  `source_scope` nêu tổng số segment, vị trí gốc của segment hiển thị và các khoảng bị lược;
+  hai segment ở hai bên một khoảng lược không liền kề, không suy ra lượt nói hay cùng người nói.
+  Nguồn hiển thị cũng là phạm vi trích dẫn của request: ID không hiển thị bị từ chối kể cả khi có
+  trong toàn nguồn, rồi đi vào repair dùng chung; bản gộp từ chối ID mà phần đó không được thấy.
+  Phần không có mục dùng toàn nguồn. Các kiểm tra tất định của mã vẫn đọc toàn nguồn.
+
+**Đánh đổi.** Trên bốn phần thực tế của v36 (call 12-15, dựng lại đúng từng mục), nguồn hiển thị
+giảm prompt từ 771.809 xuống 323.790 byte (0,4195), giữ mọi ID của mục; 7/9 ID mà model v36 đã
+thêm vẫn hiển thị, 2 ID ở xa hơn sẽ bị từ chối và đi vào repair hoặc mục giữ nguyên. Đây là giảm
+dữ liệu đầu vào, không phải bằng chứng về thời gian: thời gian v36 theo token đầu ra/suy luận.
+Model có thể không thấy segment ở xa làm rõ hoặc mâu thuẫn; chất lượng cần chấm mù. Reconcile hai
+view vẫn đọc toàn nguồn. Không thêm call, pass hay model; `MAX_PROVIDER_CALLS` 54, bản gộp 64.000
+byte, một repair dùng chung và fixture 15 call (+1 repair, tối đa 16) không đổi. ChatGPT và ca ngắn
+giữ đúng request cũ. Chất lượng và thời gian v37 chưa đo. Nguồn cục bộ:
+`reports/.notes-gemini-fix-local-20261108/` (`v36-physical-qualification.json`,
+`v36-runtime-proof.json`, `v36-score-a/report.md`, `v36-score-b/report.md`,
+`v37-scope-plan/report.md`, `v37-audit-scope/scope-measure.json`).
+
+### #183 (tiếp) — Kiểm ngữ nghĩa tám phần và tên người nói phải có trong nguồn (`notes-hierarchical-v38`)
+
+**Nguyên nhân đo được.** Lần đo mới v37 mất 660,67189 giây (15 lượt gọi thật, 0 cache, 193 mục,
+0 ID không hợp lệ), vượt trần 600 giây. Theo capture: map xong ở khoảng 162 giây, reconcile hai
+view toàn nguồn xong ở khoảng 387 giây, bốn phần kiểm ngữ nghĩa (49/48/48/48 mục) xong sau
+186,946/225,611/250,046/273,530 giây. Phần chậm có khoảng 39.000 token suy luận; prompt nhỏ hơn của
+v37 không rút ngắn thời gian. Nút thắt là đầu ra/suy luận tuần tự trong mỗi phần. Chấm mù v37:
+10/12 mẫu (G12 một phần, G08 thiếu), đủ 7 ý quan trọng, 0 ID không hợp lệ, 2 khẳng định quan trọng
+thiếu nguồn: hai mục đầu câu là tên người nói không chức danh đi với động từ "compared"/"affirmed";
+nguồn của mục không có tên hay lời giao lượt, và tên không có nguyên văn trong transcript (lời giao
+lượt chưa trích chỉ có biến thể ASR tách chữ).
+
+**Thiết kế.**
+
+- `MAX_AUDIT_PARTS` 4 → 8: `min(8, N)` tập mục liên tục, cân bằng (phần lớn hơn trước), không chồng
+  lặp; N < 8 thì N phần một mục, không tạo phần rỗng. Executor chạy `len(parts)` phần song song,
+  như trước. Hợp đồng mỗi phần giữ nguyên: nguồn hiển thị, `audit_version` 2 với `verified` bắt
+  buộc boolean cho mọi ref sở hữu, mọi phần phải hợp lệ rồi mới gộp và áp một lần, một phần lỗi
+  làm tác vụ lỗi, bản gộp tối đa 64.000 byte, một repair dùng chung, `MAX_PROVIDER_CALLS` 54. Không
+  thêm pass kiểm hay nới guard; reconcile hai view toàn nguồn và map ba worker không đổi. Fixture
+  dài: 9 map + 2 reconcile + 8 kiểm = 19 call, tối đa 20 với repair dùng chung.
+- Danh mục động từ quy lời (`ATTRIBUTION_FORMS`) thêm `compare`, `affirm` ở mọi thì; danh sách
+  động từ cũ của liên kết ngữ cảnh chung (ChatGPT) giữ nguyên.
+- `unverified_speakers`: tên quy cho người nói ở đầu câu mà không có đúng nguyên tên (so khớp cả
+  từ, không phân biệt hoa thường) ở bất kỳ đâu trong toàn nguồn cũng cần bằng chứng cục bộ như tên
+  có chức danh; không có thì mã bỏ phần quy tên bằng hậu tố nguyên văn hoặc chuyển mục sang trích
+  đoạn cần kiểm tra. Bằng chứng tự giới thiệu, câu báo cáo, lời giao lượt/cảm ơn cục bộ đã trích
+  không đổi. Tên tổ chức không chức danh có trong nguồn vẫn ngoài phạm vi; tên tổ chức không có
+  trong nguồn bị xử lý như trên.
+
+**Đánh đổi.** Tám phần nghĩa là gấp đôi request song song và lặp lại chỉ dẫn/schema cùng segment
+kề ở mỗi phần (tốn thêm token đầu vào, tăng rủi ro giới hạn tốc độ provider); mỗi phần ít mục hơn
+nên thấy ít ngữ cảnh lân cận hơn. Quy
+tắc tên vắng mặt là so khớp từ vựng: tên được model sửa đúng từ biến thể ASR cũng bị bỏ hoặc chuyển
+kiểm tra; nhãn đầu câu viết hoa kết thúc bằng dấu hai chấm mà nguồn không có (ví dụ "Quote:") cũng
+bị bỏ như một tên. Trên tài liệu v37 đã đóng băng, chạy lại bước kiểm tất định chỉ đổi đúng hai mục
+thiếu nguồn (bỏ tên đầu câu), không mục nào khác. ChatGPT 11 call và bốn ca ngắn phát lại đúng
+request, tài liệu giống hệt. Nguồn: `src/asr_studio/notes_semantic.py`,
+`src/asr_studio/notes_context.py`, `src/asr_studio/notes_document.py`; hồ sơ cục bộ
+`reports/.notes-gemini-fix-local-20261108/` (`v37-runtime-proof.json`,
+`eval-v37-physical/capture/`, `v37-score-a/assessment.json`, `v37-score-b/assessment.json`).
+
+**Kết quả đo v38 (09/11/2026, chưa đạt).** Lần đo thực tế gemini-3.8-flash trên cùng transcript cố
+định (nguồn sha256 `c0a4de56…`, 557 segment): 517,149696 giây (≤ 600), 20 lượt gọi thật, 0 cache,
+178 mục cuối (179 mục vào kiểm, 1 mục trùng nguyên văn được gộp), tám phần kiểm 23/23/23/22/22/22/22/22
+mục với cùng guard, reconcile toàn nguồn, bản gộp 64.000 byte, trần 54 call. 20 call gồm 9 map,
+2 reconcile, 1 repair reconcile dùng chung (call 12; `source_audit.provider_call_indices` [10, 12])
+và 8 phần kiểm (call 13-20). So với v37 (cùng nguồn, mẫu đo): 660,67189 → 517,149696 giây; phần
+kiểm dài nhất 273,53 → 163,754 giây; kiểm bắt đầu sau 386,775 → 353,095 giây. Không quy toàn bộ
+chênh lệch cho việc chia phần: đầu ra, suy luận và số mục (193 → 178) khác nhau giữa hai lần.
+Chấm mù độc lập (A, B; 89 + 89 = 178 mục): 7/12 mẫu (5 một phần, 0 thiếu), 5/7 ý quan trọng,
+2 khẳng định quan trọng thiếu nguồn, 0 ID không hợp lệ. Tiêu chí chất lượng chưa đạt nên v38 không
+được ghi là đạt; các mục lịch sử v36/v37 giữ nguyên. Hồ sơ cục bộ: `v38-runtime-proof.json`,
+`v38-performance-comparison.json`, `eval-v38-physical/results/long.json`, `v38-score-a/assessment.json`,
+`v38-score-b/assessment.json`.
+
+### #183 (tiếp) — Lõi hồ sơ-kết quả ứng viên, nguồn nghị sự dài và guard thành tích (`notes-hierarchical-v39`)
+
+**Vấn đề và nguyên nhân đo được (v38).** Lần đo v38 (517,149696 giây, 20 lượt gọi thật, 0 cache,
+179 mục vào kiểm, 178 mục cuối, 8 phần kiểm) đạt 7/12 mẫu, 5/7 ý quan trọng, 2 khẳng định quan trọng
+thiếu nguồn. Ba quyết định có kết quả biểu quyết trực tiếp trong nguồn bị chuyển thành trích đoạn
+cần kiểm tra: model đánh dấu unresolved vì chi tiết phụ (mục đích, tên/chức danh, mã điều khoản phụ
+ASR không rõ) hoặc thiếu tiêu đề hồ sơ trong nguồn của mục, nên ba mẫu chỉ còn một phần. Tiêu đề
+nghị sự của một bổ nhiệm nằm 35 segment/524 giây trước kết quả, ngoài cửa sổ 32/360. Một khẳng định
+thiếu nguồn ghép công việc người nói tự nhận ("we initiated in my committee") vào danh sách thành
+tích của người được đề cử; khẳng định còn lại thiếu số lượng ở segment tiếp nối bị cắt câu.
+
+**Thiết kế.**
+
+- `notes_outcomes.outcome_core_candidate`: với mục `decisions` không phải trích đoạn, mã đề xuất
+  một lõi ứng viên (không chứng minh sự thật của quyết định) gồm đúng chữ của văn bản gốc: một hồ sơ chính có nhãn và số (một họ hồ sơ, không danh
+  sách/số nhiều), một động từ kết quả rõ ràng; kết quả biểu quyết và "as amended" chỉ khi chính lượt
+  biểu quyết của kết quả nêu trực tiếp (mệnh đề kết quả hoặc các câu ngay trước nó trong segment đó
+  và segment liền trước, dừng ở câu của lượt biểu quyết khác như sửa đổi hay hồ sơ có nhãn; "N in
+  favor, unopposed/not opposed" là N-0; không đếm điểm danh, không suy số thiếu). Mục có phủ định,
+  điều kiện, kiến nghị, biểu quyết tương lai hay câu hỏi không có lõi; nhãn "No.", danh từ riêng
+  ("Plan") và tháng "May" không bị coi là phủ định/dự định/khả năng. Nguồn hỗ trợ chỉ lấy từ ID
+  được trích và ứng viên strict `complete_bindings` của chính mục (cùng hợp đồng nguồn hiển thị);
+  segment nêu riêng hồ sơ đó (ưu tiên tiêu đề nghị sự của đúng hồ sơ; danh sách/khoảng số cùng họ
+  không nhãn như "Appointments 7401 and 7402" không nêu hồ sơ nào) phải đứng trước câu kết quả. Câu
+  kết quả khẳng định trực tiếp với danh từ hồ sơ làm chủ ngữ ("The bill passed"), không phải câu
+  hỏi, lời thuật lại hay nghi ngờ; không có hồ sơ có nhãn khác, tiêu đề hay chuyển mục từ hồ sơ đến
+  hết câu kết quả (đọc toàn nguồn; nghị sự khác ở câu sau vẫn được), và không có câu thất bại trong
+  pool. Tên, vai trò, ngày, mục đích và mã điều khoản phụ không vào lõi.
+- Kiểm ngữ nghĩa có thêm text ref bất biến `.c` cho lõi ứng viên; chỉ một thay đổi hợp lệ của model
+  (verified=false, ref không nằm trong unresolved) chọn `.c`, khi đó mã thêm ID ứng viên (trong trần,
+  hiển thị, giữ ID cũ) rồi vẫn qua mọi guard tất định và kiểm tra tài liệu. Input liệt kê `source_ids` đề xuất ngay trên text_ref `.c` (chỉ `.c`, đều thuộc nguồn hiển thị, bằng đúng ID sẽ được nối; không phải bằng chứng) để model kiểm nhóm trích dẫn cuối. Ref unresolved luôn thành
+  trích đoạn cần kiểm tra dù có `.c`: mã không ghi đè từ chối của model bằng nhận dạng từ vựng,
+  vì chỉnh sửa nguồn, cơ quan khác và bất định có vô số biến thể ngôn ngữ; lõi ngắn hơn bất biến chỉ
+  là lựa chọn thêm. Manifest đếm `core_selected` (model chọn, không tính vào `model_verified`);
+  `core_preserved` luôn 0, đã loại bỏ, giữ cho tương thích. Mục khác, trích đoạn có nhãn và đường `.r`/`.p`/ẩn danh không đổi.
+- Mã viết tắt luật (ví dụ SMC) sau nhãn `CB <số>` hoặc động từ sửa đổi được coi là tham chiếu pháp
+  lý phụ, nên `.r` chỉ đánh dấu chưa rõ các số điều khoản, không che hồ sơ chính.
+- Guard thành tích: mục nêu danh sách credentials/qualifications/experience bị chuyển sang trích
+  đoạn cần kiểm tra khi một mục trong danh sách chỉ khớp (≥ 2 gốc từ nội dung, ≥ một nửa) với mệnh
+  đề đã trích có sở hữu ngôi thứ nhất rõ ("we initiated", "my committee"), không phủ định, không có
+  từ ngôi thứ ba, và không khớp mệnh đề nào khác. Không đổi vai trò, không viết lại câu.
+- Liên kết strict `complete_bindings` (mặc định tắt, chỉ Gemini đã đăng ký): tiêu đề nghị sự rõ của
+  đúng hồ sơ chính có thể được nối trong cửa sổ 64 segment/900 giây, qua lời nhắc cùng hồ sơ (sửa
+  đổi/kiến nghị) nhưng dừng ở hồ sơ hay tiêu đề khác; số lượng nguyên văn thiếu có thể nối câu tiếp
+  nối bị cắt phía sau (4 segment/120 giây, không qua kết câu/tiêu đề/chuyển mục). Cửa sổ 32/360 cũ,
+  chế độ mặc định và strict không bật vẫn như cũ.
+- Prompt kiểm (EN/VI) gọi `.c` là ứng viên, yêu cầu model kiểm nó với nguồn đã trích như `.o` (rút lại, lịch sử, ủy ban/cơ quan khác, điều kiện), chỉ chọn khi hồ sơ và kết quả được hỗ trợ và chỉ chi tiết phụ chưa rõ, nêu `.c`, "unopposed/not opposed" là 0 phiếu chống, và công việc người nói tự
+  nhận không phải thành tích của người được đề cử. `AUDIT_VERSION` 2, 8 phần, 2 view reconcile toàn
+  nguồn, 3 worker map, bản gộp 64.000 byte, trần 54 call, một repair dùng chung không đổi; không thêm
+  pass hay model.
+
+**Đo trước/sau.** Trước: số v38 ở trên. Bản phát lại tất định trước đó công bố lõi thay mọi ref
+unresolved; cách đó bị bỏ vì mã ghi đè từ chối của model. Các bản vá v38 thô nay giữ nguyên
+unresolved (trích đoạn); không điều chỉnh chúng để chọn `.c` và không có kết luận phục hồi chất
+lượng. Ba lõi ứng viên đã biết vẫn được đề xuất cho lần chọn thật sau của model. Đây không phải đo
+chất lượng hay thời gian. Đo thực tế v39 sau đó: 9/12 mẫu, 7/7 ý quan trọng, 3 khẳng định thiếu
+nguồn, 701,858427 giây, 20 lượt gọi, 0 cache (`v39-physical-qualification.json`); chưa đạt, xem v40.
+
+**Đánh đổi.** Lõi bỏ chi tiết phụ đúng của quyết định (tên, chức danh, mục đích); kết quả biểu quyết
+xa hơn segment liền trước, gắn với lượt biểu quyết khác hoặc bị ASR làm sai không được giữ; câu
+kết quả có chủ ngữ hay dấu câu ASR bất thường có thể không được chứng minh. Guard thành tích là so khớp từ vựng
+tiếng Anh và có thể bỏ sót; mệnh đề lẫn ngôi thứ ba được để cho model. Mỗi quyết định thêm một lượt
+liên kết strict chỉ đọc khi dựng kiểm. Nguồn: `src/asr_studio/notes_outcomes.py`,
+`src/asr_studio/notes_semantic.py`, `src/asr_studio/notes_context.py`,
+`src/asr_studio/notes_document.py`; hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/`
+(`v38-runtime-proof.json`, `v38-score-a/assessment.json`, `v38-score-b/assessment.json`).
+
+**Gợi ý mệnh đề chưa nêu trong reconcile (v39).** Nguyên nhân đo trên sổ v38 (call 10/11/12):
+reconcile không bỏ mục nào; 5/6 chỗ thiếu của ba mẫu một phần là mệnh đề có trong chính segment
+mục map đã trích nhưng text bỏ sót (ngày/điều kiện sau báo cáo, tổ chức người nói đại diện, lý do,
+bước của quy trình, sự ủng hộ). Prompt map vốn đã yêu cầu các ý này. Thiết kế: chỉ nhánh fact
+inventory của Gemini đã đăng ký bật `include_clause_cues` (mặc định tắt; ChatGPT, mặc định và
+Gemini ngắn không đổi byte). Mỗi view reconcile thêm `attention.unstated_clauses` cho ref nó sở
+hữu: câu/mệnh đề nguyên văn từ segment mục đã trích, có < 30% từ nội dung trùng text, và có lớp
+quan hệ chưa nêu (bước/giai đoạn có thứ tự, ngày/hạn, trình tự, nguyên nhân, đại diện, ủng hộ/phản
+đối; EN/VI) hoặc số/từ viết hoa thiếu; bước có thứ tự được gợi ý cả khi trùng từ cao nếu text chưa
+nêu bước nào. Ưu tiên: bước, ngày, rồi quan hệ, rồi số/tên; mỗi mục một gợi ý tốt nhất trước gợi
+ý thứ hai. Trần: ≤ 2/mục, ≤ 48 và ≤ 16.384 byte UTF-8/view, trích ≤ 200 ký tự (cắt thì
+`truncated`). Gợi ý chỉ là chỉ dẫn: ref không nêu vẫn hợp lệ; quy tắc có điều kiện yêu cầu update
+có quote đúng nguyên văn, giữ mọi ý/phủ định/mức chắc chắn, không coi nhãn người nói là danh tính.
+Không thêm pass, call, schema hay đường repair; repair không mang gợi ý. Đo đầu vào trên hai view
+v38 dựng lại (payload trùng byte bản đã lưu): 48 gợi ý/view, prompt +10.431/+10.968 byte (≈ 5%),
+dựng < 0,1 giây; 6/6 mục chứa chỗ thiếu có ít nhất một segment nhân chứng được gợi ý (6/8 segment;
+8/8 khi bỏ trần). Đây chỉ là đo đầu vào, không phải đo chất lượng hay thời gian. Đánh đổi: so khớp
+từ vựng, nhiều gợi ý nguyên nhân/ngày là nhiễu; mục nhiều hơn 48 thì phần sau mất gợi ý; model vẫn
+có thể bỏ qua. Nguồn: `src/asr_studio/notes_reconcile.py`, `src/asr_studio/notes_pipeline.py`,
+`tests/test_notes_unstated_clauses.py`; hồ sơ cục bộ `v39-omissions/report.md`,
+`v39-clause-cues/engineering/cues-v38.json`, `v39-clause-cues/engineering/prompt-check.json`.
+
+### #183 (tiếp) — Bốn view reconcile, năm worker map và quyết định gợi ý bắt buộc (`notes-hierarchical-v40`)
+
+**Nguyên nhân đo được (v39).** Lần đo v39 (`v39-physical-qualification.json`): 9/12 mẫu (3 một
+phần), 7/7 ý quan trọng, 3 khẳng định quan trọng thiếu nguồn, 0 ID sai, 701,858427 giây, 20 lượt
+gọi, 0 cache. Thời gian (`v39-timing/report.md`, cộng theo đường găng): map 163,3 giây (3 worker,
+chuỗi 3 call), reconcile 308,8 giây (2 view, thời gian theo số disposition xuất ra), repair 42,8
+giây nằm trên đường găng, kiểm ngữ nghĩa 186,4 giây (phần chậm nhất trong 8). Chất lượng
+(`v40-design/report.md`): view 0 liệt kê 26/26 ref chỉ có gợi ý mệnh đề, view 1 liệt kê 0/21, vì
+prompt cho phép bỏ qua gợi ý; hai mẫu một phần và một khẳng định sai mức độ (mong muốn thành kết
+quả) có gợi ý không được quyết định. Một khẳng định "đang chờ biểu quyết" còn giữ dù segment sau
+ghi kết quả; câu superseded hiện hành ("chấp nhận một người không phải superseded") đẩy model giữ
+trạng thái cũ.
+
+**Thiết kế.**
+
+- `ReconcileLedger.partitions`: tối đa `MAX_RECONCILE_PARTS` = 4 view liên tục, cân bằng (chênh
+  nhau tối đa 1 mục, view lớn trước), không rỗng, `part` = (chỉ số, số view thật = `min(4, N)`).
+  Mỗi view có toàn nguồn, giữ ref toàn cục, thấy mọi mục của view khác là ngữ cảnh chỉ đọc theo
+  thứ tự sổ; chỉ view đầu được thêm mục (trần 16 cũ). `combine_results` vẫn đòi đúng các view theo
+  thứ tự, không thiếu/lặp/lạ, đếm khớp phần sở hữu, kiểm lại tài liệu gộp với cùng trần. Chỉ nhánh
+  fact inventory của Gemini đã đăng ký chia; mặc định và ChatGPT không đổi.
+- Map fact inventory Gemini đã đăng ký chạy tối đa 5 worker (trước 3); ChatGPT giữ 3,
+  map khác vẫn 2. Nội dung request không đổi.
+- `cue_checked` (chỉ khi `include_clause_cues`): schema thêm object bắt buộc gồm đúng ref sở hữu
+  có `attention.unstated_clauses`, mỗi ref một boolean; không có ref gợi ý thì không có khóa. `true`
+  = update của ref bổ sung ít nhất một gợi ý quan trọng, bắt buộc có update; `false` = gợi ý không
+  quan trọng với mục, mọi disposition hoặc không liệt kê. Thiếu, thừa (ref sở hữu không gợi ý),
+  sai kiểu, `true` không có update làm ref đó lỗi; khóa ngoài ref sở hữu hoặc map không phải object
+  là lỗi toàn cục (repair chung có giới hạn). Prompt (EN/VI) yêu cầu quyết định mọi gợi ý, gợi ý
+  chỉ là chỉ dẫn, đọc toàn segment kể cả khi bị cắt. Manifest `source_audit.counts.cue_checked`
+  đếm `checked`/`accepted`/`declined`: độ phủ quyết định của model, không phải bằng chứng đúng.
+- Repair thưa giữ tính chất cũ: chỉ ref lỗi. Quyết định đã chấp nhận của ref khác được giữ trong
+  `ReconcileRepair.cue_checked`; repair chỉ quyết định ref lỗi có gợi ý, thấy gợi ý và nguồn của
+  chính chúng, với schema riêng (`schema(repair)`, pipeline gửi qua `repair_schema`); mã gộp rồi
+  kiểm lại toàn bộ map. Vẫn một repair dùng chung cho mọi view và kiểm ngữ nghĩa; một view lỗi làm
+  tác vụ lỗi, không công bố gì.
+- Quy tắc sửa (EN/VI, chỉ ledger có gợi ý, cả prompt chính và repair): update sửa mọi mệnh đề phụ
+  không có căn cứ và giữ phần có căn cứ; nỗ lực/mong muốn/kêu gọi/cơ hội không phải kết quả hay chỉ
+  thị; trạng thái đang chờ/kiến nghị/đề xuất/dự kiến phải đối chiếu kết quả ghi ở segment sau của
+  cùng hồ sơ trong toàn nguồn, trích cả hai giai đoạn. Guard dùng chung giữ mọi từ chắc chắn/phủ
+  định của text gốc (pending, proposed, may, ...) vẫn giữ nguyên, nên prompt dạy giữ từ đó như bổ
+  ngữ lịch sử ("previously pending ...; later confirmed"), hoặc remove superseded khi mục khác đã nêu
+  kết quả; câu superseded được làm rõ: người/kế hoạch đã chấp nhận không lỗi thời, khẳng định "vẫn
+  đang chờ" thì có thể. Prompt `_instructions` chung không đổi byte, nên ChatGPT không đổi.
+- Kiểm ngữ nghĩa (EN/VI) thêm: mức độ, hoàn thành và trạng thái hiện tại là khẳng định trọng yếu;
+  riêng kiến nghị của ủy ban không xác lập quyết định cuối còn chờ. Không thêm rewrite/xóa chữ,
+  vá tên từ vựng hay ghi đè quarantine.
+- Không đổi: trần 54 call, 24 reduction, một repair, 8 phần kiểm, 64.000 byte, gợi ý ≤ 2/mục,
+  ≤ 48 và ≤ 16.384 byte/view, ≤ 200 ký tự. Ở 24 chunk: 24 map + 4 reconcile (1 + 3 view thêm vào
+  trần reduction) + ≤ 8 kiểm + 1 repair ≤ 54 (`tests/test_notes_parallel_reconcile.py`).
+
+**Đo thực tế v40 — chưa đạt.** 298,034664 giây, 14 lượt gọi, 0 cache; lỗi
+`notes_invalid_output`, không tạo Notes. Không có điểm chất lượng hoặc thời gian toàn chuỗi thành
+công cho v40. Nguồn cục bộ: `v40-physical-qualification.json`.
+
+**Đánh đổi.** Bốn lần prefill toàn nguồn (~0,92 MB prompt reconcile) có thể chậm nếu provider giới
+hạn; nhiều view hơn thì nhiều cơ hội một view lỗi, trong khi vẫn chỉ một repair; `cue_checked`
+thêm ~10 byte/ref gợi ý và buộc update/không cho mỗi gợi ý. Bản phát lại reconcile Gemini v39
+thiếu `cue_checked` nên không phát lại được; cần đo
+thực tế mới. Nguồn: `src/asr_studio/notes_reconcile.py`, `src/asr_studio/notes_pipeline.py`,
+`src/asr_studio/notes_semantic.py`, `tests/test_notes_cue_checked.py`,
+`tests/test_notes_partitioned_reconcile.py`, `tests/test_notes_parallel_reconcile.py`; hồ sơ cục
+bộ `v39-physical-qualification.json`, `v39-timing/report.md`, `v40-design/report.md`.
+
+### #183 (tiếp) — Gom lỗi các view vào một repair dùng chung (`notes-hierarchical-v41`)
+
+**Nguyên nhân.** V40 dừng sau 298,034664 giây, 14 lượt gọi, 0 cache, không có Notes
+(`v40-physical-qualification.json`). Phát lại đúng phản hồi primary đã lưu: hai view hợp lệ,
+hai view có tổng bốn ref lỗi tên/số chưa đủ nguồn. Mỗi view tự xin repair làm một view dùng hết
+lượt sửa trong khi view khác vẫn lỗi (`v40-failure-diagnosis/primary-errors.json`).
+
+**Thiết kế.** Thu kết quả primary của các view trước; giữ nguyên view hợp lệ và gom view lỗi
+vào một request repair. Mỗi phần sửa vẫn dùng ledger, ref, quyết định gợi ý đã chấp nhận,
+nguồn hiển thị, schema và bộ kiểm riêng. Mọi phần phải hợp lệ trước khi gộp/công bố; không nới
+kiểm tra nguồn, không thêm lượt repair hay bước đối chiếu toàn nguồn. Trần phản hồi repair áp
+dụng cho toàn gói theo byte UTF-8; primary cũng dùng cùng guard raw 64.000 byte. `provider_call_indices` vẫn theo view: chỉ số repair lặp nếu cùng request
+sửa nhiều view, không phải nhiều lượt gọi; `provider_calls` đếm request thực tế. Mặc định và
+ChatGPT giữ hành vi cũ.
+
+**Đánh đổi và nghiệm thu.** Chờ đủ primary rồi mới sửa có thể làm repair bắt đầu muộn hơn;
+gói không vừa ngân sách hoặc còn lỗi sau sửa vẫn dừng toàn tác vụ. Chưa đo v41; điểm chất lượng
+9/12, 7/7 ý quan trọng và 3 khẳng định thiếu nguồn vẫn thuộc lần Notes hoàn chỉnh v39, không
+phải v40/v41 (`v39-physical-qualification.json`). Tag: architecture; đích: `docs/backend-contract.md`;
+[issue #183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184).
+
+### #183 (tiếp) — Nguồn tally của overview và bằng chứng owner cục bộ (`notes-hierarchical-v42`)
+
+**Nguyên nhân đo được.** V41 hoàn chỉnh: 420.570653 giây, 22 lượt gọi,
+0 cache; 11/12 nội dung, 7/7 ý quan trọng nhưng còn 2
+khẳng định thiếu nguồn (`v41-physical-qualification.json`, `v41-score-a/g04-clarification.md`).
+Một overview nêu nhất trí nhưng chỉ trích tiêu đề/kết luận, thiếu tally ngay trước kết luận;
+một owner dựa vào lời tự giới thiệu ở xa, không gắn với lượt cam kết được trích.
+
+**Thiết kế.** Chỉ Gemini đã đăng ký: overview có claim biểu quyết được nối thêm đúng segment
+ngay trước kết luận nếu nêu tally rõ, cùng hồ sơ đã chứng minh, trong cửa sổ cũ. Bỏ qua kết quả
+có phản đối/mơ hồ, hồ sơ khác hoặc ID của mục tiếp theo sau kết luận; không suy diễn số hay sửa
+text, giữ các trần ID. Guard `unverified_owner` giữ bằng chứng giao việc/nêu tên trực tiếp hoặc
+nhận diện trong lượt nói cục bộ; nhãn speaker chỉ chia lượt. Lời tự giới thiệu xa hay lượt cam
+kết chưa xác định không đủ để giữ owner. Mơ hồ thì chỉ đặt owner null, giữ text/deadline/nguồn.
+`owner_unverified` đếm guard này; `cleared_owner` vẫn chỉ đếm lệnh của model, `model_verified`
+vẫn là tổng Boolean gốc. Không thêm lượt gọi, không sửa prompt ChatGPT.
+
+**Kiểm chứng và đánh đổi.** Ngoại tuyến trên đầu ra v41: nối đúng 3 ID tally, giữ câu chữ và
+bỏ owner không chứng minh được (`v42-root-engineering.json`); không phải phép đo v42. Owner có
+thể bị bỏ khi thiếu nhận diện cục bộ, ưu tiên không gán sai người. V42 chưa đo thực tế; không
+ghép thời gian v41 với kiểm tra mã mới. Lượt v42 đầy đủ đo 500.522354 giây,
+22 lượt gọi, 0 cache; 7/12 nội dung, 5/7 ý quan trọng,
+0 khẳng định quan trọng thiếu nguồn, 0 ID sai trên 141 mục:
+chưa đạt độ phủ (`v42-physical-qualification.json`, `v42-score-a/assessment.json`,
+`v42-score-b/item73-clarification.md`). Tag: architecture; đích: `docs/backend-contract.md`;
+[issue #183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184).
+
+### #185 — Tải OMP release có giới hạn và kiểm tra toàn vẹn
+
+Hai build ARM64 của [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184)
+bị HTTP 504 ở URL release OMP. Cùng asset với `?download=1` trả HTTP 200 và khớp SHA-256
+hiện hành (nguồn cục bộ: `reports/.notes-gemini-fix-local-20261108/final-test/arm64-attempt2.log`,
+`omp-arm64-body-sha256.txt`). Dockerfile dùng tham số tải asset và retry hữu hạn cho cả
+binary/license: 3 retry, chờ 2 giây, cửa sổ retry 180 giây, connect 15 giây, mỗi transfer 180 giây.
+Giữ OMP 18.5.0, SHA-256, HTTPS/TLS và license; lỗi cuối/checksum vẫn làm build thất bại.
+Đánh đổi: lỗi mạng có thể kéo dài build trong giới hạn trên, không bỏ kiểm tra hay dùng mirror.
+Issue [#185](https://github.com/nguyencanhtrung/asr-studio/issues/185).
+Tag: operations. Đích: `Dockerfile`.
+
 ## Notes transcript acceptance scope — issue #88 (2026-11-08)
 
 - Problem: the original dataset issue mixed Notes-from-transcript checks with
@@ -1820,3 +2264,67 @@ end-to-end mới. Mốc ngoài cửa sổ hoặc bị ASR đổi quá xa vẫn c
 - Trade-off: this closes the transcript-fixture gap without claiming representative
   audio coverage. It does not relax the frozen content gate for #79.
 - Follow-up: #79 and PR #181; tag: acceptance; target: Notes acceptance documentation.
+
+### #183 — Sửa ngắn nội dung tại bước kiểm nguồn (`notes-hierarchical-v43`)
+
+**Nguyên nhân.** Giao thức chỉ cho chọn câu/biến thể sẵn có hoặc cách ly cả mục. Trên cùng
+đầu vào đã lưu, nhánh cũ cách ly kết luận bill trong khi nhánh mới sửa phần phụ và giữ
+kết quả có nguồn (`revised-v43/pilot/results/A-5.json`, `B-5.json`).
+
+**Thiết kế.** Semantic audit hiện có nhận `revised_text` tùy chọn, chỉ với ref `.o` được
+model đánh dấu thay đổi; không thêm lượt gọi. Giới hạn ký tự `max(300, ceil(1.5 × độ dài
+câu gốc))`, cùng trần byte/mục/tài liệu hiện hành. Giữ ID cũ, chỉ thêm ID hiển thị trong
+chính phần kiểm; owner/deadline chỉ giữ hoặc xóa. Bộ lọc token số/mã là kiểm cấu trúc,
+không chứng minh nghĩa; điều kiện/phủ định và chuẩn hóa ASR vẫn cần model và đối chiếu
+độc lập. Các guard nguồn/owner hiện hành tiếp tục chạy. Coverage ghi `model_revised`
+và `revised_refs`, bao gồm cả đề xuất sau đó bị guard cách ly; đây không phải số mục
+được chứng minh đúng. Mặc định tắt, chỉ nhánh Gemini đã đăng ký bật; map/reconcile và
+ChatGPT giữ nguyên. Nguồn hợp đồng: `revised-v43/contract.json` và mã hiện hành.
+
+**Đo kiểm có kiểm soát.** Pilot gửi 8 request thật, 0 cache, cùng đầu vào
+và 4 phần kiểm mỗi nhánh; bốn phần còn lại dùng phản hồi đã lưu.
+Nhánh cũ có 14 mục cách ly/1972 từ review; nhánh mới
+7 mục/845 từ, 3 đề xuất sửa. Không phải lượt tạo Notes đầy đủ,
+không dùng 205.301654 giây của pilot làm thời gian nghiệm thu (`revised-v43/pilot/results/summary.json`,
+`runtime-proof.json`). Đối chiếu độc lập: giữ đủ hai critical và 3/4 nhóm mục tiêu nhưng còn 1 mục thiếu nguồn, 0 ID sai; pilot không đạt. Không mở lượt đầy đủ theo giới hạn đã thống nhất (`revised-v43/pilot-qualification.json`, `pilot-assess/root-blocker-proof.json`).
+
+**Đánh đổi.** Cho sửa câu đủ khả năng giữ lõi và phục hồi quan hệ; schema không bảo đảm
+sự thật. Giữ menu biến thể cũ để giới hạn thay đổi. Không tiếp tục mở rộng nguyên văn,
+không dùng xóa token làm bằng chứng giữ nghĩa. Một mẫu A/B không chứng minh ổn định.
+
+**Theo dõi.** [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184); chỉ xem xét lượt đầy đủ
+sau pilot đạt, không tự mở vòng thử tiếp nếu thất bại. Tag: architecture; đích:
+`docs/backend-contract.md`.
+
+**Giới hạn tại pilot trước bản sửa dưới đây.** Kiểm tra adversarial xác nhận bản sửa có thể khôi phục số ASR đã bị đánh dấu chưa rõ (`revised-v43/root-quantity-regression.json`, `test/quantity_probe.txt`); đây là hồi quy bắt buộc sửa. Bộ test đầy đủ bị timeout 1.200 giây, có một dấu lỗi trước khi dừng, chưa có summary; không coi là pass (`revised-v43/test/full.rc`, `test/report.md`).
+
+
+### #183 — Giữ dấu số ASR và nguồn cho từng hồ sơ trong nhóm
+
+**Nguyên nhân.** Rewrite bỏ qua dấu số ASR; danh sách hồ sơ chỉ gắn nguồn thành viên đầu.
+Hai ca tái hiện trên phản hồi đã lưu: trước 0/2, sau
+2/2 đạt (`required-fixes-r2/frozen-before-proof.json`,
+`current-green-proof.json`, trong hồ sơ cục bộ nêu ở báo cáo nghiệm thu).
+
+**Thiết kế.** Áp lại bộ đánh dấu số trên nguồn cuối của câu sửa. Liệt kê thành viên theo
+loại/số; nối nguồn strict trong cửa sổ và trần hiện hành trước khi cách ly nhóm chưa đủ
+nguồn, cả mục giữ nguyên. Gộp bản vá giữ riêng nguồn hiển thị của phần sở hữu; số lượng
+thuần và số hồ sơ khác loại không thay thế bằng chứng. Giữ câu/ID cũ; bộ đếm model giữ
+nghĩa ban đầu. Không đổi prompt/schema hoặc thêm bước.
+
+**Kiểm chứng.** Fast bản cuối 2185 pass/557 skip (`short-fix/fast.log`).
+Full trước bổ sung nhánh mã hồ sơ ngắn: `2728 passed, 10 skipped in 1145.91s (0:19:05)`, exit 0
+(`test/full.log`, `actualfull.rc`, `report.md`). Bản cuối kiểm lại phần Notes bị ảnh hưởng;
+các kiểm tra không phụ thuộc phần mã đổi dùng lại kết quả trên (`docs-check/report.md`).
+ChatGPT 11/11 khung phản hồi giữ nguyên request, coverage và tài liệu;
+0 lượt gọi mới (`controls-final-proof.json`). Đây là kiểm hồi quy offline, không
+phải nghiệm thu Gemini toàn chuỗi.
+
+**Đánh đổi.** Thiếu nguồn thì cần kiểm tra; mã không suy luận đúng/sai ngữ nghĩa từ số.
+Tái dùng liên kết giới hạn thay vì thêm lượt model hoặc mở rộng phạm vi nguồn.
+
+**Theo dõi.** [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184): còn nghiệm thu đầy đủ
+Gemini; [#185](https://github.com/nguyencanhtrung/asr-studio/issues/185): build native.
+Tag: architecture; đích: `docs/backend-contract.md`.

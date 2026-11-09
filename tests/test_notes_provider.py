@@ -2510,7 +2510,7 @@ def test_parallel_maps_refresh_one_expiring_token_without_changing_connection(tm
 
 @pytest.mark.parametrize(
     ("provider", "model", "expected_workers"),
-    [("antigravity", "gemini-3.8-flash", [2]), ("chatgpt", "unknown-model", [])],
+    [("antigravity", "gemini-test", []), ("chatgpt", "unknown-model", [])],
 )
 def test_other_map_paths_keep_their_existing_concurrency(
     monkeypatch, provider, model, expected_workers

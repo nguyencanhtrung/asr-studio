@@ -985,7 +985,10 @@ def test_completeness_clause_is_only_in_budgeted_single_pass(provider, model, la
     assert ordinary == conservative_prompt
     assert clause in owner_prompt
     assert clause not in ordinary
-    assert chunk == owner_chunk
+    # The registered Gemini source rule is the only map-prompt difference.
+    gemini_rule = nd._KNOWN_GEMINI_RULE[language] if provider == "antigravity" else ""
+    assert gemini_rule in owner_chunk
+    assert chunk == owner_chunk.replace(gemini_rule, "", 1)
     assert reduce == owner_reduce
 
 

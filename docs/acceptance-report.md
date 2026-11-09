@@ -18,6 +18,25 @@ v24 kiểm lại từ phản hồi đã lưu; chưa đo lại thời gian toàn 
 
 Nguồn: [PR #181](https://github.com/nguyencanhtrung/asr-studio/pull/181).
 
+## Gemini Flash 3.8 — 09/11/2026
+
+gemini-3.8-flash, medium, v43 (`3e5bed9`); cùng transcript/gold.
+**Chưa đạt: còn 4 khẳng định quan trọng thiếu nguồn.**
+
+| Chỉ tiêu | Kết quả cuối |
+| --- | ---: |
+| Nội dung mẫu dài | 10/12 (2 một phần) |
+| Ý quan trọng | 7/7 |
+| Khẳng định quan trọng thiếu nguồn | 4 |
+| ID trích dẫn không tồn tại | 0 |
+| Mục đã kiểm | 180 |
+| Notes đo thực tế | 571.61 giây; 22 lượt gọi; 0 cache |
+
+Lỗi còn lại: vai trò, người ký, điều kiện/thời hạn theo dõi, liên kết người–tổ chức.
+Nguồn: [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184);
+hồ sơ cục bộ `reports/.notes-gemini-fix-local-20261108/qualification-20261109/`:
+`qualification.json`, `physical/results/long.json`, `score-a/assessment.json`, `score-b/assessment.json`.
+
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>
 

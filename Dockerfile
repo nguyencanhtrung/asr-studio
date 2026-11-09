@@ -51,16 +51,19 @@ RUN apt-get update \
         arm64) omp_asset=omp-linux-arm64; omp_sha=1244860c58bb68a3a45390d4932e5c7983183ec8c12cb6848c1afd709de38a07 ;; \
         *) echo "Unsupported OMP architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && curl --fail --location --proto '=https' --tlsv1.2 \
-        "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/${omp_asset}" \
+    && curl --fail --location --retry 3 --retry-delay 2 --retry-max-time 180 \
+        --connect-timeout 15 --max-time 180 --proto '=https' --tlsv1.2 \
+        "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/${omp_asset}?download=1" \
         --output /usr/local/bin/omp \
     && echo "${omp_sha}  /usr/local/bin/omp" | sha256sum --check --strict \
     && chmod 0755 /usr/local/bin/omp \
     && mkdir -p /usr/local/share/licenses/omp \
-    && curl --fail --location --proto '=https' --tlsv1.2 \
+    && curl --fail --location --retry 3 --retry-delay 2 --retry-max-time 180 \
+        --connect-timeout 15 --max-time 180 --proto '=https' --tlsv1.2 \
         "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/LICENSE" \
         --output /usr/local/share/licenses/omp/LICENSE \
-    && curl --fail --location --proto '=https' --tlsv1.2 \
+    && curl --fail --location --retry 3 --retry-delay 2 --retry-max-time 180 \
+        --connect-timeout 15 --max-time 180 --proto '=https' --tlsv1.2 \
         "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/THIRD-PARTY-NOTICES.txt" \
         --output /usr/local/share/licenses/omp/THIRD-PARTY-NOTICES.txt
 

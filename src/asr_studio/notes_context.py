@@ -10,17 +10,94 @@ text, owner, deadline or existing citations, and stays local: it looks back from
 each cited run at most `MAX_BACK_SEGMENTS` segments and `MAX_BACK_SECONDS` seconds, and adds at
 most `MAX_ADDED_PER_ITEM` IDs per item. An anchor that is not found in that window is left
 unresolved.
+
+Strict mode (registered Gemini only) adds two bounded anchors: a short labelled record number
+("Appointment 1355") found back in the same window, and, for an item that states an outcome
+while its cited motion has none, the first outcome statement at most `MAX_FORWARD_SEGMENTS`
+segments and `MAX_FORWARD_SECONDS` seconds after the motion.
+
+Strict mode also links two structured anchors in a separate, wider window of at most
+`MAX_STRUCTURED_SEGMENTS` segments and `MAX_STRUCTURED_SECONDS` seconds, with no bridge:
+
+- a literal record number absent from the cited pool links only the nearest explicit agenda
+  header that states it; a different header found first stops the search;
+- a person named just before "votes/voted/voting" links the next explicit vote block (vote or
+  roll call opening through its stated result) when the block contains that name. The heard
+  vote is never interpreted; a new agenda item, a block without the name or two different
+  blocks for one item leave the item unresolved.
+
+Strict mode also adds two short binding links, ahead of any other structured link:
+
+- a cited run whose last segment ends mid-sentence links the continuation, at most
+  `MAX_FORWARD_SEGMENTS` segments, through the first one that states item words the pool lacks;
+- a named person absent from the cited run and its window links the nearest floor handoff (a
+  segment ending in a short capitalised address, "Councilmember Lee.") at most
+  `MAX_FORWARD_SEGMENTS` segments before the run. The handoff is provenance only: its words are
+  never matched to the name.
+
+Strict mode also adds three provenance links after all others, each one complete or none:
+
+- an acronym ("ABC") absent from the pool links the nearest segment in the back window that
+  states it or its capitalised full name (connectors such as "of" dropped), with no bridge;
+  this is the only context the overview gets. A name is never read as a person;
+- a duration ("6-month", "six months", "6 tháng") absent from the pool links the nearest
+  segment in the back window that states the same amount and unit, plus the bridge;
+- when the pool cites an explicit agenda header stating the item's record number and a later
+  outcome within the structured window, with no other header between them, the first segment
+  in that span stating each item word the pool lacks is linked, with no bridge.
+
+Opt-in binding completion (`complete_bindings=True` with strict mode only) appends two more
+provenance links after every other link, each one complete or none, for an item that does not
+quote a cited segment verbatim:
+
+- an explicit typed record ("Council Bill 12345", "Resolution 318", "CB 12345" with a legal
+  cue in the item or pool) whose number the pool lacks links the nearest explicit agenda header
+  in the structured back window that states it, with no bridge; any other header first stops
+  the search. After a record label, whitespace three-digit groups ("12 345") read as one
+  number. A generic agenda header may state the primary number untyped (a misheard label);
+  differently labelled records of another family are ignored, while a second primary number,
+  a different number of the same family or a technical label ("permit 12345") rejects it.
+  This is the only new link the overview gets;
+- an amount with its noun phrase ("four accessible entrances") the pool lacks links the first
+  segment strictly between two cited runs, at most `MAX_STRUCTURED_SEGMENTS` segments and
+  `MAX_STRUCTURED_SECONDS` seconds apart with no header or agenda break, that states the same
+  whole phrase (case, NFC and number words folded; never part of a number list).
+
+Adjacent vote tally (same opt-in, overview only): an overview that claims unanimity or a vote
+and cites an explicit closing outcome ("passes", "adopted") also links the one source segment
+immediately before that closing segment when it explicitly states the tally ("unanimous",
+"unopposed", "5-0", "nine in favor not opposed"), with no nay, "against", abstention,
+negation ("not unanimous") or non-zero opposing count. The segment must be within
+`MAX_FORWARD_SECONDS`, not a header or topic break, and its records must be the single record
+proven by the closing segment or by the nearest cited header before it, with no other header
+between them. A name roster is no tally; no count, name or outcome is inferred, and any doubt
+leaves the overview unchanged.
+
+`unverified_vote_names` is a check, not a link: it lists each person an item says is voting (or
+will vote) who is not recognised for any cited first-person vote statement by an exact handoff
+before that turn or an exact "Thank you, <name>" after it. A thank-you elsewhere is no proof.
+`unverified_speakers` applies the same local recognition, plus a cited self-introduction or
+grammatical report, to every attributed speaker the item names that is titled, treated as a
+person by the source, or absent from the whole source (no exact whole-name occurrence).
 """
 
 from __future__ import annotations
 
 import copy
 import re
+import unicodedata
 from typing import Any
 
 MAX_BACK_SEGMENTS = 16
 MAX_BACK_SECONDS = 180.0
 MAX_ADDED_PER_ITEM = 12
+MAX_FORWARD_SEGMENTS = 4
+MAX_FORWARD_SECONDS = 120.0
+MAX_STRUCTURED_SEGMENTS = 32
+MAX_STRUCTURED_SECONDS = 360.0
+# Exact organization names can precede a long turn; never bridge or cross an agenda header.
+MAX_ORG_BACK_SEGMENTS = 32
+MAX_ORG_BACK_SECONDS = 600.0
 
 _ROLES = ("councilmember", "council member", "chair", "president", "mayor", "commissioner")
 _HONORIFIC = r"(?:Mr|Mrs|Ms|Dr|Judge|Councilmember|Council member|President|Mayor|Commissioner)"
@@ -30,6 +107,75 @@ _CONNECTED_ORG = re.compile(r"\b[A-Z][\w'-]+(?:\s+(?:of|the|for)){1,2}(?:\s+[A-Z
 # A literal item number; a decimal or longer number does not match.
 _NUMBER_EDGES = (r"(?<!\d)(?<!\d\.)", r"(?!\d)(?!\.\d)")
 _LONG_NUMBER = re.compile(rf"{_NUMBER_EDGES[0]}\d{{5,}}{_NUMBER_EDGES[1]}")
+# Strict mode: a 3-4 digit number labelled by a capitalised word ("Resolution 318").
+_LABELED_NUMBER = re.compile(rf"\b[A-Z][a-z]+\.?\s+(\d{{3,4}}){_NUMBER_EDGES[1]}")
+_ITEM_OUTCOME = re.compile(
+    r"\b(?:approved|adopted|passed|carried|confirmed|amended|rejected|defeated)\b"
+    r"|thông qua|phê duyệt|chấp thuận|bác bỏ",
+    re.IGNORECASE,
+)
+_MOTION = re.compile(r"\b(?:move|moved|motion|second|vote)\b|biểu quyết|đề nghị", re.IGNORECASE)
+_SOURCE_OUTCOME = re.compile(
+    r"\b(?:ayes have it|carries|carried|passes|passed|adopted|approved|amended|confirmed|"
+    r"fails|failed)\b|thông qua|bác bỏ",
+    re.IGNORECASE,
+)
+# Strict mode: an explicit agenda header, a vote block opening and a person named as a voter.
+_HEADER = re.compile(
+    r"\bagenda\s+items?\b|\bitems?\s+(?:no\.?\s*)?\d"
+    r"|\b(?:bill|resolution|ordinance|appointment)\s+(?:no\.?\s*)?\d",
+    re.IGNORECASE,
+)
+_VOTE_START = re.compile(
+    r"\b(?:roll\s*call|call\s+the\s+(?:roll|role)|passage\s+of"
+    r"|vote\s+on\s+(?:the\s+)?(?:council\s+)?(?:bill|resolution|ordinance|motion|amendment|item))\b",
+    re.IGNORECASE,
+)
+_VOTER = re.compile(r"\b([A-Z][a-z][\w'-]*)\s+(?:votes?|voted|voting)\b")
+_NOT_A_VOTER = {
+    *_ROLES, "council", "committee", "board", "commission", "member", "members", "final",
+    "unanimous", "majority", "public", "roll", "the", "no", "yes",
+}  # fmt: skip
+# A vote intention attributed to a named person, and a first-person vote statement in the source.
+_INTENT_VOTER = re.compile(
+    r"\b([A-Z][a-z][\w'-]*)\s+(?:(?:is|was)\s+)?(?:voting|(?:will|would|plans?\s+to|intends?\s+to)\s+vote)\b"
+)
+_FIRST_PERSON_VOTE = re.compile(
+    r"\bI(?:\s+will|\s+am|\s+plan\s+to|\s+intend\s+to|['’]ll|['’]m)?\s+(?:be\s+)?vot(?:e|ing)\b"
+)
+_ACK = re.compile(r"^\s*(?:thank\s+you|thanks)\b[^.!?]*", re.IGNORECASE)
+_DIRECT_ACK = re.compile(
+    r"^\s*(?i:thank\s+you|thanks)\s*[,!:]?\s*"
+    r"(?P<address>(?:[A-Z][\w'’-]*\.?\s+){0,3}[A-Z][\w'’-]*\.?)(?:[,;.!?]|$)"
+)
+_NOT_AN_ADDRESSEE = {"to", "for", "all", "both", "everyone", "everybody", "the", "our"}
+_SENTENCE_END = re.compile(r"[.!?…][\"'”’)]*\s*$")
+
+
+def _inflections(base: str) -> set[str]:
+    """Base, third-person, past and -ing forms: "state" -> states/stated/stating."""
+    if base == "say":
+        return {"say", "says", "said", "saying"}
+    if base.endswith("y"):
+        return {base, f"{base[:-1]}ies", f"{base[:-1]}ied", f"{base}ing"}
+    stem = base.removesuffix("e")
+    third = f"{base}es" if base.endswith(("s", "sh", "ch")) else f"{base}s"
+    return {base, third, f"{stem}ed", f"{stem}ing"}
+
+
+# Speech-attribution verbs in every tense: "Lee states", "Lee urged", "Lee is arguing".
+ATTRIBUTION_FORMS = frozenset(
+    form
+    for base in """
+    say state ask request urge note propose argue support oppose describe raise express
+    recommend thank emphasize emphasise question suggest call warn explain testify comment
+    remark claim praise acknowledge highlight mention report condemn insist add agree
+    compare affirm
+    """.split()  # noqa: SIM905 - a readable word list
+    for form in _inflections(base)
+)
+_SPEECH_VERBS = "|".join(sorted(ATTRIBUTION_FORMS, key=len, reverse=True))
+# The generic context anchor keeps its original verbs: ChatGPT links never change.
 _ATTRIBUTION_VERBS = (
     "said|says|stated|asked|requested|urged|noted|proposed|argued|supported|opposed|described|"
     "raised|expressed|recommended|thanked|emphasized|questioned|suggested|called|warned"
@@ -43,13 +189,15 @@ _TOPIC_BREAK = re.compile(
 )
 
 
-def _anchors(item: dict[str, Any]) -> list[tuple[str, str]]:
+def _anchors(item: dict[str, Any], *, strict: bool = False) -> list[tuple[str, str]]:
     """(kind, value) anchors stated by the item; kind selects the matcher."""
     text = item["text"]
     found: list[tuple[str, str]] = []
     found += [("word", name) for name in _NAME_AFTER_HONORIFIC.findall(text)]
     found += [("org", org) for org in _CONNECTED_ORG.findall(text)]
     found += [("number", number) for number in _LONG_NUMBER.findall(text)]
+    if strict:
+        found += [("number", number) for number in _LABELED_NUMBER.findall(text)]
     if (match := _ATTRIBUTED_SUBJECT.match(text)) and match.group(1).lower() not in _ROLES:
         found.append(("word", match.group(1)))
     if match := _ROLE_LEAD.match(text):
@@ -59,6 +207,54 @@ def _anchors(item: dict[str, Any]) -> list[tuple[str, str]]:
     if isinstance(owner, str) and owner.strip().lower() in _ROLES:
         found.append(("word", owner.strip()))
     return list(dict.fromkeys(found))
+
+
+_ACRONYM = re.compile(r"\b[A-Z]{2,6}\b")
+_CONNECTORS = frozenset({"of", "the", "for", "and", "on", "at", "in", "de", "&"})
+_AMOUNTS = {
+    word: value
+    for value, word in enumerate(
+        "one two three four five six seven eight nine ten eleven twelve".split(),  # noqa: SIM905
+        start=1,
+    )
+}
+_UNITS = {"ngày": "day", "tuần": "week", "tháng": "month", "năm": "year"}
+_DURATION = re.compile(
+    rf"(?<!\w)(\d{{1,3}}|{'|'.join(_AMOUNTS)})[\s-]+(day|week|month|year)s?(?!\w)"
+    rf"|(?<!\w)(\d{{1,3}})\s+({'|'.join(_UNITS)})(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _durations(text: str) -> set[str]:
+    """Canonical "<amount> <unit>" for each stated duration: "six-month" -> "6 month"."""
+    found = set()
+    for match in _DURATION.finditer(text):
+        amount, unit = (match[1], match[2]) if match[1] else (match[3], match[4])
+        amount = amount.lower()
+        value = _AMOUNTS.get(amount) or int(amount)
+        found.add(f"{value} {_UNITS.get(unit.lower(), unit.lower())}")
+    return found
+
+
+def _names_acronym(acronym: str, text: str) -> bool:
+    """The acronym itself, or capitalised words whose initials spell it ("Bay Area Rail")."""
+    if re.search(rf"\b{acronym}\b", text):
+        return True
+    words = re.findall(r"[\w'&-]+", text)
+    for first in range(len(words)):
+        initials, index = "", first
+        while index < len(words) and len(initials) < len(acronym):
+            word = words[index]
+            index += 1
+            if initials and word.lower() in _CONNECTORS:
+                continue
+            if not word[0].isupper():
+                break
+            initials += word[0]
+        if initials == acronym:
+            return True
+    return False
 
 
 def _near_spelling(heard: str, wanted: str) -> bool:
@@ -72,6 +268,10 @@ def _near_spelling(heard: str, wanted: str) -> bool:
 
 def _match(kind: str, value: str, text: str) -> str | frozenset[str] | None:
     """Return "exact", all near organization spellings, or None."""
+    if kind == "acronym":
+        return "exact" if _names_acronym(value, text) else None
+    if kind == "duration":
+        return "exact" if value in _durations(text) else None
     if kind == "number":
         found = re.search(rf"{_NUMBER_EDGES[0]}{value}{_NUMBER_EDGES[1]}", text)
         return "exact" if found else None
@@ -121,14 +321,1010 @@ def _runs(indices: list[int]) -> list[list[int]]:
     return runs
 
 
-def _context_for_item(
+def _outcome_after(run: list[int], segments: list[dict[str, Any]]) -> int | None:
+    """First outcome statement shortly after a cited motion run; a new agenda item stops it."""
+    end = run[-1]
+    end_time = float(segments[end]["end_seconds"])
+    for ahead in range(end + 1, min(end + MAX_FORWARD_SEGMENTS, len(segments) - 1) + 1):
+        text = segments[ahead]["text"]
+        if _TOPIC_BREAK.search(text) or float(segments[ahead]["start_seconds"]) - end_time > (
+            MAX_FORWARD_SECONDS
+        ):
+            return None
+        if _SOURCE_OUTCOME.search(text):
+            return ahead
+    return None
+
+
+def _header_before(value: str, segments: list[dict[str, Any]], start: int) -> int | None:
+    """Nearest explicit agenda header stating `value`; any other header first stops the search."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - MAX_STRUCTURED_SEGMENTS, 0) - 1, -1):
+        if start_time - float(segments[back]["start_seconds"]) > MAX_STRUCTURED_SECONDS:
+            return None
+        text = segments[back]["text"]
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            numbers = set(_LONG_NUMBER.findall(text)) | set(_LABELED_NUMBER.findall(text))
+            # A header naming a different or a second record number is never this item's.
+            return back if _match("number", value, text) and numbers <= {value} else None
+    return None
+
+
+def _vote_block_after(name: str, cited: list[int], segments: list[dict[str, Any]]) -> range | None:
+    """Next explicit vote block after the last cited mention of `name`, if it contains the name."""
+    mentions = [index for index in cited if _match("word", name, segments[index]["text"])]
+    if not mentions:
+        return None
+    anchor = mentions[-1]
+    anchor_end = float(segments[anchor]["end_seconds"])
+    opening = None
+    last = min(anchor + MAX_STRUCTURED_SEGMENTS, len(segments) - 1)
+    for ahead in range(anchor + 1, last + 1):
+        text = segments[ahead]["text"]
+        if float(segments[ahead]["start_seconds"]) - anchor_end > MAX_STRUCTURED_SECONDS:
+            return None
+        topic_break = _TOPIC_BREAK.search(text)
+        header = _HEADER.search(text)
+        # A vote opening may itself name its bill. Later headers (including another vote
+        # opening) end this block; compare positions so an outcome after a header cannot win.
+        if (
+            header is not None
+            and (opening is not None or not _VOTE_START.search(text))
+            and (topic_break is None or header.start() < topic_break.start())
+        ):
+            topic_break = header
+        if opening is None:
+            if topic_break:
+                return None  # a new agenda item before any vote
+            if not _VOTE_START.search(text):
+                continue
+            opening = ahead
+        outcome = _SOURCE_OUTCOME.search(text)
+        if outcome and (topic_break is None or outcome.start() < topic_break.start()):
+            block = range(opening, ahead + 1)
+            named = any(_match("word", name, segments[index]["text"]) for index in block)
+            return block if named else None
+        if topic_break:
+            return None  # the block ran into a new agenda item without a result
+    return None
+
+
+def _vocative(text: str) -> str | None:
+    """The last sentence when it is only a short capitalised address: "Councilmember Lee."."""
+    last = re.split(r"(?<=[.!?])\s+", text.strip())[-1].rstrip(".!?")
+    words = last.split()
+    return last if 2 <= len(words) <= 4 and all(word[0].isupper() for word in words) else None
+
+
+def _handoff_before(start: int, segments: list[dict[str, Any]], limit: int) -> int | None:
+    """Nearest floor handoff before `start`; an acknowledgment or a new agenda item stops it."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - limit, 0) - 1, -1):
+        text = segments[back]["text"]
+        if start_time - float(segments[back]["start_seconds"]) > MAX_BACK_SECONDS:
+            return None
+        if _vocative(text) is not None:
+            return back
+        if _ACK.match(text) or _TOPIC_BREAK.search(text):
+            return None
+    return None
+
+
+def _ack_after(end: int, segments: list[dict[str, Any]]) -> int | None:
+    """The first "Thank you, ..." acknowledgment shortly after `end`."""
+    end_time = float(segments[end]["end_seconds"])
+    for ahead in range(end + 1, min(end + MAX_FORWARD_SEGMENTS, len(segments) - 1) + 1):
+        text = segments[ahead]["text"]
+        if _TOPIC_BREAK.search(text) or float(segments[ahead]["start_seconds"]) - end_time > (
+            MAX_FORWARD_SECONDS
+        ):
+            return None
+        if _ACK.match(text):
+            return ahead
+    return None
+
+
+def _handed_off(
+    name: str, index: int, segments: list[dict[str, Any]], cited: set[int]
+) -> int | None:
+    """The cited exact handoff to `name` before statement `index`."""
+    back = _handoff_before(index, segments, MAX_BACK_SEGMENTS)
+    if back in cited and _match("word", name, _vocative(segments[back]["text"]) or ""):
+        return back
+    return None
+
+
+def _acknowledged(
+    name: str, end: int, segments: list[dict[str, Any]], cited: set[int]
+) -> int | None:
+    """The cited exact "Thank you, <name>" shortly after statement `end`."""
+    ahead = _ack_after(end, segments)
+    ack = _DIRECT_ACK.match(segments[ahead]["text"]) if ahead in cited else None
+    if (
+        ack is not None
+        and ack["address"].split()[0].casefold().rstrip(".") not in _NOT_AN_ADDRESSEE
+        and _match("word", name, ack["address"]) is not None
+    ):
+        return ahead
+    return None
+
+
+def _recognized(name: str, index: int, segments: list[dict[str, Any]], cited: set[int]) -> bool:
+    """A cited exact handoff to `name` before statement `index`, or a cited acknowledgment after.
+
+    The turn bounds are found in the full source, but the witness itself must be in the item's
+    own pool; an uncited recognition leaves the name unverified.
+    """
+    return (
+        _handed_off(name, index, segments, cited) is not None
+        or _acknowledged(name, index, segments, cited) is not None
+    )
+
+
+def _reports_vote(name: str, text: str) -> bool:
+    """`name` is the grammatical voter: "Lee votes no", "Lee will be voting yes"."""
+    aux = r"(?:(?:is|was|will|would|has|had)\s+)?(?:be\s+)?"
+    voter = rf"\b{re.escape(name)}\s+{aux}vot(?:e|es|ed|ing)\b"
+    return re.search(voter, text) is not None
+
+
+def unverified_vote_names(
     item: dict[str, Any], segments: list[dict[str, Any]], position: dict[str, int]
-) -> list[int]:
+) -> list[str]:
+    """Named vote intentions with first-person cited statements but no cited recognition."""
+    names = [
+        name
+        for name in dict.fromkeys(_INTENT_VOTER.findall(item["text"]))
+        if name.lower() not in _NOT_A_VOTER
+    ]
     cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
-    anchors = _anchors(item)
-    if not cited or not anchors:
+    statements = [index for index in cited if _FIRST_PERSON_VOTE.search(segments[index]["text"])]
+    if not names or not statements:
+        return []  # no first-person statement to bind: out of scope
+    return [
+        name
+        for name in names
+        if not any(_reports_vote(name, segments[index]["text"]) for index in cited)
+        and not any(_recognized(name, index, segments, set(cited)) for index in statements)
+    ]
+
+
+_GREETING = re.compile(
+    r"^(?:hi|hello|hey|thanks?|thank\s+you|good\s+(?:morning|afternoon|evening))\b", re.I
+)
+_CALLED_NAMES = r"(?:[A-Z][\w'’-]*,?\s+){0,3}"
+
+
+def _self_introduces(name: str, text: str) -> bool:
+    """`name` introduces itself: "My name is <name>", or a first sentence that is the name."""
+    key = re.escape(name)
+    if re.search(
+        rf"\b(?i:my\s+name\s+is|i\s+am|i['’]m|this\s+is)\s+{_CALLED_NAMES}{key}\b(?!['’]s)", text
+    ):
+        return True
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    while sentences and _GREETING.match(sentences[0]) and len(sentences[0].split()) <= 5:
+        sentences.pop(0)
+    return bool(sentences) and (
+        re.fullmatch(rf"{_CALLED_NAMES}{key}\.", sentences[0]) is not None
+        or re.match(  # "Lee Ann, Acme here on behalf of ..."
+            rf"{_CALLED_NAMES}{key},\s+(?:[A-Z][\w'’&.-]*\s+){{0,3}}"
+            r"(?:here|from|with|representing|on\s+behalf)\b",
+            sentences[0],
+        )
+        is not None
+    )
+
+
+def _reports_speech(name: str, text: str) -> bool:
+    """`name` is the grammatical subject: "Lee said", "Lee, who has argued", "Lee will vote"."""
+    aux = r"(?:\s+|,\s*who\s+)(?:(?:is|was|has|had|will|would)\s+)?(?:be\s+)?"
+    verbs = rf"(?:{_SPEECH_VERBS}|vot(?:e|es|ed|ing))"
+    return re.search(rf"\b{re.escape(name)}{aux}{verbs}\b", text) is not None
+
+
+def _person_evidence(name: str, segments: list[dict[str, Any]]) -> bool:
+    """The source treats `name` as a person: an honorific, a self-introduction or a call order.
+
+    This only classifies the name; it never identifies who made a statement.
+    """
+    key = re.escape(name)
+    person = re.compile(
+        rf"\b{_HONORIFIC}\.?\s+(?:[A-Z][\w'’-]*\s+)?{key}\b"
+        rf"|\b(?i:followed\s+by|start\s+(?:off\s+)?with|next\s+(?:up\s+)?is)\s+{_CALLED_NAMES}{key}\b"
+    )
+    return any(
+        person.search(text := segment["text"]) or _self_introduces(name, text)
+        for segment in segments
+    )
+
+
+def unverified_speakers(
+    item: dict[str, Any],
+    names: list[tuple[str, bool]],
+    segments: list[dict[str, Any]],
+    position: dict[str, int],
+) -> list[str]:
+    """Attributed speakers (name, titled) the item's own pool does not locally identify.
+
+    A titled name, one the source treats as a person, or one with no exact whole-name
+    occurrence anywhere in the full source (an invented or ASR-mangled identity, even untitled)
+    needs a cited self-introduction, a cited grammatical report, an exact cited handoff before a
+    cited turn or an exact cited "Thank you, <name>" after it. A roster, roll call, thanks to
+    someone else or a mention elsewhere in the pool is no proof; an untitled organization name
+    the source states is out of scope.
+    The match is exact and case-insensitive; an ASR alias does not prove an identity.
+    """
+    cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
+    pool = set(cited)
+    return [
+        name
+        for name, titled in dict.fromkeys(names)
+        if (
+            titled
+            or _person_evidence(name, segments)
+            or not any(_match("word", name, segment["text"]) for segment in segments)
+        )
+        and not any(
+            _self_introduces(name, segments[index]["text"])
+            or _reports_speech(name, segments[index]["text"])
+            or _recognized(name, index, segments, pool)
+            for index in cited
+        )
+    ]
+
+
+_GROUP_OWNER = re.compile(
+    r"(?:\b(?:councils?|committees?|boards?|commissions?)|hội\s+đồng|ủy\s+ban)$", re.IGNORECASE
+)
+_FIRST_PERSON_INTRO = re.compile(r"\b(?:my\s+name\s+is|i\s+am|i['’]m|this\s+is)\b", re.IGNORECASE)
+_TEXT_NAMES = re.compile(r"[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+){0,3}")
+
+
+def _assigned(name: str, text: str) -> bool:
+    """An explicit named assignment: "Lee will follow up", "asked Mr. Lee to send"."""
+    key = re.escape(name)
+    return (
+        re.search(rf"\b{key},?\s+(?:will|shall|agreed\s+to|is\s+going\s+to)\b", text) is not None
+        or re.search(
+            rf"\b(?i:ask|asks|asked|direct|directs|directed|assign|assigns|assigned)\s+"
+            rf"(?:{_HONORIFIC}\.?\s+)?{key}\s+to\b",
+            text,
+        )
+        is not None
+    )
+
+
+def _cited_turns(cited: list[int], segments: list[dict[str, Any]]) -> list[list[int]]:
+    """Cited segments grouped by local turn: one speaker label over every segment between them.
+
+    A generic label only delimits a turn; the bound and an agenda break end it.
+    """
+    turns: list[list[int]] = []
+    for index in cited:
+        if turns:
+            first, last = turns[-1][0], turns[-1][-1]
+            between = segments[last : index + 1]
+            if (
+                index - first <= MAX_BACK_SEGMENTS
+                and float(segments[index]["start_seconds"])
+                - float(segments[first]["start_seconds"])
+                <= MAX_BACK_SECONDS
+                and len({s.get("speaker_id", s.get("speaker_name")) for s in between}) == 1
+                and not any(_TOPIC_BREAK.search(s["text"]) for s in between[1:])
+            ):
+                turns[-1].append(index)
+                continue
+        turns.append([index])
+    return turns
+
+
+def _turn_proof(
+    name: str, turn: list[int], segments: list[dict[str, Any]], pool: set[int]
+) -> set[int] | None:
+    """The cited witnesses (empty for a self-introduction) identifying the turn as `name`.
+
+    A speaker label only delimits the turn; it never identifies anyone.
+    """
+    if any(_self_introduces(name, segments[i]["text"]) for i in turn):
+        return set()
+    back = _handed_off(name, turn[0], segments, pool)
+    # "I'm Lee." reads as a vocative; a first-person introduction never hands the floor on.
+    if back is not None and not _FIRST_PERSON_INTRO.search(segments[back]["text"]):
+        return {back}
+    ahead = _acknowledged(name, turn[-1], segments, pool)
+    return None if ahead is None else {ahead}
+
+
+def unverified_owner(
+    item: dict[str, Any], segments: list[dict[str, Any]], position: dict[str, int]
+) -> bool:
+    """An action owner the item's own pool does not tie to its cited commitment.
+
+    A group owner (last word a council, committee, board or commission) needs its own name in
+    a cited segment. A named person in `unverified_speakers` scope needs a cited explicit
+    assignment or report naming them, or a cited self-introduction or exact recognition of a
+    local turn; every other cited turn must then be that recognition, or be identified as
+    another person the item names (the counterpart). An introduction in a remote turn, a
+    roster or label continuity is no proof: any unidentified cited turn could hold the
+    commitment, so the owner is unverified.
+    """
+    owner = str(item.get("owner") or "").strip()
+    if not owner:
+        return False
+    cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
+    texts = [segments[i]["text"] for i in cited]
+    if _GROUP_OWNER.search(owner):
+        group = re.sub(r"^(?:the\s+)?(?:city\s+)?", "", owner, flags=re.IGNORECASE)
+        return not any(_match("word", group, text) for text in texts)
+    title = re.match(rf"{_HONORIFIC}\.?\s+", owner)
+    name = owner[title.end() :] if title else owner
+    if not (
+        title
+        or _person_evidence(name, segments)
+        or not any(_match("word", name, segment["text"]) for segment in segments)
+    ):
+        return False  # not a person the source names: out of scope
+    if any(_reports_speech(name, text) or _assigned(name, text) for text in texts):
+        return False
+    pool = set(cited)
+    others = [
+        other
+        for other in dict.fromkeys(_TEXT_NAMES.findall(item["text"]))
+        if other.casefold() not in {name.casefold(), owner.casefold()}
+    ]
+    turns = _cited_turns(cited, segments)
+    proofs = [_turn_proof(name, turn, segments, pool) for turn in turns]
+    witnesses = set().union(*(proof for proof in proofs if proof is not None))
+    return not (
+        any(proof is not None for proof in proofs)
+        and all(
+            proof is not None
+            or set(turn) <= witnesses
+            or any(_turn_proof(other, turn, segments, pool) is not None for other in others)
+            for proof, turn in zip(proofs, turns, strict=True)
+        )
+    )
+
+
+_FUNCTION_WORDS = frozenset(
+    """
+    about after again against because before being below between could during every other
+    their there these those through under until where which while would should
+    """.split()  # noqa: SIM905 - a readable word list
+)
+
+
+def _words(text: str) -> set[str]:
+    """Content words (five or more letters, no function words), plural "s" dropped."""
+    words = {word.lower() for word in re.findall(r"[A-Za-z]{5,}", text)}
+    return {word.removesuffix("s") for word in words - _FUNCTION_WORDS}
+
+
+def _binding_links(
+    item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]]
+) -> list[set[int]]:
+    """Strict binding links: the continuation of a cut sentence, and a named turn's handoff."""
+    links: list[set[int]] = []
+    missing = _words(item["text"]) - _words(" ".join(segments[i]["text"] for i in cited))
+    names = [*_NAME_AFTER_HONORIFIC.findall(item["text"])]
+    if (match := _ATTRIBUTED_SUBJECT.match(item["text"])) and match.group(1).lower() not in _ROLES:
+        names.append(match.group(1))
+    for run in _runs(cited):
+        end, last = run[-1], run[-1]
+        while (
+            missing
+            and not _SENTENCE_END.search(segments[last]["text"])
+            and last + 1 < len(segments)
+            and last + 1 - end <= MAX_FORWARD_SEGMENTS
+            and float(segments[last + 1]["start_seconds"]) - float(segments[end]["end_seconds"])
+            <= MAX_FORWARD_SECONDS
+            and not _TOPIC_BREAK.search(segments[last + 1]["text"])
+        ):
+            last += 1
+            if _words(segments[last]["text"]) & missing:
+                links.append(set(range(end + 1, last + 1)))
+                break
+        run_text = " ".join(segments[i]["text"] for i in run)
+        for name in dict.fromkeys(names):
+            if (
+                _match("word", name, run_text)
+                or _antecedent("word", name, segments, run[0]) is not None
+            ):
+                continue
+            back = _handoff_before(run[0], segments, MAX_FORWARD_SEGMENTS)
+            if back is not None:
+                links.append(set(range(back, run[0])))
+    return links
+
+
+def _organization_before(value: str, segments: list[dict[str, Any]], start: int) -> int | None:
+    """Nearest exact full organization name in the bounded current-agenda window."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - MAX_ORG_BACK_SEGMENTS, 0) - 1, -1):
+        text = segments[back]["text"]
+        if start_time - float(segments[back]["start_seconds"]) > MAX_ORG_BACK_SECONDS:
+            return None
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            return None
+        if _match("org", value, text) == "exact":
+            # Keep the original complete-bridge admission for names in the old window.
+            if (
+                start - back <= MAX_BACK_SEGMENTS
+                and start_time - float(segments[back]["start_seconds"]) <= MAX_BACK_SECONDS
+            ):
+                return None
+            return back
+    return None
+
+
+def _provenance_links(
+    item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]], *, overview: bool
+) -> list[set[int]]:
+    """Strict acronym, duration and same-agenda word links (only acronyms for the overview)."""
+    text = item["text"]
+    anchors = [("acronym", value) for value in dict.fromkeys(_ACRONYM.findall(text))]
+    if not overview:
+        anchors += [("duration", value) for value in sorted(_durations(text))]
+    links: list[set[int]] = []
+    for kind, value in anchors:
+        if any(_match(kind, value, segments[index]["text"]) for index in cited):
+            continue
+        # The nearest statement before any cited run; a full name identifies itself (no bridge).
+        found = [
+            (run[0] - back, back, run[0])
+            for run in _runs(cited)
+            if (back := _antecedent(kind, value, segments, run[0])) is not None
+        ]
+        if found:
+            _gap, back, start = min(found)
+            links.append({back} if kind == "acronym" else set(range(back, start)))
+    if not overview and (span := _agenda_span(text, cited, segments)) is not None:
+        missing = _words(text) - _words(" ".join(segments[i]["text"] for i in cited))
+        found = {
+            next((i for i in span if word in _words(segments[i]["text"])), None)
+            for word in sorted(missing)
+        }
+        if found - {None}:
+            links.append(found - {None})
+    if not overview:
+        for organization in dict.fromkeys(_CONNECTED_ORG.findall(text)):
+            if any(_match("org", organization, segments[i]["text"]) == "exact" for i in cited):
+                continue
+            candidates = [
+                (run[0] - back, back)
+                for run in _runs(cited)
+                if (back := _organization_before(organization, segments, run[0])) is not None
+            ]
+            if candidates:
+                links.append({min(candidates)[1]})
+    return links
+
+
+def _agenda_span(text: str, cited: list[int], segments: list[dict[str, Any]]) -> range | None:
+    """Segments between a cited header of the item's record and its cited outcome."""
+    numbers = set(_LONG_NUMBER.findall(text)) | set(_LABELED_NUMBER.findall(text))
+    for header in cited:
+        head_text = segments[header]["text"]
+        if not _HEADER.search(head_text) or not any(
+            _match("number", value, head_text) for value in numbers
+        ):
+            continue
+        start_time = float(segments[header]["start_seconds"])
+        for ahead in range(
+            header + 1, min(header + MAX_STRUCTURED_SEGMENTS, len(segments) - 1) + 1
+        ):
+            if float(segments[ahead]["start_seconds"]) - start_time > MAX_STRUCTURED_SECONDS:
+                return None
+            ahead_text = segments[ahead]["text"]
+            if _HEADER.search(ahead_text) or _TOPIC_BREAK.search(ahead_text):
+                stated = set(_LONG_NUMBER.findall(ahead_text)) | set(
+                    _LABELED_NUMBER.findall(ahead_text)
+                )
+                # Another agenda item ends the span, even with an outcome word in that segment;
+                # only a header restating this item's record alone may carry its outcome.
+                if not stated or not stated <= numbers:
+                    return None
+            if ahead in cited and _SOURCE_OUTCOME.search(ahead_text):
+                return range(header + 1, ahead)
+        return None
+    return None
+
+
+# Opt-in binding completion: typed record numbers and quantitative phrases.
+_RECORD_LABELS = {"council bill": "bill", "bill": "bill", "cb": "bill"}
+_RECORD_REF = re.compile(
+    r"\b(council\s+bills?|bills?|cb|resolutions?|ordinances?|appointments?)\s*"
+    r"(?:no\.?\s*|number\s+|#\s*)?(?<![\d.])(\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?![\d]|\.\d)",
+    re.IGNORECASE,
+)
+_LEGAL_CUE = re.compile(
+    r"\b(?:bill|legislation|legislative|ordinance|resolution|amend\w*|enact\w*|statute"
+    r"|municipal\s+code)\b",
+    re.IGNORECASE,
+)
+_GENERIC_HEADER = re.compile(r"\bagenda\s+items?\b|\bitems?\s+(?:no\.?\s*)?\d", re.IGNORECASE)
+# A long number after one of these words is a technical identifier, never a record.
+_TECHNICAL_LABELS = frozenset(
+    """
+    file permit project case docket section sections account contract parcel phone ticket code
+    version id number no page zip route
+    """.split()  # noqa: SIM905 - a readable word list
+)
+
+
+def _record_refs(text: str) -> list[tuple[str, str, str, tuple[int, int]]]:
+    """(family, canonical number, label, span) for each explicitly labelled record."""
+    refs = []
+    for match in _RECORD_REF.finditer(text):
+        label = re.sub(r"\s+", " ", match[1].lower()).removesuffix("s")
+        number = re.sub(r"\D", "", match[2])
+        refs.append((_RECORD_LABELS.get(label, label), number, label, match.span()))
+    return refs
+
+
+# "Appointments 7401 and 7402", "Bill 12 through 15", "Bills 12/13", "Bill 12, and 13": an
+# unlabelled sibling number of a record.
+_LIST_SIBLING = re.compile(
+    r"\s*(?:,\s*(?:and\b|or\b|&|plus\b|as\s+well\s+as\b)?|&|/|\band\b|\bor\b|\bplus\b"
+    r"|\bas\s+well\s+as\b|\bthrough\b|\bto\b|[-–](?=\s*\d))\s*(\d{1,3}(?:[ \u00a0]\d{3})+|\d+)"
+    r"(?![\d]|\.\d)",
+    re.IGNORECASE,
+)
+
+
+# An explicit group of records: a label, then members joined only by ",", "and", "or", "&"
+# (repeated labels or bare numbers). Syntax decides, as in `lists_records`: a year-like or
+# short sibling is a member; a range or a labelled date ("dated", "of 2026", "(2026)") is not.
+_GROUP_JOIN = re.compile(r"\s*(?:,(?:\s*(?:and|or)\b|\s*&)?|&|\b(?:and|or)\b)\s*", re.IGNORECASE)
+_GROUP_NUMBER = re.compile(r"(\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?![\d]|\.\d)")
+
+
+def _record_groups(text: str) -> list[list[tuple[str, str, str]]]:
+    """Per explicit record label, its (family, number, label) members in the listed group."""
+    refs = _record_refs(text)
+    groups: list[list[tuple[str, str, str]]] = []
+    index = 0
+    while index < len(refs):
+        family, number, label, (_start, end) = refs[index]
+        index += 1
+        group = [(family, number, label)]
+        while (join := _GROUP_JOIN.match(text, end)) is not None:
+            if index < len(refs) and refs[index][3][0] == join.end():
+                # An explicit label, of any family, is a member and sets the family (and label)
+                # that the following bare numbers inherit.
+                family, _canonical, label, (_start, end) = refs[index]
+                group.append((family, refs[index][1], label))
+                index += 1
+            elif (sibling := _GROUP_NUMBER.match(text, join.end())) is not None:
+                digits = re.sub(r"\D", "", sibling[1])
+                group.append((family, digits, label))
+                end = sibling.end()
+            else:
+                break
+        groups.append(group)
+    return groups
+
+
+def _record_members(text: str) -> list[tuple[str, str, str]]:
+    """Distinct (family, number, label) for every explicit record, listed members included."""
+    return list(dict.fromkeys(m for group in _record_groups(text) for m in group))
+
+
+def unbound_record_group(
+    item: dict[str, Any], segments: list[dict[str, Any]], position: dict[str, int]
+) -> bool:
+    """An item states a group of records and its cited pool lacks a member (not proven).
+
+    A member is proven by a same-family typed record in the pool (a listed group included) or
+    by an untyped number no other family labels; another family's record alone proves nothing.
+    """
+    cited = [position[ref] for ref in item["source_ids"] if ref in position]
+    texts = [segments[i]["text"] for i in cited]
+    return any(
+        len({(f, number) for f, number, _l in group}) > 1
+        and any(not _member_proven(f, number, texts) for f, number, _l in group)
+        for group in _record_groups(item["text"])
+    )
+
+
+def _member_proven(family: str, number: str, texts: list[str]) -> bool:
+    """A group member is a same-family typed record, or the number in an explicit agenda header.
+
+    A bare number in a quantity ("9402 residents") and another family's record prove nothing.
+    """
+
+    def proves(text: str) -> bool:
+        typed = {(f, n) for f, n, _l in _record_members(text)}
+        if (family, number) in typed:
+            return True
+        # A header fallback is void when another family types this same number here.
+        if any(n == number for _f, n in typed):
+            return False
+        return _explicit_record_header(text) and _header_states_record(family, number, text)
+
+    return any(proves(text) for text in texts)
+
+
+def lists_records(family: str, text: str) -> bool:
+    """A record of the family is followed by an unlabelled list or range of other numbers.
+
+    An unlabelled sibling of any length is a list, a year-like one too ("Bill 74010, 2026"):
+    only a labelled date ("dated", "of 2026", "(2026)") is no sibling. A labelled record of
+    another family is a secondary reference, never a sibling.
+    """
+    return any(
+        kind == family and _LIST_SIBLING.match(text, end)
+        for kind, _canonical, _label, (_start, end) in _record_refs(text)
+    )
+
+
+def _header_states_record(family: str, number: str, text: str) -> bool:
+    """The header's primary record is exactly this one; another family's record is secondary."""
+    if lists_records(family, text):
+        return False
+    refs = _record_refs(text)
+    primary = {canonical for kind, canonical, _label, _span in refs if kind == family}
+    if _GENERIC_HEADER.search(text):
+        for match in _LONG_NUMBER.finditer(text):
+            if any(start <= match.start() < end for *_ref, (start, end) in refs):
+                continue
+            before = re.findall(r"[\w#]+", text[: match.start()].lower())
+            if before and before[-1].rstrip(".") in _TECHNICAL_LABELS:
+                continue
+            primary.add(match[0])
+    return primary == {number}
+
+
+def _record_header_before(
+    family: str, number: str, segments: list[dict[str, Any]], start: int
+) -> int | None:
+    """Nearest explicit agenda header stating the record; any other header first stops it."""
+    start_time = float(segments[start]["start_seconds"])
+    for back in range(start - 1, max(start - MAX_STRUCTURED_SEGMENTS, 0) - 1, -1):
+        if start_time - float(segments[back]["start_seconds"]) > MAX_STRUCTURED_SECONDS:
+            return None
+        text = segments[back]["text"]
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            return back if _header_states_record(family, number, text) else None
+    return None
+
+
+# Opt-in long-agenda window: only for an explicit agenda header of the same primary record.
+MAX_AGENDA_SEGMENTS = 64
+MAX_AGENDA_SECONDS = 900.0
+
+
+def _explicit_record_header(text: str) -> bool:
+    """An agenda item header, or a segment that opens with a record label (not a motion)."""
+    if _GENERIC_HEADER.search(text):
+        return True
+    refs = _record_refs(text)
+    lead = len(text) - len(text.lstrip(" \"'“‘([-–—"))
+    return bool(refs) and refs[0][3][0] == lead and not _MOTION.search(text)
+
+
+def _agenda_header_before(
+    family: str, number: str, segments: list[dict[str, Any]], start: int
+) -> tuple[int | None, int | None]:
+    """(explicit agenda header, nearest same-record mention) within the long window.
+
+    A same-record mention (an amendment or a motion) is passed, never taken for the header;
+    any other header, topic break or a different labelled record stops the search.
+    """
+    start_time = float(segments[start]["start_seconds"])
+    mention = None
+    for back in range(start - 1, max(start - MAX_AGENDA_SEGMENTS, 0) - 1, -1):
+        if start_time - float(segments[back]["start_seconds"]) > MAX_AGENDA_SECONDS:
+            break
+        text = segments[back]["text"]
+        refs = {(kind, canonical) for kind, canonical, _label, _span in _record_refs(text)}
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            if not _header_states_record(family, number, text):
+                break
+            if _explicit_record_header(text):
+                return back, mention
+            mention = back if mention is None else mention
+        elif refs - {(family, number)}:
+            break  # a competing record in the long window
+    return None, None
+
+
+_QUANTITY_WORDS = {
+    word: str(value)
+    for value, word in enumerate(
+        """one two three four five six seven eight nine ten eleven twelve thirteen fourteen
+        fifteen sixteen seventeen eighteen nineteen twenty""".split(),  # noqa: SIM905
+        start=1,
+    )
+}
+_PHRASE_STOP = (
+    frozenset(
+        """
+    the and for are was were has had have not but with from that this than more less into onto
+    over each per its their our your his her who whom which what when where while about also
+    such very some any all both other
+    """.split()  # noqa: SIM905 - a readable word list
+    )
+    | _FUNCTION_WORDS
+)
+_QUANTITY_LABELS = frozenset({"number", "no", "item", "items", "section", "page", "bill"})
+_TOKEN = re.compile(r"[^\W_]+(?:[.,'’][^\W_]+)*")
+MAX_PHRASE_WORDS = 3
+MIN_EXCERPT_CHARS = 20
+
+
+def _tokens(text: str) -> list[tuple[str, str]]:
+    """(normalized token, separator before it); amounts become digits ("two" -> "2")."""
+    text = unicodedata.normalize("NFC", text).casefold()
+    found, end = [], 0
+    for match in _TOKEN.finditer(text):
+        token = match[0]
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+|\d+", token):
+            token = token.replace(",", "")
+        found.append((_QUANTITY_WORDS.get(token, token), text[end : match.start()]))
+        end = match.end()
+    return found
+
+
+def _phrase_word(token: str) -> bool:
+    return token.isalpha() and len(token) >= 3 and token not in _PHRASE_STOP
+
+
+def _quantity_phrases(text: str) -> list[list[tuple[str, ...]]]:
+    """Per stated amount, its amount+noun phrases, longest first; lists and labels skipped."""
+    tokens = _tokens(text)
+    phrases = []
+    for index, (token, _sep) in enumerate(tokens):
+        previous = tokens[index - 1][0] if index and not _sep.strip(" ,") else ""
+        if not token.isdigit() or previous.isdigit() or previous in _QUANTITY_LABELS:
+            continue  # not an amount, a spoken number list or a label ("item 4")
+        words = []
+        for word, sep in tokens[index + 1 : index + 1 + MAX_PHRASE_WORDS]:
+            if sep.strip() or not _phrase_word(word):
+                break
+            words.append(word)
+        # The amount alone or with a short function word is never a phrase.
+        candidates = [
+            (token, *words[:size]) for size in range(len(words), 0, -1) if len(words[size - 1]) >= 4
+        ]
+        if candidates:
+            phrases.append(candidates)
+    return phrases
+
+
+def _states_phrase(phrase: tuple[str, ...], text: str) -> bool:
+    """The whole phrase, not inside a number list and not followed by more of the noun phrase."""
+    tokens = _tokens(text)
+    size = len(phrase)
+    for index in range(len(tokens) - size + 1):
+        if tuple(token for token, _sep in tokens[index : index + size]) != phrase:
+            continue
+        if any(sep.strip() for _token, sep in tokens[index + 1 : index + size]):
+            continue
+        before = tokens[index - 1] if index else None
+        if before and not tokens[index][1].strip(" ,") and before[0].isdigit():
+            continue  # part of a spoken number list: "50 to 3", "101, two"
+        after = tokens[index + size] if index + size < len(tokens) else None
+        if after and not after[1].strip() and _phrase_word(after[0]):
+            continue  # the noun phrase goes on: a different head noun
+        return True
+    return False
+
+
+def _interior_spans(cited: list[int], segments: list[dict[str, Any]]) -> list[range]:
+    """Segments strictly between two cited runs of one agenda item, within the window."""
+    spans = []
+    runs = _runs(cited)
+    for left, right in zip(runs, runs[1:], strict=False):
+        low, high = left[-1], right[0]
+        if (
+            high - low > MAX_STRUCTURED_SEGMENTS
+            or float(segments[high]["start_seconds"]) - float(segments[low]["start_seconds"])
+            > MAX_STRUCTURED_SECONDS
+            or _TOPIC_BREAK.search(segments[high]["text"])
+            or any(
+                _HEADER.search(segments[i]["text"]) or _TOPIC_BREAK.search(segments[i]["text"])
+                for i in range(low + 1, high)
+            )
+        ):
+            continue
+        spans.append(range(low + 1, high))
+    return spans
+
+
+def _completion_links(
+    item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]], *, overview: bool
+) -> list[set[int]]:
+    """Opt-in typed record and quantitative phrase links (only records for the overview)."""
+    text = item["text"]
+    pool = " ".join(segments[i]["text"] for i in cited)
+    excerpts = [segments[i]["text"].strip() for i in cited]
+    if not cited or any(len(raw) >= MIN_EXCERPT_CHARS and raw in text for raw in excerpts):
+        return []  # a raw source excerpt (needs-review notice) is already its own evidence
+    links: list[set[int]] = []
+    pool_numbers = {number for _family, number, _label, _span in _record_refs(pool)}
+    records = dict.fromkeys(_record_members(text))
+    texts = [segments[i]["text"] for i in cited]
+    grouped = {
+        m
+        for group in _record_groups(text)
+        if len({(f, n) for f, n, _l in group}) > 1
+        for m in group
+    }
+    for family, number, label in records:
+        if len(number) < 3 and (family, number, label) not in grouped:
+            continue  # a lone short number is no record; a group member is (syntax decides)
+        if (family, number, label) in grouped:  # a group claim needs typed or header proof
+            if _member_proven(family, number, texts):
+                continue
+        elif number in pool_numbers or _match("number", number, pool):
+            continue
+        if label == "cb" and not (_LEGAL_CUE.search(text) or _LEGAL_CUE.search(pool)):
+            continue  # an abbreviation is a bill only in a legal context
+        found = [
+            (run[0] - back, back)
+            for run in _runs(cited)
+            if (back := _record_header_before(family, number, segments, run[0])) is not None
+        ]
+        if found:
+            links.append({min(found)[1]})
+        # The long agenda window: the actual header of this record, and its nearest mention.
+        far = []
+        for run in _runs(cited):
+            header, mention = _agenda_header_before(family, number, segments, run[0])
+            if header is not None:
+                far.append((run[0] - header, header, mention))
+        if far:
+            _gap, header, mention = min(far)
+            links += [{index} for index in (header, mention) if index is not None]
+    if overview:
+        return links
+    spans = _interior_spans(cited, segments)
+    for candidates in _quantity_phrases(text):
+        for phrase in candidates:
+            if _states_phrase(phrase, pool):
+                break  # already covered
+            witness = next(
+                (i for span in spans for i in span if _states_phrase(phrase, segments[i]["text"])),
+                None,
+            )
+            link = {witness} if witness is not None else _continuation(phrase, cited, segments)
+            if link:
+                links.append(link)
+                break
+    return links
+
+
+def _continuation(
+    phrase: tuple[str, ...], cited: list[int], segments: list[dict[str, Any]]
+) -> set[int]:
+    """The bounded continuation of a cut sentence after a cited run that completes the phrase."""
+    for run in _runs(cited):
+        end = last = run[-1]
+        if _states_phrase(phrase, segments[end]["text"]):
+            continue
+        while (
+            not _SENTENCE_END.search(segments[last]["text"])
+            and last + 1 < len(segments)
+            and last + 1 - end <= MAX_FORWARD_SEGMENTS
+            and float(segments[last + 1]["start_seconds"]) - float(segments[end]["end_seconds"])
+            <= MAX_FORWARD_SECONDS
+            and not _HEADER.search(segments[last + 1]["text"])
+            and not _TOPIC_BREAK.search(segments[last + 1]["text"])
+        ):
+            last += 1
+            if _states_phrase(phrase, " ".join(segments[i]["text"] for i in range(end, last + 1))):
+                return set(range(end + 1, last + 1))
+    return set()
+
+
+_VOTE_CLAIM = re.compile(
+    r"\bunanim\w*|\bunopposed\b|\bwithout\s+(?:any\s+)?opposition\b|\bvot(?:e|ed|es|ing)\b",
+    re.IGNORECASE,
+)
+_NUM = r"(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten)"
+_TALLY = re.compile(
+    rf"\bunanim\w*|\bunopposed\b|\bwithout\s+(?:any\s+)?opposition\b"
+    rf"|\b{_NUM}\s*(?:-|to)\s*(?:0|zero)\b"
+    rf"|\b{_NUM}\s+in\s+favou?r\s+(?:and\s+)?(?:not\s+opposed|unopposed)\b",
+    re.IGNORECASE,
+)
+_NEGATED_TALLY = re.compile(r"\bnot\s+(?:unanim\w*|unopposed)\b", re.IGNORECASE)
+_NOT_OPPOSED = re.compile(r"\bnot\s+opposed\b", re.IGNORECASE)
+_OPPOSED = re.compile(
+    rf"\bnays?\b|\bagainst\b|\babsten\w*|\babstain\w*|\bdissent\w*|\bopposed\b|\bno\s+votes?\b"
+    rf"|\b{_NUM}\s*(?:-|to)\s*(?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+    re.IGNORECASE,
+)
+
+
+def _record_proof(
+    closing: int, cited: list[int], segments: list[dict[str, Any]]
+) -> set[tuple[str, str]] | None:
+    """The single record of a closing outcome, from itself or the nearest cited header before it."""
+
+    def one(text: str) -> set[tuple[str, str]] | None:
+        refs = {(kind, number) for kind, number, _label, _span in _record_refs(text)}
+        return refs if len(refs) == 1 and not any(lists_records(k, text) for k, _ in refs) else None
+
+    closing_text = segments[closing]["text"]
+    closing_refs = _record_refs(closing_text)
+    if closing_refs:
+        outcome = _SOURCE_OUTCOME.search(closing_text)
+        # A record read after the closing outcome can be the next agenda item.
+        if outcome is None or any(span[1] > outcome.end() for *_ref, span in closing_refs):
+            return None
+        return one(closing_text)
+    start_time = float(segments[closing]["start_seconds"])
+    for back in range(closing - 1, max(closing - MAX_STRUCTURED_SEGMENTS, 0) - 1, -1):
+        if start_time - float(segments[back]["start_seconds"]) > MAX_STRUCTURED_SECONDS:
+            return None
+        text = segments[back]["text"]
+        if _HEADER.search(text) or _TOPIC_BREAK.search(text):
+            # The first header back is the record's own: it must be cited and state one record.
+            return one(text) if back in cited else None
+    return None
+
+
+def _adjacent_vote_links(
+    item: dict[str, Any], cited: list[int], segments: list[dict[str, Any]]
+) -> list[set[int]]:
+    """Opt-in: the explicit tally segment right before a cited closing outcome (overview only)."""
+    if not _VOTE_CLAIM.search(item["text"]):
         return []
+    claimed = {(kind, number) for kind, number, _label, _span in _record_refs(item["text"])}
+    links: list[set[int]] = []
+    for closing in cited:
+        before = closing - 1
+        if before < 0 or before in cited or not _SOURCE_OUTCOME.search(segments[closing]["text"]):
+            continue
+        text = segments[before]["text"]
+        if (
+            not _TALLY.search(text)
+            or _NEGATED_TALLY.search(text)
+            or _OPPOSED.search(_NOT_OPPOSED.sub("", text))
+            or _HEADER.search(text)
+            or _TOPIC_BREAK.search(text)
+            or float(segments[closing]["start_seconds"]) - float(segments[before]["start_seconds"])
+            > MAX_FORWARD_SECONDS
+        ):
+            continue
+        record = _record_proof(closing, cited, segments)
+        stated = {(kind, number) for kind, number, _label, _span in _record_refs(text)}
+        if record is None or not stated <= record or (claimed and not record <= claimed):
+            continue
+        links.append({before})
+    return links
+
+
+def _context_for_item(
+    item: dict[str, Any],
+    segments: list[dict[str, Any]],
+    position: dict[str, int],
+    *,
+    strict: bool = False,
+    complete_bindings: bool = False,
+) -> tuple[list[int], list[set[int]]]:
+    """Generic context IDs (unchanged rules) and the complete strict structured links."""
+    cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
+    anchors = _anchors(item, strict=strict)
     added: set[int] = set()
+    # Binding evidence first: complete links are admitted in order while they fit.
+    structured: list[set[int]] = _binding_links(item, cited, segments) if strict else []
+    if (
+        strict
+        and cited
+        and _ITEM_OUTCOME.search(item["text"])
+        and not any(_SOURCE_OUTCOME.search(segments[index]["text"]) for index in cited)
+    ):
+        for run in _runs(cited):
+            if (
+                _MOTION.search(" ".join(segments[index]["text"] for index in run))
+                and (ahead := _outcome_after(run, segments)) is not None
+            ):
+                added.update(range(run[-1] + 1, ahead + 1))
+                break  # one outcome per item
     for run in _runs(cited):
         run_text = " ".join(segments[index]["text"] for index in run)
         start = run[0]
@@ -139,29 +1335,79 @@ def _context_for_item(
             if back is not None:
                 # The anchor and the bridge that carries its reference to the cited run.
                 added.update(range(back, start))
+            elif (
+                strict
+                and kind == "number"
+                and not any(_match(kind, value, segments[index]["text"]) for index in cited)
+            ):
+                header = _header_before(value, segments, start)
+                if header is not None:
+                    structured.append({header})  # the header states the relation: no bridge
+    if strict and cited:
+        voters = [name for name in _VOTER.findall(item["text"]) if name.lower() not in _NOT_A_VOTER]
+        blocks = {
+            tuple(block)
+            for name in dict.fromkeys(voters)
+            if (block := _vote_block_after(name, cited, segments)) is not None
+        }
+        if len(blocks) == 1:  # two different blocks for one item conflict: unresolved
+            structured.append(set(blocks.pop()))
+    if strict:
+        structured += _provenance_links(item, cited, segments, overview=False)
+    if strict and complete_bindings:
+        structured += _completion_links(item, cited, segments, overview=False)
     added -= set(cited)
     if len(added) > MAX_ADDED_PER_ITEM:
-        return []  # An over-wide chain is left unresolved, not truncated.
-    return sorted(added)
+        added = set()  # An over-wide chain is left unresolved, not truncated.
+    return sorted(added), [link - set(cited) for link in structured]
 
 
 def link_antecedent_context(
-    document: dict[str, Any], snapshot: dict[str, Any], *, max_refs_per_item: int
+    document: dict[str, Any],
+    snapshot: dict[str, Any],
+    *,
+    max_refs_per_item: int,
+    strict: bool = False,
+    complete_bindings: bool = False,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """Return a copy with local antecedent IDs added, and bounded counts.
 
-    The overview is a cross-item summary, so only the detail sections get context links.
+    The overview is a cross-item summary, so only the detail sections get context links, except
+    strict acronym links and, with `complete_bindings`, strict typed record links.
+    `complete_bindings` without `strict` changes nothing.
     """
     segments = snapshot["segments"]  # saved transcript order
     position = {segment["id"]: index for index, segment in enumerate(segments)}
     result = copy.deepcopy(document)
     counts = {"items": 0, "added_ids": 0}
     for section, value in result.items():
-        if section == "overview" or not isinstance(value, list):
+        if not isinstance(value, list) or (section == "overview" and not strict):
             continue
         for item in value:
-            added = _context_for_item(item, segments, position)
-            if not added or len(item["source_ids"]) + len(added) > max_refs_per_item:
+            if section == "overview":
+                cited = sorted({position[ref] for ref in item["source_ids"] if ref in position})
+                generic = []
+                links = _provenance_links(item, cited, segments, overview=True)
+                if complete_bindings:
+                    links += _completion_links(item, cited, segments, overview=True)
+                    links += _adjacent_vote_links(item, cited, segments)
+                structured = [link - set(cited) for link in links]
+            else:
+                generic, structured = _context_for_item(
+                    item, segments, position, strict=strict, complete_bindings=complete_bindings
+                )
+            fits = len(item["source_ids"]) + len(generic) <= max_refs_per_item
+            added = set(generic) if fits else set()
+            # Generic links are kept as before; each complete structured link joins only if the
+            # union still fits both caps. A link is never truncated.
+            for link in structured:
+                union = added | link
+                if (
+                    len(union) <= MAX_ADDED_PER_ITEM
+                    and len(item["source_ids"]) + len(union) <= max_refs_per_item
+                ):
+                    added = union
+            if not added:
                 continue
             ids = set(item["source_ids"]) | {segments[index]["id"] for index in added}
             item["source_ids"] = sorted(ids, key=position.__getitem__)
