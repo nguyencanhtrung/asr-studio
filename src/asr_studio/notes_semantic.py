@@ -39,6 +39,7 @@ from asr_studio.notes_context import (
     ATTRIBUTION_FORMS,
     MAX_FORWARD_SECONDS,
     link_antecedent_context,
+    unbound_record_group,
     unverified_owner,
     unverified_speakers,
     unverified_vote_names,
@@ -998,6 +999,30 @@ class SemanticAudit:
         segments = self.source["segments"]
         return core[0], tuple(segments[index]["id"] for index in core[1])
 
+    def _complete_record_group(
+        self, section: str, published: dict[str, Any], scope: set[str]
+    ) -> None:
+        """Append the strict typed-header links of a listed record group, visible IDs only.
+
+        Provenance only (guard-added, not model-added): complete links within the existing caps
+        and this part's visible scope; the text and old IDs stay, and a link that does not fit
+        is left out, so an unbound member still quarantines the item.
+        """
+        part: dict[str, Any] = {name: [] for name in _SECTION_NAMES}
+        part[section] = [copy.deepcopy(published)]
+        linked, _counts = link_antecedent_context(
+            part,
+            self.source,
+            max_refs_per_item=nd._source_ref_limit(self.max_unit_size),
+            strict=True,
+            complete_bindings=True,
+        )
+        known = set(published["source_ids"])
+        new = [i for i in linked[section][0]["source_ids"] if i not in known and i in scope]
+        published["source_ids"] = sorted(
+            [*published["source_ids"], *new], key=lambda i: self._position[i]
+        )
+
     def _responsibility_texts(self, texts: list[tuple[str, str]]) -> list[tuple[str, str]]:
         """'.p' over the original, '.pr' over '.r', '.aNp'/'.aNpr' over anonymous ones; capped."""
         extra: list[tuple[str, str]] = []
@@ -1177,7 +1202,9 @@ class SemanticAudit:
         )
         if len(merged.encode("utf-8")) > MAX_SEMANTIC_OUTPUT_BYTES:
             raise _error("The merged semantic audit patch exceeds its output limit.", "size")
-        return self.parse(merged, output_language=output_language)
+        # A deterministic completion sees only the part view that owned the item.
+        item_scope = {ref: view._visible for view, _patch in parts for ref in view._by_ref}
+        return self.parse(merged, output_language=output_language, _item_scope=item_scope)
 
     # ----- provider contract ------------------------------------------------------------------
 
@@ -1331,7 +1358,11 @@ class SemanticAudit:
         return {"text": excerpt, "source_ids": ids}
 
     def parse(
-        self, raw_output: object, *, output_language: str | None = None
+        self,
+        raw_output: object,
+        *,
+        output_language: str | None = None,
+        _item_scope: Mapping[str, Sequence[str]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, int]]:
         """Apply one sparse patch; an unknown, duplicate, cross-origin or conflicting ref fails.
 
@@ -1443,6 +1474,12 @@ class SemanticAudit:
                     revised, suffix, target[1], self._cited(published)
                 )
                 counts["model_revised"] += 1
+                # The constructor marked the raw list total only in '.o'; rewritten prose may
+                # restore it, so mark again against the item's final pool (added cites included).
+                published["text"], marks = mark_unclear_quantities(
+                    published["text"], self._cited(published), output_language
+                )
+                counts["quantity_unclear"] += marks  # marks applied here, not retained markers
             if clear_owner:
                 published["owner"] = None
             if clear_deadline:
@@ -1478,6 +1515,16 @@ class SemanticAudit:
                 published["text"], self._cited(published), output_language
             )
             counts["quantity_unclear"] += marks
+            if unbound_record_group(published, segments, position):
+                self._complete_record_group(
+                    item.section,
+                    published,
+                    set(_item_scope[item.ref]) if _item_scope else scope,
+                )
+                if unbound_record_group(published, segments, position):
+                    # Still unproven after bounded completion: counted in `quarantined`.
+                    forced.add(item.ref)
+                    continue
             if unverified_vote_names(published, segments, position) or speaker_work_as_credential(
                 published["text"], self._cited(published)
             ):

@@ -2297,4 +2297,34 @@ không dùng xóa token làm bằng chứng giữ nghĩa. Một mẫu A/B không
 sau pilot đạt, không tự mở vòng thử tiếp nếu thất bại. Tag: architecture; đích:
 `docs/backend-contract.md`.
 
-**Giới hạn hiện tại.** Kiểm tra adversarial xác nhận bản sửa có thể khôi phục số ASR đã bị đánh dấu chưa rõ (`revised-v43/root-quantity-regression.json`, `test/quantity_probe.txt`); đây là hồi quy bắt buộc sửa. Bộ test đầy đủ bị timeout 1.200 giây, có một dấu lỗi trước khi dừng, chưa có summary; không coi là pass (`revised-v43/test/full.rc`, `test/report.md`).
+**Giới hạn tại pilot trước bản sửa dưới đây.** Kiểm tra adversarial xác nhận bản sửa có thể khôi phục số ASR đã bị đánh dấu chưa rõ (`revised-v43/root-quantity-regression.json`, `test/quantity_probe.txt`); đây là hồi quy bắt buộc sửa. Bộ test đầy đủ bị timeout 1.200 giây, có một dấu lỗi trước khi dừng, chưa có summary; không coi là pass (`revised-v43/test/full.rc`, `test/report.md`).
+
+
+### #183 — Giữ dấu số ASR và nguồn cho từng hồ sơ trong nhóm
+
+**Nguyên nhân.** Rewrite bỏ qua dấu số ASR; danh sách hồ sơ chỉ gắn nguồn thành viên đầu.
+Hai ca tái hiện trên phản hồi đã lưu: trước 0/2, sau
+2/2 đạt (`required-fixes-r2/frozen-before-proof.json`,
+`current-green-proof.json`, trong hồ sơ cục bộ nêu ở báo cáo nghiệm thu).
+
+**Thiết kế.** Áp lại bộ đánh dấu số trên nguồn cuối của câu sửa. Liệt kê thành viên theo
+loại/số; nối nguồn strict trong cửa sổ và trần hiện hành trước khi cách ly nhóm chưa đủ
+nguồn, cả mục giữ nguyên. Gộp bản vá giữ riêng nguồn hiển thị của phần sở hữu; số lượng
+thuần và số hồ sơ khác loại không thay thế bằng chứng. Giữ câu/ID cũ; bộ đếm model giữ
+nghĩa ban đầu. Không đổi prompt/schema hoặc thêm bước.
+
+**Kiểm chứng.** Fast bản cuối 2185 pass/557 skip (`short-fix/fast.log`).
+Full trước bổ sung nhánh mã hồ sơ ngắn: `2728 passed, 10 skipped in 1145.91s (0:19:05)`, exit 0
+(`test/full.log`, `actualfull.rc`, `report.md`). Bản cuối kiểm lại phần Notes bị ảnh hưởng;
+các kiểm tra không phụ thuộc phần mã đổi dùng lại kết quả trên (`docs-check/report.md`).
+ChatGPT 11/11 khung phản hồi giữ nguyên request, coverage và tài liệu;
+0 lượt gọi mới (`controls-final-proof.json`). Đây là kiểm hồi quy offline, không
+phải nghiệm thu Gemini toàn chuỗi.
+
+**Đánh đổi.** Thiếu nguồn thì cần kiểm tra; mã không suy luận đúng/sai ngữ nghĩa từ số.
+Tái dùng liên kết giới hạn thay vì thêm lượt model hoặc mở rộng phạm vi nguồn.
+
+**Theo dõi.** [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183),
+[PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184): còn nghiệm thu đầy đủ
+Gemini; [#185](https://github.com/nguyencanhtrung/asr-studio/issues/185): build native.
+Tag: architecture; đích: `docs/backend-contract.md`.

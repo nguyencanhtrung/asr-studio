@@ -219,8 +219,15 @@ owner/deadline chỉ giữ hoặc xóa. Bộ lọc digit/mã hỗn hợp và t�
 chứng minh nghĩa, đơn vị hoặc số viết chữ khác. Manifest thêm `counts.model_revised`
 và `revised_refs` toàn cục cho đề xuất được nhận, kể cả khi guard sau đó cách ly;
 không đồng nghĩa với số mục đúng hay đã công bố. Ref unresolved vẫn cách ly như cũ.
-Candidate v43 chưa nghiệm thu: pilot còn lỗi gắn nguồn nhiều hồ sơ; kiểm tra bổ sung
-phát hiện số ASR mơ hồ có thể được khôi phục sau rewrite. Xem báo cáo nghiệm thu và #183.
+Sau rewrite, mã áp lại dấu số lượng chưa rõ trên chính nguồn cuối của mục (kể cả ID
+model vừa thêm); chỉ tổng số độc lập được trích mới cho giữ số chính xác. `quantity_unclear`
+đếm lần áp dấu, không phải số dấu còn lại. Với danh sách hồ sơ có nhãn, mã kiểm từng
+cặp loại/số, kể cả mục `verified=true` giữ nguyên; thử nối nguồn bằng cơ chế strict hiện có
+trước khi chuyển mục còn thiếu nguồn sang cần kiểm tra. Số lượng thuần hoặc cùng số nhưng
+khác loại hồ sơ không chứng minh thành viên. Giữ cửa sổ nghị sự, trần ID và nguồn hiển thị
+của phần sở hữu, cả lúc gộp các phần; giữ câu chữ và ID cũ. ID do guard thêm không tính
+vào `counts.added_ids` của model. Không đổi prompt/schema hay thêm lượt gọi.
+Hai lỗi đã được sửa và kiểm offline; Gemini toàn chuỗi chưa nghiệm thu lại. Xem báo cáo nghiệm thu và #183.
 
 Từ v42, chỉ Gemini đã đăng ký nối tally rõ ngay trước một kết luận được overview trích dẫn,
 trong cùng hồ sơ được chứng minh và trong trần cũ; không nối ID hồ sơ kế tiếp sau kết luận hay

@@ -37,12 +37,12 @@ hồ sơ cục bộ (không theo dõi) `reports/.notes-gemini-fix-local-20261108
 `v42-score-b/assessment.json`, `v42-score-b/item73-clarification.md`.
 
 
-**Pilot v43: chưa đạt.** 8 lượt gọi; 3/4 nhóm mục tiêu,
-2/2 ý quan trọng mục tiêu; 1 mục thiếu nguồn, 0 ID sai.
-Không chạy toàn chuỗi. Fast: 2.129 pass; full timeout 1.200 giây;
-còn hồi quy bảo vệ số ASR. Nguồn cục bộ: `revised-v43/pilot-qualification.json`,
-`revised-v43/coder/fast.log`, `revised-v43/test/report.md`,
-`revised-v43/root-quantity-regression.json`.
+**Bản sửa v43:** 2/2 lỗi bắt buộc đã sửa; fast 2185 pass,
+557 skip.
+ChatGPT: 11/11 phản hồi đối chiếu giữ nguyên; 0 lượt gọi mới.
+Chưa chạy lại nghiệm thu Gemini toàn chuỗi; kết quả v42 ở trên vẫn là lần đo đầy đủ mới nhất.
+Nguồn cục bộ: `required-fixes-r2/current-green-proof.json`, `short-fix/fast.log`,
+`docs-check/report.md`, `controls-final-proof.json` (cùng thư mục hồ sơ nêu trên).
 
 <details>
 <summary>Nghiệm thu release v0.1.0 — lịch sử, không đo lại</summary>

@@ -834,7 +834,7 @@ def _agenda_span(text: str, cited: list[int], segments: list[dict[str, Any]]) ->
 # Opt-in binding completion: typed record numbers and quantitative phrases.
 _RECORD_LABELS = {"council bill": "bill", "bill": "bill", "cb": "bill"}
 _RECORD_REF = re.compile(
-    r"\b(council\s+bill|bills?|cb|resolutions?|ordinances?|appointments?)\s+"
+    r"\b(council\s+bills?|bills?|cb|resolutions?|ordinances?|appointments?)\s*"
     r"(?:no\.?\s*|number\s+|#\s*)?(?<![\d.])(\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?![\d]|\.\d)",
     re.IGNORECASE,
 )
@@ -871,6 +871,79 @@ _LIST_SIBLING = re.compile(
     r"(?![\d]|\.\d)",
     re.IGNORECASE,
 )
+
+
+# An explicit group of records: a label, then members joined only by ",", "and", "or", "&"
+# (repeated labels or bare numbers). Syntax decides, as in `lists_records`: a year-like or
+# short sibling is a member; a range or a labelled date ("dated", "of 2026", "(2026)") is not.
+_GROUP_JOIN = re.compile(r"\s*(?:,(?:\s*(?:and|or)\b|\s*&)?|&|\b(?:and|or)\b)\s*", re.IGNORECASE)
+_GROUP_NUMBER = re.compile(r"(\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?![\d]|\.\d)")
+
+
+def _record_groups(text: str) -> list[list[tuple[str, str, str]]]:
+    """Per explicit record label, its (family, number, label) members in the listed group."""
+    refs = _record_refs(text)
+    groups: list[list[tuple[str, str, str]]] = []
+    index = 0
+    while index < len(refs):
+        family, number, label, (_start, end) = refs[index]
+        index += 1
+        group = [(family, number, label)]
+        while (join := _GROUP_JOIN.match(text, end)) is not None:
+            if index < len(refs) and refs[index][3][0] == join.end():
+                # An explicit label, of any family, is a member and sets the family (and label)
+                # that the following bare numbers inherit.
+                family, _canonical, label, (_start, end) = refs[index]
+                group.append((family, refs[index][1], label))
+                index += 1
+            elif (sibling := _GROUP_NUMBER.match(text, join.end())) is not None:
+                digits = re.sub(r"\D", "", sibling[1])
+                group.append((family, digits, label))
+                end = sibling.end()
+            else:
+                break
+        groups.append(group)
+    return groups
+
+
+def _record_members(text: str) -> list[tuple[str, str, str]]:
+    """Distinct (family, number, label) for every explicit record, listed members included."""
+    return list(dict.fromkeys(m for group in _record_groups(text) for m in group))
+
+
+def unbound_record_group(
+    item: dict[str, Any], segments: list[dict[str, Any]], position: dict[str, int]
+) -> bool:
+    """An item states a group of records and its cited pool lacks a member (not proven).
+
+    A member is proven by a same-family typed record in the pool (a listed group included) or
+    by an untyped number no other family labels; another family's record alone proves nothing.
+    """
+    cited = [position[ref] for ref in item["source_ids"] if ref in position]
+    texts = [segments[i]["text"] for i in cited]
+    return any(
+        len({(f, number) for f, number, _l in group}) > 1
+        and any(not _member_proven(f, number, texts) for f, number, _l in group)
+        for group in _record_groups(item["text"])
+    )
+
+
+def _member_proven(family: str, number: str, texts: list[str]) -> bool:
+    """A group member is a same-family typed record, or the number in an explicit agenda header.
+
+    A bare number in a quantity ("9402 residents") and another family's record prove nothing.
+    """
+
+    def proves(text: str) -> bool:
+        typed = {(f, n) for f, n, _l in _record_members(text)}
+        if (family, number) in typed:
+            return True
+        # A header fallback is void when another family types this same number here.
+        if any(n == number for _f, n in typed):
+            return False
+        return _explicit_record_header(text) and _header_states_record(family, number, text)
+
+    return any(proves(text) for text in texts)
 
 
 def lists_records(family: str, text: str) -> bool:
@@ -1071,11 +1144,21 @@ def _completion_links(
         return []  # a raw source excerpt (needs-review notice) is already its own evidence
     links: list[set[int]] = []
     pool_numbers = {number for _family, number, _label, _span in _record_refs(pool)}
-    records = dict.fromkeys(
-        (family, number, label) for family, number, label, _ in _record_refs(text)
-    )
+    records = dict.fromkeys(_record_members(text))
+    texts = [segments[i]["text"] for i in cited]
+    grouped = {
+        m
+        for group in _record_groups(text)
+        if len({(f, n) for f, n, _l in group}) > 1
+        for m in group
+    }
     for family, number, label in records:
-        if len(number) < 3 or number in pool_numbers or _match("number", number, pool):
+        if len(number) < 3 and (family, number, label) not in grouped:
+            continue  # a lone short number is no record; a group member is (syntax decides)
+        if (family, number, label) in grouped:  # a group claim needs typed or header proof
+            if _member_proven(family, number, texts):
+                continue
+        elif number in pool_numbers or _match("number", number, pool):
             continue
         if label == "cb" and not (_LEGAL_CUE.search(text) or _LEGAL_CUE.search(pool)):
             continue  # an abbreviation is a bill only in a legal context
