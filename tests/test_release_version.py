@@ -24,7 +24,7 @@ def test_application_metadata_lock_fastapi_and_shell_share_release_version():
 
     assert Version(project["project"]["version"]) == Version(__version__)
     assert Version(lock_version) == Version(__version__)
-    assert lock_version == "0.2.1"
+    assert lock_version == "0.2.2"
     assert app.version == __version__
     assert f"Version {__version__}" in shell
     assert "{{ASR_STUDIO_VERSION}}" not in shell
@@ -32,7 +32,7 @@ def test_application_metadata_lock_fastapi_and_shell_share_release_version():
 
 def test_release_check_accepts_the_matching_release_tag():
     result = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "check-release.py"), "v0.2.1"],
+        [sys.executable, str(ROOT / "scripts" / "check-release.py"), "v0.2.2"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -40,12 +40,12 @@ def test_release_check_accepts_the_matching_release_tag():
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "source=0.2.1 lock=0.2.1 tag=v0.2.1" in result.stdout
+    assert "source=0.2.2 lock=0.2.2 tag=v0.2.2" in result.stdout
 
 
 def test_release_check_rejects_a_pep440_equivalent_noncanonical_tag():
     result = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "check-release.py"), "v0.2.1.0"],
+        [sys.executable, str(ROOT / "scripts" / "check-release.py"), "v0.2.2.0"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -53,7 +53,7 @@ def test_release_check_rejects_a_pep440_equivalent_noncanonical_tag():
     )
 
     assert result.returncode != 0
-    assert "must exactly match canonical tag 'v0.2.1'" in result.stderr
+    assert "must exactly match canonical tag 'v0.2.2'" in result.stderr
 
 
 def test_release_check_rejects_a_tag_with_a_different_version():
@@ -66,4 +66,4 @@ def test_release_check_rejects_a_tag_with_a_different_version():
     )
 
     assert result.returncode != 0
-    assert "must exactly match canonical tag 'v0.2.1'" in result.stderr
+    assert "must exactly match canonical tag 'v0.2.2'" in result.stderr

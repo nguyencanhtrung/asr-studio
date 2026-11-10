@@ -279,7 +279,7 @@ def test_startup_checks_complete_community_model_then_preflights_before_services
         return next(i for i, line in enumerate(commands) if marker in line)
 
     build = command_index("compose -f compose.yaml build")
-    image_version = command_index("version --json --expect-version 0.2.1")
+    image_version = command_index("version --json --expect-version 0.2.2")
     model_prepare = command_index("asr_studio.cli model prepare")
     runtime_check = command_index("asr_studio.cli runtime check")
     services = command_index("compose -f compose.yaml up --pull never --no-build")
@@ -381,7 +381,7 @@ def test_pull_version_mismatch_stops_before_any_service_volume_is_mounted(tmp_pa
     )
 
     assert result.returncode != 0
-    assert "does not match source version 0.2.1 and schema 16" in result.stderr
+    assert "does not match source version 0.2.2 and schema 16" in result.stderr
     commands = result.docker_log.splitlines()
     assert f"pull {image}" in commands
     assert any("version --json --expect-version" in line for line in commands)
