@@ -89,6 +89,9 @@ def _run_start(
     source_revision: str | None = CHECKOUT_REVISION,
     image_revision: str = "match",
     checkout: Path = ROOT,
+    compose_project: str = "asr-studio",
+    existing_volumes: tuple[str, ...] = (),
+    copy_fail: str = "none",
 ) -> subprocess.CompletedProcess[str]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     model_root = tmp_path / "models"
@@ -117,6 +120,10 @@ def _run_start(
         'if [ "$1" = compose ] && [ "$4" = config ]; then\n'
         '  if [ "$5" = --images ]; then\n'
         '    printf \'%s\\n%s\\n%s\\n\' "$COMPOSE_IMAGE" "$COMPOSE_SECOND_IMAGE" "$COMPOSE_IMAGE"\n'
+        '  elif [ "$#" -eq 4 ]; then\n'
+        "    printf 'name: %s\\nservices:\\n' \"$COMPOSE_PROJECT\"\n"
+        '  elif [ "$5" = --volumes ]; then\n'
+        "    printf 'data\\nauth\\nprovider\\nmodel-install\\n'\n"
         "  else\n"
         "    printf 'ASR_DEVICE=%s\\nASR_MODEL_HOST_PATH=%s\\n"
         "ASR_DIARIZATION_MODEL_PATH=/models/speaker-diarization-community-1\\n' "
@@ -129,7 +136,12 @@ def _run_start(
         '  [ "$3" = --format ] && printf \'%s\\n\' "$IMAGE_REVISION"\n'
         "  exit 0\n"
         "fi\n"
+        'if [ "$1" = volume ] && [ "$2" = inspect ]; then\n'
+        '  case " $EXISTING_VOLUMES " in *" $3 "*) exit 0 ;; esac\n'
+        "  exit 1\n"
+        "fi\n"
         'case "$*" in\n'
+        '  *"cp -a /from/. /to/"*) case "$*" in *"$COPY_FAIL:/from"*) exit 1 ;; esac ;;\n'
         '  pull*) [ "$PULL_OK" = 1 ] || exit 1 ;;\n'
         '  *"version --json --expect-version"*) [ "$VERSION_MATCH" = 1 ] || exit 1 ;;\n'
         '  *"--gpus all"*) [ "$GPU_CHECK_OK" = 1 ] || exit 1 ;;\n'
@@ -154,6 +166,9 @@ def _run_start(
     environment["GPU_CHECK_OK"] = "1" if gpu_check_ok else "0"
     environment["MODEL_CHECK_OK"] = "1" if model_check_ok else "0"
     environment["PULL_OK"] = "1"
+    environment["COMPOSE_PROJECT"] = compose_project
+    environment["EXISTING_VOLUMES"] = " ".join(existing_volumes)
+    environment["COPY_FAIL"] = copy_fail
     if source_revision is None:
         environment.pop("ASR_SOURCE_REVISION", None)
     else:
@@ -808,3 +823,68 @@ def test_every_action_is_pinned_to_an_immutable_commit():
 
 def test_dependabot_pull_request_configuration_is_removed():
     assert not DEPENDABOT_PATH.exists()
+
+
+LEGACY_VOLUMES = tuple(f"asr-en-vi_{v}" for v in ("data", "auth", "provider", "model-install"))
+
+
+def _copied_volumes(log: str) -> list[str]:
+    return [
+        line.split(" -v ")[1].split(":")[0].removeprefix("asr-en-vi_")
+        for line in log.splitlines()
+        if "cp -a /from/. /to/" in line
+    ]
+
+
+def test_startup_copies_legacy_volumes_before_any_service_run(tmp_path):
+    result = _run_start(tmp_path, COMMUNITY_1_FILES, existing_volumes=LEGACY_VOLUMES)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    commands = result.docker_log.splitlines()
+    down = commands.index("compose -f compose.yaml -p asr-en-vi down")
+    first_copy = next(i for i, line in enumerate(commands) if "cp -a /from/. /to/" in line)
+    first_run = next(i for i, line in enumerate(commands) if " run --pull never " in line)
+    assert down < first_copy < first_run
+    assert _copied_volumes(result.docker_log) == ["auth", "provider", "model-install", "data"]
+    assert all(
+        f"-v asr-en-vi_{v}:/from:ro -v asr-studio_{v}:/to" in result.docker_log
+        for v in ("data", "auth", "provider", "model-install")
+    )
+    assert "volume rm" not in result.docker_log
+    assert "the old volumes are kept" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("project", "volumes"),
+    [
+        ("asr-studio", ()),
+        ("asr-studio", (*LEGACY_VOLUMES, "asr-studio_data")),
+        ("asr-en-vi", LEGACY_VOLUMES),
+        ("custom", LEGACY_VOLUMES),
+    ],
+    ids=["fresh-install", "already-migrated", "legacy-project-name", "custom-project-name"],
+)
+def test_startup_skips_volume_migration_when_not_needed(tmp_path, project, volumes):
+    result = _run_start(
+        tmp_path, COMMUNITY_1_FILES, compose_project=project, existing_volumes=volumes
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert " down" not in result.docker_log
+    assert "volume create" not in result.docker_log
+    assert _copied_volumes(result.docker_log) == []
+
+
+def test_failed_volume_copy_removes_new_volumes_and_stops(tmp_path):
+    result = _run_start(
+        tmp_path, COMMUNITY_1_FILES, existing_volumes=LEGACY_VOLUMES, copy_fail="asr-en-vi_provider"
+    )
+
+    assert result.returncode != 0
+    assert "Could not copy volume asr-en-vi_provider" in result.stderr
+    assert "volume rm asr-studio_auth asr-studio_provider" in result.docker_log
+    assert not any(
+        "volume create" in line and "asr-studio_data" in line
+        for line in result.docker_log.splitlines()
+    )
+    assert " up " not in result.docker_log

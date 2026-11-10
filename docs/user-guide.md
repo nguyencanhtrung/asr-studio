@@ -232,7 +232,10 @@ reason even if cleanup also fails.
 | `provider`         | ChatGPT and OMP registration and credentials               | app, notes service |
 | Host model directory | ASR and diarization models (read-only, not in the image)   | app, worker |
 
-Restart and recreate keep the volumes. A new Compose project makes a new token.
+Restart and recreate keep the volumes. A new Compose project makes a new token, except the
+one-time copy from the former `asr-en-vi` project, which keeps the token and provider sign-in.
+After checking the new deployment, remove the old volumes with
+`docker volume rm asr-en-vi_data asr-en-vi_auth asr-en-vi_provider asr-en-vi_model-install`.
 
 | Setting                       | Purpose                                                                 |
 | ----------------------------- | ----------------------------------------------------------------------- |
