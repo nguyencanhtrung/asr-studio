@@ -78,10 +78,10 @@ error. It does not fall back to the CPU.
 The commands below install the ASR Studio release `v0.2.2`. For a real installation, use the tag,
 commit or digest from the release notes. Do not overwrite old tags.
 
-`v0.1.3` predates the rename: its published image remains under `asr-en-vi` and
-its Python module is `asr_en_vi`. Use the Compose file and CLI instructions from
-that tag. The current checkout uses `asr_studio` and must be rebuilt with
-`./scripts/start.sh --source` and `ASR_IMAGE=asr-studio:local`.
+`v0.1.3` predates the rename: its Python module is `asr_en_vi`, and its old
+`asr-en-vi` image is no longer published. To run it, check out that tag and build from
+source with its Compose file and CLI instructions. The current checkout uses `asr_studio`
+and must be rebuilt with `./scripts/start.sh --source` and `ASR_IMAGE=asr-studio:local`.
 
 Keep `COMPOSE_PROJECT_NAME` and `ASR_MODEL_HOST_PATH` the same on each run, so that Compose
 uses the same volumes and model directory. Prepare the ASR model while online. Download
