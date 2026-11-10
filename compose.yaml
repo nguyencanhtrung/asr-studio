@@ -1,5 +1,5 @@
-# Stable deployment identity preserves existing containers and volumes after the rename.
-name: asr-en-vi
+# Project name since v0.2.3; start.sh copies volumes from the former asr-en-vi project once.
+name: asr-studio
 
 services:
   app:

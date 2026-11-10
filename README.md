@@ -50,9 +50,10 @@ Use `ASR_IMAGE=asr-studio:local` for a source build. Images published before the
 rename retain their original package names and must use the Compose file from
 their release tag. Archived release inventories describe those original images.
 
-Compose keeps the existing deployment name `asr-en-vi` so renaming the checkout
-folder does not switch to empty data, auth or provider volumes. Keep any custom
-`COMPOSE_PROJECT_NAME` override you previously used. Browser preferences and
+The Compose project is `asr-studio`. On the first start, `./scripts/start.sh` stops a
+deployment under the former default name `asr-en-vi` and copies its data, auth, provider and
+model-install volumes to `asr-studio_*`; the old volumes stay for rollback. Keep any custom
+`COMPOSE_PROJECT_NAME` override you previously used: it is not migrated. Browser preferences and
 pending request keys migrate automatically on the next page load at the same origin.
 After moving a checkout with a virtual environment, run `uv sync --all-groups --locked`
 to refresh its editable install and command paths.

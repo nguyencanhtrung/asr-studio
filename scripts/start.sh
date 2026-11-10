@@ -243,6 +243,36 @@ if ! docker run --pull=never --rm --network none --entrypoint python "$selected_
 fi
 check_image_revision
 
+# Before v0.2.3 the default project was asr-en-vi. Copy its volumes once, before any
+# Compose run creates empty asr-studio volumes. The old volumes stay for rollback.
+legacy_project=asr-en-vi
+migrate_legacy_volumes() {
+    project=$(compose_base config | sed -n 's/^name: //p' | sed -n '1p')
+    [ "$project" = asr-studio ] || return 0
+    docker volume inspect "${project}_data" >/dev/null 2>&1 && return 0
+    docker volume inspect "${legacy_project}_data" >/dev/null 2>&1 || return 0
+
+    echo "Copying volumes of Compose project $legacy_project to $project; the old volumes are kept."
+    docker compose -f compose.yaml -p "$legacy_project" down
+    created=""
+    # data goes last: its presence marks a complete migration.
+    for volume in $(compose_base config --volumes | grep -vx data) data; do
+        docker volume inspect "${legacy_project}_$volume" >/dev/null 2>&1 || continue
+        if docker volume create --label "com.docker.compose.project=$project" \
+                --label "com.docker.compose.volume=$volume" "${project}_$volume" >/dev/null &&
+            created="$created ${project}_$volume" &&
+            docker run --pull=never --rm --network none --user 0:0 --entrypoint sh \
+                -v "${legacy_project}_$volume:/from:ro" -v "${project}_$volume:/to" \
+                "$selected_image" -c 'cp -a /from/. /to/'; then
+            continue
+        fi
+        # shellcheck disable=SC2086
+        [ -z "$created" ] || docker volume rm $created >/dev/null
+        fail "Could not copy volume ${legacy_project}_$volume. The $legacy_project volumes are unchanged."
+    done
+}
+migrate_legacy_volumes
+
 if [ "$requested_device" = cpu ]; then
     echo "CPU backend requested; selecting whisper-small."
 elif docker run --pull=never --rm --gpus all --network none --entrypoint python "$selected_image" \
