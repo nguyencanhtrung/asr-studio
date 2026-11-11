@@ -461,7 +461,7 @@ function citedBullets(lines, citations) {
 // Inline nodes of one Markdown line: text, strong, code, em, link {…ids}, invalid {text, reason}.
 function inlineNodes(text, revision, origin) {
   const token = /\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g;
-  const unescape = (value) => value.replace(/\\([\\`*_{}\[\]<>()#!|~+\-.>])/g, "$1");
+  const unescape = (value) => value.replace(/\\([\\`*_{}\[\]<>()#!|~+\-.>:@])/g, "$1");
   const nodes = [];
   let previous = 0;
   let match;
@@ -1830,7 +1830,7 @@ function taskView(state, data) {
     end: { hidden: !ended || reached !== undefined, state: ended && reached === undefined ? task.status : "", label: ended && reached === undefined ? TASK_STATE_LABELS[task.status] : "" },
     cancelHidden: !active,
     cancelDisabled: !active || stopping,
-    cancelLabel: stopping ? t("Đang dừng…") : t("Hủy tạo notes"),
+    cancelLabel: stopping ? t("Đang dừng…") : t("Hủy"),
   };
 }
 

@@ -174,7 +174,7 @@ def test_notes_runner_emits_the_citations_of_the_document_it_rendered(
     assert event["citations"] == [
         {
             "section": "Decisions",
-            "text": r"Ship it\.",
+            "text": r"Ship it.",
             "sources": [
                 {"id": segment_ids[0], "start_seconds": 1.0},
                 {"id": segment_ids[1], "start_seconds": 4.0},
@@ -187,7 +187,7 @@ def test_notes_runner_emits_the_citations_of_the_document_it_rendered(
         },
     ]
     # The Markdown names the same bullets and carries no reference to a source.
-    assert "- Ship it\\.\n" in event["markdown"]
+    assert "- Ship it.\n" in event["markdown"]
     assert "- Send the draft — Owner: Morgan; Deadline: Undetermined.\n" in event["markdown"]
     assert "notes_source" not in event["markdown"] and segment_ids[0] not in event["markdown"]
 
