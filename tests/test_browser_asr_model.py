@@ -26,7 +26,7 @@ from asr_studio.worker import acquire_worker_lock, write_heartbeat
 pytestmark = pytest.mark.browser
 
 PREPARE_FLAG = "--asr-model pho-whisper-large"
-INVITES_START = "Bấm “Bắt đầu chép lời”"
+INVITES_START = "Bấm “Chép lời”"
 INVITES_RETRY = "hãy bấm để thử lại"
 NO_CONFIDENCE = "“cần kiểm tra” không xét độ tin cậy của chữ"
 
@@ -132,8 +132,8 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
         "Theo phần cứng của máy: qwen3-asr-1.7b."
     )
 
-    page.get_by_role("button", name="Bắt đầu chép lời").click()
-    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    page.get_by_role("button", name="Chép lời").click()
+    expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     expect(selector).to_be_disabled()
     first_generation = finish_run(live, "Bản chép lời đầu tiên.")
     meta = page.locator("#generation-meta")
@@ -141,10 +141,10 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     expect(meta).to_contain_text("qwen3-asr-1.7b · GPU · CUDA · bfloat16")
 
     selector.select_option("pho-whisper-large")
-    expect(page.locator("#transcription-model-help")).to_contain_text("Tối ưu cho tiếng Việt")
+    expect(page.locator("#transcription-model-help")).to_contain_text("Tối ưu tiếng Việt")
     expect(page.locator("#transcription-model-help")).to_contain_text("Không dành cho English")
-    page.get_by_role("button", name="Chạy lại bản ghi").click()
-    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    page.get_by_role("button", name="Chạy lại").click()
+    expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     expect(selector).to_have_value("pho-whisper-large")
     second_generation = finish_run(live, "Bản chép lời thứ hai.")
     expect(page.locator("#generation-title")).to_have_text("Transcript #2", timeout=8_000)
@@ -181,7 +181,7 @@ def test_an_unprepared_model_cannot_start_and_says_how_to_prepare_it(live, signe
     )
     page.goto(f"{live.url}/meetings/{meeting_id}")
     selector = page.get_by_label("Model ASR")
-    start = page.get_by_role("button", name="Bắt đầu chép lời")
+    start = page.get_by_role("button", name="Chép lời")
     guidance = page.locator("#transcription-model-guidance")
     expect(start).to_be_enabled()
     expect(guidance).to_be_hidden()
@@ -274,9 +274,7 @@ def test_only_a_transcript_without_confidence_scores_qualifies_its_review_count(
 
     # The same warning where the model is chosen, before any count exists.
     page.get_by_label("Model ASR").select_option("qwen3-asr-1.7b")
-    expect(page.locator("#transcription-model-help")).to_contain_text(
-        "đừng so số này với model khác"
-    )
+    expect(page.locator("#transcription-model-help")).to_contain_text("Không có điểm tin cậy")
 
 
 def test_renaming_the_meeting_keeps_the_selector_and_its_guard(live, signed_in, worker):
@@ -286,12 +284,12 @@ def test_renaming_the_meeting_keeps_the_selector_and_its_guard(live, signed_in, 
     )
     page.goto(f"{live.url}/meetings/{meeting_id}")
     selector = page.get_by_label("Model ASR")
-    start = page.get_by_role("button", name="Bắt đầu chép lời")
+    start = page.get_by_role("button", name="Chép lời")
     selector.select_option("pho-whisper-large")
     expect(start).to_be_disabled()
 
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("After rename")
     page.get_by_role("button", name="Lưu thay đổi").click()
     expect(page.locator("#edit-status")).to_have_text("Đã lưu tên và ngày họp.")
@@ -315,7 +313,7 @@ def test_a_model_removed_after_the_page_loaded_is_refused_and_the_page_recovers(
     meeting_id = seed_meeting(data_dir, "Stale list", "2026-10-17", duration_seconds=30.0)
     page.goto(f"{live.url}/meetings/{meeting_id}")
     selector = page.get_by_label("Model ASR")
-    start = page.get_by_role("button", name="Bắt đầu chép lời")
+    start = page.get_by_role("button", name="Chép lời")
     selector.select_option("pho-whisper-large")
     expect(start).to_be_enabled()
 
@@ -363,16 +361,16 @@ def test_automatic_runs_the_default_from_settings_and_one_run_can_still_differ(
     expect(page.locator("#transcription-model-help")).to_have_text(
         "Theo Cài đặt: pho-whisper-large."
     )
-    page.get_by_role("button", name="Bắt đầu chép lời").click()
-    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    page.get_by_role("button", name="Chép lời").click()
+    expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     finish_run(live, "Theo mặc định.")
     meta = page.locator("#generation-meta")
     expect(meta).to_contain_text("pho-whisper-large · GPU · CUDA · float16", timeout=8_000)
 
     # One run with another model leaves the default where it was.
     selector.select_option("whisper-large-v3")
-    page.get_by_role("button", name="Chạy lại bản ghi").click()
-    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    page.get_by_role("button", name="Chạy lại").click()
+    expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     finish_run(live, "Một lần khác.")
     expect(meta).to_contain_text("whisper-large-v3 · GPU · CUDA · float16", timeout=8_000)
     body = page.request.get(f"{live.url}/api/asr-models").json()

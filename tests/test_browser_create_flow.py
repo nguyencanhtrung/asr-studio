@@ -474,7 +474,7 @@ def test_cancel_keeps_the_form_and_retry_reruns_the_whole_flow(live, signed_in, 
     expect(page.locator("#meeting-date-input")).to_have_value("2026-10-15")
     expect(page.locator('input[name="language_hint"][value="vi"]')).to_be_checked()
     assert _count(requests, "POST", "/api/meetings") == 0
-    retry = dialog.get_by_role("button", name="Tải lại từ đầu")
+    retry = dialog.get_by_role("button", name="Tải lên lại")
     expect(retry).to_be_enabled()
 
     page.unroute("**/api/uploads/*/content**")
@@ -513,7 +513,7 @@ def test_retry_stays_disabled_while_the_form_is_invalid(live, signed_in, media_t
     state = "aborted" if how == "cancel" else "error"
     expect(dialog).to_have_attribute("data-state", state, timeout=10_000)
 
-    retry = dialog.get_by_role("button", name="Tải lại từ đầu")
+    retry = dialog.get_by_role("button", name="Tải lên lại")
     title = page.locator("#meeting-name")
     expect(retry).to_be_enabled()
     for blank in ("", "   "):
@@ -591,7 +591,7 @@ def test_state_labels_are_vietnamese_and_never_technical_codes(live, signed_in, 
     page.locator('input[name="language_hint"][value="en"]').check()
     expect_state("selected", "Đã chọn file")
     create = dialog.get_by_role("button", name="Tạo cuộc họp")
-    retry = dialog.get_by_role("button", name="Tải lại từ đầu")
+    retry = dialog.get_by_role("button", name="Tải lên lại")
     cancel = dialog.get_by_role("button", name="Hủy tải lên")
 
     page.route(
@@ -660,7 +660,7 @@ def test_auto_transcribe_checkbox_defaults_on_and_is_remembered(live, signed_in)
     dialog = _open_dialog(page)
     checkbox = dialog.get_by_label("Chép lời ngay sau khi tạo")
     expect(checkbox).to_be_checked()
-    expect(dialog.get_by_text("Bỏ chọn để tự bấm")).to_be_visible()
+    expect(dialog.get_by_text("Bỏ chọn để chép lời thủ công")).to_be_visible()
 
     checkbox.uncheck()
     assert page.evaluate("localStorage.getItem('asr-studio:auto-transcribe')") == "0"
@@ -974,7 +974,7 @@ def test_busy_machine_shows_the_reason_and_the_manual_button_without_retry(
     error = page.locator("#transcription-error")
     expect(error).to_contain_text("Máy đang bận", timeout=10_000)
     expect(error).to_contain_text("không tự thử lại")
-    start = page.get_by_role("button", name="Bắt đầu chép lời")
+    start = page.get_by_role("button", name="Chép lời")
     expect(start).to_be_visible()
     expect(start).to_be_enabled()
     page.wait_for_timeout(1_500)
@@ -1004,7 +1004,7 @@ def test_unavailable_worker_shows_the_reason_and_the_manual_button(live, signed_
     expect(page.locator("#transcription-error")).to_contain_text(
         "Worker chép lời chưa sẵn sàng", timeout=10_000
     )
-    expect(page.get_by_role("button", name="Bắt đầu chép lời")).to_be_enabled()
+    expect(page.get_by_role("button", name="Chép lời")).to_be_enabled()
     page.wait_for_timeout(1_500)
     assert _count(requests, "POST", "/api/tasks") == 1
     assert _task_count(live, meeting_id) == 0
@@ -1016,7 +1016,7 @@ def test_checkbox_off_keeps_the_manual_start(live, ready_worker, signed_in, medi
     _fill_and_create(page, auto=False)
     meeting_id = _meeting_id(page)
 
-    start = page.get_by_role("button", name="Bắt đầu chép lời")
+    start = page.get_by_role("button", name="Chép lời")
     expect(start).to_be_enabled(timeout=10_000)
     expect(page.locator("#transcription-error")).to_be_hidden()
     page.wait_for_timeout(1_000)
@@ -1049,7 +1049,7 @@ def test_a_blocked_handoff_never_starts_transcription_and_still_creates(
     _fill_and_create(page)
     _meeting_id(page)
 
-    expect(page.get_by_role("button", name="Bắt đầu chép lời")).to_be_enabled(timeout=10_000)
+    expect(page.get_by_role("button", name="Chép lời")).to_be_enabled(timeout=10_000)
     page.wait_for_timeout(1_000)
     assert _count(requests, "POST", "/api/tasks") == 0
 
@@ -1073,7 +1073,7 @@ def test_a_refused_file_cannot_be_resubmitted_until_another_is_chosen(live, sign
     expect(dialog).to_have_attribute("data-state", "error", timeout=10_000)
     expect(page.locator("#form-error")).to_contain_text("File không đạt yêu cầu")
     expect(create).to_be_disabled()  # the same file would be refused again
-    expect(dialog.get_by_role("button", name="Tải lại từ đầu")).to_be_hidden()
+    expect(dialog.get_by_role("button", name="Tải lên lại")).to_be_hidden()
     expect(page.locator("#meeting-name")).to_have_value("Broken")  # the form keeps its data
 
     page.unroute("**/api/uploads/*/complete")

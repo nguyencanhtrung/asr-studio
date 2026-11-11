@@ -287,8 +287,9 @@ Corners are compact and engineered: controls use the small radius, content panel
 - **Shape:** Compact rectangular control with the small radius and a 40px default height.
 - **Primary:** Solid accent fill with theme-specific contrast text; reserve it for the next decisive action.
 - **Hover / Focus:** A one-pixel upward movement is allowed on hover; keyboard focus uses a two-pixel accent outline. Reduced-motion preferences collapse transitions to effectively instant.
-- **Secondary / Text:** Secondary buttons use a neutral surface and strong hairline. Text actions remain transparent and underlined. Running work again over an existing result is secondary and only the first run is primary: **Chạy lại bản ghi** after **Bắt đầu chép lời**, and **Tạo lại notes · …** after **Tạo notes · …**.
-- **Cancel:** The cancel control names what it stops (**Hủy chép lời**, **Hủy tạo notes**) and reads **Đang dừng…** once the request is sent.
+- **Secondary / Text:** Secondary buttons use a neutral surface and strong hairline. Text actions remain transparent and underlined. Running work again over an existing result is secondary and only the first run is primary: **Chạy lại** after **Chép lời**, and **Tạo lại notes · …** after **Tạo notes · …**.
+- **Cancel:** The cancel control reads **Hủy**; its panel names what it stops. It reads **Đang dừng…** once the request is sent.
+- **Labels:** Button labels are one to three words. Explanations go in field help, not on the button. Help text stays one short line.
 - **Disabled:** Neutral surface and muted ink, plus the native disabled state; never communicate disabled only through opacity.
 
 ### Meeting Tabs

@@ -684,13 +684,12 @@ def _confirm_meeting_deletion(page, meeting_title):
     page.locator("#delete-meeting").click()
     dialog = page.locator("#meeting-delete-dialog")
     expect(dialog).to_be_visible()
-    expect(dialog).to_contain_text("File nguồn bên ngoài không bị thay đổi")
-    expect(dialog).to_contain_text("Hủy chép lời")
-    expect(dialog).to_contain_text("Hủy tạo notes")
+    expect(dialog).to_contain_text("file nguồn bên ngoài giữ nguyên")
+    expect(dialog).to_contain_text("Hủy")
     expect(dialog).to_contain_text("chờ tác vụ kết thúc")
     expect(dialog.locator("#meeting-delete-cancel")).to_have_text("Đóng")
     expect(dialog.locator("#meeting-delete-help")).to_contain_text(
-        "Đóng hộp thoại sau khi xác nhận không hủy yêu cầu xóa"
+        "Đóng hộp thoại không hủy lệnh xóa"
     )
     expect(dialog.locator("#meeting-delete-help")).to_contain_text("Nếu dọn dẹp bị gián đoạn")
     expect(dialog.locator("#meeting-delete-help")).to_contain_text(
@@ -893,7 +892,7 @@ def test_delete_ui_guides_active_task_cancel_and_wait(live, browser_context, tmp
     expect(page.locator("#meeting-deletion-status")).to_contain_text("chờ trạng thái kết thúc")
     expect(page.locator("#meeting-deletion-status")).not_to_contain_text("khởi động")
     expect(page.locator("#delete-meeting")).to_have_text("Xóa cuộc họp")
-    expect(page.locator("#meeting-delete-confirm")).to_have_text("Xóa dữ liệu đã lưu")
+    expect(page.locator("#meeting-delete-confirm")).to_have_text("Xóa")
     assert context.request.get(f"{live.url}/api/meetings/{meeting_id}").status == 200
 
 
@@ -976,7 +975,7 @@ def test_delete_failure_after_dialog_close_is_persisted_for_origin_meeting(
 
     page.locator("#delete-meeting").click()
     expect(page.locator("#meeting-delete-dialog")).to_be_visible()
-    expect(page.locator("#meeting-delete-confirm")).to_have_text("Xóa dữ liệu đã lưu")
+    expect(page.locator("#meeting-delete-confirm")).to_have_text("Xóa")
     page.locator("#meeting-delete-cancel").click()
 
 
@@ -1014,7 +1013,7 @@ def test_delete_ui_keeps_failed_cleanup_visible_and_retries(live, browser_contex
     expect(dialog).to_be_visible()
     expect(dialog.locator("#meeting-delete-cancel")).to_have_text("Đóng")
     expect(dialog.locator("#meeting-delete-help")).to_contain_text(
-        "Đóng hộp thoại sau khi xác nhận không hủy yêu cầu xóa"
+        "Đóng hộp thoại không hủy lệnh xóa"
     )
     expect(dialog.locator("#meeting-delete-help")).to_contain_text("Nếu dọn dẹp bị gián đoạn")
     expect(dialog.locator("#meeting-delete-help")).to_contain_text(
@@ -1078,7 +1077,7 @@ def test_pending_meeting_delete_is_scoped_across_navigation(
         expect(dialog).to_be_visible()
         expect(dialog.locator("#meeting-delete-cancel")).to_have_text("Đóng")
         expect(dialog.locator("#meeting-delete-help")).to_contain_text(
-            "Đóng hộp thoại sau khi xác nhận không hủy yêu cầu xóa"
+            "Đóng hộp thoại không hủy lệnh xóa"
         )
         expect(dialog.locator("#meeting-delete-help")).to_contain_text("Nếu dọn dẹp bị gián đoạn")
         expect(dialog.locator("#meeting-delete-help")).to_contain_text(
@@ -1114,7 +1113,7 @@ def test_pending_meeting_delete_is_scoped_across_navigation(
         page.locator("#delete-meeting").click()
         expect(page.locator("#meeting-delete-dialog")).to_be_visible()
         expect(page.locator("#meeting-delete-name")).to_have_text(other_title)
-        expect(page.locator("#meeting-delete-confirm")).to_have_text("Xóa dữ liệu đã lưu")
+        expect(page.locator("#meeting-delete-confirm")).to_have_text("Xóa")
         page.locator("#meeting-delete-cancel").click()
 
         if outcome == "success":
@@ -1464,7 +1463,7 @@ def test_diarization_error_shows_sanitized_copyable_diagnostic_command(live, bro
             ),
         ),
     )
-    page.get_by_role("button", name="Chạy lại bản ghi").click()
+    page.get_by_role("button", name="Chạy lại").click()
     expect(page.locator("#transcription-error-message")).to_contain_text(
         "Máy chủ chưa thể hoàn tất yêu cầu. Hãy thử lại sau."
     )
@@ -1501,13 +1500,13 @@ def test_edit_metadata_conflict_keeps_draft_and_persists_across_restart(live, br
 
     # Tab A starts a draft but does not save yet.
     page_a.locator("#meeting-actions").click()
-    page_a.get_by_role("button", name="Sửa tên và ngày").click()
+    page_a.get_by_role("button", name="Sửa thông tin").click()
     page_a.locator("#edit-title").fill("Draft from A")
     page_a.locator("#edit-clear-date").click()
 
     # Tab B saves a title-only edit; it must not carry a date or language.
     page_b.locator("#meeting-actions").click()
-    page_b.get_by_role("button", name="Sửa tên và ngày").click()
+    page_b.get_by_role("button", name="Sửa thông tin").click()
     page_b.locator("#edit-title").fill("Saved from B")
     page_b.get_by_role("button", name="Lưu thay đổi").click()
     expect(page_b.locator("#meeting-title")).to_have_text("Saved from B")
@@ -1526,7 +1525,7 @@ def test_edit_metadata_conflict_keeps_draft_and_persists_across_restart(live, br
     assert (stored["title"], stored["meeting_date"]) == ("Saved from B", "2026-10-14")
 
     # After comparing, an explicit second save wins and removes the date.
-    page_a.get_by_role("button", name="Lưu bản nháp lên bản mới nhất").click()
+    page_a.get_by_role("button", name="Lưu bản nháp").click()
     expect(page_a.locator("#meeting-title")).to_have_text("Draft from A")
     expect(page_a.locator("#meeting-date")).to_have_text("Chưa đặt ngày")
     expect(page_a.locator("#meeting-language")).to_have_text("Tiếng Việt")
@@ -1555,7 +1554,7 @@ def test_edit_metadata_conflict_keeps_draft_and_persists_across_restart(live, br
 
     # Re-adding a date from the editor moves it back onto the calendar.
     page_a.locator("#meeting-actions").click()
-    page_a.get_by_role("button", name="Sửa tên và ngày").click()
+    page_a.get_by_role("button", name="Sửa thông tin").click()
     page_a.locator("#edit-date").fill("2026-02-28")
     page_a.get_by_role("button", name="Lưu thay đổi").click()
     expect(page_a.locator("#meeting-date")).to_have_attribute("datetime", "2026-02-28")
@@ -1585,7 +1584,7 @@ def test_partial_date_is_not_treated_as_clearing_the_date(live, browser_context)
 
     page.locator("#meeting-actions").click()
 
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     date = page.locator("#edit-date")
     date.focus()
     page.keyboard.press("Backspace")  # clears only the focused month segment
@@ -1622,10 +1621,10 @@ def test_conflict_resends_only_fields_the_user_edited(live, browser_context):
 
     page_a.locator("#meeting-actions").click()
 
-    page_a.get_by_role("button", name="Sửa tên và ngày").click()
+    page_a.get_by_role("button", name="Sửa thông tin").click()
     page_a.locator("#edit-title").fill("Title from A")
     page_b.locator("#meeting-actions").click()
-    page_b.get_by_role("button", name="Sửa tên và ngày").click()
+    page_b.get_by_role("button", name="Sửa thông tin").click()
     page_b.locator("#edit-date").fill("2026-11-02")
     page_b.get_by_role("button", name="Lưu thay đổi").click()
     expect(page_b.locator("#meeting-date")).to_have_attribute("datetime", "2026-11-02")
@@ -1635,7 +1634,7 @@ def test_conflict_resends_only_fields_the_user_edited(live, browser_context):
     expect(page_a.locator("#edit-conflict")).to_be_visible()
     expect(page_a.locator("#edit-title")).to_have_value("Title from A")
     expect(page_a.locator("#edit-date")).to_have_value("2026-11-02")  # untouched: follows server
-    page_a.get_by_role("button", name="Lưu bản nháp lên bản mới nhất").click()
+    page_a.get_by_role("button", name="Lưu bản nháp").click()
     expect(page_a.locator("#meeting-title")).to_have_text("Title from A")
     expect(page_a.locator("#meeting-date")).to_have_attribute("datetime", "2026-11-02")
     assert patches_a == [
@@ -1650,10 +1649,10 @@ def test_conflict_resends_only_fields_the_user_edited(live, browser_context):
     page_b.reload(wait_until="domcontentloaded")
     expect(page_b.locator("#meeting-title")).to_have_text("Title from A")
     page_a.locator("#meeting-actions").click()
-    page_a.get_by_role("button", name="Sửa tên và ngày").click()
+    page_a.get_by_role("button", name="Sửa thông tin").click()
     page_a.locator("#edit-title").fill("A wins")
     page_b.locator("#meeting-actions").click()
-    page_b.get_by_role("button", name="Sửa tên và ngày").click()
+    page_b.get_by_role("button", name="Sửa thông tin").click()
     page_b.locator("#edit-title").fill("B first")
     page_b.get_by_role("button", name="Lưu thay đổi").click()
     expect(page_b.locator("#meeting-title")).to_have_text("B first")
@@ -1662,7 +1661,7 @@ def test_conflict_resends_only_fields_the_user_edited(live, browser_context):
     expect(page_a.locator("#edit-title")).to_have_value("A wins")
     stored = context.request.get(f"{live.url}/api/meetings/{meeting_id}").json()
     assert stored["title"] == "B first"
-    page_a.get_by_role("button", name="Lưu bản nháp lên bản mới nhất").click()
+    page_a.get_by_role("button", name="Lưu bản nháp").click()
     expect(page_a.locator("#meeting-title")).to_have_text("A wins")
 
 
@@ -1730,7 +1729,7 @@ def test_negative_utc_offset_keeps_date_only_values_and_local_today(live, signed
     expect(page.locator("#meeting-date")).to_contain_text("14 tháng 10")
     expect(page.locator("#recent-list .link-date").first).to_have_text("14/10/2026 · 1 giây")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     expect(page.locator("#edit-date")).to_have_value("2026-10-14")
     page.locator("#edit-cancel").click()
 
@@ -1839,7 +1838,7 @@ def test_slow_save_never_repaints_after_navigating_elsewhere(live, browser_conte
     # Save A, then open B before the PATCH returns.
     held = hold_first(page, rf"/api/meetings/{a}$", "PATCH")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("A renamed")
     page.get_by_role("button", name="Lưu thay đổi").click()
     expect(page.locator("#edit-save")).to_be_disabled()
@@ -1861,7 +1860,7 @@ def test_slow_save_never_repaints_after_navigating_elsewhere(live, browser_conte
     # Save B, then open the calendar before the PATCH returns.
     held = hold_first(page, rf"/api/meetings/{b}$", "PATCH")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("B renamed")
     page.get_by_role("button", name="Lưu thay đổi").click()
     open_calendar(page)
@@ -1957,7 +1956,7 @@ def test_slow_conflict_lookup_never_repaints_after_navigating_elsewhere(live, br
     page.goto(f"{live.url}/meetings/{a}", wait_until="domcontentloaded")
     expect(page.locator("#meeting-title")).to_have_text("Conflict A")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("Draft A")
 
     other_tab = context.request.patch(
@@ -2164,7 +2163,7 @@ def test_save_released_after_a_calendar_round_trip_is_rendered_and_saved(live, b
 
     held = hold_first(page, rf"/api/meetings/{meeting_id}$", "PATCH")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("After round trip")
     page.locator("#edit-date").fill("2026-10-20")
     page.get_by_role("button", name="Lưu thay đổi").click()
@@ -2191,7 +2190,7 @@ def test_save_result_arriving_while_the_calendar_is_open_shows_after_leaving(liv
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     held = hold_first(page, rf"/api/meetings/{meeting_id}$", "PATCH")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("Saved in background")
     page.get_by_role("button", name="Lưu thay đổi").click()
     open_calendar(page)
@@ -2222,7 +2221,7 @@ def test_conflict_arriving_around_a_calendar_round_trip_is_not_lost(live, browse
     # Conflict lands after returning from the calendar.
     held = hold_first(page, rf"/api/meetings/{meeting_id}$", "PATCH")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("My draft")
     page.get_by_role("button", name="Lưu thay đổi").click()
     open_calendar(page)
@@ -2236,10 +2235,10 @@ def test_conflict_arriving_around_a_calendar_round_trip_is_not_lost(live, browse
     assert stored["title"] == "Other tab one"
 
     # Conflict lands while the calendar is open: it is waiting after leaving.
-    page.get_by_role("button", name="Hủy và bỏ bản nháp").click()
+    page.get_by_role("button", name="Bỏ nháp").click()
     held = hold_first(page, rf"/api/meetings/{meeting_id}$", "PATCH")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("Second draft")
     page.get_by_role("button", name="Lưu thay đổi").click()
     open_calendar(page)
@@ -2252,7 +2251,7 @@ def test_conflict_arriving_around_a_calendar_round_trip_is_not_lost(live, browse
     expect(page.locator("#edit-conflict")).to_contain_text("Other tab two")
     expect(page.locator("#edit-title")).to_have_value("Second draft")
     expect(page.locator("#meeting-title")).to_have_text("Other tab two")
-    expect(page.locator("#edit-save")).to_have_text("Lưu bản nháp lên bản mới nhất")
+    expect(page.locator("#edit-save")).to_have_text("Lưu bản nháp")
 
 
 def fetch_now_deliver_later(page, pattern):
@@ -2284,7 +2283,7 @@ def test_stale_meeting_read_answering_after_a_save_cannot_roll_the_ui_back(live,
     # 1. Start a save (version 1 -> 2) and keep its PATCH from reaching the server.
     held_patch = hold_first(page, meeting_path, "PATCH")
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("After save")
     page.locator("#edit-date").fill("2026-10-20")
     page.get_by_role("button", name="Lưu thay đổi").click()
@@ -2319,7 +2318,7 @@ def test_stale_meeting_read_answering_after_a_save_cannot_roll_the_ui_back(live,
 
     # The model kept version 2: the next edit saves cleanly instead of conflicting.
     page.locator("#meeting-actions").click()
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     expect(page.locator("#edit-title")).to_have_value("After save")
     expect(page.locator("#edit-date")).to_have_value("2026-10-20")
     page.locator("#edit-title").fill("Third title")
@@ -2522,7 +2521,7 @@ def test_add_speaker_current_generation_conflict_can_be_reapplied_to_latest(live
     expect(page.locator(".transcript-speaker-add-draft-review")).to_contain_text(
         "Tên cần thêm: Recoverable speaker"
     )
-    reapply = page.get_by_role("button", name="Thêm vào transcript hiện tại")
+    reapply = page.get_by_role("button", name="Thêm vào transcript")
     expect(reapply).to_be_disabled()
     expect(add_name).to_be_disabled()
     submit = page.locator("#speaker-add-form button[type=submit]")
@@ -2541,8 +2540,8 @@ def test_add_speaker_current_generation_conflict_can_be_reapplied_to_latest(live
     expect(add_name).to_be_empty()
     recovery = page.locator(".transcript-speaker-add-draft-review")
     expect(recovery).to_contain_text("Tên cần thêm: Recoverable speaker")
-    expect(recovery.get_by_role("button", name="Thêm vào transcript hiện tại")).to_be_enabled()
-    recovery.get_by_role("button", name="Thêm vào transcript hiện tại").click()
+    expect(recovery.get_by_role("button", name="Thêm vào transcript")).to_be_enabled()
+    recovery.get_by_role("button", name="Thêm vào transcript").click()
 
     expect(page.locator("#speaker-add-status")).to_have_text("Đã thêm người nói.")
     expect(page.locator(".transcript-speaker-add-draft-review")).to_have_count(0)
@@ -2688,7 +2687,7 @@ def test_add_speaker_source_conflict_recovers_after_new_generation_with_lower_ve
     page.locator("#speaker-add-form [data-reload-latest]").click()
     expect(page.locator("#generation-title")).to_have_text("Transcript #2")
     expect(add_name).to_be_empty()
-    reapply = page.get_by_role("button", name="Thêm vào transcript hiện tại")
+    reapply = page.get_by_role("button", name="Thêm vào transcript")
     expect(reapply).to_be_enabled()
     reapply.click()
 
@@ -3322,7 +3321,7 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
         route_add_speaker,
     )
     assert post_bodies == []  # Reopening an imported meeting never starts ASR.
-    start_button = page.get_by_role("button", name="Bắt đầu chép lời")
+    start_button = page.get_by_role("button", name="Chép lời")
     expect(start_button).to_be_visible()
     assert "%" not in page.locator("#transcription-panel").inner_text()
     assert "ETA" not in page.locator("#transcription-panel").inner_text()
@@ -3421,7 +3420,7 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
     expect(page.locator("#transcript-mutation-status")).to_have_text("Đã lưu tên người nói.")
     expect(page.locator("#speaker-catalog-list .speaker-chip").first).to_have_text("Alice")
     rename_speaker(page)
-    page.get_by_role("button", name="Khôi phục tên mặc định").first.click()
+    page.get_by_role("button", name="Đặt lại tên").first.click()
     expect(page.locator(".segment-original-speaker")).to_have_text("Gán ban đầu: Speaker 1")
     assert [entry["expected_source_version"] for entry in speaker_catalog_updates] == [3, 4]
 
@@ -3590,7 +3589,7 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
         == 1
     )
 
-    rerun = page.get_by_role("button", name="Chạy lại bản ghi")
+    rerun = page.get_by_role("button", name="Chạy lại")
     rerun.click()
     speaker_select.focus()
     page.wait_for_timeout(1_200)
@@ -3630,7 +3629,7 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
     rerun.click()
     expect(page.locator("#transcription-error")).to_be_visible(timeout=5_000)
     rerun.click()
-    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     assert post_bodies[3]["request_id"] != post_bodies[2]["request_id"]
     assert post_bodies[4]["request_id"] != post_bodies[3]["request_id"]
 
@@ -3682,7 +3681,7 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
     )
     assert page.evaluate("window.getSelection().toString()") == selected_recovery_text
 
-    page.get_by_role("button", name="Hủy chép lời").click()
+    page.get_by_role("button", name="Hủy").click()
     expect(page.locator("#transcription-status")).to_contain_text("Đã hủy", timeout=5_000)
     expect(page.locator("#generation-title")).to_have_text("Transcript #2")
     assert len(post_bodies) == 5
@@ -3934,7 +3933,7 @@ def test_meeting_install_preserves_newer_transcript_after_metadata_and_same_meet
 
     page.locator("#meeting-actions").click()
 
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("Metadata saved during transcript edit")
     page.get_by_role("button", name="Lưu thay đổi").click()
     deadline = time.monotonic() + 10
@@ -3977,7 +3976,7 @@ def test_meeting_install_preserves_newer_transcript_after_metadata_and_same_meet
 
     page.locator("#meeting-actions").click()
 
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     page.locator("#edit-title").fill("Keep this metadata conflict draft")
     external_save = _context.request.patch(
         f"{live.url}/api/meetings/{meeting_id}",
@@ -4409,13 +4408,13 @@ def test_assignment_source_conflict_survives_reload_and_can_be_reapplied(live, b
     expect(page.locator(".transcript-assignment-draft-review")).to_contain_text(
         "Lựa chọn cần xem lại: Speaker 2"
     )
-    reapply = page.get_by_role("button", name="Áp dụng lại lựa chọn")
+    reapply = page.get_by_role("button", name="Áp dụng lại")
     expect(reapply).to_be_disabled()
     reload_button = page.locator("#transcript-mutation-error [data-reload-latest]")
     reload_button.click()
 
     expect(select).to_have_value("SPEAKER_01")
-    reapply = page.get_by_role("button", name="Áp dụng lại lựa chọn")
+    reapply = page.get_by_role("button", name="Áp dụng lại")
     expect(reapply).to_be_enabled()
     rename_speaker(page, 1).fill("Alice")
     page.locator(
@@ -4426,7 +4425,7 @@ def test_assignment_source_conflict_survives_reload_and_can_be_reapplied(live, b
     expect(
         page.locator(".transcript-assignment-draft-review .transcript-draft-value")
     ).to_have_text("Lựa chọn cần xem lại: Alice")
-    reapply = page.get_by_role("button", name="Áp dụng lại lựa chọn")
+    reapply = page.get_by_role("button", name="Áp dụng lại")
     reapply.click()
     expect(page.locator(".segment-speaker-select")).to_have_value("SPEAKER_01")
     expect(page.locator(".segment-speaker-select")).to_have_attribute(
@@ -5168,7 +5167,7 @@ def test_speakers_are_chips_with_inline_rename_restore_and_add(live, browser_con
 
     # The default name can still be restored, which brings the invitation back.
     speaker_chip(page, 0).click()
-    page.get_by_role("button", name="Khôi phục tên mặc định").click()
+    page.get_by_role("button", name="Đặt lại tên").click()
     expect(speaker_chip(page, 0).locator(".speaker-chip-name")).to_have_text("Speaker 1")
     expect(speaker_chip(page, 0).locator(".speaker-chip-mark")).to_have_text("đặt tên")
     expect(speaker_chip(page, 0)).to_be_focused()
@@ -5571,7 +5570,7 @@ def test_failed_speaker_add_reapply_keeps_focus_on_its_button(live, browser_cont
     add_name.fill("Zed")
     add_name.press("Enter")
     expect(page.locator("#speaker-add-status")).not_to_have_text("")
-    reapply = page.get_by_role("button", name="Thêm vào transcript hiện tại")
+    reapply = page.get_by_role("button", name="Thêm vào transcript")
     expect(reapply).to_be_enabled()
     reapply.click()
     status = page.locator("#transcript-mutation-status")

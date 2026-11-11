@@ -746,9 +746,9 @@ def test_notes_tab_without_a_transcript_says_so_and_offers_the_transcript_tab(li
         "#notes-model",
     ):
         expect(page.locator(selector)).to_be_hidden()
-    expect(panel.get_by_role("button", name=re.compile("Transcript & bản ghi"))).to_be_visible()
+    expect(panel.get_by_role("button", name="Mở transcript")).to_be_visible()
 
-    panel.get_by_role("button", name=re.compile("Transcript & bản ghi")).click()
+    panel.get_by_role("button", name="Mở transcript").click()
     expect_tab(page, "transcript")
     assert fragment(page) == "transcript"
     assert focused_id(page) == "meeting-tab-transcript"

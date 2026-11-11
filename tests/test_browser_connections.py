@@ -614,7 +614,7 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
     )
 
     page.locator("#connection-model").select_option("gpt-6-luna")
-    page.get_by_role("button", name="Lưu mô hình và effort").click()
+    page.get_by_role("button", name="Lưu").click()
     expect(page.locator("#connection-model-status")).to_contain_text("Đã lưu GPT 6 Luna")
     assert api.preferences == {
         "provider": "chatgpt",
@@ -640,7 +640,7 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
     expect(page.locator(".connection-usage-link")).to_have_attribute(
         "href", "https://chatgpt.com/settings/usage"
     )
-    page.get_by_role("button", name="Chạy kiểm tra bằng dữ liệu tổng hợp").click()
+    page.get_by_role("button", name="Kiểm tra").click()
     expect(page.locator("#connection-verification-result")).to_contain_text(
         "Đã xác minh GPT 6 Luna"
     )
@@ -653,7 +653,7 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
     )
     assert not any("/responses" in path for _, path, _ in api.calls)
 
-    page.get_by_role("button", name="Ngắt kết nối ChatGPT").click()
+    page.get_by_role("button", name="Ngắt kết nối").click()
     expect(page.locator("#connection-disconnect-confirm")).to_be_visible()
     expect(page.locator("#connection-disconnect-confirm")).to_contain_text(
         "thu hồi quyền truy cập từ xa"
@@ -717,7 +717,7 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
     expect(page.locator("#connection-registration-confirm")).to_be_visible()
     page.locator("#connection-registration-name").fill("My ASR Studio")
     expect(page.locator("#connection-registration-confirm-button")).to_have_text(
-        "Thu hồi và đăng nhập lại" if language == "vi" else "Revoke and sign in again"
+        "Đăng nhập lại" if language == "vi" else "Sign in again"
     )
     page.locator("#connection-registration-confirm-button").click()
     expect(page.locator("#connection-callback")).to_be_visible()
@@ -921,7 +921,7 @@ def test_slow_page_load_status_cannot_overwrite_state_read_through_the_dialog(br
     page.locator("#antigravity-disconnect").click()
     page.locator("#antigravity-disconnect-confirm-button").click()
     expect(google).to_have_attribute("data-state", "disconnected")
-    page.get_by_role("button", name="Ngắt kết nối ChatGPT").click()
+    page.get_by_role("button", name="Ngắt kết nối").click()
     page.get_by_role("button", name="Ngắt kết nối", exact=True).click()
     expect(openai).to_have_attribute("data-state", "disconnected")
 
@@ -1007,7 +1007,7 @@ def test_antigravity_login_catalog_verification_and_disconnect(browser_runtime):
     page.locator("#antigravity-model").select_option("gemini-3-pro-high")
     expect(page.locator("#antigravity-effort")).to_have_value("high")
     page.locator("#antigravity-effort").select_option("medium")
-    page.get_by_role("button", name="Lưu mô hình Antigravity").click()
+    page.get_by_role("button", name="Lưu").click()
     expect(page.locator("#antigravity-model-status")).to_contain_text("Đã lưu Gemini 3 Pro High")
     expect(page.locator("#antigravity-model-status")).to_contain_text("mức suy nghĩ Medium")
     assert api.antigravity_effort == "medium"
@@ -1016,7 +1016,7 @@ def test_antigravity_login_catalog_verification_and_disconnect(browser_runtime):
         "/api/providers/antigravity/preference",
         {"model": "gemini-3-pro-high", "reasoning_effort": "medium"},
     ) in api.calls
-    page.get_by_role("button", name="Chạy kiểm tra model đã chọn").click()
+    page.get_by_role("button", name="Kiểm tra").click()
     expect(page.locator("#antigravity-verification-result")).to_contain_text(
         "Đã xác minh Gemini 3 Pro High"
     )
@@ -1079,12 +1079,12 @@ def test_antigravity_reconnect_error_refreshes_status_and_hides_stale_controls(
     if operation == "verify":
         expect(page.locator("#antigravity-status")).to_have_text("Đã kết nối")
         api.antigravity_failure_operation = operation
-        page.get_by_role("button", name="Chạy kiểm tra model đã chọn").click()
+        page.get_by_role("button", name="Kiểm tra").click()
     elif operation == "preference":
         expect(page.locator("#antigravity-status")).to_have_text("Đã kết nối")
         api.antigravity_failure_operation = operation
         page.locator("#antigravity-model").select_option("claude-sonnet-test")
-        page.get_by_role("button", name="Lưu mô hình Antigravity").click()
+        page.get_by_role("button", name="Lưu").click()
 
     expect(page.locator("#antigravity-status")).to_have_text(expected_status)
     expect(page.get_by_role("button", name="Kết nối Google Antigravity")).to_be_visible()
@@ -1177,8 +1177,8 @@ def test_login_cancel_expiry_and_api_errors(browser_runtime):
     expect(page.locator("#connection-error-message")).to_have_text(
         "Chưa đọc được trạng thái đăng nhập. Hãy thử lại.", timeout=6000
     )
-    expect(page.get_by_role("button", name="Kiểm tra trạng thái lại")).to_be_visible()
-    page.get_by_role("button", name="Kiểm tra trạng thái lại").click()
+    expect(page.get_by_role("button", name="Kiểm tra lại")).to_be_visible()
+    page.get_by_role("button", name="Kiểm tra lại").click()
     expect(page.get_by_role("button", name="Hủy đăng nhập")).to_be_visible()
     page.get_by_role("button", name="Hủy đăng nhập").click()
     expect(page.locator("#connection-message")).to_have_text("Đã hủy đăng nhập ChatGPT.")
@@ -1218,11 +1218,11 @@ def test_luna_effort_is_saved_and_used_for_verification(browser_runtime, model_i
     expect(page.locator("#connection-model")).to_have_value(model_id)
     expect(page.locator("#connection-effort")).to_be_enabled()
     page.locator("#connection-effort").select_option("max")
-    page.get_by_role("button", name="Lưu mô hình và effort").click()
+    page.get_by_role("button", name="Lưu").click()
     expect(page.locator("#connection-model-status")).to_contain_text("effort max")
     assert api.preferences["reasoning_effort"] == "max"
 
-    page.get_by_role("button", name="Chạy kiểm tra bằng dữ liệu tổng hợp").click()
+    page.get_by_role("button", name="Kiểm tra").click()
     expect(page.locator("#connection-verification-result")).to_contain_text("effort max")
     assert (
         "POST",
@@ -1262,7 +1262,7 @@ def test_unavailable_model_is_preserved_and_dialog_is_accessible_on_mobile(brows
     expect(page.locator("#connection-model option").first).to_have_text(
         "gpt-retired — không khả dụng với tài khoản này"
     )
-    expect(page.get_by_role("button", name="Lưu mô hình")).to_be_disabled()
+    expect(page.locator("#connection-model-save")).to_be_disabled()
     expect(page.locator("#connection-verify")).to_be_disabled()
     page.keyboard.press("Tab")
     assert page.locator("#connections-dialog").evaluate(
@@ -1272,7 +1272,7 @@ def test_unavailable_model_is_preserved_and_dialog_is_accessible_on_mobile(brows
     assert focus_style == "solid"
 
     page.locator("#connection-model").select_option("gpt-current")
-    page.get_by_role("button", name="Lưu mô hình").click()
+    page.locator("#connection-model-save").click()
     expect(page.locator("#connection-error-message")).to_have_text(
         "Chưa lưu được lựa chọn model. Hãy thử lại."
     )
@@ -1316,9 +1316,9 @@ def test_provider_reconnect_error_refreshes_status_without_replaying_verify(
 
     if operation == "save":
         page.locator("#connection-model").select_option("gpt-6-luna")
-        page.get_by_role("button", name="Lưu mô hình").click()
+        page.locator("#connection-model-save").click()
     elif operation == "verify":
-        page.get_by_role("button", name="Chạy kiểm tra bằng dữ liệu tổng hợp").click()
+        page.get_by_role("button", name="Kiểm tra").click()
 
     expect(page.locator("#connection-status")).to_have_text("Cần đăng nhập lại")
     expect(page.locator("#launcher-chatgpt")).to_have_attribute("data-state", "reconnect_required")
@@ -1355,7 +1355,7 @@ def test_local_auth_401_does_not_mark_provider_reconnect(browser_runtime):
     )
     api.next_verification_401 = True
 
-    page.get_by_role("button", name="Chạy kiểm tra bằng dữ liệu tổng hợp").click()
+    page.get_by_role("button", name="Kiểm tra").click()
     expect(page.locator("#connection-error-message")).to_have_text(
         "Phiên truy cập workspace không còn hợp lệ."
     )

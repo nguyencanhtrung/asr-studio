@@ -790,7 +790,7 @@ test("a version conflict reloads the meeting, keeps edited fields and moves only
   assert.equal(s.editor.original.meeting_date, "2025-05-06");
   assert.equal(s.meeting.title, "Theirs");
   assert.match(text(s.editor.conflict), /“Theirs” · 06\/05\/2025\. Bản nháp tên của bạn vẫn được giữ/);
-  assert.equal(text(s.editor.saveLabel), "Lưu bản nháp lên bản mới nhất");
+  assert.equal(text(s.editor.saveLabel), "Lưu bản nháp");
   assert.equal(s.installKind, "conflict");
   // The next save is checked against the new version and sends the title only.
   env.dispatch("editor-submitted", { title: "Mine", date: "2025-05-06", badInput: false });
@@ -849,7 +849,7 @@ test("the confirmation button enables only for the exact name and shows the clea
   let view = selectDeletion(env.state());
   assert.equal(view.dialog.open, true);
   assert.equal(view.dialog.confirmDisabled, true);
-  assert.equal(text(view.dialog.confirmLabel), "Xóa dữ liệu đã lưu");
+  assert.equal(text(view.dialog.confirmLabel), "Xóa");
   assert.equal(view.dialog.name, "Meeting m1");
   env.dispatch("deletion-confirmation-edited", { value: "Meeting m1" });
   view = selectDeletion(env.state());
@@ -928,7 +928,7 @@ test("a deletion that fails reloads the meeting, then shows the error in the ope
   assert.equal(s.deletion.dialog.confirmation, "");
   assert.equal(s.deletion.dialog.open, true);
   assert.equal(selectDeletion(s).dialog.confirmDisabled, true);
-  assert.equal(text(selectDeletion(s).dialog.confirmLabel), "Xóa dữ liệu đã lưu");
+  assert.equal(text(selectDeletion(s).dialog.confirmLabel), "Xóa");
 });
 
 test("a failed cleanup marks the meeting and offers to continue", async () => {

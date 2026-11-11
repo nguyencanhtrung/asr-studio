@@ -215,7 +215,7 @@
               <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><circle cx="10" cy="4.5" r="1.6" /><circle cx="10" cy="10" r="1.6" /><circle cx="10" cy="15.5" r="1.6" /></svg>
             </button>
             <div class="meeting-actions-menu" id="meeting-actions-menu" popover>
-              <button class="menu-item" id="edit-meeting" type="button" aria-describedby="notes-lock-status">Sửa tên và ngày</button>
+              <button class="menu-item" id="edit-meeting" type="button" aria-describedby="notes-lock-status">Sửa thông tin</button>
               <button class="menu-item menu-item-danger" id="delete-meeting" type="button" aria-haspopup="dialog" aria-controls="meeting-delete-dialog">Xóa cuộc họp</button>
             </div>
             <p class="edit-status" id="edit-status" role="status"></p>
@@ -237,11 +237,11 @@
                 </div>
               </div>
             </div>
-            <p class="field-help">Chỉ đổi tên và ngày. Đổi ngày sẽ đánh dấu notes cần cập nhật; gợi ý ngôn ngữ giữ nguyên.</p>
+            <p class="field-help">Đổi ngày sẽ đánh dấu notes cần cập nhật.</p>
             <div class="edit-conflict" id="edit-conflict" role="alert" hidden></div>
             <p class="form-error" id="edit-error" role="alert" hidden></p>
             <div class="edit-actions">
-              <button class="secondary-button" id="edit-cancel" type="button">Hủy và bỏ bản nháp</button>
+              <button class="secondary-button" id="edit-cancel" type="button">Bỏ nháp</button>
               <button class="primary-button" id="edit-save" type="submit">Lưu thay đổi</button>
             </div>
           </form>
@@ -270,7 +270,7 @@
             <div class="notes-empty" id="notes-empty" hidden>
               <h3 id="notes-empty-title">Cần transcript trước</h3>
               <p id="notes-empty-copy"></p>
-              <button class="secondary-button" id="notes-empty-open-transcript" type="button" aria-controls="meeting-panel-transcript">Mở Transcript &amp; bản ghi</button>
+              <button class="secondary-button" id="notes-empty-open-transcript" type="button" aria-controls="meeting-panel-transcript">Mở transcript</button>
             </div>
             <div class="notes-create" id="notes-create">
             <header class="notes-heading-row">
@@ -283,7 +283,7 @@
             <div class="notes-run" id="notes-run">
               <div class="notes-run-actions">
                 <button class="primary-button" id="notes-start" type="button" aria-describedby="notes-status" disabled>Tạo notes</button>
-                <button class="secondary-button" id="notes-cancel" type="button" hidden>Hủy tạo notes</button>
+                <button class="secondary-button" id="notes-cancel" type="button" hidden>Hủy</button>
                 <button class="text-button" id="notes-change" type="button" aria-expanded="false" aria-controls="notes-choice">Đổi…</button>
               </div>
               <p class="notes-speaker-reminder" id="notes-speaker-reminder" hidden>
@@ -291,7 +291,7 @@
                 <a class="text-link" id="notes-name-speakers" href="#transcript">Đặt tên trước</a>
               </p>
               <p class="notes-run-plan" id="notes-run-plan" role="status" aria-live="polite"></p>
-              <button type="button" class="secondary-button notes-choice-reload" id="notes-choice-reload" hidden>Tải lại lựa chọn</button>
+              <button type="button" class="secondary-button notes-choice-reload" id="notes-choice-reload" hidden>Tải lại</button>
               <div class="notes-choice" id="notes-choice" hidden>
                 <div class="notes-choice-fields">
                   <div class="notes-output-language-control">
@@ -358,8 +358,8 @@
               <div class="notes-conflict" id="notes-conflict" role="alert" hidden>
                 <p id="notes-conflict-message"></p>
                 <div class="notes-conflict-actions">
-                  <button class="secondary-button" id="notes-keep-draft" type="button">Giữ bản nháp và lưu lên bản mới nhất</button>
-                  <button class="text-button" id="notes-use-latest" type="button">Tải bản đã lưu mới nhất</button>
+                  <button class="secondary-button" id="notes-keep-draft" type="button">Giữ bản nháp</button>
+                  <button class="text-button" id="notes-use-latest" type="button">Dùng bản mới nhất</button>
                 </div>
               </div>
               <!-- The view/write switch sits at the right of the line describing the text below it. -->
@@ -409,7 +409,7 @@
             <nav id="notes-source-members"></nav>
             <p class="notes-source-text" id="notes-source-text"></p>
             <p class="notes-source-difference" id="notes-source-difference" hidden></p>
-            <button class="secondary-button" id="notes-source-seek" type="button">Tua bản ghi tới mốc này</button>
+            <button class="secondary-button" id="notes-source-seek" type="button">Tua tới đây</button>
             <p class="notes-source-status" id="notes-source-status" role="status" aria-live="polite"></p>
           </section>
           <section class="transcription-panel" id="transcription-panel" aria-labelledby="transcription-heading">
@@ -417,20 +417,20 @@
               <h3 id="transcription-heading">Transcript</h3>
               <div class="transcription-actions">
                 <div class="transcription-language-control">
-                  <label for="transcription-language">Ngôn ngữ gợi ý</label>
+                  <label for="transcription-language">Gợi ý ngôn ngữ</label>
                   <select id="transcription-language" aria-describedby="transcription-language-help">
                     <option value="en">English</option>
                     <option value="vi">Tiếng Việt</option>
                   </select>
-                  <p class="field-help" id="transcription-language-help">Chỉ là gợi ý; transcript không bị khóa ngôn ngữ.</p>
+                  <p class="field-help" id="transcription-language-help">Không khóa ngôn ngữ transcript.</p>
                 </div>
                 <div class="transcription-language-control" id="transcription-model-control" hidden>
                   <label for="transcription-model">Model ASR</label>
                   <select id="transcription-model" aria-describedby="transcription-model-help"></select>
                   <p class="field-help" id="transcription-model-help"></p>
                 </div>
-                <button class="primary-button" id="start-transcription" type="button">Bắt đầu chép lời</button>
-                <button class="secondary-button" id="cancel-transcription" type="button" hidden>Hủy chép lời</button>
+                <button class="primary-button" id="start-transcription" type="button">Chép lời</button>
+                <button class="secondary-button" id="cancel-transcription" type="button" hidden>Hủy</button>
               </div>
             </header>
             <div class="transcription-model-guidance" id="transcription-model-guidance" role="status" hidden>
@@ -450,7 +450,7 @@
               <progress class="task-progress-bar" id="task-progress-bar" max="1" aria-labelledby="task-progress-stage"></progress>
             </div>
             <p class="transcription-status" id="transcription-status" role="status" aria-live="polite">
-              Bản ghi đã lưu. Bấm “Bắt đầu chép lời” khi bạn muốn chạy nhận dạng local.
+              Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local.
             </p>
             <dl class="task-measurements" id="task-measurements" hidden>
               <div><dt>Giai đoạn</dt><dd id="task-stage"></dd></div>
@@ -607,12 +607,12 @@
                     <label class="language-option"><input type="radio" name="language_hint" value="en" aria-describedby="language-hint-help" required /><span>English</span></label>
                     <label class="language-option"><input type="radio" name="language_hint" value="vi" aria-describedby="language-hint-help" required /><span>Tiếng Việt</span></label>
                   </div>
-                  <p class="field-help" id="language-hint-help">Gợi ý ngôn ngữ không dịch hoặc khóa ngôn ngữ của transcript.</p>
+                  <p class="field-help" id="language-hint-help">Không dịch, không khóa ngôn ngữ transcript.</p>
                 </fieldset>
               </div>
               <div class="auto-transcribe">
                 <label class="auto-transcribe-option"><input id="auto-transcribe" type="checkbox" checked aria-describedby="auto-transcribe-help" /><span>Chép lời ngay sau khi tạo</span></label>
-                <p class="field-help" id="auto-transcribe-help">Bỏ chọn để tự bấm “Bắt đầu chép lời” trên trang cuộc họp.</p>
+                <p class="field-help" id="auto-transcribe-help">Bỏ chọn để chép lời thủ công sau.</p>
                 <div class="create-asr-model field-group" id="create-asr-model-control" hidden>
                   <label for="create-asr-model">Model chép lời</label>
                   <select id="create-asr-model" aria-describedby="create-asr-model-help"></select>
@@ -640,7 +640,7 @@
 
           <footer class="dialog-actions">
             <button class="secondary-button" id="cancel-upload" type="button" hidden>Hủy tải lên</button>
-            <button class="secondary-button" id="retry-upload" type="button" hidden>Tải lại từ đầu</button>
+            <button class="secondary-button" id="retry-upload" type="button" hidden>Tải lên lại</button>
             <button class="primary-button" id="create-meeting" type="submit" disabled>Tạo cuộc họp</button>
           </footer>
         </form>
@@ -656,16 +656,16 @@
           </button>
         </header>
         <div class="meeting-delete-body">
-          <p>Hành động này xóa transcript, người nói, notes và audio do workspace quản lý. File nguồn bên ngoài không bị thay đổi. Nếu transcript hoặc notes đang chạy, hãy dùng <strong>Hủy chép lời</strong> hoặc <strong>Hủy tạo notes</strong> trong tab tương ứng, chờ tác vụ kết thúc rồi thử lại.</p>
+          <p>Xóa transcript, người nói, notes và audio trong workspace; file nguồn bên ngoài giữ nguyên. Tác vụ đang chạy? Bấm <strong>Hủy</strong> trong tab tương ứng, chờ tác vụ kết thúc rồi thử lại.</p>
           <p class="meeting-delete-name" id="meeting-delete-name"></p>
           <form id="meeting-delete-form" novalidate>
             <label for="meeting-delete-confirmation">Nhập chính xác tên cuộc họp để xác nhận</label>
             <input id="meeting-delete-confirmation" type="text" autocomplete="off" aria-describedby="meeting-delete-help meeting-delete-error" />
-            <p class="field-help" id="meeting-delete-help">Đóng hộp thoại sau khi xác nhận không hủy yêu cầu xóa. Nếu dọn dẹp bị gián đoạn, cuộc họp sẽ còn được đánh dấu và có thể thử lại sau khi khắc phục lỗi lưu trữ.</p>
+            <p class="field-help" id="meeting-delete-help">Đóng hộp thoại không hủy lệnh xóa. Nếu dọn dẹp bị gián đoạn, có thể thử lại sau khi khắc phục lỗi lưu trữ.</p>
             <p class="meeting-delete-error" id="meeting-delete-error" role="alert" aria-live="assertive" hidden></p>
             <div class="meeting-delete-actions">
               <button class="secondary-button" id="meeting-delete-cancel" type="button">Đóng</button>
-              <button class="primary-button meeting-delete-confirm" id="meeting-delete-confirm" type="submit" disabled>Xóa dữ liệu đã lưu</button>
+              <button class="primary-button meeting-delete-confirm" id="meeting-delete-confirm" type="submit" disabled>Xóa</button>
             </div>
           </form>
         </div>
@@ -721,7 +721,7 @@
               <p class="connection-mutation-status" id="connection-mutation-reason" role="status" aria-live="polite" hidden></p>
               <div class="connection-error" id="connection-error" role="alert" hidden>
                 <span id="connection-error-message"></span>
-                <button class="text-button" id="connection-retry-poll" type="button" hidden>Kiểm tra trạng thái lại</button>
+                <button class="text-button" id="connection-retry-poll" type="button" hidden>Kiểm tra lại</button>
               </div>
 
               <button class="primary-button connection-sign-in" id="connection-sign-in" type="button">
@@ -746,7 +746,7 @@
               </div>
 
               <div class="connection-registration" id="connection-registration" hidden>
-                <button class="text-button connection-registration-trigger" id="connection-registration-trigger" type="button">Tạo lại đăng ký ChatGPT</button>
+                <button class="text-button connection-registration-trigger" id="connection-registration-trigger" type="button">Đăng ký lại</button>
                 <div class="connection-registration-confirm" id="connection-registration-confirm" hidden>
                   <p>
                     Tên đăng ký được lưu tại ChatGPT. Thao tác này thu hồi quyền kết nối hiện tại và yêu cầu đăng nhập lại. Tên gợi ý cho đăng ký mới là ASR Studio; bạn có thể sửa trước khi cấp quyền.
@@ -757,13 +757,13 @@
                   </div>
                   <div class="connection-registration-actions">
                     <button class="secondary-button" id="connection-registration-keep" type="button">Giữ kết nối</button>
-                    <button class="primary-button" id="connection-registration-confirm-button" type="button">Thu hồi và đăng nhập lại</button>
+                    <button class="primary-button" id="connection-registration-confirm-button" type="button">Đăng nhập lại</button>
                   </div>
                 </div>
               </div>
 
               <div class="connection-disconnect" id="connection-disconnect" hidden>
-                <button class="text-button connection-disconnect-trigger" id="connection-disconnect-trigger" type="button">Ngắt kết nối ChatGPT</button>
+                <button class="text-button connection-disconnect-trigger" id="connection-disconnect-trigger" type="button">Ngắt kết nối</button>
                 <div class="connection-disconnect-confirm" id="connection-disconnect-confirm" hidden>
                   <p>
                     Thao tác này xóa thông tin đăng nhập ChatGPT đã lưu trong workspace. Việc thu hồi quyền truy cập từ xa có thể chưa được xác nhận; nếu cần, hãy kiểm tra tại
@@ -798,7 +798,7 @@
                   <p class="connection-help" id="connection-effort-help">Mức cao hơn có thể mất thêm thời gian và hạn mức sử dụng. Chỉ hiện các mức đã xác nhận cho mô hình được chọn.</p>
                 </div>
                 <p class="connection-model-status" id="connection-model-status" role="status" aria-live="polite"></p>
-                <button class="primary-button" id="connection-model-save" type="submit" disabled>Lưu mô hình và effort</button>
+                <button class="primary-button" id="connection-model-save" type="submit" disabled>Lưu</button>
               </form>
             </section>
 
@@ -810,7 +810,7 @@
                 Thao tác này gửi một yêu cầu nhỏ bằng dữ liệu tổng hợp qua gói ChatGPT của bạn. Yêu cầu không chứa nội dung cuộc họp và có thể được tính vào mức sử dụng gói.
               </p>
               <p class="connection-verification-result" id="connection-verification-result" role="status" aria-live="polite"></p>
-              <button class="secondary-button" id="connection-verify" type="button" disabled>Chạy kiểm tra bằng dữ liệu tổng hợp</button>
+              <button class="secondary-button" id="connection-verify" type="button" disabled>Kiểm tra</button>
             </section>
 
             <section class="connection-provider-divider" id="antigravity-section" aria-labelledby="antigravity-title">
@@ -847,7 +847,7 @@
                 <button class="text-button" id="antigravity-cancel" type="button">Hủy đăng nhập</button>
               </div>
               <div class="connection-disconnect" id="antigravity-disconnect-wrap" hidden>
-                <button class="text-button connection-disconnect-trigger" id="antigravity-disconnect" type="button">Ngắt kết nối Antigravity</button>
+                <button class="text-button connection-disconnect-trigger" id="antigravity-disconnect" type="button">Ngắt kết nối</button>
                 <div class="connection-disconnect-confirm" id="antigravity-disconnect-confirm" hidden>
                   <p>Thao tác này xóa credential Antigravity đã lưu trong workspace. Quyền Google từ xa không bị thu hồi.</p>
                   <div class="connection-disconnect-actions">
@@ -875,7 +875,7 @@
                   <p class="connection-help" id="antigravity-effort-help">High đầy đủ hơn nhưng chậm hơn (khoảng 7–10 phút cho cuộc họp 1 giờ). Medium nhanh hơn nhưng có thể bỏ sót việc cần làm.</p>
                 </div>
                 <p class="connection-model-status" id="antigravity-model-status" role="status" aria-live="polite"></p>
-                <button class="primary-button" id="antigravity-model-save" type="submit" disabled>Lưu mô hình Antigravity</button>
+                <button class="primary-button" id="antigravity-model-save" type="submit" disabled>Lưu</button>
               </form>
             </section>
 
@@ -883,7 +883,7 @@
               <div class="connection-section-heading"><h5>Kiểm tra Antigravity bằng dữ liệu tổng hợp</h5></div>
               <p>Yêu cầu chỉ chứa chỉ dẫn tổng hợp cố định, không chứa transcript hoặc dữ liệu cuộc họp. OMP không tự gửi lại khi lỗi.</p>
               <p class="connection-verification-result" id="antigravity-verification-result" role="status" aria-live="polite"></p>
-              <button class="secondary-button" id="antigravity-verify" type="button" disabled>Chạy kiểm tra model đã chọn</button>
+              <button class="secondary-button" id="antigravity-verify" type="button" disabled>Kiểm tra</button>
             </section>
           </div>
 

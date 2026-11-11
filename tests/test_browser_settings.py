@@ -157,7 +157,7 @@ def test_settings_edits_follow_the_sidebar_and_notes_panel_without_reload(live, 
     expect(page.locator("#connection-status")).to_have_text("Đã kết nối")
     page.locator("#connection-model").select_option("gpt-6-luna")
     page.locator("#connection-effort").select_option("low")
-    page.get_by_role("button", name="Lưu mô hình và effort").click()
+    page.locator("#connection-model-save").click()
     expect(page.locator("#connection-model-status")).to_contain_text("Đã lưu GPT 6 Luna")
     page.keyboard.press("Escape")
     expect(start).to_have_text("Tạo notes · English · ChatGPT GPT 6 Luna")
@@ -180,17 +180,17 @@ def test_settings_runs_login_model_effort_verify_and_disconnect(browser_runtime)
 
     page.locator("#connection-model").select_option("gpt-6-luna")
     page.locator("#connection-effort").select_option("low")
-    page.get_by_role("button", name="Lưu mô hình và effort").click()
+    page.locator("#connection-model-save").click()
     expect(page.locator("#connection-model-status")).to_contain_text("Đã lưu GPT 6 Luna")
     assert api.preferences["models"] == {"chatgpt": "gpt-6-luna"}
     assert api.preferences["reasoning_effort"] == "low"
 
-    page.get_by_role("button", name="Chạy kiểm tra bằng dữ liệu tổng hợp").click()
+    page.get_by_role("button", name="Kiểm tra").click()
     expect(page.locator("#connection-verification-result")).to_contain_text(
         "Đã xác minh GPT 6 Luna"
     )
 
-    page.get_by_role("button", name="Ngắt kết nối ChatGPT").click()
+    page.get_by_role("button", name="Ngắt kết nối").click()
     page.get_by_role("button", name="Ngắt kết nối", exact=True).click()
     expect(page.locator("#connection-status")).to_have_text("Chưa kết nối")
     expect(launcher).to_have_attribute("aria-label", "Kết nối OpenAI: chưa kết nối")
@@ -236,7 +236,7 @@ def test_a_busy_provider_keeps_its_message_and_the_running_task_keeps_its_model(
 
     # The other provider is free; changing it leaves the running task as it was accepted.
     page.locator("#connection-model").select_option("gpt-6-luna")
-    page.get_by_role("button", name="Lưu mô hình và effort").click()
+    page.locator("#connection-model-save").click()
     expect(page.locator("#connection-model-status")).to_contain_text("Đã lưu GPT 6 Luna")
     task = get_task(live.settings.data_dir, running["id"])
     assert task["status"] == "running"

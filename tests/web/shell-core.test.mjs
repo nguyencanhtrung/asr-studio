@@ -827,7 +827,7 @@ test("create with an unknown outcome resends the same payload; fields stay locke
   const failed = env.state();
   assert.equal(failed.createUncertain, true);
   assert.equal(selectView(failed).fieldsDisabled, true);
-  assert.equal(selectView(failed).createLabel.text, "Xác minh và thử lại");
+  assert.equal(selectView(failed).createLabel.text, "Thử lại");
   const payload = failed.createRetryPayload;
   env.store.dispatch({ type: "shell/file-selected", file: { name: "b.wav", size: 1 } }); // ignored while uncertain
   assert.equal(env.state(), failed);

@@ -173,7 +173,7 @@ def test_a_run_in_progress_keeps_its_button_and_its_cancel(live, signed_in):
     start = page.locator("#notes-start")
     expect(cancel).to_be_visible()
     expect(start).to_have_text(re.compile(r"^Tạo notes · English · ChatGPT"))
-    expect(cancel).to_have_text("Hủy tạo notes")
+    expect(cancel).to_have_text("Hủy")
     expect(start).to_be_disabled()
     expect(start).to_have_attribute("data-action", "start")
     expect(page.get_by_text("Kết nối ChatGPT để tạo notes")).to_have_count(0)

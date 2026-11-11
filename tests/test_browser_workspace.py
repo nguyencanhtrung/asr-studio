@@ -169,7 +169,7 @@ def test_managed_recording_upload_saves_and_restores_meeting(tmp_path):
             create_button.click()
             expect(dialog).to_have_attribute("data-state", "error", timeout=10_000)
             expect(page.locator("#form-error")).to_contain_text("Không tạo cuộc họp")
-            retry_button = page.get_by_role("button", name="Tải lại từ đầu")
+            retry_button = page.get_by_role("button", name="Tải lên lại")
             expect(retry_button).to_be_visible()
             page.unroute("**/api/uploads/*/content**")
 
@@ -181,7 +181,7 @@ def test_managed_recording_upload_saves_and_restores_meeting(tmp_path):
             # Retry re-runs the whole flow, so the dropped response is met at the create step.
             page.route("**/api/meetings", commit_meeting_then_drop_response)
             retry_button.click()
-            retry_create = page.get_by_role("button", name="Xác minh và thử lại")
+            retry_create = page.get_by_role("button", name="Thử lại")
             expect(retry_create).to_be_enabled(timeout=20_000)
             expect(dialog).to_have_attribute("data-state", "error")
             expect(page.locator("#close-dialog")).to_be_enabled()

@@ -676,7 +676,7 @@ test("a worker that is down keeps the server's own refusal instead of a dead but
 test("PhoWhisper is described for Vietnamese and never as the choice for English or mixed content", async () => {
   const env = await opened(withChoices());
   env.send("task/model-chosen", { model: "pho-whisper-large" });
-  assert.match(text(env.view().model.note), /^Tối ưu cho tiếng Việt\. Không dành cho English/);
+  assert.match(text(env.view().model.note), /^Tối ưu tiếng Việt\. Không dành cho English/);
 });
 
 test("a running task shows its own model and locks the selector", async () => {
