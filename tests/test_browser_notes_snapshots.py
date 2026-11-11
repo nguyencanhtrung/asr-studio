@@ -82,7 +82,7 @@ def test_only_a_date_edit_marks_the_notes_as_changed_never_the_title(
 
     page.locator("#meeting-actions").click()
 
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     if "title" in fields:
         page.locator("#edit-title").fill(fields["title"])
     if fields.get("date"):
@@ -401,7 +401,7 @@ def test_the_lock_holds_through_a_cancel_request_until_the_run_has_stopped(live,
 
     page.locator("#meeting-actions").click()
 
-    page.get_by_role("button", name="Sửa tên và ngày").click()
+    page.get_by_role("button", name="Sửa thông tin").click()
     date, clear_date, title = (
         page.locator(f"#edit-{name}") for name in ("date", "clear-date", "title")
     )

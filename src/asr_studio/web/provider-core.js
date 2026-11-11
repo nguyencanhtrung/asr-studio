@@ -214,8 +214,8 @@ export const CHATGPT = {
     recreateStarted: t("Quyền kết nối cũ đã được thu hồi. Hãy tiếp tục trong cửa sổ ChatGPT mới."),
     recreateConnected: t("Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT."),
     recreateSubmitting: t("Đang tạo lại đăng ký…"),
-    recreate: t("Tạo lại đăng ký ChatGPT"),
-    recreateConfirm: t("Thu hồi và đăng nhập lại"),
+    recreate: t("Đăng ký lại"),
+    recreateConfirm: t("Đăng nhập lại"),
   },
 };
 

@@ -323,7 +323,7 @@ function startFailed(state, error, auto) {
     // A named model has its own preparation/GPU guidance, including for an automatic handoff.
     message = MODEL_REFUSALS[failure.code];
   } else if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
-    message = t("{reason} Cuộc họp đã được lưu nhưng chưa chép lời. Ứng dụng không tự thử lại; bấm “Bắt đầu chép lời” khi máy sẵn sàng.", { reason: AUTO_START_REASONS[failure.code] });
+    message = t("{reason} Cuộc họp đã được lưu nhưng chưa chép lời. Ứng dụng không tự thử lại; bấm “Chép lời” khi máy sẵn sàng.", { reason: AUTO_START_REASONS[failure.code] });
   } else if (Object.hasOwn(MODEL_REFUSALS, failure.code)) {
     // Automatic names no model of its own: the operator fixes this one in Settings.
     message = t("Model mặc định chưa chạy được trên máy này. Mở Cài đặt → ASR Model để cài lại hoặc chọn mặc định khác.");

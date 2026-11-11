@@ -209,7 +209,7 @@ def test_an_edited_bullet_loses_its_chips_and_no_other_bullet_loses_or_gains_any
 
     edit_markdown(
         page,
-        lambda text: text.replace("Prepare the launch plan\\.", "Prepare the launch plan today\\."),
+        lambda text: text.replace("Prepare the launch plan.", "Prepare the launch plan today."),
     )
     after = chip_labels(page)
     assert after.pop("Prepare the launch plan today.") == []
@@ -267,7 +267,7 @@ def test_identical_bullets_keep_their_own_chips_and_none_once_one_is_edited(live
 
     # Words that two bullets share cannot tell which of them was edited, so neither shows a chip:
     # the second must not inherit the first one's.
-    edit_markdown(page, lambda text: text.replace("- Same words\\.", "- Other words\\.", 1))
+    edit_markdown(page, lambda text: text.replace("- Same words.", "- Other words.", 1))
     assert [twin.locator("a").all_text_contents() for twin in twins.all()] == [[], []]
 
 
@@ -304,7 +304,7 @@ def test_a_bullet_edited_into_a_copy_of_another_leaves_both_copies_without_a_chi
 
     # The words cannot say which copy is the genuine one, so neither shows a chip: the edited bullet
     # has none, and the genuine one must not wear a chip that may belong to the other.
-    edit_markdown(page, lambda text: text.replace(f"{edited} point\\.", f"{copied} point\\."))
+    edit_markdown(page, lambda text: text.replace(f"{edited} point.", f"{copied} point."))
     assert chip_pairs(page) == [
         [f"{copied} point.", []],
         [f"{copied} point.", []],

@@ -4,6 +4,7 @@ import copy
 import dataclasses
 import hashlib
 import json
+import re
 from itertools import pairwise
 
 import pytest
@@ -98,7 +99,7 @@ def test_renderer_keeps_summary_and_deadlines_without_timestamp_references(docum
     assert document["action_items"][0]["deadline_date"] == "2099-01-01"
     markdown = render_markdown(document, snapshot)
     assert "Owner: Undetermined; Deadline: tomorrow (2026-10-20)." in markdown
-    assert r"- Ship the update\." in markdown
+    assert r"- Ship the update." in markdown
     assert "notes_source=" not in markdown
     assert "01:01:01" not in markdown
     for _, heading in SECTIONS:
@@ -133,7 +134,7 @@ def test_citations_name_the_sources_of_every_bullet_the_markdown_renders(documen
     assert build_citations(document, snapshot) == [
         {
             "section": "Decisions",
-            "text": r"Ship the update\.",
+            "text": r"Ship the update.",
             "sources": [{"id": "c" * 32, "start_seconds": 3661.9}],
         },
         {
@@ -168,11 +169,11 @@ def test_citation_text_is_the_bullet_text_as_rendered_in_order_for_both_language
         assert [{"section": c["section"], "text": c["text"]} for c in citations] == bullets
         assert len(citations) == 5
     first, empty, last = build_citations(document, snapshot)[:3]
-    assert first["text"] == r"Use \*bold\* \[link\]\(x\) \#1 and \`code\`"
+    assert first["text"] == r"Use \*bold\* \[link\](x) #1 and \`code\`"
     assert [source["id"] for source in first["sources"]] == ["d" * 32, "c" * 32]  # document order
     assert first["sources"][0]["start_seconds"] == 7
     # A bullet without sources still has its entry, so identical bullets keep their places.
-    assert (empty["text"], empty["sources"]) == ("No source here\\.", [])
+    assert (empty["text"], empty["sources"]) == ("No source here.", [])
     assert last["text"] == empty["text"] and len(last["sources"]) == 1
 
 
@@ -456,7 +457,7 @@ def test_provider_markup_is_content(document, snapshot):
         }
     ]
     markdown = render_markdown(document, snapshot)
-    assert "<script>" not in markdown
+    assert re.search(r"(?<!\\)<", markdown) is None
     assert "[click](https" not in markdown
     assert markdown.count("\n## Decisions\n") == 1
 
@@ -1400,3 +1401,23 @@ def _fact_rule(language):
     from asr_studio.notes_document import _FACT_INVENTORY_RULE
 
     return _FACT_INVENTORY_RULE[language]
+
+
+@pytest.mark.parametrize(
+    ("text", "markdown"),
+    [
+        ("Keep docs up-to-date (v2.1)!", "Keep docs up-to-date (v2.1)!"),
+        ("About ~100 users, snake_case", "About ~100 users, snake_case"),
+        ("~100 to ~200", r"\~100 to \~200"),
+        ("see [x](y) <b> **b** `c` _e_", r"see \[x\](y) \<b> \*\*b\*\* \`c\` \_e\_"),
+        ("# h", r"\# h"),
+        ("> q", r"\> q"),
+        ("- n", r"\- n"),
+        ("1. o", r"1\. o"),
+        ("https://x.io www.y.io a@b.io", r"https\://x.io www\.y.io a\@b.io"),
+    ],
+)
+def test_provider_text_escapes_only_characters_that_would_act_as_markdown(text, markdown):
+    from asr_studio.notes_document import _markdown
+
+    assert _markdown(text) == markdown

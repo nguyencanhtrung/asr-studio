@@ -586,7 +586,7 @@ function conflictLoaded(state, action) {
       title: titleEdited ? editor.title : current.title,
       date: dateEdited ? editor.date : current.meeting_date || "",
       version: current.metadata_version,
-      saveLabel: t("Lưu bản nháp lên bản mới nhất"),
+      saveLabel: t("Lưu bản nháp"),
       conflict: t("Cuộc họp đã được cập nhật ở nơi khác: “{title}” · {date}. {kept}, hoặc hủy để dùng bản đã lưu.", {
         title: current.title,
         date,
@@ -1095,7 +1095,7 @@ export function selectDeletion(state) {
     confirmation: deletion.dialog.confirmation,
     error: deletion.dialog.error,
   };
-  if (!meeting) return { header: null, dialog: { ...dialog, confirmDisabled: true, confirmLabel: t("Xóa dữ liệu đã lưu"), name: "" } };
+  if (!meeting) return { header: null, dialog: { ...dialog, confirmDisabled: true, confirmLabel: t("Xóa"), name: "" } };
   const marker = meeting.deletion_status;
   const failure = deletion.failures[meeting.id];
   const message = failure ? failure.message : "";
@@ -1122,7 +1122,7 @@ export function selectDeletion(state) {
       ...dialog,
       name: meeting.title,
       confirmDisabled: deletion.pending || settling || dialog.confirmation !== meeting.title,
-      confirmLabel: requestPending || settling ? t("Đang dọn dữ liệu…") : cleanupMarked ? t("Thử dọn tiếp") : t("Xóa dữ liệu đã lưu"),
+      confirmLabel: requestPending || settling ? t("Đang dọn dữ liệu…") : cleanupMarked ? t("Thử dọn tiếp") : t("Xóa"),
     },
   };
 }

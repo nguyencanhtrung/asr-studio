@@ -555,7 +555,7 @@ def test_model_saved_in_the_connections_dialog_refreshes_the_open_notes_panel(
     expect(page.locator("#connections-dialog")).to_be_visible()
     expect(page.locator("#connection-model")).to_have_value(CHATGPT_MODEL)
     page.locator("#connection-model").select_option("gpt-6-luna")
-    page.get_by_role("button", name="Lưu mô hình và effort").click()
+    page.locator("#connection-model-save").click()
     expect(page.locator("#connection-model-status")).to_contain_text("Luna")
     page.locator("#connections-close").click()
     expect(page.locator("#notes-model")).to_have_value("gpt-6-luna")

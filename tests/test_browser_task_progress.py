@@ -277,7 +277,7 @@ def test_transcription_cancel_names_what_it_cancels(live, signed_in):
 
     cancel = page.locator("#cancel-transcription")
     expect(cancel).to_be_visible()
-    expect(cancel).to_have_text("Hủy chép lời")
+    expect(cancel).to_have_text("Hủy")
     expect(page.get_by_role("button", name="Hủy xử lý")).to_have_count(0)
     cancel.click()
     expect(cancel).to_have_text("Đang dừng…")
@@ -295,7 +295,7 @@ def test_rerun_is_a_secondary_button_once_a_transcript_exists(live, signed_in):
     fresh_id = seed_meeting(live.settings.data_dir, "Not transcribed yet", "2026-10-18")
     page.goto(f"{live.url}/meetings/{transcribed_id}")
 
-    rerun = page.get_by_role("button", name="Chạy lại bản ghi")
+    rerun = page.get_by_role("button", name="Chạy lại")
     expect(rerun).to_have_class(re.compile(r"\bsecondary-button\b"))
     expect(rerun).not_to_have_class(re.compile(r"\bprimary-button\b"))
     accent = rgb(theme_tokens(page)["--accent"])
@@ -303,7 +303,7 @@ def test_rerun_is_a_secondary_button_once_a_transcript_exists(live, signed_in):
     expect(page.locator("#task-progress")).to_be_hidden()
 
     page.goto(f"{live.url}/meetings/{fresh_id}")
-    first_run = page.get_by_role("button", name="Bắt đầu chép lời")
+    first_run = page.get_by_role("button", name="Chép lời")
     expect(first_run).to_have_class(re.compile(r"\bprimary-button\b"))
     expect(first_run).not_to_have_class(re.compile(r"\bsecondary-button\b"))
     assert first_run.evaluate("el => getComputedStyle(el).backgroundColor") == accent
@@ -349,7 +349,7 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     language = page.locator("#transcription-language")
     expect(language).to_have_value("en")
-    expect(language).to_have_accessible_name("Ngôn ngữ gợi ý")
+    expect(language).to_have_accessible_name("Gợi ý ngôn ngữ")
     language.select_option("vi")
     # An unrelated meeting render must not replace the user's choice with the previous
     # generation's language before the rerun request is sent.
@@ -363,7 +363,7 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
     )
     expect(language).to_have_value("vi")
     expect(language).not_to_be_disabled()
-    page.get_by_role("button", name="Chạy lại bản ghi").click()
+    page.get_by_role("button", name="Chạy lại").click()
     expect(page.locator("#transcription-error")).to_be_visible()
     expect(language).to_have_value("vi")
     expect(language).to_be_disabled()
@@ -373,8 +373,8 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
     page.reload(wait_until="domcontentloaded")
     expect(language).to_have_value("vi")
     expect(language).to_be_disabled()
-    page.get_by_role("button", name="Chạy lại bản ghi").click()
-    expect(page.get_by_role("button", name="Hủy chép lời")).to_be_visible()
+    page.get_by_role("button", name="Chạy lại").click()
+    expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     assert len(requests) == 2
     assert requests[0]["language_hint"] == "vi"
     assert requests[1] == requests[0]
@@ -597,7 +597,7 @@ def test_notes_cancel_names_what_it_cancels(live, signed_in):
     cancel = page.locator("#notes-cancel")
     # The button ships hidden with static text; only the first render shows what the script sets.
     expect(cancel).to_be_visible()
-    expect(cancel).to_have_text("Hủy tạo notes")
+    expect(cancel).to_have_text("Hủy")
     expect(page.get_by_role("button", name="Hủy xử lý")).to_have_count(0)
     cancel.click()
     expect(cancel).to_have_text("Đang dừng…")

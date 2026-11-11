@@ -42,7 +42,7 @@ V1 không bao gồm tự ghi âm, bot tham gia Meet, chép lời thời gian th�
 
 1. Khi khởi chạy, nhận QR và link có token trong terminal của người vận hành. Bấm/copy link để mở ứng dụng trong trình duyệt trên cùng máy; sau xác thực, vào lịch sử hoặc tạo cuộc họp mới.
 2. Kéo thả hoặc chọn file audio/video có sẵn. Tên cuộc họp được điền sẵn từ tên file (bỏ phần mở rộng) cho tới khi người dùng tự gõ.
-3. Sửa tên cuộc họp nếu cần, chọn ngôn ngữ chính (mặc định là lựa chọn lần trước) và tùy chọn nhập ngày họp, rồi bấm nút chính **Tạo cuộc họp**: ứng dụng tự upload lên backend, kiểm tra file và tạo cuộc họp. Ô **Chép lời ngay sau khi tạo** được bật sẵn và nhớ lựa chọn cuối trong trình duyệt; khi tắt, người dùng tự bấm **Bắt đầu chép lời** ở trang cuộc họp.
+3. Sửa tên cuộc họp nếu cần, chọn ngôn ngữ chính (mặc định là lựa chọn lần trước) và tùy chọn nhập ngày họp, rồi bấm nút chính **Tạo cuộc họp**: ứng dụng tự upload lên backend, kiểm tra file và tạo cuộc họp. Ô **Chép lời ngay sau khi tạo** được bật sẵn và nhớ lựa chọn cuối trong trình duyệt; khi tắt, người dùng tự bấm **Chép lời** ở trang cuộc họp.
 4. Chọn provider ChatGPT hoặc Google Antigravity qua OMP và model cho bước notes; UI chọn sẵn lựa chọn gần nhất để xem/đổi. Dùng phiên đã lưu hoặc kết nối bên được chọn. Nếu provider chưa dùng được, vẫn cho bắt đầu chép lời local và tạo notes sau. Xem tiến độ hoặc hủy tác vụ.
 5. Xem transcript, nhãn người nói và notes nếu đã tạo; tùy chọn đặt tên người nói cho cuộc họp. Khi mới có transcript, hiển thị rõ chưa có notes.
 6. Bấm mốc thời gian để nghe lại đoạn nguồn; sửa transcript hoặc notes.
@@ -64,8 +64,8 @@ V1 không bao gồm tự ghi âm, bot tham gia Meet, chép lời thời gian th�
 ### 2.2. Xử lý và tiến độ
 
 - Chỉ nhận một tác vụ xử lý tại một thời điểm trong v1, gồm cả xử lý bản ghi và tạo lại notes. Khi đang bận, báo rõ và từ chối yêu cầu xử lý mới; chưa có hàng đợi nhiều tác vụ. Vẫn xem và sửa được các cuộc họp đã hoàn tất.
-- Khi ô **Chép lời ngay sau khi tạo** đang bật, trang cuộc họp gửi yêu cầu chép lời đúng một lần ngay sau khi tạo; tải lại trang hoặc Back không gửi lại. Nếu máy đang bận hoặc worker/model chưa sẵn sàng, cuộc họp vẫn được lưu; UI nêu lý do, hiện nút **Bắt đầu chép lời** và không tự thử lại.
-- GUI hiển thị giai đoạn đang chạy (thanh tiến độ khi chép lời, danh sách bước khi tạo notes), trạng thái hoàn tất hoặc lỗi và cung cấp nút hủy nói rõ đang hủy gì (**Hủy chép lời**, **Hủy tạo notes**).
+- Khi ô **Chép lời ngay sau khi tạo** đang bật, trang cuộc họp gửi yêu cầu chép lời đúng một lần ngay sau khi tạo; tải lại trang hoặc Back không gửi lại. Nếu máy đang bận hoặc worker/model chưa sẵn sàng, cuộc họp vẫn được lưu; UI nêu lý do, hiện nút **Chép lời** và không tự thử lại.
+- GUI hiển thị giai đoạn đang chạy (thanh tiến độ khi chép lời, danh sách bước khi tạo notes), trạng thái hoàn tất hoặc lỗi và cung cấp nút hủy nói rõ đang hủy gì (**Hủy**, **Hủy**).
 - Sau khi upload hoàn tất và backend nhận tác vụ, đóng tab hoặc mất kết nối trình duyệt không hủy xử lý trên backend. Mở lại UI phải xem được trạng thái, tiến độ hoặc kết quả đã lưu.
 - Khi tiến trình xử lý hoặc máy chủ bị ngắt, sau khi hệ thống hoạt động lại phải đánh dấu tác vụ đang dở là bị gián đoạn và cho người dùng chủ động chạy lại từ đầu bằng bản ghi đã lưu. Không yêu cầu tự chạy lại hoặc phục hồi từ checkpoint; giữ các kết quả hoàn tất và bản notes đã sửa.
 - Tác vụ bị lỗi hoặc bị hủy không được hiển thị là đã hoàn thành đầy đủ.

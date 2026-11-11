@@ -961,7 +961,7 @@ function transcriptSpeakerLabel(generation, speakerId) {
 }
 
 function draftReviewValue(field, value, generation = null) {
-  if (field === "speakerName" && value === "") return t("Khôi phục tên mặc định");
+  if (field === "speakerName" && value === "") return t("Đặt lại tên");
   if (field === "speakerAssignment") return transcriptSpeakerLabel(generation, value);
   return value;
 }
@@ -1171,7 +1171,7 @@ function renderTranscriptDraftRecovery(transcription, shownId) {
       const current = transcription && transcription.generation;
       const draft = transcriptDraft(entry.generationId, "speakerAddName", "speaker-add-name");
       apply.disabled = !speakerAddRecoveryReady(current, draft);
-      apply.textContent = t("Thêm vào transcript hiện tại");
+      apply.textContent = t("Thêm vào transcript");
       const status = document.createElement("span");
       status.className = "transcript-speaker-add-draft-status";
       status.setAttribute("role", "status");
@@ -1283,7 +1283,7 @@ function buildSpeakerRenameForm(generation, speaker, draft) {
   clear.dataset.speakerId = speaker.speaker_id;
   clear.dataset.generationId = generation.id;
   clear.dataset.transcriptMutation = "true";
-  clear.textContent = t("Khôi phục tên mặc định");
+  clear.textContent = t("Đặt lại tên");
   const status = document.createElement("p");
   status.className = "speaker-form-status";
   status.dataset.speakerStatus = speaker.speaker_id;
@@ -1671,7 +1671,7 @@ function createAssignmentDraftReview(generation, segment, draft, editable) {
     apply.dataset.segmentId = segment.id;
     apply.dataset.transcriptMutation = "true";
     apply.disabled = Boolean(draft.conflictCode) || Boolean(tstate().mutation);
-    apply.textContent = t("Áp dụng lại lựa chọn");
+    apply.textContent = t("Áp dụng lại");
     const status = document.createElement("span");
     status.className = "transcript-assignment-draft-status";
     status.setAttribute("role", "status");
@@ -2322,13 +2322,13 @@ function renderTranscription(transcription) {
 
   startButton.hidden = view.active;
   startButton.disabled = view.requestBusy || sourceMutationUnavailable() || Boolean(view.model && view.model.blocked);
-  startButton.textContent = generation ? t("Chạy lại bản ghi") : t("Bắt đầu chép lời");
+  startButton.textContent = generation ? t("Chạy lại") : t("Chép lời");
   // The first run is the decisive action; running again over a transcript is not.
   startButton.classList.toggle("primary-button", !generation);
   startButton.classList.toggle("secondary-button", Boolean(generation));
   cancelButton.hidden = !view.active;
   cancelButton.disabled = view.cancelDisabled;
-  cancelButton.textContent = view.stopping ? t("Đang dừng…") : t("Hủy chép lời");
+  cancelButton.textContent = view.stopping ? t("Đang dừng…") : t("Hủy");
   renderTaskProgress(view.progress, task);
   measurements.hidden = !task;
   renderTaskError(view);
@@ -2340,7 +2340,7 @@ function renderTranscription(transcription) {
       ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
       : modelBlocked
         ? t("Bản ghi đã lưu.")
-        : t("Bản ghi đã lưu. Bấm “Bắt đầu chép lời” khi bạn muốn chạy nhận dạng local.");
+        : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local.");
   } else {
     const statusText = {
       accepted: t("Tác vụ đã được nhận. Worker sẽ bắt đầu xử lý."),
@@ -2609,7 +2609,7 @@ $("#transcript-generation").addEventListener("submit", (event) => {
     });
   }
 });
-// A speaker choice, from the select of an open row or from "Áp dụng lại lựa chọn" under a draft.
+// A speaker choice, from the select of an open row or from "Áp dụng lại" under a draft.
 function dispatchAssignment(select, reviewed) {
   dispatch({
     type: "transcript/assignment-chosen",

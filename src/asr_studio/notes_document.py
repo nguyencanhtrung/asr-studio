@@ -1047,8 +1047,23 @@ def validate_document(
 
 
 def _markdown(value: str) -> str:
-    # Provider text is content, never an authority for links, HTML or Markdown syntax.
-    return re.sub(r"([\\`*_{}\[\]<>()#!|~+\-.>])", r"\\\1", " ".join(value.split()))
+    """Provider text is content, never an authority for links, HTML or Markdown syntax.
+
+    Only characters that would act as syntax are escaped, so "up-to-date" and "~100" stay as
+    written.
+    """
+    text = re.sub(r"[\\`*\[\]<]", r"\\\g<0>", " ".join(value.split()))
+    # `_` opens emphasis only at a word edge; "snake_case" stays as written.
+    text = re.sub(r"(?<![^\W_])_|_(?![^\W_])", r"\\_", text)
+    # A pair of tildes is GFM strikethrough; a lone "~100" is plain text.
+    if text.count("~") > 1:
+        text = text.replace("~", "\\~")
+    # GFM turns bare URLs and e-mail addresses into links; one escape breaks each pattern.
+    text = re.sub(r"(?i)\b(https?|ftp|mailto|www)([:.])", r"\1\\\2", text)
+    text = re.sub(r"@(?=[\w-]+\.)", r"\\@", text)
+    # The text follows "- ", where a leading "#", ">", "-", "+" or "1." would open a block.
+    text = re.sub(r"^[#>]|^[-+](?= |$)", r"\\\g<0>", text)
+    return re.sub(r"^(\d+)([.)])(?= |$)", r"\1\\\2", text)
 
 
 def timestamp(seconds: float) -> str:

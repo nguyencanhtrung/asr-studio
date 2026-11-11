@@ -351,7 +351,7 @@ def test_transcript_controls_share_rows_before_stacking(live, signed_in, width):
     page.goto(f"{live.url}/meetings/{meeting_id}#transcript")
     page.locator("#meeting-tab-transcript").click()
     expect(page.locator("#transcription-panel")).to_be_visible(timeout=10_000)
-    expect(page.get_by_role("button", name="Chạy lại bản ghi")).to_be_visible()
+    expect(page.get_by_role("button", name="Chạy lại")).to_be_visible()
 
     # The model selector is conditional in the product, so expose it here to exercise both
     # columns and make one help text wrap independently of the other.
@@ -397,7 +397,7 @@ def test_transcript_controls_share_rows_before_stacking(live, signed_in, width):
 @pytest.mark.browser
 @pytest.mark.parametrize(
     ("language", "labels"),
-    [("vi", ("Ngôn ngữ gợi ý", "Model ASR")), ("en", ("Language hint", "ASR model"))],
+    [("vi", ("Gợi ý ngôn ngữ", "Model ASR")), ("en", ("Language hint", "ASR model"))],
 )
 @pytest.mark.parametrize("width", [1280, 390])
 def test_transcript_row_labels_are_short_and_clear_of_their_selects(
@@ -421,6 +421,30 @@ def test_transcript_row_labels_are_short_and_clear_of_their_selects(
             name.bounding_box()["y"] + name.bounding_box()["height"]
         )
         assert 6 <= gap <= 9, (select, gap)
+    if width >= 1100:
+        button = page.locator(".transcription-actions > button:visible").first.bounding_box()
+        select = page.locator("#transcription-language").bounding_box()
+        assert abs(button["y"] - select["y"]) <= 1, (button, select)
+        assert abs(button["height"] - select["height"]) <= 1, (button, select)
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("width", [1280, 390])
+def test_create_dialog_date_and_language_controls_share_a_top_edge(live, signed_in, width):
+    _context, page = signed_in(viewport={"width": width, "height": 900})
+    page.locator("[data-open-meeting-dialog]:visible").first.click()
+    expect(page.locator("#recording-file")).to_be_enabled(timeout=10_000)
+    page.wait_for_function("() => document.getAnimations().every((a) => a.playState !== 'running')")
+    date = page.locator("#meeting-date-input").bounding_box()
+    options = page.locator("#meeting-form .language-options").bounding_box()
+    if width >= 1100:
+        assert abs(date["y"] - options["y"]) <= 1, (date, options)
+    for label, box in (
+        ("label[for='meeting-date-input']", date),
+        ("#meeting-form .language-field legend", options),
+    ):
+        name = page.locator(label).bounding_box()
+        assert 6 <= box["y"] - (name["y"] + name["height"]) <= 9, label
 
 
 @pytest.mark.browser
