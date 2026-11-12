@@ -138,6 +138,12 @@ def test_isolated_compose_removes_ports_build_and_pull_policy_without_changing_v
                 "build": {"context": "."},
                 "volumes": ["project_data:/var/lib/asr-studio/data"],
             },
+            "notes-service": {
+                "image": "example.invalid/asr:test",
+                "build": {"context": "."},
+                "pull_policy": "never",
+                "volumes": ["project_data:/var/lib/asr-studio/data"],
+            },
         },
         "volumes": {"data": {"name": "project_data"}},
     }
@@ -148,6 +154,12 @@ def test_isolated_compose_removes_ports_build_and_pull_policy_without_changing_v
     assert isolated["services"]["app"]["ports"] == []
     assert "build" not in isolated["services"]["app"]
     assert "build" not in isolated["services"]["worker"]
+    assert "build" not in isolated["services"]["notes-service"]
+    assert "pull_policy" not in isolated["services"]["notes-service"]
+    assert (
+        isolated["services"]["notes-service"]["volumes"]
+        == original["services"]["notes-service"]["volumes"]
+    )
     assert "pull_policy" not in isolated["services"]["app"]
     assert isolated["networks"]["default"]["internal"] is True
     assert isolated["volumes"] == original["volumes"]
@@ -180,6 +192,7 @@ def test_resolved_compose_uses_gpu_overlay_and_offline_config_keeps_device_reque
                 "volumes": ["auth:/var/lib/asr-studio/auth"],
                 "environment": {"ASR_PUBLIC_URL": harness.base_url},
             },
+            "notes-service": {"image": options.image},
             "worker": {
                 "image": options.image,
                 "build": {"context": "."},
@@ -1354,3 +1367,60 @@ def test_transcription_failure_is_not_masked_by_observer_cleanup(monkeypatch, ta
 
     assert error.value is (primary if task_fails else secondary)
     assert bool(messages) is task_fails
+
+
+def test_isolated_phase_starts_notes_service_and_checks_its_egress(monkeypatch, tmp_path):
+    harness = object.__new__(offline_smoke.SmokeHarness)
+    harness.options = type("Options", (), {"startup_timeout": 30})()
+    harness.isolated_config_path = tmp_path / "isolated.json"
+    harness.port = 18764
+    harness.evidence = {"checks": {}}
+    harness.log = lambda *_: None
+    harness._write_isolated_compose = lambda: harness.isolated_config_path
+    harness._verify_owned_resources = lambda: None
+    commands = []
+    harness.compose = lambda *args, **_kwargs: commands.append(args)
+    harness._app_container_ip = lambda _: "127.0.0.1"
+    harness._wait_ready = lambda **_: None
+    probed = []
+
+    def container_python(service, *_args, **_kwargs):
+        probed.append(service)
+        return {"blocked": True}
+
+    harness.container_python = container_python
+
+    class Relay:
+        def __init__(self, *_args):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(offline_smoke, "LoopbackRelay", Relay)
+
+    harness._create_isolated_phase()
+
+    up = next(command for command in commands if command[0] == "up")
+    assert {"app", "worker", "notes-service"} <= set(up)
+    assert "model-installer" not in up
+    assert set(probed) == {"app", "worker", "notes-service"}
+    assert harness.evidence["checks"]["container_egress_denied"] == "pass"
+
+
+def test_restart_lifecycle_includes_notes_service():
+    harness = object.__new__(offline_smoke.SmokeHarness)
+    harness.options = type("Options", (), {"startup_timeout": 30})()
+    harness.evidence = {"checks": {}}
+    harness.log = lambda *_: None
+    snapshot = {"provider_fixture": {"synthetic": True}, "session_valid": True}
+    harness._semantic_snapshot = lambda *_: snapshot
+    harness._wait_ready = lambda **_: None
+    commands = []
+    harness.compose = lambda *args, **_kwargs: commands.append(args)
+
+    harness._restart_lifecycle(object(), "synthetic-meeting")
+
+    for command in commands:
+        assert {"app", "worker", "notes-service"} <= set(command)
+    assert harness.evidence["checks"]["restart_and_recreate_persistence"] == "pass"

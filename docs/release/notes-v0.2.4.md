@@ -6,6 +6,7 @@
 - Align form controls and shorten Vietnamese and English labels and help text. [#191](https://github.com/nguyencanhtrung/asr-studio/pull/191)
 - Keep ordinary punctuation readable in generated notes while escaping active Markdown syntax. [#191](https://github.com/nguyencanhtrung/asr-studio/pull/191)
 - Clarify that the old `asr-en-vi` image is no longer published. Historical tags can still be built from source. [#187](https://github.com/nguyencanhtrung/asr-studio/pull/187)
+- Include `notes-service` in the offline installation smoke's startup, restart and network checks. The smoke pauses the notes service while seeding its synthetic fixture.
 
 ## Upgrade
 
