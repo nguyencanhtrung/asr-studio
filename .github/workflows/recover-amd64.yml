@@ -1,0 +1,190 @@
+name: Recover amd64 release
+
+"on":
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      verified_run:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  RECOVERY_TAG: ${{ inputs.release_tag }}
+  VERIFIED_RUN: ${{ inputs.verified_run }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Check out recovery tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tools
+      - name: Check out frozen application tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          path: source
+      - name: Require verified frozen source and completed arm64 publication
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/scripts/check-release-recovery.py --tag "${RECOVERY_TAG}" --run "${VERIFIED_RUN}" --repository "${GITHUB_REPOSITORY}" --source source > "${RUNNER_TEMP}/recovery-context.json"
+          jq -r '"sha=" + .sha, "schema=" + (.schema|tostring), "version=" + .version' "${RUNNER_TEMP}/recovery-context.json" >> "${GITHUB_OUTPUT}"
+      - name: Restore the verified arm64 digest
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: digest-arm64
+          path: ${{ runner.temp }}/arm64-digest
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.verified_run }}
+      - name: Validate the retained digest
+        id: arm64
+        env:
+          ARM_DIGEST_DIR: ${{ runner.temp }}/arm64-digest
+        run: |
+          python3 - <<'PY' >> "${GITHUB_OUTPUT}"
+          import os,re
+          from pathlib import Path
+          files=[p for p in Path(os.environ["ARM_DIGEST_DIR"]).rglob("*") if p.is_file()]
+          assert len(files)==1 and re.fullmatch("[0-9a-f]{64}", files[0].name)
+          print("digest=sha256:"+files[0].name)
+          PY
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Require the versioned manifest to be unpublished
+        run: |
+          if docker buildx imagetools inspect "${IMAGE_NAME}:${RECOVERY_TAG}" > "${RUNNER_TEMP}/existing-manifest" 2> "${RUNNER_TEMP}/manifest-error"; then
+            echo "The versioned manifest already exists; recovery stops." >&2
+            exit 1
+          fi
+          grep -Eq 'not found|manifest unknown' "${RUNNER_TEMP}/manifest-error"
+      - name: Build frozen amd64 candidate
+        id: candidate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: source
+          platforms: linux/amd64
+          load: true
+          tags: asr-recovery:candidate
+          build-args: VCS_REF=${{ steps.context.outputs.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.context.outputs.sha }}
+            org.opencontainers.image.version=${{ inputs.release_tag }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=container
+      - name: Collect and publish exact corresponding source
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_METADATA: ${{ steps.candidate.outputs.metadata }}
+        run: |
+          cp ../tools/scripts/collect-release-sources.py scripts/collect-release-sources.py
+          config_digest=$(jq -er '."containerimage.config.digest" | select(test("^sha256:[0-9a-f]{64}$"))' <<< "${CANDIDATE_METADATA}")
+          output="${RUNNER_TEMP}/recovery-sources"
+          for attempt in 1 2 3; do
+            if python3 scripts/prepare-release-bundle.py asr-recovery:candidate --version "${RECOVERY_TAG#v}" --platform amd64 --config-digest "${config_digest}" --output "${output}"; then
+              break
+            fi
+            if [ "${attempt}" -eq 3 ]; then exit 1; fi
+            sleep 2
+          done
+          name="corresponding-source-amd64-${config_digest#sha256:}.tar.gz"
+          mv "${output}/corresponding-source.tar.gz" "${output}/${name}"
+          (cd "${output}" && sha256sum "${name}" > "${name}.sha256")
+          test "$(gh release view "${RECOVERY_TAG}" --json isDraft --jq .isDraft)" = false
+          gh release upload "${RECOVERY_TAG}" "${output}/${name}" "${output}/${name}.sha256"
+          curl --fail --location --retry 3 "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RECOVERY_TAG}/${name}.sha256" --output "${output}/public.sha256"
+          cmp "${output}/${name}.sha256" "${output}/public.sha256"
+          git diff --exit-code -- Dockerfile pyproject.toml README.md LICENSE uv.lock src scripts/build-lgpl-media.sh scripts/use-system-openmp.py third_party/notices third_party/platform-coverage.json
+      - name: Push frozen amd64 image by digest
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: source
+          platforms: linux/amd64
+          build-args: VCS_REF=${{ steps.context.outputs.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.context.outputs.sha }}
+            org.opencontainers.image.version=${{ inputs.release_tag }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=container
+          provenance: mode=max
+          sbom: true
+      - name: Verify anonymously pulled amd64 image
+        working-directory: source
+        env:
+          PUBLISHED_DIGEST: ${{ steps.image.outputs.digest }}
+          SOURCE_SHA: ${{ steps.context.outputs.sha }}
+          SOURCE_SCHEMA: ${{ steps.context.outputs.schema }}
+          CANDIDATE_METADATA: ${{ steps.candidate.outputs.metadata }}
+        run: |
+          image="${IMAGE_NAME}@${PUBLISHED_DIGEST}"
+          anonymous_config=$(mktemp -d)
+          trap 'rm -rf "${anonymous_config}"' EXIT
+          DOCKER_CONFIG="${anonymous_config}" docker pull "${image}"
+          config=$(python3 scripts/resolve-image-config.py --repository "${GITHUB_REPOSITORY}" --published-digest "${PUBLISHED_DIGEST}" --platform amd64 | jq -er .config_digest)
+          test "${config}" = "$(jq -er '."containerimage.config.digest"' <<< "${CANDIDATE_METADATA}")"
+          docker run --rm --pull=never --network none --entrypoint python "${image}" -m asr_studio.cli version --json --expect-version "${RECOVERY_TAG#v}" --expect-schema "${SOURCE_SCHEMA}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" = "${SOURCE_SHA}"
+          ./scripts/container-smoke.sh "${image}"
+      - name: Publish verified multi-platform manifest
+        id: manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARM64_DIGEST: ${{ steps.arm64.outputs.digest }}
+          AMD64_DIGEST: ${{ steps.image.outputs.digest }}
+          SOURCE_SHA: ${{ steps.context.outputs.sha }}
+        run: |
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${VERIFIED_RUN}" --jq '.status + "/" + .conclusion')" = completed/failure
+          git -C source fetch origin "refs/tags/${RECOVERY_TAG}:refs/tags/${RECOVERY_TAG}"
+          test "$(git -C source rev-parse "refs/tags/${RECOVERY_TAG}^{commit}")" = "${SOURCE_SHA}"
+          if docker buildx imagetools inspect "${IMAGE_NAME}:${RECOVERY_TAG}" > "${RUNNER_TEMP}/existing-manifest" 2> "${RUNNER_TEMP}/manifest-error"; then
+            echo "The versioned manifest appeared during recovery; publication stops." >&2
+            exit 1
+          fi
+          grep -Eq 'not found|manifest unknown' "${RUNNER_TEMP}/manifest-error"
+          version="${RECOVERY_TAG#v}"
+          minor="${version%.*}"
+          docker buildx imagetools create -t "${IMAGE_NAME}:${RECOVERY_TAG}" -t "${IMAGE_NAME}:${version}" -t "${IMAGE_NAME}:${minor}" -t "${IMAGE_NAME}:latest" -t "${IMAGE_NAME}:sha-${SOURCE_SHA}" --metadata-file "${RUNNER_TEMP}/recovered-manifest.json" "${IMAGE_NAME}@${AMD64_DIGEST}" "${IMAGE_NAME}@${ARM64_DIGEST}"
+          digest=$(jq -er '."containerimage.descriptor".digest' "${RUNNER_TEMP}/recovered-manifest.json")
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Attest recovered manifest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+      - name: Retain exact recovery reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recovered-release-evidence
+          path: |
+            ${{ runner.temp }}/recovery-context.json
+            ${{ runner.temp }}/recovery-sources/runtime-inventory.json
+            ${{ runner.temp }}/recovery-sources/source-artifacts/source-manifest.json
+            ${{ runner.temp }}/recovered-manifest.json
+          if-no-files-found: warn
+          retention-days: 7

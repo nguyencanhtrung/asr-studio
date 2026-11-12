@@ -2,6 +2,16 @@ name: Pipeline
 
 "on":
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Latest stable tag whose amd64 publication failed
+        required: true
+        type: string
+      verified_run:
+        description: Tag pipeline run with successful quality, native checks and arm64 publication
+        required: true
+        type: string
   push:
     branches:
       - main
@@ -12,8 +22,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: pipeline-${{ github.ref }}
-  cancel-in-progress: true
+  group: pipeline-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
@@ -23,6 +33,7 @@ env:
 jobs:
   quality:
     name: Quality and browser tests
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     # Media setup plus the complete browser suite exceeded the former 30-minute job cap.
     timeout-minutes: 45
@@ -73,6 +84,7 @@ jobs:
 
   container:
     name: Build container (${{ matrix.platform }})
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -319,3 +331,17 @@ jobs:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
+
+  recover-amd64:
+    name: Recover interrupted amd64 publication
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/recover-amd64.yml
+    with:
+      release_tag: ${{ inputs.release_tag }}
+      verified_run: ${{ inputs.verified_run }}
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+      attestations: write
+      id-token: write

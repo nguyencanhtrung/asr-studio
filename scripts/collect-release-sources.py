@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from time import sleep as retry_sleep
 
 DEFAULT_TIMEOUT = 180
 SUITES = {
@@ -96,7 +97,7 @@ def request_for(url: str) -> urllib.request.Request:
     )
 
 
-def download_checked(
+def _download_checked_once(
     url: str,
     destination: Path,
     expected_sha256: str | None,
@@ -131,6 +132,29 @@ def download_checked(
         "bytes": destination.stat().st_size,
         "validated": bool(expected_sha256 and actual == expected_sha256),
     }
+
+
+def download_checked(
+    url: str,
+    destination: Path,
+    expected_sha256: str | None,
+    *,
+    offline: bool,
+) -> dict[str, object]:
+    attempt = 1
+    while True:
+        try:
+            return _download_checked_once(url, destination, expected_sha256, offline=offline)
+        except CollectionError as error:
+            cause = error.__cause__
+            retryable = isinstance(cause, (urllib.error.URLError, TimeoutError, ConnectionError))
+            if isinstance(cause, urllib.error.HTTPError):
+                retryable = cause.code in {408, 429, 500, 502, 503, 504}
+            if not retryable or attempt >= 3:
+                raise
+            print(f"Retrying source download ({attempt + 1}/3): {url}", file=sys.stderr)
+            retry_sleep(attempt)
+            attempt += 1
 
 
 def load_json(path: Path) -> dict:
@@ -809,6 +833,8 @@ def main() -> int:
             {"status": manifest["status"], "blockers": len(manifest["blockers"])}, sort_keys=True
         )
     )
+    for blocker in manifest["blockers"]:
+        print(f"Source collection blocked: {blocker}", file=sys.stderr)
     if manifest["blockers"] and not args.allow_unresolved:
         return 2
     return 0

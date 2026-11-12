@@ -129,3 +129,22 @@ def test_vendored_library_is_the_unmodified_upstream_file_with_its_license():
         encoding="utf-8"
     )
     assert "web/vendor/mediabunny/*" in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_system_only_inventory_does_not_require_an_installed_application(monkeypatch, capsys):
+    def unexpected_application_lookup(*_args):
+        raise AssertionError("System inventory must not inspect Python application packages")
+
+    monkeypatch.setattr(
+        inventory.importlib.metadata, "distributions", unexpected_application_lookup
+    )
+    monkeypatch.setattr(inventory.importlib.metadata, "distribution", unexpected_application_lookup)
+    packages = [{"name": "libexample1", "version": "1.0", "source_package": "example"}]
+    monkeypatch.setattr(inventory, "system_packages", lambda: packages)
+
+    inventory.main(system_only=True)
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["system_packages"] == packages
+    assert report["python_packages"] == []
+    assert "system" in report["scope"].lower()

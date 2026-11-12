@@ -66,6 +66,23 @@ Use the [bundle instructions](../../third_party/README.md) for manual collection
 Keep configuration digests separate from registry manifest digests.
 A local image ID does not identify a registry manifest.
 
+When source collection fails, read each blocker in the CLI output and retain
+`source-manifest.json`. Transient HTTP and connection failures retry at most three
+times. Retries preserve checksum validation and discard interrupted partial files.
+The `Release source probe` workflow collects the same system
+package sources from the `python-base` stage without building the application.
+Select the source tag or commit when running it manually. Its report artifact contains
+the inventory and source manifest; it does not publish an image.
+
+For an interrupted amd64 publication with arm64 already verified, run `Pipeline`
+manually on the current tools revision. Set `release_tag` to the immutable stable
+tag and `verified_run` to its failed tag-pipeline run ID. Recovery requires successful
+quality, native-platform and arm64 publication jobs for that exact commit. It uses
+the current collector with the frozen application checkout, publishes source before
+the replacement image, and compares the published configuration digest with the
+candidate. It stops if the versioned manifest already exists. The retained arm64
+digest is combined with the verified amd64 digest only after these checks pass.
+
 Record fresh installation evidence for source and image delivery.
 Use `scripts/offline-smoke.py --mode source` and `--mode pull` from the release tag.
 Use separate evidence directories for the two runs.

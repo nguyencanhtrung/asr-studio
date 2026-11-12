@@ -1,0 +1,58 @@
+name: Release source probe
+
+"on":
+  pull_request:
+    paths:
+      - scripts/collect-release-sources.py
+      - third_party/bundle-spec.json
+      - .github/workflows/source-probe.yml
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Source tag or commit to inspect
+        required: true
+        default: v0.2.4
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sources:
+    name: Inspect amd64 corresponding source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out collection tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tools
+      - name: Check out application source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || 'v0.2.4' }}
+          path: source
+      - name: Build the exact system package layer
+        run: docker build --target python-base --tag asr-source-probe:base source
+      - name: Collect source with blocker details
+        run: |
+          mkdir -p "${RUNNER_TEMP}/source-probe"
+          docker run --rm --network none --entrypoint python3 -i asr-source-probe:base - --system-only \
+            < tools/scripts/release-inventory.py > "${RUNNER_TEMP}/source-probe/inventory.json"
+          python3 tools/scripts/collect-release-sources.py --repo-root source \
+            --inventory "${RUNNER_TEMP}/source-probe/inventory.json" \
+            --artifact-root "${RUNNER_TEMP}/source-probe/artifacts"
+      - name: Retain the source failure report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-probe-report
+          path: |
+            ${{ runner.temp }}/source-probe/inventory.json
+            ${{ runner.temp }}/source-probe/artifacts/source-manifest.json
+          if-no-files-found: warn
+          retention-days: 7
