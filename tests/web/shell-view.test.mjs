@@ -19,7 +19,7 @@ const CORES = ["shell-core.js", "provider-core.js", "notes-core.js", "history-co
 // scripts that load without type="module" (they run before first paint and share their binding as a page global).
 const EXCEPTIONS = {
   "store.js": { reason: "the runner: fetch, timers, storage and XHR arrive as injected dependencies", top: ["createStore", "combine", "createRunner"], classic: false },
-  "audio-extract.js": { reason: "browser adapter: the vendored media library behind the runner's extract dependency, loaded on the first video", top: ["fail", "TARGETS", "extractAudio"], classic: false },
+  "audio-extract.js": { reason: "browser adapter: local metadata reads and audio extraction behind runner dependencies, loaded on the first video", top: ["fail", "TARGETS", "findBox", "movieCreationDate", "plausibleDate", "recordingDateFromFile", "readRecordingDate", "extractAudio"], classic: false },
   "i18n.js": { reason: "classic script: t() and UI_LOCALE are read-only page bindings that every module and the markup need before any module runs", top: ["t", "UI_LOCALE"], classic: true },
   "theme.js": { reason: "classic script: applies the theme before first paint, no module can run that early", top: [], classic: true },
 };

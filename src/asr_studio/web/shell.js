@@ -23,6 +23,7 @@ const selectedFileName = document.querySelector("#selected-file-name");
 const selectedFileSize = document.querySelector("#selected-file-size");
 const titleInput = document.querySelector("#meeting-name");
 const dateInput = document.querySelector("#meeting-date-input");
+const dateHelp = document.querySelector("#meeting-date-help");
 const autoTranscribeInput = document.querySelector("#auto-transcribe");
 const asrModelControl = document.querySelector("#create-asr-model-control");
 const asrModelInput = document.querySelector("#create-asr-model");
@@ -108,6 +109,11 @@ function render(state) {
   // Typing already matches the state, so only a programmatic change touches the inputs.
   setProp(titleInput, "value", state.form.title);
   setProp(dateInput, "value", state.form.date);
+  setProp(dateHelp, "textContent", state.dateReading
+    ? t("Đang đọc ngày từ metadata file trên máy…")
+    : state.autoDate
+      ? t("Ngày từ metadata file. Bạn có thể sửa.")
+      : t("Tự điền từ metadata nếu có; bạn có thể nhập hoặc sửa ngày."));
   for (const input of languageInputs) setProp(input, "checked", input.value === state.form.language);
   setProp(autoTranscribeInput, "checked", state.form.autoTranscribe);
   for (const input of [titleInput, dateInput, autoTranscribeInput, ...languageInputs]) setProp(input, "disabled", view.fieldsDisabled);
@@ -155,6 +161,20 @@ const run = createRunner({
   now: () => Date.now(),
   // The extractor (and the vendored library behind it) loads on the first video, not with the page.
   extract: async (file, options) => (await import("./audio-extract.js")).extractAudio(file, options),
+  calls: {
+    "read-recording-date": async (file) => {
+      let timer;
+      try {
+        // Include module loading in the deadline: metadata is optional even on a stalled connection.
+        return await Promise.race([
+          import("./audio-extract.js").then((module) => module.readRecordingDate(file)),
+          new Promise((resolve) => { timer = window.setTimeout(() => resolve(null), 3000); }),
+        ]);
+      } finally {
+        window.clearTimeout(timer);
+      }
+    },
+  },
 });
 const store = createStore({ reduce, initialState, run });
 const { dispatch } = store;
@@ -226,7 +246,8 @@ asrModelInput.addEventListener("change", () => {
 
 const editForm = () => dispatch({ type: "shell/form-edited", form: readForm() });
 titleInput.addEventListener("input", editForm);
-dateInput.addEventListener("change", editForm);
+dateInput.addEventListener("input", () => dispatch({ type: "shell/form-edited", form: readForm(), dateEdited: true }));
+dateInput.addEventListener("change", () => dispatch({ type: "shell/form-edited", form: readForm(), dateEdited: true }));
 for (const input of languageInputs) input.addEventListener("change", editForm);
 
 dialog.addEventListener("cancel", (event) => {

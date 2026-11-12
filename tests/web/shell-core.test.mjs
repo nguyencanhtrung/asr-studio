@@ -57,7 +57,7 @@ test("server error details are resolved by code instead of leaking raw English",
 });
 
 // Real store and runner over fakes: requests wait in `calls` until a test answers them.
-function setup() {
+function setup({ readDate = () => null } = {}) {
   const calls = [];
   const fetch = (url, init) =>
     new Promise((resolve, reject) => {
@@ -108,6 +108,7 @@ function setup() {
     return timer;
   };
   const run = createRunner({
+    calls: { "read-recording-date": readDate },
     extract,
     fetch,
     setTimeout,
@@ -1114,6 +1115,93 @@ test("auto-transcribe off: a completed create writes no handoff key", async () =
 // Video upload: the browser cuts the audio out first (effect "extract"), then the usual upload sends that audio.
 const VIDEO = { name: "Weekly sync.mp4", size: 900 };
 const AUDIO = { name: "Weekly sync.m4a", size: 60 };
+
+test("a local metadata read fills the date before any upload and sends it with the meeting", async () => {
+  let finish;
+  const env = setup({ readDate: (file) => {
+    assert.equal(file, VIDEO);
+    return new Promise((resolve) => { finish = resolve; });
+  } });
+  await selected(env, VIDEO);
+  assert.equal(env.state().dateReading, true);
+  assert.equal(canSubmit(env.state()), false);
+  env.store.dispatch({ type: "shell/submit-requested" });
+  await tick();
+  assert.equal(env.calls.filter((call) => call.method === "POST").length, 0);
+  assert.equal(env.extracts.length, 0);
+  finish("2026-10-14");
+  await tick();
+  assert.equal(env.state().form.date, "2026-10-14");
+  assert.equal(env.state().autoDate, "2026-10-14");
+  env.store.dispatch({ type: "shell/submit-requested" });
+  await tick();
+  env.extracts[0].resolve(AUDIO);
+  await tick();
+  await env.answer(env.is("POST", "/api/uploads"), 201, { id: "u1" });
+  assert.equal(env.xhrs[0].body, AUDIO);
+  Object.assign(env.xhrs[0], { status: 204, responseText: "" });
+  env.xhrs[0].onload();
+  await tick();
+  await env.answer(env.is("POST", "/complete"), 200, { status: "ready" });
+  const create = env.calls.find(env.is("POST", "/api/meetings"));
+  assert.equal(JSON.parse(create.init.body).meeting_date, "2026-10-14");
+});
+
+test("metadata never overwrites a manual date or a date cleared during the read", async () => {
+  for (const date of ["2026-10-15", ""]) {
+    let finish;
+    const env = setup({ readDate: () => new Promise((resolve) => { finish = resolve; }) });
+    await selected(env, VIDEO);
+    env.store.dispatch({ type: "shell/form-edited", form: { ...env.form, date }, dateEdited: true });
+    finish("2026-10-14");
+    await tick();
+    assert.equal(env.state().dateReading, false);
+    assert.equal(env.state().form.date, date);
+    assert.equal(env.state().autoDate, null);
+  }
+});
+
+test("a new file clears the old suggested date but preserves a manual one", async () => {
+  const env = setup({ readDate: () => "2026-10-14" });
+  await selected(env, VIDEO);
+  await tick();
+  env.store.dispatch({ type: "shell/file-selected", file: FILE });
+  assert.equal(env.state().form.date, "");
+  env.store.dispatch({ type: "shell/form-edited", form: { ...env.form, date: "2026-10-15" } });
+  env.store.dispatch({ type: "shell/file-selected", file: VIDEO });
+  await tick();
+  assert.equal(env.state().form.date, "2026-10-15");
+});
+
+test("old metadata replies are ignored after replacement or closing and reopening", async () => {
+  const pending = [];
+  const env = setup({ readDate: () => new Promise((resolve) => pending.push(resolve)) });
+  await selected(env, VIDEO);
+  const oldRequest = env.state().dateRequest;
+  env.store.dispatch({ type: "shell/file-selected", file: { ...VIDEO, name: "other.mp4" } });
+  pending[0]("2026-10-14");
+  await tick();
+  assert.equal(env.state().dateReading, true);
+  assert.equal(env.state().form.date, "");
+  env.store.dispatch({ type: "shell/recording-date-read", value: "2026-10-14", meta: { id: oldRequest } });
+  assert.equal(env.state().form.date, "");
+  env.store.dispatch({ type: "shell/dialog-close-requested" });
+  await opened(env);
+  pending[1]("2026-10-15");
+  await tick();
+  assert.equal(env.state().form.date, "");
+});
+
+test("missing, invalid and unreadable metadata leave upload available", async () => {
+  for (const readDate of [() => null, () => "2026-02-30", () => { throw new Error("unreadable"); }]) {
+    const env = setup({ readDate });
+    await selected(env, VIDEO);
+    await tick();
+    assert.equal(env.state().dateReading, false);
+    assert.equal(env.state().form.date, "");
+    assert.equal(canSubmit(env.state()), true);
+  }
+});
 
 async function extracting(env) {
   await selected(env, VIDEO);

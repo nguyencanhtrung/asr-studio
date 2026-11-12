@@ -340,7 +340,7 @@ Khi checkbox **Chép lời ngay sau khi tạo** bật, dưới checkbox hiện s
 | `phase` | Nghĩa | Vào bằng | Nút/trường |
 | --- | --- | --- | --- |
 | `idle` | chưa chọn file, chính sách đã tải | `policy-loaded` | chọn file được |
-| `selected` | file hợp lệ đã chọn, hoặc đang chuẩn bị slot upload | `file-selected`, bắt đầu lượt mới | tạo được nếu form hợp lệ |
+| `selected` | file hợp lệ đã chọn, hoặc đang chuẩn bị slot upload | `file-selected`, bắt đầu lượt mới | tạo được nếu form hợp lệ và đã đọc xong metadata ngày |
 | `extracting` | trình duyệt tách audio khỏi video `.mp4`/`.mov`/`.webm`, có tiến độ; chưa có slot upload | `submit-requested` (sau khi dọn upload cũ) | khóa form; hiện nút hủy |
 | `uploading` | đang truyền byte, có tiến độ | `upload-created` | khóa form; hiện nút hủy |
 | `checking` | server kiểm tra file, có thể kéo dài; client giữ upload khi response complete mơ hồ | `upload-sent`, phục hồi từ lỗi complete, `recheck` | khóa form; hiện nút hủy |
@@ -362,7 +362,10 @@ Cờ bổ sung: `checkingSince` (mốc `action.now` đầu tiên khi server ki�
 | mở | `policy-load-failed` | `error`, `policyFailed` | |
 | mở | `policy-*` hoặc `asr-models-*` với id cũ | không đổi | |
 | mở | `asr-models-load-failed` | giữ `asrModels = null`, ẩn control; tạo meeting vẫn được | |
-| không bận | `file-selected` hợp lệ | `selected` | `fetch` DELETE upload cũ và các upload chờ dọn |
+| không bận | `file-selected` hợp lệ | `selected`, xóa ngày tự gợi ý của file trước; giữ ngày nhập tay | hủy `shell/recording-date` cũ; DELETE upload cũ và các upload chờ dọn; `call shell/recording-date` với MP4/MOV/M4A/WebM |
+| `selected`, `dateReading` | `recording-date-read` đúng `dateRequest` | hết chờ; điền ngày hợp lệ nếu ô trống và chưa được người dùng sửa | |
+| `selected`, `dateReading` | `recording-date-failed` đúng `dateRequest` | hết chờ; giữ ngày hiện tại, vẫn cho tạo | |
+| bất kỳ | `recording-date-*` với id cũ hoặc dialog đã đóng | không đổi | |
 | không bận | `file-selected` sai đuôi, quá lớn, chưa có chính sách | `error` | như trên |
 | đang bận hoặc tạo không rõ | `file-selected` | không đổi | |
 | có thể tạo | `submit-requested` khi chưa `serverReady` | `selected`, `starting` | DELETE upload cũ, rồi `fetch shell/upload-create` |
@@ -414,7 +417,9 @@ Cờ bổ sung: `checkingSince` (mốc `action.now` đầu tiên khi server ki�
 | checkbox bật, danh mục đã tải | `asr-model-chosen` model ready hoặc `auto` | đổi `form.asrModel` | |
 | checkbox tắt | `asr-model-chosen` | không có control; state giữ lựa chọn cho lần bật lại | |
 
-**Tách audio khỏi video (#117).** Với `.mp4`, `.mov`, `.webm`, trước khi tạo slot upload, `audio-extract.js` đọc file theo luồng và copy gói audio sang file audio-only, không giải mã hay mã hóa lại; mỗi tên file audio giữ phần tên và đổi đuôi. Thư viện là Mediabunny 1.61.6 (MPL-2.0), vendor nguyên bản ở `web/vendor/mediabunny/`, nạp bằng `import()` cùng origin khi gặp video đầu tiên; CSP không đổi (`script-src 'self'`, không `wasm-unsafe-eval`). Hiệu ứng `extract` chạy qua `deps.extract(file, {signal, onProgress})` của runner (core vẫn thuần, test bằng bản giả). Quyết định theo container:
+**Ngày từ metadata file.** Khi chọn MP4/MOV/M4A/WebM hợp lệ, effect `call shell/recording-date` gọi `readRecordingDate(file)` trong `audio-extract.js` ngay trên file gốc của máy người dùng, trước khi tách audio; không tạo upload hay gửi byte media để đọc ngày. Ưu tiên tag `com.apple.quicktime.creationdate` hoặc `DATE_RECORDED` (giữ ngày tại offset ghi trong tag); MP4/MOV/M4A còn đọc ngày tạo trong `moov/mvhd` v0/v1, dùng múi giờ trình duyệt khi header chỉ có UTC. Không lấy `lastModified`, ngày upload hoặc tag ngày phát hành. Bỏ ngày trống, không hợp lệ, mốc epoch và ngày vượt đồng hồ máy hơn một ngày. Hết thời gian chờ metadata thì để trống và vẫn cho tạo. `dateReading` khóa nút tạo trong lúc đọc nhưng vẫn cho nhập; `dateTouched` bảo vệ cả thao tác xóa ngày khi đang đọc, `autoDate` ghi nhận ngày tự điền, `dateRequest` tăng khi chọn file hoặc reset dialog để bỏ kết quả cũ. Dòng trợ giúp cạnh ngày báo nguồn metadata và cho phép sửa. Header được đọc bằng các lát nhỏ, nhảy qua payload theo độ dài box (có giới hạn số box); Mediabunny đọc tag, không giải mã video.
+
+**Tách audio khỏi video (#117).** Với `.mp4`, `.mov`, `.webm`, trước khi tạo slot upload, `audio-extract.js` đọc file theo luồng và copy gói audio sang file audio-only, không giải mã hay mã hóa lại; mỗi tên file audio giữ phần tên và đổi đuôi. Thư viện là Mediabunny 1.61.6 (MPL-2.0), vendor nguyên bản ở `web/vendor/mediabunny/`, nạp bằng `import()` cùng origin khi chọn file đầu tiên cần đọc metadata hoặc tách audio; CSP không đổi (`script-src 'self'`, không `wasm-unsafe-eval`). Hiệu ứng `extract` chạy qua `deps.extract(file, {signal, onProgress})` của runner (core vẫn thuần, test bằng bản giả). Quyết định theo container:
 
 | Nguồn | Audio copy được | File gửi lên | Khác |
 | --- | --- | --- | --- |
