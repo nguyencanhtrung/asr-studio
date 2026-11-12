@@ -67,7 +67,9 @@ Keep configuration digests separate from registry manifest digests.
 A local image ID does not identify a registry manifest.
 
 When source collection fails, read each blocker in the CLI output and retain
-`source-manifest.json`. The `Release source probe` workflow collects the same system
+`source-manifest.json`. Transient HTTP and connection failures retry at most three
+times. Retries preserve checksum validation and discard interrupted partial files.
+The `Release source probe` workflow collects the same system
 package sources from the `python-base` stage without building the application.
 Select the source tag or commit when running it manually. Its report artifact contains
 the inventory and source manifest; it does not publish an image.
