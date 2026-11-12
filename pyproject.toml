@@ -1,6 +1,6 @@
 [project]
 name = "asr-studio"
-version = "0.2.3"
+version = "0.2.4"
 description = "Local-first meeting notes workspace"
 readme = "README.md"
 license = "PolyForm-Noncommercial-1.0.0"

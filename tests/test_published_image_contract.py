@@ -70,7 +70,7 @@ def test_published_image_gate_uses_anonymous_digest_and_stops_on_mismatch(tmp_pa
         "    sys.exit(1 if failure == 'pull' else 0)\n"
         "elif args[0] == 'run':\n"
         "    assert '--pull=never' in args and '--expect-version' in args\n"
-        "    assert args[args.index('--expect-version') + 1] == '0.2.3'\n"
+        "    assert args[args.index('--expect-version') + 1] == '0.2.4'\n"
         "    if failure == 'version': sys.exit(1)\n"
         "    from asr_studio.cli import main\n"
         "    sys.exit(main(args[args.index('-m') + 2:]))\n"
@@ -99,7 +99,7 @@ def test_published_image_gate_uses_anonymous_digest_and_stops_on_mismatch(tmp_pa
             "PUBLISHED_DIGEST": IMAGE.split("@", 1)[1],
             "GITHUB_REPOSITORY": "example/asr",
             "RELEASE_PLATFORM": "amd64",
-            "GITHUB_REF_NAME": "v0.2.3",
+            "GITHUB_REF_NAME": "v0.2.4",
             "GITHUB_SHA": "b" * 40,
             "TRACE": str(trace),
             "RUNNER_TEMP": str(runner_temp),
