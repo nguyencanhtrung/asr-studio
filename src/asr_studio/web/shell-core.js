@@ -265,6 +265,10 @@ export const initialState = {
   fileRefused: false,
   form: { title: "", date: "", language: "", autoTranscribe: true, asrModel: "auto" },
   autoTitle: "",
+  autoDate: null,
+  dateTouched: false,
+  dateReading: false,
+  dateRequest: 0,
   uploadId: null,
   sendFile: null, // what the upload sends: the file itself, or the audio the browser extracted from it
   uploadOffset: 0, // bytes durably committed by the server before the current chunk
@@ -332,6 +336,7 @@ function selectAsrModel(state, disabled) {
 // A valid file and form are enough: the one button uploads and checks first when needed.
 export const canSubmit = (state) =>
   !isActive(state)
+  && !state.dateReading
   && state.phase !== "saved"
   && (
     retryingUncertain(state)
@@ -344,6 +349,7 @@ function guidance(state) {
   if (!state.policy) return t("Đang tải giới hạn file của ứng dụng…");
   if (!state.file) return t("Chọn file, nhập tên và chọn ngôn ngữ để tiếp tục.");
   if (!validFile(state)) return t("Chọn một file hợp lệ để tiếp tục.");
+  if (state.dateReading) return t("Đang đọc ngày từ metadata file trên máy…");
   if (!form.title.trim()) return t("Nhập tên cuộc họp để tiếp tục.");
   if (!form.language) return t("Chọn English hoặc Tiếng Việt để tiếp tục.");
   if (state.validationUncertain) return t("Không thể xác nhận trạng thái file. Upload vẫn được giữ lại; hãy kiểm tra lại hoặc hủy.");
@@ -439,6 +445,7 @@ function fresh(state, patch) {
     runId: state.runId + 1,
     policyRequest: state.policyRequest + 1,
     asrModelsRequest: state.asrModelsRequest + 1,
+    dateRequest: state.dateRequest + 1,
     createRequest: state.createRequest,
     ...patch,
   };
@@ -936,10 +943,19 @@ function selectFile(state, file) {
   if (!file || state.createUncertain || state.validationUncertain || isBusy(state)) return same(state);
   const previous = state.uploadId;
   const retry = without(state.pendingCleanup, previous);
-  const effects = [...(previous ? [previous] : []), ...retry].map((uploadId) => cleanupEffect(uploadId, "select"));
+  const effects = [
+    { type: "cancel", key: "shell/recording-date" },
+    ...[...(previous ? [previous] : []), ...retry].map((uploadId) => cleanupEffect(uploadId, "select")),
+  ];
+  const suggested = prefillTitle(state, file.name);
   const base = {
     ...state,
-    ...prefillTitle(state, file.name),
+    ...suggested,
+    form: { ...(suggested.form || state.form), date: state.autoDate === state.form.date ? "" : state.form.date },
+    autoDate: null,
+    dateTouched: false,
+    dateReading: false,
+    dateRequest: state.dateRequest + 1,
     file,
     fileError: null,
     fileRefused: false,
@@ -975,6 +991,14 @@ function selectFile(state, file) {
       t("File chưa đạt giới hạn đã công bố."),
     );
   }
+  if ([".mp4", ".mov", ".m4a", ".webm"].includes(extension)) {
+    base.dateReading = true;
+    effects.push({
+      type: "call", key: "shell/recording-date", name: "read-recording-date", args: [file],
+      ok: "shell/recording-date-read", error: "shell/recording-date-failed",
+      meta: { id: base.dateRequest },
+    });
+  }
   return {
     state: { ...base, phase: "selected", workflow: t("Đã chọn file. Nhập thông tin rồi bấm “Tạo cuộc họp”.") },
     effects,
@@ -988,6 +1012,7 @@ function closeDialog(state) {
   const effects = [
     { type: "cancel", key: "shell/policy" },
     { type: "cancel", key: "shell/asr-models" },
+    { type: "cancel", key: "shell/recording-date" },
     { type: "cancel", key: "shell/upload-checking-clock" },
     { type: "cancel", key: "shell/upload-validation-state" },
     { type: "cancel", key: "shell/upload-validation-poll" },
@@ -1001,7 +1026,7 @@ function dialogClosed(state) {
   if (!state.open) return same(state);
   // A save in flight finishes and navigates; only the open flag follows the dialog.
   if (state.phase === "creating") return set(state, { open: false });
-  const effects = ["policy", "asr-models", "extract", "upload-create", "upload", "upload-state", "upload-retry", "upload-complete", "upload-validation-state", "upload-validation-poll", "upload-checking-clock"].map((name) => ({ type: "cancel", key: `shell/${name}` }));
+  const effects = ["policy", "asr-models", "recording-date", "extract", "upload-create", "upload", "upload-state", "upload-retry", "upload-complete", "upload-validation-state", "upload-validation-poll", "upload-checking-clock"].map((name) => ({ type: "cancel", key: `shell/${name}` }));
   const leftover = state.createUncertain || state.validationUncertain ? null : state.uploadId;
   if (leftover) effects.push(cleanupEffect(leftover, "close"));
   const pendingCleanup = leftover ? withItem(state.pendingCleanup, leftover) : state.pendingCleanup;
@@ -1064,6 +1089,16 @@ export function reduce(state, action) {
       return dialogClosed(state);
     case "shell/file-selected":
       return selectFile(state, action.file);
+    case "shell/recording-date-read":
+    case "shell/recording-date-failed": {
+      if (!state.open || action.meta?.id !== state.dateRequest || !state.dateReading) return same(state);
+      const value = action.type === "shell/recording-date-read" ? action.value : null;
+      const useDate = !state.dateTouched && !state.form.date && typeof value === "string" && value && validMeetingDate(value);
+      return set(state, {
+        dateReading: false,
+        ...(useDate ? { form: { ...state.form, date: value }, autoDate: value } : {}),
+      });
+    }
     case "shell/multiple-files-dropped":
       return set(state, {
         fileError: t("Chọn từng file một để tạo cuộc họp."),
@@ -1073,16 +1108,20 @@ export function reduce(state, action) {
     // action.form: { title, date, language } as the view reads them.
     case "shell/form-edited": {
       const form = { ...state.form, title: action.form.title, date: action.form.date, language: action.form.language };
+      const dateTouched = state.dateTouched || action.dateEdited === true || form.date !== state.form.date;
+      const autoDate = dateTouched ? null : state.autoDate;
       if (state.createAttemptFailed && state.serverReady) {
         return set(state, {
           form,
+          dateTouched,
+          autoDate,
           createAttemptFailed: false,
           phase: "ready",
           workflow: t("File đã sẵn sàng. Kiểm tra thông tin rồi thử tạo cuộc họp lại."),
           formError: null,
         });
       }
-      return set(state, { form });
+      return set(state, { form, dateTouched, autoDate });
     }
     case "shell/auto-transcribe-toggled":
       return set(state, { form: { ...state.form, autoTranscribe: action.value } }, [

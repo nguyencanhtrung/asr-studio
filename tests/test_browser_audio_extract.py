@@ -194,6 +194,101 @@ def test_timestamps_match_after_server_normalization(live, signed_in, tmp_path, 
     assert abs(got_length - want_length) < TOLERANCE_SECONDS
 
 
+@pytest.mark.parametrize(
+    ("container", "metadata", "timezone", "expected"),
+    [
+        (
+            "mp4",
+            ["-metadata", "creation_time=2026-10-14T23:30:00Z"],
+            "Asia/Ho_Chi_Minh",
+            "2026-10-15",
+        ),
+        (
+            "mov",
+            [
+                "-metadata",
+                "creation_time=2026-10-13T12:00:00Z",
+                "-metadata",
+                "com.apple.quicktime.creationdate=2026-10-15T00:30:00+0700",
+                "-movflags",
+                "use_metadata_tags",
+            ],
+            "America/Los_Angeles",
+            "2026-10-15",
+        ),
+        ("webm", ["-metadata", "DATE_RECORDED=2026-10-15T00:30:00+07:00"], "UTC", "2026-10-15"),
+    ],
+)
+def test_recording_date_is_read_locally_before_upload_and_only_audio_is_sent(
+    live, signed_in, tmp_path, container, metadata, timezone, expected
+):
+    codec = "opus" if container == "webm" else "aac"
+    source = make_video(tmp_path / f"source.{container}", audio=codec)
+    video = tmp_path / f"dated.{container}"
+    _ffmpeg("-i", str(source), "-c", "copy", *metadata, str(video))
+    context, page = signed_in(timezone=timezone)
+    requests = []
+    page.on(
+        "request", lambda request: requests.append((request.method, urlsplit(request.url).path))
+    )
+    dialog = _open_dialog(page)
+    page.locator("#recording-file").set_input_files(str(video))
+    expect(page.locator("#meeting-date-input")).to_have_value(expected)
+    expect(page.locator("#meeting-date-help")).to_have_text(
+        "Ngày từ metadata file. Bạn có thể sửa."
+    )
+    assert not [method for method, _path in requests if method in {"POST", "PUT"}]
+    assert page.evaluate("document.activeElement.id") == "meeting-name"
+
+    page.locator('input[name="language_hint"][value="en"]').check()
+    page.locator("#auto-transcribe").set_checked(False)
+    uploads = []
+    page.on(
+        "request",
+        lambda request: (
+            uploads.append(request.post_data_json)
+            if request.method == "POST" and urlsplit(request.url).path == "/api/uploads"
+            else None
+        ),
+    )
+    dialog.get_by_role("button", name="Tạo cuộc họp").click()
+    meeting_id = _meeting_id(page)
+    meeting = context.request.get(f"{live.url}/api/meetings/{meeting_id}").json()
+    assert meeting["meeting_date"] == expected
+    assert uploads[0]["filename"].endswith(".webm" if container == "webm" else ".m4a")
+    assert uploads[0]["size_bytes"] < video.stat().st_size
+    stored = tmp_path / "stored-date.m4a"
+    stored.write_bytes(context.request.get(f"{live.url}/api/meetings/{meeting_id}/audio").body())
+    assert [stream["codec_type"] for stream in probe(stored)["streams"]] == ["audio"]
+
+
+def test_date_metadata_is_optional_and_a_manual_date_is_preserved(live, signed_in, tmp_path):
+    source = make_video(tmp_path / "undated.mp4")
+    dated = tmp_path / "dated.mp4"
+    _ffmpeg(
+        "-i",
+        str(source),
+        "-c",
+        "copy",
+        "-metadata",
+        "creation_time=2026-10-14T12:00:00Z",
+        str(dated),
+    )
+    _context, page = signed_in()
+    _open_dialog(page)
+    page.locator("#recording-file").set_input_files(str(source))
+    expect(page.locator("#meeting-date-help")).to_have_text(
+        "Tự điền từ metadata nếu có; bạn có thể nhập hoặc sửa ngày."
+    )
+    expect(page.locator("#meeting-date-input")).to_have_value("")
+    page.locator("#meeting-date-input").fill("2026-10-16")
+    page.locator("#recording-file").set_input_files(str(dated))
+    expect(page.locator("#meeting-date-help")).to_have_text(
+        "Tự điền từ metadata nếu có; bạn có thể nhập hoặc sửa ngày."
+    )
+    expect(page.locator("#meeting-date-input")).to_have_value("2026-10-16")
+
+
 def test_uncopyable_codec_sends_the_original_file(live, signed_in, tmp_path):
     video = make_video(tmp_path / "clip.mp4", audio="mp3")  # mp3 is not copied into an m4a
     context, page = signed_in()
