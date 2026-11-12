@@ -41,8 +41,8 @@ jobs:
       - name: Collect source with blocker details
         run: |
           mkdir -p "${RUNNER_TEMP}/source-probe"
-          docker run --rm --network none --entrypoint python3 -i asr-source-probe:base - \
-            < source/scripts/release-inventory.py > "${RUNNER_TEMP}/source-probe/inventory.json"
+          docker run --rm --network none --entrypoint python3 -i asr-source-probe:base - --system-only \
+            < tools/scripts/release-inventory.py > "${RUNNER_TEMP}/source-probe/inventory.json"
           python3 tools/scripts/collect-release-sources.py --repo-root source \
             --inventory "${RUNNER_TEMP}/source-probe/inventory.json" \
             --artifact-root "${RUNNER_TEMP}/source-probe/artifacts"

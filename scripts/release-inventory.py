@@ -7,6 +7,7 @@ License texts remain in the image; their hashes identify the reviewed copies.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.metadata
 import json
@@ -167,7 +168,21 @@ def system_packages() -> list[dict]:
     return sorted(packages, key=lambda item: item["name"])
 
 
-def main() -> None:
+def main(*, system_only: bool = False) -> None:
+    if system_only:
+        print(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "scope": "Installed system packages only",
+                    "architecture": platform.machine(),
+                    "python_packages": [],
+                    "system_packages": system_packages(),
+                },
+                indent=2,
+            )
+        )
+        return
     distributions = sorted(importlib.metadata.distributions(), key=lambda d: d.name.lower())
     omp = Path("/usr/local/bin/omp")
     notices = Path("/usr/local/share/licenses/omp")
@@ -200,4 +215,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--system-only", action="store_true")
+    main(system_only=parser.parse_args().system_only)
