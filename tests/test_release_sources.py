@@ -160,3 +160,17 @@ def test_launchpad_fallback_extracts_file_hashes_and_aliases():
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     )
     assert sources.launchpad_source_alias("libuuid1") == "util-linux"
+
+
+def test_cli_reports_the_exact_blocker_and_keeps_failure_exit(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sources.sys, "argv", ["collect-release-sources.py", "--repo-root", str(tmp_path)]
+    )
+    monkeypatch.setattr(sources, "load_json", lambda _: {})
+    blocker = "download failed for https://example.invalid/source.tar.xz: HTTP Error 503"
+    monkeypatch.setattr(sources, "collect", lambda *_: {"status": "blocked", "blockers": [blocker]})
+
+    assert sources.main() == 2
+
+    assert blocker in capsys.readouterr().err

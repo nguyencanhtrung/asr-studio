@@ -809,6 +809,8 @@ def main() -> int:
             {"status": manifest["status"], "blockers": len(manifest["blockers"])}, sort_keys=True
         )
     )
+    for blocker in manifest["blockers"]:
+        print(f"Source collection blocked: {blocker}", file=sys.stderr)
     if manifest["blockers"] and not args.allow_unresolved:
         return 2
     return 0
