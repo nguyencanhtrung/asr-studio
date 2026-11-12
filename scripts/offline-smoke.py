@@ -44,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = ROOT / "compose.yaml"
 GPU_COMPOSE_FILE = ROOT / "compose.gpu.yaml"
 COMPOSE_FILES = (COMPOSE_FILE, GPU_COMPOSE_FILE)
+PROCESSING_SERVICES = ("app", "worker", "notes-service")
 DEFAULT_PROJECT_PREFIX = "asr-offline-smoke"
 PUBLIC_IMAGE = "ghcr.io/nguyencanhtrung/asr-studio"
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
@@ -215,12 +216,12 @@ def isolated_compose_document(document: dict[str, Any], project: str) -> dict[st
     """Return a resolved Compose document isolated from egress and published ports."""
     result = json.loads(json.dumps(document))
     services = result.get("services")
-    if not isinstance(services, dict) or not {"app", "worker"} <= set(services):
-        raise SmokeFailure("Resolved Compose config must contain app and worker services.")
-    for service_name in ("app", "worker"):
+    if not isinstance(services, dict) or not set(PROCESSING_SERVICES) <= set(services):
+        raise SmokeFailure("Resolved Compose config must contain app, worker and notes-service.")
+    for service_name in PROCESSING_SERVICES:
         service = services[service_name]
         if not isinstance(service, dict) or not service.get("image"):
-            raise SmokeFailure("Resolved app and worker services must use the selected image.")
+            raise SmokeFailure("Resolved processing services must use the selected image.")
         service.pop("build", None)
         service.pop("pull_policy", None)
     services["app"]["ports"] = []
@@ -1928,7 +1929,9 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
 
     def _restart_lifecycle(self, client: ApiClient, meeting_id: str) -> dict[str, Any]:
         before = self._semantic_snapshot(client, meeting_id)
-        self.compose("restart", "app", "worker", label="restart owned app and worker", timeout=120)
+        self.compose(
+            "restart", *PROCESSING_SERVICES, label="restart owned processing services", timeout=120
+        )
         self._wait_ready(client=client)
         after_restart = self._semantic_snapshot(client, meeting_id)
         self._compare_snapshot(before, after_restart, "service restart")
@@ -1942,9 +1945,8 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             "--wait",
             "--wait-timeout",
             str(self.options.startup_timeout),
-            "app",
-            "worker",
-            label="force-recreate owned app and worker with named volumes",
+            *PROCESSING_SERVICES,
+            label="force-recreate owned processing services with named volumes",
             timeout=max(self.options.startup_timeout + 60, 180),
         )
         self._wait_ready(client=client)
@@ -2245,7 +2247,7 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             "else:\n"
             "    print(json.dumps({'blocked': False}))\n"
         )
-        for service in ("app", "worker"):
+        for service in PROCESSING_SERVICES:
             result = self.container_python(
                 service,
                 probe,
@@ -2278,8 +2280,7 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
             "--wait",
             "--wait-timeout",
             str(self.options.startup_timeout),
-            "app",
-            "worker",
+            *PROCESSING_SERVICES,
             config_path=self.isolated_config_path,
             label="start owned project on temporary internal network",
             timeout=max(self.options.startup_timeout + 60, 180),
@@ -2614,10 +2615,15 @@ print(json.dumps({"observed_schema": observed_schema, "tables": tables,
         self.evidence["checks"]["public_second_generation"] = "pass"
         self.evidence["meeting_id"] = first_meeting
 
-        self.compose("stop", "worker", label="pause owned worker for synthetic notes fixture")
+        self.compose(
+            "stop", "notes-service", label="pause owned notes service for synthetic notes fixture"
+        )
         notes_fixture = self._seed_saved_notes(first_meeting)
         self.compose(
-            "start", "worker", label="restart owned worker after notes fixture", timeout=60
+            "start",
+            "notes-service",
+            label="restart owned notes service after notes fixture",
+            timeout=60,
         )
         self._wait_ready(client=self.api)
         self._seed_notes_preference()

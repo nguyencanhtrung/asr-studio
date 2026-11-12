@@ -75,7 +75,7 @@ error. It does not fall back to the CPU.
 
 ### Install a release
 
-The commands below install the ASR Studio release `v0.2.3`. For a real installation, use the tag,
+The commands below install the ASR Studio release `v0.2.4`. For a real installation, use the tag,
 commit or digest from the release notes. Do not overwrite old tags.
 
 `v0.1.3` predates the rename: its Python module is `asr_en_vi`, and its old
@@ -98,11 +98,11 @@ For schema rollback, restore the matching pre-upgrade database/data backup; see
 Build from source:
 
 ```sh
-git clone --branch v0.2.3 --depth 1 https://github.com/nguyencanhtrung/asr-studio.git
+git clone --branch v0.2.4 --depth 1 https://github.com/nguyencanhtrung/asr-studio.git
 cd asr-studio
 export COMPOSE_PROJECT_NAME=asr-source-v1
 export ASR_MODEL_HOST_PATH="$PWD/models"
-export ASR_IMAGE=asr-studio:v0.2.3
+export ASR_IMAGE=asr-studio:v0.2.4
 ./scripts/start.sh --source
 ```
 
@@ -112,12 +112,12 @@ Pull the public image (same checkout):
 export COMPOSE_PROJECT_NAME=asr-pull-v1
 export ASR_PORT=8766
 export ASR_MODEL_HOST_PATH="$PWD/models"
-export ASR_IMAGE=ghcr.io/nguyencanhtrung/asr-studio:v0.2.3
+export ASR_IMAGE=ghcr.io/nguyencanhtrung/asr-studio:v0.2.4
 ./scripts/start.sh --pull
 ```
 
 A different project name gives separate data, token and provider volumes. Port 8766 prevents a
-conflict with the source installation. The local tag `asr-studio:v0.2.3` shows that the image
+conflict with the source installation. The local tag `asr-studio:v0.2.4` shows that the image
 comes from source, not from GHCR. To fix an exact artifact, set `ASR_IMAGE` to the published
 digest (`ghcr.io/nguyencanhtrung/asr-studio@sha256:...`).
 
