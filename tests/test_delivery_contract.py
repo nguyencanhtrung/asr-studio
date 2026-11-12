@@ -810,15 +810,73 @@ def test_manifest_publish_waits_for_platform_images_and_attests_manifest_digest(
 
 
 def test_every_action_is_pinned_to_an_immutable_commit():
-    pipeline = load_yaml(PIPELINE_PATH)
     action_ref = re.compile(r"^[^@]+@[0-9a-f]{40}$")
-
-    used_actions = [
-        step["uses"] for job in pipeline["jobs"].values() for step in job["steps"] if "uses" in step
-    ]
-
+    used_actions = []
+    for path in PIPELINE_PATH.parent.glob("*.yml"):
+        for job in load_yaml(path)["jobs"].values():
+            if "uses" in job:
+                local = job["uses"]
+                assert local.startswith("./.github/workflows/")
+                assert (ROOT / local[2:]).resolve().is_relative_to(ROOT)
+                assert (ROOT / local[2:]).is_file()
+            used_actions.extend(step["uses"] for step in job.get("steps", []) if "uses" in step)
     assert used_actions
     assert all(action_ref.fullmatch(action) for action in used_actions)
+
+
+@pytest.mark.parametrize(
+    "state,success", [("missing", True), ("published", False), ("network", False)]
+)
+def test_recovery_manifest_guard_requires_confirmed_absence(tmp_path, state, success):
+    workflow = load_yaml(PIPELINE_PATH.parent / "recover-amd64.yml")
+    step = next(
+        step
+        for step in workflow["jobs"]["publish"]["steps"]
+        if step["name"] == "Require the versioned manifest to be unpublished"
+    )
+    binary = tmp_path / "docker"
+    binary.write_text(
+        '#!/bin/sh\ncase "$SIMULATED" in\n'
+        'published) exit 0 ;;\nmissing) echo "manifest unknown: not found" >&2 ;;\n'
+        'network) echo "TLS connection failed" >&2 ;;\nesac\nexit 1\n'
+    )
+    binary.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "RUNNER_TEMP": str(tmp_path),
+            "IMAGE_NAME": "ghcr.io/example/app",
+            "RECOVERY_TAG": "v0.2.4",
+            "SIMULATED": state,
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is success
+
+
+def test_recovery_builds_verified_tag_inputs_and_publishes_source_before_image():
+    pipeline = load_yaml(PIPELINE_PATH)
+    assert pipeline["jobs"]["quality"]["if"] == "github.event_name != 'workflow_dispatch'"
+    assert pipeline["jobs"]["container"]["if"] == "github.event_name != 'workflow_dispatch'"
+    steps = load_yaml(PIPELINE_PATH.parent / "recover-amd64.yml")["jobs"]["publish"]["steps"]
+    names = [step["name"] for step in steps]
+    assert names.index(
+        "Require verified frozen source and completed arm64 publication"
+    ) < names.index("Log in to GHCR")
+    assert (
+        names.index("Collect and publish exact corresponding source")
+        < names.index("Push frozen amd64 image by digest")
+        < names.index("Verify anonymously pulled amd64 image")
+        < names.index("Publish verified multi-platform manifest")
+    )
+    candidate = next(step for step in steps if step.get("id") == "candidate")
+    assert candidate["with"]["context"] == "source"
+    assert candidate["with"]["build-args"] == "VCS_REF=${{ steps.context.outputs.sha }}"
+    checkout = next(step for step in steps if step["name"] == "Check out frozen application tag")
+    assert checkout["with"]["ref"] == "refs/tags/${{ inputs.release_tag }}"
 
 
 def test_dependabot_pull_request_configuration_is_removed():
