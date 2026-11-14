@@ -27,37 +27,6 @@ provider you choose, and every note links back to the moment in the recording it
 </p>
 </details>
 
-## Screenshot provenance
-
-The README screenshots are reproducible synthetic examples in the dark theme, in English and
-Vietnamese, not acceptance evidence. Regenerate them with:
-
-```sh
-uv run python scripts/capture-readme.py
-```
-
-The script reads only the repository [synthetic fixture](tests/fixtures/readme-demo.json), starts a
-fresh temporary local app, uses a stub notes provider and a stubbed connected account, captures at
-a width of 1440, and rejects non-loopback browser requests. It does not read recordings, credentials or provider sessions, run
-ASR/inference, or use a user's browser.
-
-## Renaming an existing checkout
-
-The product and Python package are now `ASR Studio` and `asr_studio`.
-Run Python commands with `python -m asr_studio.cli`; rebuild the local image with
-`./scripts/start.sh --source` before starting the updated Compose services.
-Use `ASR_IMAGE=asr-studio:local` for a source build. Images published before the
-rename retain their original package names and must use the Compose file from
-their release tag. Archived release inventories describe those original images.
-
-The Compose project is `asr-studio`. On the first start, `./scripts/start.sh` stops a
-deployment under the former default name `asr-en-vi` and copies its data, auth, provider and
-model-install volumes to `asr-studio_*`; the old volumes stay for rollback. Keep any custom
-`COMPOSE_PROJECT_NAME` override you previously used: it is not migrated. Browser preferences and
-pending request keys migrate automatically on the next page load at the same origin.
-After moving a checkout with a virtual environment, run `uv sync --all-groups --locked`
-to refresh its editable install and command paths.
-
 ## Overview
 
 ASR Studio is a self-hosted web app for meeting recordings. You upload a recording and get back a
