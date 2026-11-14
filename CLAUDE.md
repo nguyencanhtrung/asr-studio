@@ -33,3 +33,10 @@ After a pull request has merged, run `./scripts/finish-pr.sh <PR_NUMBER>` to ver
 ## Development checks
 
 Before changing a workflow, the OMP adapter, or running tests in a restricted environment, read `docs/agents/development.md` for related contract tests, workflow linting and environment preflight.
+
+<!-- studio-hub:start -->
+## Studio hub: asr-studio
+
+Read and follow `/home/mars/workspace/studio/hub-apps/PROJECT.md` before project work.
+Keep this repository's applicable instructions above shared hub defaults.
+<!-- studio-hub:end -->
