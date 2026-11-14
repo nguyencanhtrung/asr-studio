@@ -6,6 +6,8 @@ Ngày 2026-11-15 · [Thiết kế tự tạo transcript và meeting notes sau fi
 
 Đề xuất coi normalized recording đạt ready sau finalize là một sự kiện bền vững, rồi trong một transaction tạo hoặc lấy lại cả meeting và một processing intent. Intent này tách hai bước: transcription và notes. Worker chỉ lấy task đã được chấp nhận khi có slot; lúc recording còn đang capture hoặc upload thì không giữ inference slot.
 
+Theo quyết định của người vận hành, extension kết thúc khi server xác nhận đã lưu bền vững toàn bộ audio bằng receipt toàn phiên khớp với bản ghi. Extension báo “Đã gửi xong”, dọn buffer theo contract ingest và không chờ hoặc poll transcript/notes. ACK từng chunk chưa đủ để hoàn tất. Việc normalize, tạo transcript và meeting notes chạy nền trên server; trạng thái và kết quả thuộc web UI của ASR Studio.
+
 Contract cần bảo đảm:
 
 - một finalized recording chỉ có một meeting và một workflow tự động;
@@ -169,7 +171,7 @@ Các field waiting cần được thêm additive vào pipeline summary/meeting r
 
 ### API và quyền của người gọi
 
-MVP thêm `GET /api/extension/v1/recording-sessions/{id}/processing` với session token và `recording:status:read`. Server lấy owner từ credential, resource ngoài owner trả 404; payload chỉ gồm pipeline/step state, waiting_reason, task/result ids thuộc phiên và relative meeting_url của cùng backend. Client không dùng response để đổi endpoint, không nhét token vào URL. Nội dung transcript/notes mở trong web UI đã xác thực; MVP chưa cấp thêm transcript:read/notes:read hay notes:run chỉ để hiển thị tiến độ.
+Extension chỉ dùng trạng thái ingest để xác nhận receipt toàn phiên; dừng polling sau receipt hợp lệ và không cần route `/processing` riêng trong MVP. Server lấy owner từ credential khi trả trạng thái ingest; resource ngoài owner trả 404. Có thể trả một liên kết kết quả tương đối của cùng backend để người dùng mở ASR Studio, nhưng không giữ extension ở trạng thái chờ đến khi có meeting hoặc kết quả. Client không dùng response để đổi endpoint và không nhét token vào URL. Tiến độ xử lý, transcript và notes được xem trong web UI đã xác thực; không cấp thêm transcript:read/notes:read hay notes:run cho extension.
 
 Retry notes và cancel processing dùng UI operator với cookie/same-origin guard hiện có. UI cần route điều khiển pipeline, đề xuất `POST /api/meetings/{id}/processing/retry-notes` (request_id, expected_pipeline_epoch, source_snapshot_id, confirmed_recipe_version) và `/processing/cancel` (request_id, expected_pipeline_epoch). Request lặp cùng payload trả cùng attempt/cancel outcome; payload khác 409. Retry chỉ tạo notes attempt, không tạo ASR task; khi chưa có snapshot vì ASR chưa complete thì 409 transcript_required. ASR retry hoặc đổi recipe cũng cần thao tác explicit riêng; canceled workflow không tự retry. Server DELETE tiếp tục qua luồng xóa meeting của operator. Các route này là đề xuất chưa triển khai; token extension không được dùng gọi chúng.
 
