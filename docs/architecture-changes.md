@@ -2342,6 +2342,8 @@ credentials exchange for temporary sessions. The operator controls expiry and re
 Credentials bind to the configured endpoint and server identity. Additional extension origins
 do not widen the existing web cookie/Origin boundary. Keep the private credential-hashing
 key in auth storage and credential hashes/state in the application database.
+Persist the public installation identity after the private file is durable, so a missing
+auth file cannot silently bootstrap a different server on a later read or restart.
 
 **Evidence and limits.** The API and Settings regression tests cover synthetic pairing,
 expiry, revocation, explicit re-pairing, endpoint guards and state persistence. This is a

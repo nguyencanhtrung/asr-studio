@@ -128,6 +128,7 @@ def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
         "extension_pairing_codes",
         "extension_sessions",
         "extension_pairing_rate",
+        "extension_auth_installation",
     }
     assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     with sqlite3.connect(database) as connection:
@@ -638,6 +639,7 @@ def test_schema_v15_records_the_runtime_of_existing_generations(tmp_path):
         connection.execute("DROP TABLE extension_pairing_codes")
         connection.execute("DROP TABLE extension_devices")
         connection.execute("DROP TABLE extension_pairing_rate")
+        connection.execute("DROP TABLE extension_auth_installation")
         connection.execute("ALTER TABLE tasks DROP COLUMN asr_model")
         connection.execute("ALTER TABLE tasks DROP COLUMN owner_role")
         connection.execute("ALTER TABLE transcript_generations DROP COLUMN device")

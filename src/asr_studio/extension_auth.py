@@ -156,7 +156,7 @@ class _PrivateAuthStateStore:
 
     def ensure(self) -> _PrivateAuthState:
         with self._locked(exclusive=True):
-            if not self.state_path.exists():
+            if not self.state_path.exists() and not self.state_path.is_symlink():
                 self._write_locked(
                     _PrivateAuthState(secrets.token_hex(16), secrets.token_bytes(32))
                 )
@@ -313,10 +313,45 @@ class ExtensionAuthService:
         return self.private_state.load()
 
     def ensure(self) -> str:
-        return self.private_state.ensure().backend_id
+        # Persist the public identity after the private file is durable. A crash
+        # before the DB commit can reuse that file; a later loss cannot bootstrap
+        # a different installation, even if no device has been paired yet.
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            installation = connection.execute(
+                "SELECT backend_id FROM extension_auth_installation WHERE id = 1"
+            ).fetchone()
+            has_devices = (
+                connection.execute("SELECT 1 FROM extension_devices LIMIT 1").fetchone() is not None
+            )
+            state = (
+                self.private_state.load()
+                if installation is not None or has_devices
+                else self.private_state.ensure()
+            )
+            if installation is not None and installation["backend_id"] != state.backend_id:
+                raise ExtensionAuthError(
+                    "authentication_unavailable",
+                    "Extension authentication is unavailable.",
+                    503,
+                )
+            if installation is None:
+                connection.execute(
+                    "INSERT INTO extension_auth_installation(id, backend_id) VALUES (1, ?)",
+                    (state.backend_id,),
+                )
+            connection.commit()
+            return state.backend_id
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def backend_id(self) -> str:
-        return self.ensure()
+        return self._state().backend_id
 
     def _require_server_url(self, server_url: str) -> None:
         if server_url not in self.server_urls:

@@ -27,6 +27,8 @@ HTTP is allowed only for literal `localhost`, `127.0.0.1` and `[::1]`. On a clie
 
 Compose passes the optional endpoint setting to the app service. Keep the auth and data volumes persistent across restarts. Device identity and a separate private credential-hashing key live in auth storage; device and session state live in the application database. This is credential hashing, not audio/database encryption or backup.
 
+The database also remembers the installation's public identity. After initialization, a missing, corrupt or mismatched private auth file prevents startup; API reads never recreate it. Restore the matching auth state rather than deleting the file to reset pairing. This preserves server identity even before the first device pairs.
+
 ## API authority
 
 | Caller | Routes | Authority |

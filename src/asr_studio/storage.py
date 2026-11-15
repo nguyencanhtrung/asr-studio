@@ -569,6 +569,12 @@ def _migrate_v16(connection: sqlite3.Connection) -> None:
 def _migrate_v17(connection: sqlite3.Connection) -> None:
     """Add durable device, pairing-code and session state for the extension API."""
     connection.execute(
+        "CREATE TABLE extension_auth_installation ("
+        "id INTEGER PRIMARY KEY CHECK(id = 1), "
+        "backend_id TEXT NOT NULL CHECK(length(backend_id) = 32)"
+        ")"
+    )
+    connection.execute(
         "CREATE TABLE extension_devices ("
         "id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 16 AND 128), "
         "owner_id TEXT NOT NULL CHECK(length(owner_id) BETWEEN 16 AND 128), "

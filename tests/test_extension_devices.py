@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -12,10 +13,12 @@ from asr_studio.auth import AuthStore
 from asr_studio.config import Settings
 from asr_studio.extension_auth import (
     CODE_LIFETIME,
+    DEVICE_LIFETIME_DURATIONS,
     EXTENSION_ID,
     MAX_ACTIVE_SESSIONS_PER_DEVICE,
     MAX_PAIRING_ATTEMPTS,
     MAX_PENDING_DEVICE_RECORDS,
+    SESSION_LIFETIME,
     ExtensionAuthError,
     ExtensionAuthService,
     authorize_extension_session,
@@ -456,6 +459,199 @@ def test_pending_credential_expires_before_first_session(settings):
     assert service.list_devices(now=started + CODE_LIFETIME)[0]["status"] == "expired"
 
 
+def test_pairing_code_expiry_precedes_device_activation(settings):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir,
+        settings.extension_server_urls,
+        auth_dir=settings.auth_dir,
+    )
+    service.ensure()
+    started = datetime(2035, 1, 1, tzinfo=UTC)
+    issued = service.create_pairing_code(device_lifetime="30d", device_record_id=None, now=started)
+
+    with pytest.raises(ExtensionAuthError) as error:
+        service.pair(
+            code=issued.code,
+            device_id="expired-code-device",
+            server_url=settings.extension_server_urls[0],
+            now=started + CODE_LIFETIME,
+        )
+
+    assert error.value.code == "invalid_pairing_code"
+    assert service.list_devices(now=started + CODE_LIFETIME)[0]["status"] == "expired"
+
+
+def test_finite_device_expiry_is_independent_from_session_expiry_and_refresh(settings):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir,
+        settings.extension_server_urls,
+        auth_dir=settings.auth_dir,
+    )
+    service.ensure()
+    endpoint = settings.extension_server_urls[0]
+    started = datetime(2035, 1, 1, tzinfo=UTC)
+    issued = service.create_pairing_code(device_lifetime="7d", device_record_id=None, now=started)
+    paired_at = started + timedelta(seconds=1)
+    device = service.pair(
+        code=issued.code,
+        device_id="finite-device",
+        server_url=endpoint,
+        now=paired_at,
+    )
+
+    session_at = paired_at + timedelta(seconds=1)
+    first_session = service.create_session(
+        device_token=device.token,
+        server_url=endpoint,
+        now=session_at,
+    )
+    session_expired_at = session_at + SESSION_LIFETIME
+    with pytest.raises(ExtensionAuthError) as expired_session:
+        service.authorize_session(
+            session_token=first_session.token,
+            server_url=endpoint,
+            now=session_expired_at,
+        )
+    assert expired_session.value.code == "invalid_session_credential"
+
+    refreshed = service.create_session(
+        device_token=device.token,
+        server_url=endpoint,
+        now=session_expired_at,
+    )
+    identity = service.authorize_session(
+        session_token=refreshed.token,
+        server_url=endpoint,
+        now=session_expired_at + timedelta(seconds=1),
+    )
+    assert identity.device_id == "finite-device"
+
+    device_expired_at = paired_at + DEVICE_LIFETIME_DURATIONS["7d"]
+    near_expiry_session = service.create_session(
+        device_token=device.token,
+        server_url=endpoint,
+        now=device_expired_at - timedelta(seconds=1),
+    )
+    with pytest.raises(ExtensionAuthError) as expired_device_session:
+        service.authorize_session(
+            session_token=near_expiry_session.token,
+            server_url=endpoint,
+            now=device_expired_at,
+        )
+    assert expired_device_session.value.code == "invalid_session_credential"
+    with pytest.raises(ExtensionAuthError) as expired_device:
+        service.create_session(
+            device_token=device.token,
+            server_url=endpoint,
+            now=device_expired_at,
+        )
+    assert expired_device.value.code == "invalid_device_credential"
+    assert service.list_devices(now=device_expired_at)[0]["status"] == "expired"
+
+
+def test_missing_private_auth_state_fails_closed_without_rotating_identity(settings):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir,
+        settings.extension_server_urls,
+        auth_dir=settings.auth_dir,
+    )
+    original_backend_id = service.ensure()
+    service.create_pairing_code(device_lifetime="30d", device_record_id=None)
+    (settings.auth_dir / "extension-auth.json").unlink()
+
+    with pytest.raises(ExtensionAuthError) as error:
+        service.backend_id()
+
+    assert error.value.code == "authentication_unavailable"
+    assert not (settings.auth_dir / "extension-auth.json").exists()
+    assert original_backend_id
+
+
+def test_corrupt_private_auth_state_fails_closed(settings):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir,
+        settings.extension_server_urls,
+        auth_dir=settings.auth_dir,
+    )
+    service.ensure()
+    (settings.auth_dir / "extension-auth.json").write_text("not-json", encoding="utf-8")
+
+    with pytest.raises(ExtensionAuthError) as error:
+        service.backend_id()
+
+    assert error.value.code == "authentication_unavailable"
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_restart_cannot_reinitialize_missing_private_identity(settings, paired):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir, settings.extension_server_urls, auth_dir=settings.auth_dir
+    )
+    original_id = service.ensure()
+    if paired:
+        service.create_pairing_code(device_lifetime="never", device_record_id=None)
+    state_path = settings.auth_dir / "extension-auth.json"
+    original_bytes = state_path.read_bytes()
+    state_path.unlink()
+    restarted = ExtensionAuthService(
+        settings.data_dir, settings.extension_server_urls, auth_dir=settings.auth_dir
+    )
+    with pytest.raises(ExtensionAuthError, match="authentication is unavailable"):
+        restarted.ensure()
+    assert not state_path.exists()
+    state_path.write_bytes(original_bytes)
+    assert restarted.ensure() == original_id
+
+
+def test_bootstrap_reuses_durable_private_file_before_database_commit(settings):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir, settings.extension_server_urls, auth_dir=settings.auth_dir
+    )
+    original_id = service.ensure()
+    state_path = settings.auth_dir / "extension-auth.json"
+    original_bytes = state_path.read_bytes()
+    # Represents the file publication surviving a lost initialization DB commit.
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        connection.execute("DELETE FROM extension_auth_installation")
+    restarted = ExtensionAuthService(
+        settings.data_dir, settings.extension_server_urls, auth_dir=settings.auth_dir
+    )
+    assert restarted.ensure() == original_id
+    assert state_path.read_bytes() == original_bytes
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert connection.execute(
+            "SELECT backend_id FROM extension_auth_installation WHERE id = 1"
+        ).fetchone() == (original_id,)
+
+
+def test_restart_rejects_private_file_from_another_installation(settings):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir, settings.extension_server_urls, auth_dir=settings.auth_dir
+    )
+    original_id = service.ensure()
+    state_path = settings.auth_dir / "extension-auth.json"
+    original_bytes = state_path.read_bytes()
+    document = json.loads(original_bytes)
+    document["backend_id"] = "0" * 32 if original_id != "0" * 32 else "1" * 32
+    replacement = json.dumps(document).encode()
+    state_path.write_bytes(replacement)
+    restarted = ExtensionAuthService(
+        settings.data_dir, settings.extension_server_urls, auth_dir=settings.auth_dir
+    )
+    with pytest.raises(ExtensionAuthError, match="authentication is unavailable"):
+        restarted.ensure()
+    assert state_path.read_bytes() == replacement
+    state_path.write_bytes(original_bytes)
+    assert restarted.ensure() == original_id
+
+
 async def test_extension_origin_guards_and_preflight_never_grant_authority(client, settings):
     no_origin = await client.post(
         "/api/extension/v1/session",
@@ -496,6 +692,22 @@ async def test_revoke_invalidates_pending_code_and_fresh_explicit_repair_reactiv
     await _authenticate_operator(client, settings)
     issued = await _create_code(client, settings)
     record_id = (await client.get("/api/extension/devices")).json()["devices"][0]["id"]
+
+    object_body = await client.post(
+        f"/api/extension/devices/{record_id}/revoke",
+        headers={"Origin": settings.public_url, "Content-Type": "application/json"},
+        content=b"{}",
+    )
+    assert object_body.status_code == 400
+    assert (await client.get("/api/extension/devices")).json()["devices"][0]["status"] == "pending"
+
+    client.cookies.clear()
+    bearer_only = await client.post(
+        f"/api/extension/devices/{record_id}/revoke",
+        headers={"Origin": settings.public_url, "Authorization": "Bearer extension-token"},
+    )
+    assert bearer_only.status_code == 401
+    await _authenticate_operator(client, settings)
 
     revoked = await client.post(
         f"/api/extension/devices/{record_id}/revoke",

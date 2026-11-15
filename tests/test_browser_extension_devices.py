@@ -161,6 +161,44 @@ def test_delayed_create_failure_respects_section_focus_movement(browser_runtime)
     context.close()
 
 
+def test_delayed_create_failure_does_not_steal_control_focus(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+
+    held_routes = []
+
+    def hold_request(route):
+        held_routes.append(route)
+
+    page.route("**/api/extension/pairing-codes", hold_request)
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    create = page.locator("#extension-device-code-button")
+    create.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(100)
+    assert held_routes
+
+    close = page.locator("#connections-close")
+    close.focus()
+    expect(close).to_be_focused()
+    held_routes[0].fulfill(
+        status=429,
+        content_type="application/json",
+        body=json.dumps({"error": {"code": "pending_limit", "message": "private"}}),
+    )
+    expect(close).to_be_focused()
+    expect(page.locator("#extension-device-error-message")).to_have_text(
+        "Có quá nhiều thiết bị đang chờ ghép. Hãy ghép hoặc thu hồi một thiết bị "
+        "trước khi tạo mã mới."
+    )
+    context.close()
+
+
 def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(browser_runtime):
     live, browser = browser_runtime
     context, page, _api = signed_in_page(
