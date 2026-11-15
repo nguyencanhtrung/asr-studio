@@ -2568,3 +2568,11 @@ Antigravity's supported `default` matches its resolved `high` recipe, while a
 different provider/model or genuinely changed effort still requires confirmation.
 The focused regression covers both this accepted equivalence and rejection of
 a changed ChatGPT effort without advancing the workflow.
+
+The Devices panel keeps pairing and existing device actions first in keyboard
+order, followed by automatic-processing preferences. Their ASR selector has a
+distinct label so manual transcription retains its existing accessible name.
+The automatic status panel sits before the compact status strip, preserving the
+header-to-tab adjacency on small screens. Existing model, pairing and mobile
+tab regressions cover these integration boundaries; the pairing selector check
+is scoped to its form because processing preferences add their own controls.
