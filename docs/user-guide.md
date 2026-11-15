@@ -503,6 +503,44 @@ This happens on any web page, not only in this workspace. Select the file and cl
 or drag the file onto the upload area. Closing the picker without a file leaves **New meeting**
 open.
 
+### Extension recordings
+
+Pair an extension device from **Settings → Devices** as described in the
+[extension device guide](extension-devices.md). Issue #218 provides the production
+`asr-extension-v1` recording-session ingest used by an authorized client; it does not ship the
+installable client, automatic ASR/Notes, or physical-microphone qualification. Those boundaries
+remain in [#219](https://github.com/nguyencanhtrung/asr-studio/issues/219),
+[#220](https://github.com/nguyencanhtrung/asr-studio/issues/220), and
+[#205](https://github.com/nguyencanhtrung/asr-studio/issues/205)/[#206](https://github.com/nguyencanhtrung/asr-studio/issues/206).
+
+An extension recording creates its meeting and library row when the first authenticated session
+is accepted. The history and meeting views show whether the source is an extension and whether it
+is receiving, finalizing/archiving, ready, failed or canceled. Playback, transcription and Notes
+remain unavailable until the raw receipt has been durably stored and bounded media finalization
+publishes a derivative with a real positive duration. A media failure keeps the exact raw receipt
+for an explicit retry; deletion removes managed files and leaves a tombstone so an old client
+cannot recreate the meeting. Repeating an acknowledged chunk or finalize request is safe and does
+not create another meeting or append bytes twice.
+
+The default operational guards are finite: 8 MiB per chunk, 65,536 chunks per manifest, a 4 GiB
+recording cap, 512 MiB global retained staging, 64 active sessions, a 30-minute media wall limit,
+512 MiB normalized output, and a 64 MiB free-disk reserve. The effective recording/staging cap is
+the configured minimum of the upload limit, the 4 GiB cap and `ASR_EXTENSION_MAX_STAGING_BYTES`.
+Staging admission includes in-flight reservations and retained failed/canceled chunks, so a
+replay of an already committed chunk remains possible even when new bytes are refused. These are
+guards, not a promise of throughput or long-recording reliability. Their authoritative sources
+are [`config.py`](../src/asr_studio/config.py),
+[`extension_ingest.py`](../src/asr_studio/extension_ingest.py), and the capabilities response.
+
+If media finalization fails after the raw receipt is durable, the meeting remains visible as failed
+and the operator can choose **Retry recording** in the meeting view. The action is available only
+when the server can verify the complete raw archive; it reuses the same meeting and receipt and
+returns immediately to the bounded media worker. It does not authorize the extension bearer to
+perform operator processing, and it is rejected for incomplete, canceled, deleted or foreign
+recordings. Playback and transcription remain disabled until the derivative is published with a
+real positive duration. The connection-aware ready-publication seam is reserved for #219's later
+workflow intent; #218 does not start automatic ASR or Notes.
+
 **Transcribe after create** is on by default. The browser remembers that checkbox choice. When it
 is on, the dialog also shows **Transcription model** after the model catalog loads: **Automatic**
 is always available, while a model that is not ready is shown but cannot be selected. The model

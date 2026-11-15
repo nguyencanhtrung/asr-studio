@@ -15,6 +15,8 @@ import {
   mergeTranscription,
   monthGrid,
   reduce,
+  recordingInfo,
+  recordingReady,
   failureOf,
   selectCalendar,
   selectDeletion,
@@ -140,6 +142,47 @@ test("recording duration reads in seconds, minutes, or hours and minutes", () =>
   assert.equal(text(formatRecordingDuration(59.5)), "1 phút");
   assert.equal(text(formatRecordingDuration(720)), "12 phút");
   assert.equal(text(formatRecordingDuration(5040)), "1 giờ 24 phút");
+});
+
+test("extension recording state is visible without authorizing playback or work", () => {
+  const pending = recordingInfo(meeting("pending", {
+    recording: { source: "extension", state: "receiving", duration_seconds: null, audio_url: null },
+  }));
+  assert.equal(pending.source, "extension");
+  assert.equal(pending.ready, false);
+  assert.equal(pending.playable, false);
+  assert.equal(pending.refreshable, true);
+  assert.equal(pending.retryable, false);
+  assert.equal(text(pending.statusLabel), "Đang nhận");
+
+  const failed = recordingInfo(meeting("failed", {
+    recording: {
+      source: "extension",
+      state: "failed",
+      duration_seconds: null,
+      audio_url: null,
+      error: { code: "media_processing_failed", message: "do not show this" },
+    },
+  }));
+  assert.equal(failed.ready, false);
+  assert.equal(failed.refreshable, false);
+  assert.equal(failed.retryable, true);
+  assert.equal(text(failed.statusMessage), "Không thể xử lý bản ghi. Hãy tải lại trạng thái.");
+  assert.equal(failed.errorCode, "media_processing_failed");
+
+  const manualFailure = recordingInfo(meeting("manual-failed", {
+    recording: { source: "upload", state: "failed", duration_seconds: null, audio_url: null },
+  }));
+  assert.equal(manualFailure.refreshable, false);
+  assert.equal(manualFailure.retryable, false);
+
+  const ready = recordingInfo(meeting("ready", {
+    recording: { source: "extension", state: "ready", duration_seconds: 12, audio_url: "/api/meetings/ready/audio" },
+  }));
+  assert.equal(recordingReady({ ...meeting("legacy"), recording: undefined }), true);
+  assert.equal(ready.ready, true);
+  assert.equal(ready.playable, true);
+  assert.equal(ready.durationSeconds, 12);
 });
 
 test("the meeting id comes from the address path", () => {
@@ -358,6 +401,117 @@ test("boot at a meeting address loads it, then shows it, tells notes.js and gets
   assert.equal(s.installKind, "load");
   assert.equal(s.loadDone, s.loadId);
   assert.equal(s.notes.lockKnown, true);
+});
+
+test("recording status refresh keeps the meeting visible and settles from pending to ready", async () => {
+  const env = await booted("/meetings/m1", "m1");
+  env.dispatch("recording-refresh-clicked");
+  assert.equal(env.state().recordingRefresh.pending, true);
+  await env.answer(GET("m1"), 200, meeting("m1", {
+    recording: { source: "extension", state: "archiving", duration_seconds: null, audio_url: null },
+  }));
+  assert.equal(env.state().view, "meeting");
+  assert.equal(recordingReady(env.state().meeting), false);
+  assert.equal(env.state().recordingRefresh.error, null);
+
+  env.dispatch("recording-refresh-clicked");
+  await env.fail(GET("m1"));
+  assert.equal(env.state().view, "meeting");
+  assert.equal(text(env.state().recordingRefresh.error), "Không thể đọc trạng thái bản ghi. Hãy thử lại.");
+
+  env.dispatch("recording-refresh-clicked");
+  await env.answer(GET("m1"), 200, meeting("m1", {
+    recording: { source: "extension", state: "ready", duration_seconds: 12, audio_url: "/api/meetings/m1/audio" },
+  }));
+  assert.equal(recordingReady(env.state().meeting), true);
+  assert.equal(env.state().recordingRefresh.pending, false);
+  assert.equal(env.state().recordingRefresh.error, null);
+});
+
+test("a failed extension recording retries through the operator route, then refreshes the meeting", async () => {
+  const env = await booted("/meetings/m1", "m1");
+  env.store.dispatch({
+    type: "history/meeting-fetched",
+    meeting: meeting("m1", {
+      recording: {
+        source: "extension",
+        state: "failed",
+        duration_seconds: null,
+        audio_url: null,
+        error: { code: "media_processing_failed", message: "private" },
+      },
+    }),
+    at: at("/meetings/m1"),
+  });
+
+  env.dispatch("recording-retry-clicked");
+  assert.equal(env.state().recordingRetry.pending, true);
+  assert.equal(env.state().recordingRetry.error, null);
+  const post = env.waiting((request) => request.method === "POST" && request.url === "/api/meetings/m1/recording/retry");
+  assert.equal(post.length, 1);
+
+  await env.answer((request) => request.method === "POST" && request.url === "/api/meetings/m1/recording/retry", 202, {
+    meeting_id: "m1",
+    recording_state: "finalizing",
+    retry_requested: true,
+  });
+  assert.equal(env.state().recordingRetry.pending, false);
+  assert.equal(env.state().recordingRefresh.pending, true);
+  assert.equal(env.waiting(GET("m1")).length, 1);
+
+  await env.answer(GET("m1"), 200, meeting("m1", {
+    recording: { source: "extension", state: "archiving", duration_seconds: null, audio_url: null },
+  }));
+  assert.equal(env.state().recordingRefresh.pending, false);
+  assert.equal(env.state().recordingRetry.error, null);
+  assert.equal(env.state().meeting.recording.state, "archiving");
+});
+
+test("a failed retry settles with a localized error and keeps the action available", async () => {
+  const env = await booted("/meetings/m1", "m1");
+  env.store.dispatch({
+    type: "history/meeting-fetched",
+    meeting: meeting("m1", { recording: { source: "extension", state: "failed", duration_seconds: null, audio_url: null } }),
+    at: at("/meetings/m1"),
+  });
+  env.dispatch("recording-retry-clicked");
+  await env.answer((request) => request.method === "POST" && request.url === "/api/meetings/m1/recording/retry", 409, {
+    detail: { code: "recording_retry_unavailable", message: "private server detail" },
+  });
+
+  assert.equal(env.state().recordingRetry.pending, false);
+  assert.equal(text(env.state().recordingRetry.error), "Bản ghi chưa có bản lưu gốc đầy đủ để xử lý lại. Hãy tải lại trạng thái.");
+  assert.equal(env.state().recordingRefresh.pending, false);
+  assert.equal(env.waiting(GET("m1")).length, 0);
+});
+
+test("a stale recording retry response cannot settle a newer request", async () => {
+  const env = await booted("/meetings/m1", "m1");
+  env.store.dispatch({
+    type: "history/meeting-fetched",
+    meeting: meeting("m1", { recording: { source: "extension", state: "failed", duration_seconds: null, audio_url: null } }),
+    at: at("/meetings/m1"),
+  });
+  env.dispatch("recording-retry-clicked");
+  const firstRequestId = env.state().recordingRetry.requestId;
+  await env.answer((request) => request.method === "POST" && request.url === "/api/meetings/m1/recording/retry", 409, {
+    detail: { code: "recording_retry_unavailable", message: "private" },
+  });
+  env.dispatch("recording-retry-clicked");
+  const secondRequestId = env.state().recordingRetry.requestId;
+  assert.equal(secondRequestId, firstRequestId + 1);
+
+  const before = env.state();
+  const stale = reduce(before, {
+    type: "history/recording-retry-succeeded",
+    meta: { meetingId: "m1", requestId: firstRequestId },
+    response: { body: { meeting_id: "m1", recording_state: "finalizing", retry_requested: true } },
+    at: at("/meetings/m1"),
+  });
+  assert.strictEqual(stale.state, before);
+  assert.deepEqual(stale.effects, []);
+  assert.equal(env.state().recordingRetry.pending, true);
+  assert.equal(env.waiting((request) => request.method === "GET" && request.url === "/api/meetings/m1").length, 0);
 });
 
 test("opening another meeting shows loading and drops the editor; the old meeting stays until the new one lands", async () => {

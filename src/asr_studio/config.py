@@ -17,6 +17,16 @@ MAX_EXTENSION_URL_BYTES = 256
 DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024**3
 DEFAULT_MAX_RECORDING_SECONDS = 4 * 60 * 60
 DEFAULT_UPLOAD_CHUNK_BYTES = 64 * 1024**2
+EXTENSION_MAX_CHUNK_BYTES = 8 * 1024**2
+EXTENSION_MAX_CHUNKS = 65_536
+EXTENSION_MAX_LOCAL_BYTES = 512 * 1024**2
+EXTENSION_MAX_RECORDING_BYTES = 4 * 1024**3
+EXTENSION_MAX_ACTIVE_SESSIONS = 64
+EXTENSION_FINALIZE_ENTRY_BYTES = 160
+EXTENSION_FINALIZE_ENVELOPE_BYTES = 16 * 1024
+EXTENSION_MEDIA_WALL_SECONDS = 30 * 60
+EXTENSION_MEDIA_OUTPUT_BYTES = 512 * 1024**2
+EXTENSION_MEDIA_DISK_RESERVE_BYTES = 64 * 1024**2
 DEFAULT_ASR_GPU_MODEL_PATH = Path("/models/qwen3-asr-1.7b")
 DEFAULT_ASR_CPU_MODEL_PATH = Path("/models/whisper-small")
 DEFAULT_ASR_PHOWHISPER_MODEL_PATH = Path("/models/pho-whisper-large")
@@ -152,6 +162,13 @@ def _positive_int_from_env(name: str, default: int) -> int:
     return value
 
 
+def extension_finalize_body_bytes(max_chunks: int = EXTENSION_MAX_CHUNKS) -> int:
+    """Return the finite JSON envelope bound for one chunk-manifest submission."""
+    if isinstance(max_chunks, bool) or max_chunks < 1:
+        raise ValueError("max_chunks must be positive")
+    return EXTENSION_FINALIZE_ENVELOPE_BYTES + max_chunks * EXTENSION_FINALIZE_ENTRY_BYTES
+
+
 def _validate_public_url(raw_url: str) -> str:
     if not isinstance(raw_url, str) or any(
         ord(character) < 0x20 or ord(character) == 0x7F for character in raw_url
@@ -251,6 +268,8 @@ class Settings:
     install_dir: Path | None = None
     chatgpt_callback_url: str | None = None
     extension_urls: tuple[str, ...] = ()
+    extension_max_staging_bytes: int = EXTENSION_MAX_LOCAL_BYTES
+    extension_max_active_sessions: int = EXTENSION_MAX_ACTIVE_SESSIONS
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "data_dir", Path(self.data_dir))
@@ -313,6 +332,16 @@ class Settings:
             )
         if isinstance(self.max_recording_seconds, bool) or self.max_recording_seconds < 1:
             raise ValueError("max_recording_seconds must be a positive integer")
+        if (
+            isinstance(self.extension_max_staging_bytes, bool)
+            or self.extension_max_staging_bytes < 1
+        ):
+            raise ValueError("extension_max_staging_bytes must be a positive integer")
+        if (
+            isinstance(self.extension_max_active_sessions, bool)
+            or self.extension_max_active_sessions < 1
+        ):
+            raise ValueError("extension_max_active_sessions must be a positive integer")
         if self.asr_device not in ASR_DEVICES:
             raise ValueError("asr_device must be auto, cpu, or cuda")
         for value in (
@@ -346,6 +375,12 @@ class Settings:
             ),
             max_recording_seconds=_positive_int_from_env(
                 "ASR_MAX_RECORDING_SECONDS", DEFAULT_MAX_RECORDING_SECONDS
+            ),
+            extension_max_staging_bytes=_positive_int_from_env(
+                "ASR_EXTENSION_MAX_STAGING_BYTES", EXTENSION_MAX_LOCAL_BYTES
+            ),
+            extension_max_active_sessions=_positive_int_from_env(
+                "ASR_EXTENSION_MAX_ACTIVE_SESSIONS", EXTENSION_MAX_ACTIVE_SESSIONS
             ),
             asr_model_path=(
                 Path(os.environ["ASR_MODEL_PATH"]) if os.environ.get("ASR_MODEL_PATH") else None

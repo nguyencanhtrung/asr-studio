@@ -10,6 +10,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from asr_studio.extension_ingest import (
+    cleanup_extension_session_artifacts,
+    session_lock,
+)
 from asr_studio.storage import database_path
 
 _UPLOAD_ID_RE = re.compile(r"[0-9a-f]{32}\Z")
@@ -80,6 +84,33 @@ def _mark_meeting_for_deletion(data_dir: Path, meeting_id: str) -> None:
                 "deletion_error_code = NULL WHERE id = ? AND deletion_requested_at IS NULL",
                 (meeting_id,),
             )
+        extension_rows = connection.execute(
+            "SELECT sessions.owner_id, sessions.client_recording_id, sessions.id, "
+            "sessions.payload_fingerprint FROM recordings "
+            "JOIN extension_recording_sessions AS sessions "
+            "ON sessions.id = recordings.extension_session_id "
+            "WHERE recordings.meeting_id = ?",
+            (meeting_id,),
+        ).fetchall()
+        for row in extension_rows:
+            connection.execute(
+                "INSERT OR IGNORE INTO extension_recording_tombstones("
+                "owner_id, client_recording_id, session_id, payload_fingerprint, state) "
+                "VALUES (?, ?, ?, ?, 'deleted')",
+                (
+                    row["owner_id"],
+                    row["client_recording_id"],
+                    row["id"],
+                    row["payload_fingerprint"],
+                ),
+            )
+            connection.execute(
+                "UPDATE extension_recording_sessions SET state = 'canceled', "
+                "error_code = 'recording_deleted', "
+                "error_message = 'Recording deleted by operator.', "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND receipt_at IS NULL",
+                (row["id"],),
+            )
 
 
 def _managed_upload_ids(data_dir: Path, meeting_id: str) -> list[str]:
@@ -102,6 +133,14 @@ def _managed_upload_ids(data_dir: Path, meeting_id: str) -> list[str]:
             (meeting_id,),
         ).fetchall()
     if not rows:
+        with _connect(data_dir) as connection:
+            extension_row = connection.execute(
+                "SELECT 1 FROM recordings WHERE meeting_id = ? "
+                "AND extension_session_id IS NOT NULL LIMIT 1",
+                (meeting_id,),
+            ).fetchone()
+        if extension_row is not None:
+            return []
         raise RuntimeError("A marked meeting has no owned recording row")
     upload_ids: list[str] = []
     for row in rows:
@@ -115,6 +154,33 @@ def _managed_upload_ids(data_dir: Path, meeting_id: str) -> list[str]:
             raise RuntimeError("A meeting recording has an unexpected managed key")
         upload_ids.append(upload_id)
     return upload_ids
+
+
+def _managed_extension_session_ids(data_dir: Path, meeting_id: str) -> list[str]:
+    with _connect(data_dir) as connection:
+        meeting = connection.execute(
+            "SELECT deletion_requested_at FROM meetings WHERE id = ?", (meeting_id,)
+        ).fetchone()
+        if meeting is None:
+            raise MeetingDeletionError(404, "meeting_not_found", "Meeting not found.")
+        if meeting["deletion_requested_at"] is None:
+            raise MeetingDeletionError(
+                409,
+                "meeting_deletion_not_marked",
+                "Meeting deletion has not been marked.",
+            )
+        rows = connection.execute(
+            "SELECT extension_session_id FROM recordings WHERE meeting_id = ? "
+            "AND extension_session_id IS NOT NULL",
+            (meeting_id,),
+        ).fetchall()
+    session_ids: list[str] = []
+    for row in rows:
+        session_id = row["extension_session_id"]
+        if not isinstance(session_id, str) or _UPLOAD_ID_RE.fullmatch(session_id) is None:
+            raise RuntimeError("A meeting references an invalid extension session id")
+        session_ids.append(session_id)
+    return session_ids
 
 
 def _open_child_directory(parent_fd: int, name: str) -> int | None:
@@ -234,11 +300,17 @@ def _finalize_database_delete(data_dir: Path, meeting_id: str) -> None:
             if _active_task(connection, meeting_id):
                 raise MeetingDeletionError(409, "meeting_task_active", _DELETE_GUIDANCE)
 
+            recording_rows = connection.execute(
+                "SELECT upload_id, extension_session_id FROM recordings WHERE meeting_id = ?",
+                (meeting_id,),
+            ).fetchall()
             upload_ids = [
-                row[0]
-                for row in connection.execute(
-                    "SELECT upload_id FROM recordings WHERE meeting_id = ?", (meeting_id,)
-                ).fetchall()
+                row["upload_id"] for row in recording_rows if row["upload_id"] is not None
+            ]
+            extension_session_ids = [
+                row["extension_session_id"]
+                for row in recording_rows
+                if row["extension_session_id"] is not None
             ]
             connection.execute("DELETE FROM notes_revisions WHERE meeting_id = ?", (meeting_id,))
             connection.execute("DELETE FROM notes_sources WHERE meeting_id = ?", (meeting_id,))
@@ -268,6 +340,18 @@ def _finalize_database_delete(data_dir: Path, meeting_id: str) -> None:
             connection.executemany(
                 "DELETE FROM uploads WHERE id = ?", [(upload_id,) for upload_id in upload_ids]
             )
+            connection.executemany(
+                "DELETE FROM extension_recording_chunks WHERE session_id = ?",
+                [(session_id,) for session_id in extension_session_ids],
+            )
+            connection.executemany(
+                "DELETE FROM extension_recording_reservations WHERE session_id = ?",
+                [(session_id,) for session_id in extension_session_ids],
+            )
+            connection.executemany(
+                "DELETE FROM extension_recording_sessions WHERE id = ?",
+                [(session_id,) for session_id in extension_session_ids],
+            )
             connection.execute(
                 "DELETE FROM meetings WHERE id = ? AND deletion_requested_at IS NOT NULL",
                 (meeting_id,),
@@ -292,8 +376,17 @@ def _finalize_database_delete(data_dir: Path, meeting_id: str) -> None:
 def _finish_marked_deletion(data_dir: Path, meeting_id: str) -> dict[str, str]:
     try:
         upload_ids = _managed_upload_ids(data_dir, meeting_id)
-        _unlink_owned_files(data_dir, upload_ids)
-        _finalize_database_delete(data_dir, meeting_id)
+        extension_session_ids = _managed_extension_session_ids(data_dir, meeting_id)
+        if extension_session_ids:
+            if len(extension_session_ids) != 1:
+                raise RuntimeError("A meeting has more than one extension recording")
+            with session_lock(data_dir, extension_session_ids[0]):
+                _unlink_owned_files(data_dir, upload_ids)
+                cleanup_extension_session_artifacts(data_dir, extension_session_ids[0])
+                _finalize_database_delete(data_dir, meeting_id)
+        else:
+            _unlink_owned_files(data_dir, upload_ids)
+            _finalize_database_delete(data_dir, meeting_id)
     except MeetingDeletionError:
         raise
     except (OSError, sqlite3.Error, RuntimeError) as error:

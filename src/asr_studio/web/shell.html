@@ -385,9 +385,16 @@
           <div class="audio-panel">
             <header class="audio-heading">
               <h3 id="audio-heading">Bản ghi âm</h3>
-              <span class="source-label"><span aria-hidden="true"></span>Nguồn cuộc họp</span>
+              <span class="source-label"><span class="source-label-dot" aria-hidden="true"></span><span id="recording-source">Nguồn cuộc họp</span></span>
             </header>
             <p class="audio-hint">Dùng thanh điều khiển để phát, tạm dừng hoặc tua tới đoạn cần nghe lại.</p>
+            <section class="recording-status" id="recording-status" hidden>
+              <div class="recording-status-copy">
+                <p id="recording-status-message"></p>
+                <p class="recording-status-error" id="recording-status-error" hidden><span>Mã lỗi</span>: <code id="recording-error-code"></code></p>
+              </div>
+              <button class="secondary-button" id="recording-status-retry" type="button" aria-describedby="recording-status-message" hidden>Tải lại trạng thái</button>
+            </section>
           </div>
           <section class="player-bar" aria-labelledby="audio-heading">
             <audio id="meeting-audio" controls preload="metadata" aria-label="Trình phát bản ghi cuộc họp"></audio>

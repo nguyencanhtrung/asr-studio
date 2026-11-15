@@ -264,6 +264,31 @@ def accept_transcription_task(
                 )
             return _task_summary(existing)
 
+        recording = connection.execute(
+            "SELECT recordings.duration_seconds, recordings.storage_key, recordings.content_type, "
+            "recordings.extension_session_id, sessions.state AS extension_state "
+            "FROM recordings LEFT JOIN extension_recording_sessions AS sessions "
+            "ON sessions.id = recordings.extension_session_id "
+            "WHERE recordings.meeting_id = ?",
+            (meeting_id,),
+        ).fetchone()
+        if recording is None:
+            raise TaskError(404, "meeting_not_found", "Meeting recording not found.")
+        if (
+            recording["duration_seconds"] is None
+            or recording["storage_key"] is None
+            or recording["content_type"] is None
+            or (
+                recording["extension_session_id"] is not None
+                and recording["extension_state"] != "ready"
+            )
+        ):
+            raise TaskError(
+                409,
+                "recording_not_ready",
+                "The recording is not ready for transcription yet.",
+            )
+
         slot = connection.execute(
             "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
         ).fetchone()
@@ -300,12 +325,6 @@ def accept_transcription_task(
                 "diarization_model_unavailable",
                 "The configured local Community-1 model is not prepared.",
             ) from None
-
-        recording = connection.execute(
-            "SELECT duration_seconds FROM recordings WHERE meeting_id = ?", (meeting_id,)
-        ).fetchone()
-        if recording is None:
-            raise TaskError(404, "meeting_not_found", "Meeting recording not found.")
 
         connection.execute(
             "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "

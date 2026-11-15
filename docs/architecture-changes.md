@@ -2363,3 +2363,93 @@ production client. Physical microphone and long-recording validation remain unde
 [#205](https://github.com/nguyencanhtrung/asr-studio/issues/205) and
 [#206](https://github.com/nguyencanhtrung/asr-studio/issues/206).
 Tag: architecture, privacy, design. Target: [extension device guide](extension-devices.md).
+
+## #218 — Durable bounded extension recording ingest
+
+**Problem.** #217 established extension device authority, but the production application still
+needed a recoverable audio-ingest path. The earlier prototype server is contract research only;
+it is not part of this deployment. This issue does not ship the recording client, automatic ASR or
+Notes workflow, or physical-microphone/long-recording qualification.
+
+**Change.** The application now exposes only `asr-extension-v1` recording-session routes. A first
+accepted session creates one pending meeting and one source-aware recording link. The canonical
+artifact lifecycle and error state live in `extension_recording_sessions`; `recordings` keeps the
+nullable extension link and derivative fields, so the two tables cannot disagree about lifecycle.
+Chunk bytes are written through bounded temporary files, fsynced and renamed into managed staging;
+the exact raw archive is fsynced and receipt-committed before media normalization. A single durable,
+bounded media worker publishes the derivative and only then marks the artifact ready. Recovery,
+upload, publication and deletion share a per-session ownership lock; deletion leaves a tombstone
+fence for old replay and status requests.
+
+**Client and operator seams.** The session summary advertises the negotiated `limits` object used by
+the promoted client. Its receipt `recording_id` is the extension upload session ID
+(`upload.serverSessionId`), while `recording.id` remains the separate library-row ID; the two IDs
+must not be conflated. A failed media finalization keeps the verified raw receipt and can be
+requeued through `POST /api/meetings/{meeting_id}/recording/retry`, which is protected by the
+existing operator session cookie and same-origin Origin checks. The route only verifies the raw
+archive, changes failed state back to `finalizing`, and wakes the bounded worker; it rejects
+incomplete, canceled, deleted, and out-of-scope recordings, and an extension bearer cannot call
+it. `_commit_ready_derivative` delegates its row updates to the connection-aware
+`publish_ready_derivative(connection, ...)` helper. That helper does no transaction ownership,
+network, or media work, allowing #219 to insert workflow intent in the same caller-owned
+transaction without changing #218's processing boundary.
+
+**Finite limits and sources.** These are admission/operational guards, not throughput or reliability
+measurements. The effective recording and staging limits are the minimum of the configured upload
+limit, 4 GiB recording cap and `ASR_EXTENSION_MAX_STAGING_BYTES` (default 512 MiB). The default
+global active-session cap is 64; each chunk is at most 8 MiB and a manifest has at most 65,536
+chunks. Finalize-body capacity is `16 KiB + 160 bytes × max_chunks`. Media finalization is bounded
+to 30 minutes wall time, 512 MiB output and a 64 MiB free-disk reserve. Values come from
+[`config.py`](../src/asr_studio/config.py), [`extension_ingest.py`](../src/asr_studio/extension_ingest.py)
+and the capabilities response; operators can configure the staging and active-session caps.
+Compose forwards both configurable caps from `.env`. Probe, remux, conversion and
+output validation share one monotonic deadline. Extension media commands enter a
+separate process group and receive a child-only `RLIMIT_FSIZE` before execution;
+the file limit is the output budget plus one sentinel byte, and any overflow is
+rejected. This bounds writes during processing, not only after the command exits.
+The runner still enforces its deadline after output pipes close and kills its
+owned process group before returning. See [`media.py`](../src/asr_studio/media.py)
+and [`test_extension_media.py`](../tests/test_extension_media.py).
+
+**Evidence and trade-offs.** Language omission is part of the immutable replay fingerprint, global
+staging includes durable in-flight reservations and retained canceled/failed chunks, and exact
+committed replay remains possible at capacity. SQLite ready guards explicitly require non-null
+duration as well as `> 0`. Focused fault tests cover replay, raw receipt ordering, quota,
+cancellation, corruption, publication/recovery locking, caller-transaction rollback, deletion
+fences, distinct client/library receipt IDs, operator retry authorization and ready invariants;
+the backend handoff also passed the non-browser regression suite. Browser/model and real-device
+qualification remain separate acceptance work. The design retains raw bytes after a media failure
+for bounded retry, which consumes staging/storage until operator cleanup rather than inventing a
+time-based deletion policy.
+Invalid or foreign ingest IDs are checked before allocating lifecycle lock files.
+Finalize replay cannot restart failed media work through extension authority.
+Operator retry hashes the retained archive outside SQLite's write transaction;
+the receipt identity is rechecked in the short publication transaction.
+
+**Follow-ups.** #219 adds automatic ASR/Notes, #220 delivers the production client, and #205/#206
+own physical-microphone and long-recording validation. Issue [#218](https://github.com/nguyencanhtrung/asr-studio/issues/218).
+Tag: architecture, storage, privacy. Targets: `src/asr_studio/extension_ingest.py`,
+`src/asr_studio/extension_routes.py`, `src/asr_studio/routes.py`, `src/asr_studio/storage.py`,
+`src/asr_studio/recordings.py`, the history UI, and the extension API.
+
+Finalize replay and cancellation use short SQLite state transitions, so a media subprocess cannot
+hold their responses behind its filesystem lifecycle lock. Chunk requests encountering that lock
+return a retryable `session_busy` response; recovery and file publication retain the exclusive lock.
+Cancellation and deletion markers are observed during archiving and media work, and every final
+publication rechecks the durable fence. Canceled state cannot be overwritten by late progress.
+
+A receipt returned by create/status/finalize replay also verifies the surviving raw archive outside
+SQLite write transactions. Missing or corrupt raw bytes return `raw_corrupt`, allowing the client
+to retain its local copy; stored receipt identity remains immutable. Error-level FFmpeg diagnostics
+reject malformed extension media even when the process exits successfully. This validation does
+not infer missing audio after an otherwise valid streaming-container boundary; capture completion
+still depends on the client's final-blob barrier and complete hashed manifest. These boundaries are
+covered by `tests/test_extension_lifecycle.py` and `tests/test_extension_media.py`. Rendered failure
+and success focus checks cover both UI languages and themes in
+`tests/test_browser_extension_ingest.py`.
+
+Derivative allocation failures are converted into recoverable artifact errors without discarding
+the raw receipt or terminating the media loop. A standby application keeps waiting for the actual
+exclusive service lock after another instance starts first; it does not infer ownership from an
+old heartbeat. Disk-exhaustion and ownership-transfer regressions are in
+`tests/test_extension_lifecycle.py`.

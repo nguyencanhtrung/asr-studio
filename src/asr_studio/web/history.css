@@ -57,6 +57,23 @@
   font-size: var(--text-label);
 }
 
+.meeting-link-recording-state {
+  color: var(--ink-2);
+  font-size: var(--text-label);
+}
+
+.meeting-link-recording-state[data-state="failed"],
+.meeting-link-recording-state[data-state="canceled"] {
+  color: var(--danger);
+}
+
+.meeting-link-recording-state[data-state="receiving"],
+.meeting-link-recording-state[data-state="finalizing"],
+.meeting-link-recording-state[data-state="archiving"],
+.meeting-link-recording-state[data-state="archived"] {
+  color: var(--warning);
+}
+
 .meeting-link-deletion-state {
   color: var(--warning);
   font-size: var(--text-label);

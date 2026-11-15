@@ -34,6 +34,8 @@ const KEY = {
   searchTimer: "history/search-timer",
   tabTimer: "history/tab-timer",
   meeting: "history/meeting",
+  recording: "history/recording",
+  recordingRetry: "history/recording-retry",
   save: "history/save",
   conflict: "history/conflict",
   remove: "history/delete",
@@ -103,6 +105,101 @@ export function formatRecordingDuration(seconds) {
   if (minutes < 60) return t("{n} phút", { n: minutes });
   return t("{h} giờ {m} phút", { h: Math.floor(minutes / 60), m: pad(minutes % 60) });
 }
+
+const RECORDING_PENDING_STATES = new Set(["receiving", "finalizing", "archiving", "archived"]);
+const RECORDING_STATE_LABELS = {
+  receiving: t("Đang nhận"),
+  finalizing: t("Đang hoàn thiện"),
+  archiving: t("Đang lưu"),
+  archived: t("Đang chuẩn bị"),
+  failed: t("Thất bại"),
+  canceled: t("Đã hủy"),
+  ready: t("Đã lưu"),
+};
+const RECORDING_ERROR_MESSAGES = {
+  media_processing_failed: t("Không thể xử lý bản ghi. Hãy tải lại trạng thái."),
+  media_processing_timeout: t("Xử lý bản ghi mất quá nhiều thời gian. Hãy tải lại trạng thái."),
+  media_processing_cancelled: t("Xử lý bản ghi đã bị hủy."),
+  invalid_media: t("Định dạng bản ghi không được hỗ trợ."),
+  storage_failed: t("Không thể lưu bản ghi. Hãy xử lý bộ nhớ rồi tải lại trạng thái."),
+  raw_corrupt: t("Bản ghi gốc không còn nguyên vẹn. Hãy xóa bản ghi này rồi tạo lại."),
+  archive_size_mismatch: t("Bản ghi chưa được lưu đủ. Hãy tải lại trạng thái."),
+  chunk_corrupt: t("Một phần bản ghi bị lỗi. Hãy xóa bản ghi này rồi tạo lại."),
+  canceled: t("Bản ghi đã bị hủy trước khi hoàn tất. Không thể phát hoặc chép lời."),
+  recording_not_ready: t("Bản ghi chưa sẵn sàng. Hãy tải lại trạng thái."),
+};
+const RECORDING_RETRY_ERRORS = {
+  recording_retry_unavailable: t("Bản ghi chưa có bản lưu gốc đầy đủ để xử lý lại. Hãy tải lại trạng thái."),
+  recording_deleted: t("Bản ghi đã bị xóa; không thể xử lý lại."),
+};
+const RECORDING_RETRY_STATES = new Set(["finalizing", "archived", "ready"]);
+
+const asPositiveSeconds = (value) => {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+};
+
+// List rows and meeting details carry the recording fields at different levels. This is the one place where
+// the page normalizes both shapes, with legacy manual uploads defaulting to their old ready behavior.
+export function recordingInfo(meeting) {
+  const detail = meeting && meeting.recording && typeof meeting.recording === "object" ? meeting.recording : null;
+  const sourceValue = detail && Object.hasOwn(detail, "source") ? detail.source : meeting && meeting.recording_source;
+  const source = sourceValue === undefined || sourceValue === null || sourceValue === "upload"
+    ? "upload"
+    : sourceValue === "extension" ? "extension" : "unknown";
+  const stateValue = detail && Object.hasOwn(detail, "state") ? detail.state : meeting && meeting.recording_state;
+  const state = typeof stateValue === "string" && stateValue ? stateValue : "ready";
+  const durationValue = detail && Object.hasOwn(detail, "duration_seconds")
+    ? detail.duration_seconds
+    : meeting && meeting.duration_seconds;
+  const durationSeconds = asPositiveSeconds(durationValue);
+  const audioUrl = detail && Object.hasOwn(detail, "audio_url") ? detail.audio_url : meeting && meeting.audio_url;
+  const errorValue = detail && detail.error && typeof detail.error === "object" ? detail.error : null;
+  const errorCodeValue = errorValue && typeof errorValue.code === "string"
+    ? errorValue.code
+    : meeting && typeof meeting.recording_error_code === "string" ? meeting.recording_error_code : "";
+  const errorCode = errorCodeValue || "";
+  const ready = state === "ready" && source !== "unknown" && (source !== "extension" || durationSeconds !== null);
+  const playable = ready && (source !== "extension" || typeof audioUrl === "string" && audioUrl.trim() !== "");
+  const statusLabel = ready
+    ? RECORDING_STATE_LABELS.ready
+    : RECORDING_STATE_LABELS[state] || t("Chưa sẵn sàng");
+  let statusMessage;
+  if (ready) {
+    statusMessage = t("Bản ghi đã lưu.");
+  } else if (state === "receiving") {
+    statusMessage = t("Bản ghi đang được nhận. Trình phát và chép lời sẽ mở khi bản ghi sẵn sàng.");
+  } else if (state === "finalizing") {
+    statusMessage = t("Bản ghi đang được hoàn thiện. Trình phát và chép lời sẽ mở khi bản ghi sẵn sàng.");
+  } else if (state === "archiving") {
+    statusMessage = t("Bản ghi đang được lưu. Trình phát và chép lời sẽ mở khi bản ghi sẵn sàng.");
+  } else if (state === "archived") {
+    statusMessage = t("Bản ghi đã lưu. Đang chuẩn bị bản phát và transcript.");
+  } else if (state === "canceled") {
+    statusMessage = RECORDING_ERROR_MESSAGES.canceled;
+  } else if (state === "failed" && RECORDING_ERROR_MESSAGES[errorCode]) {
+    statusMessage = RECORDING_ERROR_MESSAGES[errorCode];
+  } else {
+    statusMessage = RECORDING_ERROR_MESSAGES[errorCode] || t("Bản ghi chưa sẵn sàng. Hãy tải lại trạng thái.");
+  }
+  return {
+    source,
+    sourceLabel: source === "extension" ? t("Extension") : source === "upload" ? t("Upload thủ công") : t("Nguồn không xác định"),
+    state,
+    statusLabel,
+    statusMessage,
+    statusState: ready ? "done" : RECORDING_PENDING_STATES.has(state) ? "active" : state === "failed" || state === "canceled" ? "problem" : "warning",
+    errorCode,
+    durationSeconds,
+    audioUrl: typeof audioUrl === "string" && audioUrl.trim() ? audioUrl : null,
+    ready,
+    playable,
+    refreshable: !ready && source === "extension" && RECORDING_PENDING_STATES.has(state),
+    retryable: !ready && source === "extension" && state === "failed",
+  };
+}
+
+export const recordingReady = (meeting) => recordingInfo(meeting).ready;
 
 // The year box commits as soon as it holds a complete 4-digit year in range.
 export function validYear(text) {
@@ -251,6 +348,8 @@ export function applySpeakerAdded(meeting, answer) {
 
 const NO_ADDRESS = { pathname: "/", search: "", hash: "", tab: null };
 const NO_DELETION = { pending: false, meetingId: null, failures: {}, dialog: { open: false, confirmation: "", error: null }, after: null };
+const NO_RECORDING_REFRESH = { requestId: 0, meetingId: null, pending: false, error: null };
+const NO_RECORDING_RETRY = { requestId: 0, meetingId: null, pending: false, error: null };
 
 export const initialState = {
   today: null,
@@ -272,6 +371,8 @@ export const initialState = {
   loadDone: 0, // the loadId of the last load that ended, loaded or failed
   loadError: null,
   meeting: null,
+  recordingRefresh: NO_RECORDING_REFRESH,
+  recordingRetry: NO_RECORDING_RETRY,
   // meeting tabs
   tab: null, // "notes" | "transcript"; null while the default waits for notes.js
   tabWaiting: false, // the fallback timer is running
@@ -628,7 +729,19 @@ function installMeeting(state, incoming, kind) {
   } else if (other) {
     notes = { ...notes, locked: false, lockKnown: false };
   }
-  return { ...state, meeting: mergeTranscription(previous, incoming), notes, installKind: kind, installRev: state.installRev + 1 };
+  return {
+    ...state,
+    meeting: mergeTranscription(previous, incoming),
+    notes,
+    recordingRefresh: other
+      ? { ...NO_RECORDING_REFRESH, requestId: state.recordingRefresh.requestId }
+      : state.recordingRefresh,
+    recordingRetry: other
+      ? { ...NO_RECORDING_RETRY, requestId: state.recordingRetry.requestId }
+      : state.recordingRetry,
+    installKind: kind,
+    installRev: state.installRev + 1,
+  };
 }
 
 // The task slice (task-core.js) reduces the same answers: the meeting on screen takes the task as its own.
@@ -659,6 +772,97 @@ function refreshedMeeting(state, action) {
   if (!state.meeting || state.meeting.id !== action.meta.meetingId || !meeting || !meeting.transcription) return state;
   const fetched = reduce(state, { type: "history/meeting-fetched", meeting });
   return repaintSidebar(fetched.state);
+}
+
+function requestRecordingRefresh(state) {
+  if (!state.meeting || state.recordingRefresh.pending || state.recordingRetry.pending) return out(state);
+  const requestId = state.recordingRefresh.requestId + 1;
+  const meetingId = state.meeting.id;
+  return out(
+    {
+      ...state,
+      recordingRefresh: { requestId, meetingId, pending: true, error: null },
+    },
+    [request(KEY.recording, `/api/meetings/${encodeURIComponent(meetingId)}`, "GET", undefined, "recording-refresh-loaded", "recording-refresh-failed", { meetingId, requestId })],
+  );
+}
+
+function requestRecordingRetry(state) {
+  if (!state.meeting || state.recordingRefresh.pending || state.recordingRetry.pending) return out(state);
+  if (!recordingInfo(state.meeting).retryable) return out(state);
+  const requestId = state.recordingRetry.requestId + 1;
+  const meetingId = state.meeting.id;
+  return out(
+    {
+      ...state,
+      recordingRetry: { requestId, meetingId, pending: true, error: null },
+      recordingRefresh: { ...state.recordingRefresh, error: null },
+    },
+    [request(KEY.recordingRetry, `/api/meetings/${encodeURIComponent(meetingId)}/recording/retry`, "POST", undefined, "recording-retry-succeeded", "recording-retry-failed", { meetingId, requestId })],
+  );
+}
+
+function recordingRetryFailure(state, action, message = null) {
+  const { meetingId, requestId } = action.meta;
+  const retry = state.recordingRetry;
+  if (!state.meeting || state.meeting.id !== meetingId || retry.meetingId !== meetingId || retry.requestId !== requestId) return out(state);
+  const failure = message ? null : failureOf(action.error);
+  const error = message || RECORDING_RETRY_ERRORS[failure?.code] || failure?.message || t("Không thể xử lý lại bản ghi. Hãy thử lại.");
+  return out({
+    ...state,
+    recordingRetry: { ...retry, pending: false, error },
+    recordingRefresh: { ...state.recordingRefresh, error: null },
+  });
+}
+
+function recordingRetrySucceeded(state, action) {
+  const { meetingId, requestId } = action.meta;
+  const retry = state.recordingRetry;
+  if (!state.meeting || state.meeting.id !== meetingId || retry.meetingId !== meetingId || retry.requestId !== requestId) return out(state);
+  const body = action.response && action.response.body;
+  if (!isRecord(body) || body.meeting_id !== meetingId || !RECORDING_RETRY_STATES.has(body.recording_state) || typeof body.retry_requested !== "boolean") {
+    return recordingRetryFailure(state, action, t("Máy chủ không xác nhận yêu cầu xử lý lại bản ghi."));
+  }
+  const refreshRequestId = state.recordingRefresh.requestId + 1;
+  return out(
+    {
+      ...state,
+      recordingRetry: { ...retry, pending: false, error: null },
+      recordingRefresh: { requestId: refreshRequestId, meetingId, pending: true, error: null },
+    },
+    [request(KEY.recording, `/api/meetings/${encodeURIComponent(meetingId)}`, "GET", undefined, "recording-refresh-loaded", "recording-refresh-failed", { meetingId, requestId: refreshRequestId })],
+  );
+}
+
+function recordingRefreshLoaded(state, action) {
+  const { meetingId, requestId } = action.meta;
+  const refresh = state.recordingRefresh;
+  if (!state.meeting || state.meeting.id !== meetingId || refresh.meetingId !== meetingId || refresh.requestId !== requestId) return out(state);
+  const payload = action.response.body;
+  const incoming = payload && payload.meeting && typeof payload.meeting === "object" ? payload.meeting : payload;
+  if (!incoming || typeof incoming.id !== "string" || incoming.id !== meetingId || !incoming.transcription) {
+    return out({ ...state, recordingRefresh: { ...refresh, pending: false, error: t("Máy chủ không trả về trạng thái bản ghi hợp lệ.") } });
+  }
+  const next = {
+    ...installMeeting(state, incoming, "refresh"),
+    recordingRetry: { ...state.recordingRetry, error: null },
+    recordingRefresh: { ...refresh, pending: false, error: null },
+  };
+  return out(bump(next, "paintRev"));
+}
+
+function recordingRefreshFailed(state, action) {
+  const { meetingId, requestId } = action.meta;
+  const refresh = state.recordingRefresh;
+  if (!state.meeting || state.meeting.id !== meetingId || refresh.meetingId !== meetingId || refresh.requestId !== requestId) return out(state);
+  return out({
+    ...state,
+    recordingRefresh: {
+      ...refresh,
+      pending: false,
+      error: t("Không thể đọc trạng thái bản ghi. Hãy thử lại."),
+    },
+  });
 }
 
 // ---- loading one meeting ----
@@ -890,6 +1094,18 @@ export function reduce(state, action) {
       return meetingLoaded(state, action);
     case "history/meeting-load-failed":
       return meetingLoadFailed(state, action);
+    case "history/recording-refresh-clicked":
+      return requestRecordingRefresh(state);
+    case "history/recording-retry-clicked":
+      return requestRecordingRetry(state);
+    case "history/recording-refresh-loaded":
+      return recordingRefreshLoaded(state, action);
+    case "history/recording-refresh-failed":
+      return recordingRefreshFailed(state, action);
+    case "history/recording-retry-succeeded":
+      return recordingRetrySucceeded(state, action);
+    case "history/recording-retry-failed":
+      return recordingRetryFailure(state, action);
     case "history/home-shown":
       return showHome(state, at);
     case "history/home-clicked": {

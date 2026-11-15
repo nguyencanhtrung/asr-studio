@@ -6,7 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -640,6 +640,159 @@ def _migrate_v17(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v18(connection: sqlite3.Connection) -> None:
+    """Add source-aware extension ingest state and rebuild the legacy recording link."""
+    connection.execute(
+        "CREATE TABLE extension_recording_sessions ("
+        "id TEXT PRIMARY KEY CHECK(length(id) = 32), "
+        "owner_id TEXT NOT NULL CHECK(length(owner_id) BETWEEN 16 AND 128), "
+        "client_recording_id TEXT NOT NULL CHECK(length(client_recording_id) BETWEEN 1 AND 128), "
+        "capture_epoch TEXT NOT NULL CHECK(length(capture_epoch) BETWEEN 1 AND 128), "
+        "payload_fingerprint TEXT NOT NULL CHECK(length(payload_fingerprint) = 64), "
+        "language_hint TEXT NOT NULL CHECK(language_hint IN ('en', 'vi')), "
+        "language_hint_omitted INTEGER NOT NULL CHECK(language_hint_omitted IN (0, 1)), "
+        "mime_type TEXT NOT NULL CHECK(mime_type = 'audio/webm;codecs=opus'), "
+        "state TEXT NOT NULL CHECK(state IN ("
+        "'receiving', 'finalizing', 'archiving', 'archived', 'ready', 'failed', 'canceled')), "
+        "epoch INTEGER NOT NULL CHECK(epoch >= 1), "
+        "next_sequence INTEGER NOT NULL CHECK(next_sequence >= 0), "
+        "next_offset INTEGER NOT NULL CHECK(next_offset >= 0), "
+        "finalize_id TEXT, "
+        "finalize_payload_hash TEXT CHECK(finalize_payload_hash IS NULL OR "
+        "length(finalize_payload_hash) = 64), "
+        "finalize_total_bytes INTEGER CHECK(finalize_total_bytes IS NULL OR "
+        "finalize_total_bytes >= 0), "
+        "finalize_chunk_count INTEGER CHECK(finalize_chunk_count IS NULL OR "
+        "finalize_chunk_count >= 0), "
+        "finalize_capture_complete INTEGER CHECK(finalize_capture_complete IS NULL OR "
+        "finalize_capture_complete IN (0, 1)), "
+        "manifest_hash TEXT CHECK(manifest_hash IS NULL OR length(manifest_hash) = 64), "
+        "raw_key TEXT UNIQUE, "
+        "raw_bytes INTEGER CHECK(raw_bytes IS NULL OR raw_bytes >= 0), "
+        "archive_sha256 TEXT CHECK(archive_sha256 IS NULL OR length(archive_sha256) = 64), "
+        "receipt_at TEXT, "
+        "error_code TEXT, "
+        "error_message TEXT, "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "UNIQUE(owner_id, client_recording_id)"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX extension_recording_sessions_state_idx "
+        "ON extension_recording_sessions(state, updated_at, id)"
+    )
+    connection.execute(
+        "CREATE TABLE extension_recording_chunks ("
+        "session_id TEXT NOT NULL REFERENCES extension_recording_sessions(id) ON DELETE RESTRICT, "
+        "sequence INTEGER NOT NULL CHECK(sequence >= 0), "
+        "offset_bytes INTEGER NOT NULL CHECK(offset_bytes >= 0), "
+        "length_bytes INTEGER NOT NULL CHECK(length_bytes > 0), "
+        "sha256 TEXT NOT NULL CHECK(length(sha256) = 64), "
+        "storage_key TEXT NOT NULL UNIQUE, "
+        "committed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "PRIMARY KEY(session_id, sequence), "
+        "UNIQUE(session_id, offset_bytes)"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX extension_recording_chunks_session_offset_idx "
+        "ON extension_recording_chunks(session_id, offset_bytes, sequence)"
+    )
+    connection.execute(
+        "CREATE TABLE extension_recording_reservations ("
+        "id TEXT PRIMARY KEY CHECK(length(id) = 32), "
+        "session_id TEXT NOT NULL REFERENCES extension_recording_sessions(id) ON DELETE RESTRICT, "
+        "sequence INTEGER NOT NULL CHECK(sequence >= 0), "
+        "reserved_bytes INTEGER NOT NULL CHECK(reserved_bytes > 0), "
+        "temp_name TEXT NOT NULL CHECK(length(temp_name) BETWEEN 1 AND 255), "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "UNIQUE(session_id, sequence)"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX extension_recording_reservations_session_idx "
+        "ON extension_recording_reservations(session_id, sequence)"
+    )
+    connection.execute(
+        "CREATE TABLE extension_recording_tombstones ("
+        "owner_id TEXT NOT NULL CHECK(length(owner_id) BETWEEN 16 AND 128), "
+        "client_recording_id TEXT NOT NULL CHECK(length(client_recording_id) BETWEEN 1 AND 128), "
+        "session_id TEXT NOT NULL CHECK(length(session_id) = 32), "
+        "payload_fingerprint TEXT NOT NULL CHECK(length(payload_fingerprint) = 64), "
+        "state TEXT NOT NULL CHECK(state = 'deleted'), "
+        "deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "PRIMARY KEY(owner_id, client_recording_id), "
+        "UNIQUE(session_id)"
+        ")"
+    )
+    connection.execute(
+        "CREATE TABLE recordings_v18 ("
+        "id TEXT PRIMARY KEY, "
+        "meeting_id TEXT NOT NULL UNIQUE REFERENCES meetings(id) ON DELETE RESTRICT, "
+        "upload_id TEXT UNIQUE REFERENCES uploads(id) ON DELETE RESTRICT, "
+        "extension_session_id TEXT UNIQUE REFERENCES "
+        "extension_recording_sessions(id) ON DELETE RESTRICT, "
+        "storage_key TEXT UNIQUE, "
+        "content_type TEXT DEFAULT 'audio/mp4', "
+        "duration_seconds REAL CHECK(duration_seconds IS NULL OR duration_seconds > 0), "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "CHECK((upload_id IS NOT NULL AND extension_session_id IS NULL "
+        "AND storage_key IS NOT NULL AND content_type IS NOT NULL "
+        "AND duration_seconds IS NOT NULL AND duration_seconds > 0) OR "
+        "(upload_id IS NULL AND extension_session_id IS NOT NULL AND "
+        "((storage_key IS NULL AND content_type IS NULL AND duration_seconds IS NULL) OR "
+        "(storage_key IS NOT NULL AND content_type IS NOT NULL "
+        "AND duration_seconds IS NOT NULL AND duration_seconds > 0))))"
+        ")"
+    )
+    connection.execute(
+        "INSERT INTO recordings_v18(id, meeting_id, upload_id, storage_key, content_type, "
+        "duration_seconds, created_at) "
+        "SELECT id, meeting_id, upload_id, storage_key, content_type, duration_seconds, "
+        "created_at FROM recordings"
+    )
+    connection.execute("DROP TABLE recordings")
+    connection.execute("ALTER TABLE recordings_v18 RENAME TO recordings")
+    connection.execute(
+        "CREATE TRIGGER extension_recordings_ready_insert_guard "
+        "BEFORE INSERT ON recordings WHEN NEW.extension_session_id IS NOT NULL AND "
+        "(SELECT state FROM extension_recording_sessions "
+        "WHERE id = NEW.extension_session_id) = 'ready' "
+        "AND (NEW.storage_key IS NULL OR NEW.content_type IS NULL OR "
+        "NEW.duration_seconds IS NULL OR NEW.duration_seconds <= 0) "
+        "BEGIN SELECT RAISE(ABORT, 'extension_ready_recording_requires_derivative'); END"
+    )
+    connection.execute(
+        "CREATE TRIGGER extension_recordings_ready_update_guard "
+        "BEFORE UPDATE OF extension_session_id, storage_key, content_type, duration_seconds "
+        "ON recordings WHEN NEW.extension_session_id IS NOT NULL AND "
+        "(SELECT state FROM extension_recording_sessions "
+        "WHERE id = NEW.extension_session_id) = 'ready' "
+        "AND (NEW.storage_key IS NULL OR NEW.content_type IS NULL OR "
+        "NEW.duration_seconds IS NULL OR NEW.duration_seconds <= 0) "
+        "BEGIN SELECT RAISE(ABORT, 'extension_ready_recording_requires_derivative'); END"
+    )
+    connection.execute(
+        "CREATE TRIGGER extension_recording_sessions_ready_insert_guard "
+        "BEFORE INSERT ON extension_recording_sessions "
+        "WHEN NEW.state = 'ready' AND NOT EXISTS ("
+        "SELECT 1 FROM recordings WHERE extension_session_id = NEW.id "
+        "AND storage_key IS NOT NULL AND content_type IS NOT NULL "
+        "AND duration_seconds IS NOT NULL AND duration_seconds > 0) "
+        "BEGIN SELECT RAISE(ABORT, 'extension_ready_recording_requires_derivative'); END"
+    )
+    connection.execute(
+        "CREATE TRIGGER extension_recording_sessions_ready_guard "
+        "BEFORE UPDATE OF state ON extension_recording_sessions "
+        "WHEN NEW.state = 'ready' AND NOT EXISTS ("
+        "SELECT 1 FROM recordings WHERE extension_session_id = NEW.id "
+        "AND storage_key IS NOT NULL AND content_type IS NOT NULL "
+        "AND duration_seconds IS NOT NULL AND duration_seconds > 0) "
+        "BEGIN SELECT RAISE(ABORT, 'extension_ready_recording_requires_derivative'); END"
+    )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -771,6 +924,28 @@ def initialize(data_dir: Path) -> Path:
             _migrate_v17(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (17)")
         connection.commit()
+        if current_version < 18:
+            # recordings changes its source and nullable derivative constraints. SQLite
+            # requires the create-copy-drop-rename rebuild to happen with FK checks off.
+            connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                current_version = connection.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()[0]
+                if current_version < 18:
+                    _migrate_v18(connection)
+                    connection.execute("INSERT INTO schema_migrations(version) VALUES (18)")
+                violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    raise RuntimeError("Database migration produced foreign-key violations")
+                connection.commit()
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+            finally:
+                connection.execute("PRAGMA foreign_keys = ON")
     finally:
         connection.close()
     os.chmod(path, 0o600)

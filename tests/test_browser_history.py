@@ -5577,3 +5577,80 @@ def test_failed_speaker_add_reapply_keeps_focus_on_its_button(live, browser_cont
     expect(status).not_to_have_text("Đang lưu thay đổi transcript.")
     expect(reapply).to_be_enabled()
     expect(reapply).to_be_focused()
+
+
+def test_extension_recording_status_is_visible_and_retries_without_playback_or_asr(
+    live, browser_context
+):
+    _context, page = browser_context
+    meeting_id = seed_meeting(live.settings.data_dir, "Extension status", "2026-10-14")
+    responses = [
+        {
+            "source": "extension",
+            "state": "receiving",
+            "duration_seconds": None,
+            "audio_url": None,
+            "error": None,
+        },
+        {
+            "source": "extension",
+            "state": "failed",
+            "duration_seconds": None,
+            "audio_url": None,
+            "error": {"code": "media_processing_failed", "message": "private detail"},
+        },
+        {
+            "source": "extension",
+            "state": "ready",
+            "duration_seconds": 12,
+            "audio_url": f"/api/meetings/{meeting_id}/audio",
+            "error": None,
+        },
+    ]
+
+    def route_meeting(route):
+        if route.request.method == "POST":
+            route.fulfill(
+                status=202,
+                json={
+                    "meeting_id": meeting_id,
+                    "recording_state": "finalizing",
+                    "retry_requested": True,
+                },
+            )
+            return
+        response = route.fetch()
+        payload = response.json()
+        if "recording" not in payload:
+            route.fallback()
+            return
+        recording = {**payload["recording"], **responses.pop(0)}
+        if recording["error"] is None:
+            recording.pop("error", None)
+        payload["recording"] = recording
+        route.fulfill(response=response, json=payload)
+
+    page.route(re.compile(rf"/api/meetings/{meeting_id}(?:/recording/retry)?/?$"), route_meeting)
+    page.goto(f"{live.url}/meetings/{meeting_id}#transcript", wait_until="domcontentloaded")
+
+    expect(page.locator("#recording-source")).to_have_text("Nguồn cuộc họp · Extension")
+    expect(page.locator("#status-recording")).to_have_text("Bản ghi · Đang nhận")
+    expect(page.locator("#recording-status")).to_contain_text("Bản ghi đang được nhận")
+    expect(page.locator("#recording-status-retry")).to_be_visible()
+    expect(page.locator("#recording-status-retry")).to_be_enabled()
+    expect(page.locator("#start-transcription")).to_be_disabled()
+    assert page.locator("#meeting-audio").evaluate(
+        "audio => ({controls: audio.controls, src: audio.currentSrc})"
+    ) == {"controls": False, "src": ""}
+
+    page.get_by_role("button", name="Tải lại trạng thái").click()
+    expect(page.locator("#status-recording")).to_have_text("Bản ghi · Thất bại")
+    expect(page.locator("#recording-status")).to_contain_text("Mã lỗi: media_processing_failed")
+    expect(page.locator("#recording-status")).not_to_contain_text("private detail")
+    expect(page.locator("#recording-status-retry")).to_be_visible()
+
+    page.get_by_role("button", name="Thử xử lý lại").click()
+    expect(page.locator("#status-recording")).to_have_text("Bản ghi · Đã lưu · 12 giây")
+    expect(page.locator("#recording-status")).to_be_hidden()
+    expect(page.locator("#recording-status-retry")).to_be_hidden()
+    assert page.locator("#meeting-audio").evaluate("audio => audio.controls") is True
