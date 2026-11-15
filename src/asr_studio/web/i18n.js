@@ -513,6 +513,7 @@ const { t, UI_LOCALE } = (() => {
       "Ngày họp, lời thoại, mốc thời gian và tên người nói được gửi tới ChatGPT bằng model và effort đã lưu. Với nguồn dài, các bản tóm tắt trung gian cũng được gửi để tổng hợp notes. File audio/video, tên cuộc họp và thông tin tài khoản không được gửi.": "The meeting date, speech, timestamps and speaker names are sent to ChatGPT with the saved model and effort. For long sources, intermediate summaries are also sent to compile the notes. The audio/video file, meeting name and account details are not sent.",
       "Ngày họp, lời thoại, mốc thời gian và tên người nói được gửi tới {name} bằng model đã chọn. Với nguồn dài, các bản tóm tắt trung gian cũng được gửi để tổng hợp notes. File audio/video, tên cuộc họp và thông tin tài khoản không được gửi.": "The meeting date, speech, timestamps and speaker names are sent to {name} with the selected model. For long sources, intermediate summaries are also sent to compile the notes. The audio/video file, meeting name and account details are not sent.",
       "Model ASR": "ASR model",
+      "Model chép lời tự động": "Automatic transcription model",
       "Model chép lời": "Transcription model",
       "Lệnh chuẩn bị model": "Model preparation command",
       "Model mặc định theo phần cứng": "Hardware default model",

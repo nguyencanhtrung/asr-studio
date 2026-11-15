@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 
+from asr_studio import extension_routes
 from asr_studio.app import EXTENSION_ORIGIN
 from asr_studio.auth import AuthStore
 from asr_studio.extension_auth import ExtensionSessionIdentity
@@ -151,6 +152,115 @@ async def test_authenticated_chunk_replay_and_pending_library_guard(client, sett
     audio = await client.get(f"/api/meetings/{session['meeting_url'].rsplit('/', 1)[-1]}/audio")
     assert audio.status_code == 409
     assert audio.json()["detail"]["code"] == "recording_not_ready"
+
+
+@pytest.mark.parametrize("replay", [False, True])
+@pytest.mark.parametrize("deadline", ["idle", "total"])
+async def test_stalled_chunk_body_releases_lease_and_preserves_replay(
+    client, settings, monkeypatch, replay, deadline
+):
+    monkeypatch.setattr(extension_routes, "EXTENSION_CHUNK_BODY_IDLE_SECONDS", 0.05)
+    monkeypatch.setattr(extension_routes, "EXTENSION_CHUNK_BODY_TOTAL_SECONDS", 0.2)
+    token = await _extension_session(client, settings)
+    auth = {"Origin": EXTENSION_ORIGIN, "Authorization": f"Bearer {token}"}
+    created = await client.post(
+        "/api/extension/v1/recording-sessions", headers=auth, json=_create_payload()
+    )
+    assert created.status_code == 201, created.text
+    session = created.json()
+    content = b"stalled-body-content"
+    digest = hashlib.sha256(content).hexdigest()
+    chunk_url = f"/api/extension/v1/recording-sessions/{session['id']}/chunks/0"
+    chunk_headers = {
+        **auth,
+        "X-Chunk-Offset": "0",
+        "X-Chunk-SHA256": digest,
+        "X-Writer-Epoch": "1",
+    }
+
+    if replay:
+        uploaded = await client.put(chunk_url, headers=chunk_headers, content=content)
+        assert uploaded.status_code == 200, uploaded.text
+
+    async def stalled_body():
+        yield content[:4]
+        if deadline == "idle":
+            await asyncio.sleep(1)
+            return
+        for _ in range(len(content) - 4):
+            await asyncio.sleep(0.02)
+            yield b"x"
+
+    timed_out = await asyncio.wait_for(
+        client.put(chunk_url, headers=chunk_headers, content=stalled_body()), timeout=2
+    )
+    assert timed_out.status_code == 408, timed_out.text
+    assert timed_out.json()["error"]["code"] == "chunk_timeout"
+
+    chunk_path = settings.data_dir / "extension-staging" / "chunks" / session["id"] / "0.chunk"
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_recording_reservations WHERE session_id = ?",
+                (session["id"],),
+            ).fetchone()[0]
+            == 0
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM extension_recording_chunks WHERE session_id = ?",
+            (session["id"],),
+        ).fetchone()[0] == (1 if replay else 0)
+    if replay:
+        assert chunk_path.read_bytes() == content
+    else:
+        assert not chunk_path.exists()
+
+    retried = await client.put(chunk_url, headers=chunk_headers, content=content)
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["next_offset"] == len(content)
+
+    meeting_id = session["meeting_url"].rsplit("/", 1)[-1]
+    deleted = await asyncio.wait_for(
+        client.delete(f"/api/meetings/{meeting_id}", headers={"Origin": settings.public_url}),
+        timeout=2,
+    )
+    assert deleted.status_code == 200, deleted.text
+
+
+async def test_oversized_replay_body_releases_lease_without_erasing_chunk(client, settings):
+    token = await _extension_session(client, settings)
+    auth = {"Origin": EXTENSION_ORIGIN, "Authorization": f"Bearer {token}"}
+    created = await client.post(
+        "/api/extension/v1/recording-sessions", headers=auth, json=_create_payload()
+    )
+    assert created.status_code == 201, created.text
+    session = created.json()
+    content = b"committed-replay"
+    chunk_url = f"/api/extension/v1/recording-sessions/{session['id']}/chunks/0"
+    chunk_headers = {
+        **auth,
+        "X-Chunk-Offset": "0",
+        "X-Chunk-SHA256": hashlib.sha256(content).hexdigest(),
+        "X-Writer-Epoch": "1",
+    }
+    uploaded = await client.put(chunk_url, headers=chunk_headers, content=content)
+    assert uploaded.status_code == 200, uploaded.text
+
+    async def oversized_body():
+        yield content
+        yield b"!"
+
+    rejected = await asyncio.wait_for(
+        client.put(chunk_url, headers=chunk_headers, content=oversized_body()), timeout=2
+    )
+    assert rejected.status_code == 413, rejected.text
+    assert rejected.json()["error"]["code"] == "chunk_too_large"
+    chunk_path = settings.data_dir / "extension-staging" / "chunks" / session["id"] / "0.chunk"
+    assert chunk_path.read_bytes() == content
+
+    replay = await client.put(chunk_url, headers=chunk_headers, content=content)
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == uploaded.json()
 
 
 async def test_finalize_receipt_precedes_media_failure_and_delete_tombstones(

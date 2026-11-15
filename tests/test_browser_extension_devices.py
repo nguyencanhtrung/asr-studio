@@ -265,7 +265,7 @@ def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(
     page.keyboard.press("Tab")
     expect(repair_en).to_be_focused()
     assert page.evaluate("getComputedStyle(document.activeElement).outlineStyle") == "solid"
-    assert page.locator("#settings-panel-devices select").count() == 1
+    assert page.locator("#extension-device-code-form select").count() == 1
 
     # Consume the code at the configured endpoint. The operator UI never receives this bearer;
     # it is held only by this browser test to exercise the pending-before-session contract.
