@@ -325,8 +325,8 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _open_directory_chain(path: Path) -> int:
-    """Open a managed directory without following any path component symlink."""
-    absolute = Path(os.path.abspath(os.fspath(path)))
+    """Resolve the configured root, then reject symlinks in managed children."""
+    absolute = Path(os.path.realpath(os.fspath(path)))
     descriptor = os.open(os.sep, _DIRECTORY_FLAGS)
     try:
         for component in absolute.parts[1:]:
@@ -379,6 +379,43 @@ def _managed_extension_directories(data_dir: Path, session_id: str) -> Iterator[
                 os.close(descriptor)
 
 
+@contextmanager
+def _managed_extension_temp_directories(data_dir: Path) -> Iterator[dict[str, int]]:
+    root_descriptor = _open_directory_chain(data_dir)
+    descriptors = [root_descriptor]
+    try:
+        raw_descriptor = _open_directory_child(root_descriptor, "extension-raw")
+        descriptors.append(raw_descriptor)
+        raw_tmp_descriptor = _open_directory_child(raw_descriptor, ".tmp")
+        descriptors.append(raw_tmp_descriptor)
+        derivatives_descriptor = _open_directory_child(root_descriptor, "extension-derivatives")
+        descriptors.append(derivatives_descriptor)
+        derivatives_tmp_descriptor = _open_directory_child(derivatives_descriptor, ".tmp")
+        descriptors.append(derivatives_tmp_descriptor)
+        yield {"raw_tmp": raw_tmp_descriptor, "derivatives_tmp": derivatives_tmp_descriptor}
+    finally:
+        for descriptor in reversed(descriptors):
+            with suppress(OSError):
+                os.close(descriptor)
+
+
+def _reconcile_extension_temp_artifacts(
+    data_dir: Path,
+) -> dict[str, dict[str, set[str]]]:
+    """Enumerate managed temp files once, grouped by their validated session ID."""
+    artifacts: dict[str, dict[str, set[str]]] = {}
+    with _managed_extension_temp_directories(data_dir) as directories:
+        for kind, key in (("raw", "raw_tmp"), ("derivative", "derivatives_tmp")):
+            for name in os.listdir(directories[key]):
+                if len(name) <= 33 or not name.startswith(".") or name[33] != "-":
+                    continue
+                session_id = name[1:33]
+                if SESSION_ID_RE.fullmatch(session_id) is None:
+                    continue
+                artifacts.setdefault(session_id, {}).setdefault(kind, set()).add(name)
+    return artifacts
+
+
 def _unlink_directory_entry(directory_descriptor: int, name: str) -> bool:
     try:
         os.unlink(name, dir_fd=directory_descriptor)
@@ -396,6 +433,17 @@ def _remove_directory_entries(
         if predicate(name):
             changed = _unlink_directory_entry(directory_descriptor, name) or changed
     return changed
+
+
+def _remove_enumerated_extension_temp_artifacts(
+    directories: dict[str, int], artifacts: dict[str, set[str]]
+) -> None:
+    for directory_key, artifact_key in (("raw_tmp", "raw"), ("derivatives_tmp", "derivative")):
+        changed = False
+        for name in artifacts.get(artifact_key, set()):
+            changed = _unlink_directory_entry(directories[directory_key], name) or changed
+        if changed:
+            os.fsync(directories[directory_key])
 
 
 def _safe_entry_name(value: object) -> bool:
@@ -2152,13 +2200,23 @@ class ExtensionIngestWorker:
 def recover_extension_ingest(data_dir: Path) -> None:
     """Recover only after acquiring each session's publication/delete boundary."""
     ensure_extension_storage(data_dir)
+    temp_artifacts = _reconcile_extension_temp_artifacts(data_dir)
     with _connect(data_dir) as connection:
-        session_ids = [
+        database_session_ids = [
             row[0]
             for row in connection.execute(
-                "SELECT id FROM extension_recording_sessions ORDER BY id"
+                "SELECT sessions.id FROM extension_recording_sessions AS sessions "
+                "WHERE sessions.state IN ('receiving', 'finalizing', 'archiving') "
+                "OR EXISTS ("
+                "SELECT 1 FROM extension_recording_chunks AS chunks "
+                "WHERE chunks.session_id = sessions.id"
+                ") OR EXISTS ("
+                "SELECT 1 FROM extension_recording_reservations AS reservations "
+                "WHERE reservations.session_id = sessions.id"
+                ") ORDER BY sessions.id"
             ).fetchall()
         ]
+    session_ids = sorted(set(database_session_ids) | set(temp_artifacts))
     for session_id in session_ids:
         with session_lock(data_dir, session_id):
             with _connect(data_dir) as connection:
@@ -2168,6 +2226,11 @@ def recover_extension_ingest(data_dir: Path) -> None:
                     (session_id,),
                 ).fetchone()
                 if session is None:
+                    _session_dir(data_dir, session_id)
+                    with _managed_extension_directories(data_dir, session_id) as directories:
+                        _remove_enumerated_extension_temp_artifacts(
+                            directories, temp_artifacts.get(session_id, {})
+                        )
                     continue
                 chunk_rows = connection.execute(
                     "SELECT sequence, storage_key, length_bytes, sha256 "
@@ -2245,20 +2308,6 @@ def recover_extension_ingest(data_dir: Path) -> None:
             derivative_key = recording["storage_key"] if recording is not None else None
             if derivative_key not in {None, f"extension-derivatives/{session_id}.m4a"}:
                 raise RuntimeError("An extension recording has an unexpected derivative key")
-            raw_corrupt = False
-            if session["raw_key"] is not None:
-                raw_path = Path(data_dir) / "extension-raw" / f"{session_id}.webm"
-                try:
-                    raw_length, raw_digest = _hash_file(
-                        raw_path, expected_length=session["raw_bytes"]
-                    )
-                    raw_corrupt = (
-                        session["receipt_at"] is None
-                        or raw_digest != session["archive_sha256"]
-                        or raw_length != session["raw_bytes"]
-                    )
-                except ExtensionIngestError:
-                    raw_corrupt = True
             with _managed_extension_directories(data_dir, session_id) as directories:
                 changed_raw = False
                 if session["raw_key"] is None:
@@ -2268,22 +2317,27 @@ def recover_extension_ingest(data_dir: Path) -> None:
                     changed_derivative = _unlink_directory_entry(
                         directories["derivatives"], f"{session_id}.m4a"
                     )
-                changed_raw_tmp = _remove_directory_entries(
-                    directories["raw_tmp"],
-                    lambda name, prefix=f".{session_id}-": name.startswith(prefix),
-                )
-                changed_derivative_tmp = _remove_directory_entries(
-                    directories["derivatives_tmp"],
-                    lambda name, prefix=f".{session_id}-": name.startswith(prefix),
-                )
                 if changed_raw:
                     os.fsync(directories["raw"])
                 if changed_derivative:
                     os.fsync(directories["derivatives"])
-                if changed_raw_tmp:
-                    os.fsync(directories["raw_tmp"])
-                if changed_derivative_tmp:
-                    os.fsync(directories["derivatives_tmp"])
+                _remove_enumerated_extension_temp_artifacts(
+                    directories, temp_artifacts.get(session_id, {})
+                )
+            has_staging = bool(chunk_rows or reservations)
+            raw_corrupt = False
+            if session["receipt_at"] is not None and has_staging:
+                raw_path = Path(data_dir) / "extension-raw" / f"{session_id}.webm"
+                try:
+                    raw_length, raw_digest = _hash_file(
+                        raw_path, expected_length=session["raw_bytes"]
+                    )
+                    raw_corrupt = (
+                        raw_digest != session["archive_sha256"]
+                        or raw_length != session["raw_bytes"]
+                    )
+                except ExtensionIngestError:
+                    raw_corrupt = True
             if raw_corrupt:
                 with _connect(data_dir) as connection, connection:
                     connection.execute(
@@ -2294,7 +2348,7 @@ def recover_extension_ingest(data_dir: Path) -> None:
                         "AND state <> 'canceled'",
                         (_now_text(), session_id),
                     )
-            elif session["receipt_at"] is not None:
+            elif session["receipt_at"] is not None and has_staging:
                 try:
                     _release_receipted_staging(data_dir, session_id, raw_verified=True)
                 except (OSError, RuntimeError, sqlite3.Error):

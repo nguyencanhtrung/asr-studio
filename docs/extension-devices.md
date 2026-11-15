@@ -72,6 +72,20 @@ Replaying an extension finalize request only returns the saved outcome; it does
 not restart failed media processing. Archive verification for operator retry
 runs outside the database write transaction so other library operations can proceed.
 
+Each chunk body has a 30-second idle-read and 300-second total-read deadline. The original body is
+limited to the negotiated chunk maximum (8 MiB by default); a replay body is limited to the smaller
+of that maximum and the already committed chunk length. A stalled body returns retryable
+`chunk_timeout` (HTTP 408), aborts its lease and releases its reservation and session lock, so the
+same chunk can be retried and the meeting can be deleted. A timed-out or oversized replay never
+rewrites or removes the committed chunk.
+
+Startup recovery is bounded by pending work rather than the retained library: it selects nonterminal
+or staging-bearing sessions and skips ready/failed terminal archives without staging. It enumerates
+the raw and derivative temp directories once, groups validated session-prefixed names, and removes
+only the names still present after taking each session's publication/delete lock. Temp files created
+after that enumeration are deferred to a later recovery; this preserves a live archive or conversion
+temp file at the cost of possibly leaving one extra interrupted temp until restart.
+
 Ready publication is kept as a connection-aware database seam: the internal helper updates the
 recording derivative fields and session state on a caller-owned SQLite connection and performs no
 `BEGIN`, `COMMIT`, media, or network work. This leaves #219 room to atomically add workflow intent

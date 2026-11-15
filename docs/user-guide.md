@@ -536,6 +536,13 @@ guards, not a promise of throughput or long-recording reliability. Their authori
 are [`config.py`](../src/asr_studio/config.py),
 [`extension_ingest.py`](../src/asr_studio/extension_ingest.py), and the capabilities response.
 
+Chunk uploads have a 30-second idle-read and 300-second total-read budget. A stalled upload is
+aborted with a retryable `chunk_timeout`; the server releases its temporary reservation and session
+lock, so retrying the same chunk or deleting the meeting remains possible. Replay bodies are drained
+under the same deadlines and may not exceed the smaller of the 8 MiB chunk limit and the committed
+chunk length; a rejected replay preserves the committed bytes. Startup recovery checks pending or
+staging-bearing work and temp artifacts, but does not hash every retained ready/failed archive.
+
 If media finalization fails after the raw receipt is durable, the meeting remains visible as failed
 and the operator can choose **Retry recording** in the meeting view. The action is available only
 when the server can verify the complete raw archive; it reuses the same meeting and receipt and

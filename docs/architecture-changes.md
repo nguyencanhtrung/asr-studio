@@ -2378,7 +2378,13 @@ nullable extension link and derivative fields, so the two tables cannot disagree
 Chunk bytes are written through bounded temporary files, fsynced and renamed into managed staging;
 the exact raw archive is fsynced and receipt-committed before media normalization. After that commit,
 the archive lane fsyncs and removes the session's staging chunks before deleting their database rows.
-Recovery repeats this cleanup only after it verifies the immutable raw receipt. One lifetime-owned,
+Recovery repeats this cleanup only after it verifies the immutable raw receipt. Startup selects
+receiving/finalizing/archiving sessions and any session with retained staging, while ready/failed
+terminal archives without staging are left untouched; their raw receipt remains verified by the
+existing status, retry and media paths when needed. Raw and derivative temp directories are each
+enumerated once, valid `.{session_id}-...` names are grouped, and cleanup takes the corresponding
+session lock before unlinking the names captured by that enumeration. A temp file created after
+enumeration is left for a later recovery rather than risking deletion by a live publisher. One lifetime-owned,
 bounded worker supervises separate archive/receipt and normalization lanes: there is one archive
 operation and one normalization job at a time, while an archive can proceed when normalization is
 paused. The normalization lane publishes the derivative and only then marks the artifact ready.
@@ -2403,7 +2409,12 @@ measurements. The effective recording and staging limits are the minimum of the 
 limit, 4 GiB recording cap and `ASR_EXTENSION_MAX_STAGING_BYTES` (default 512 MiB). The default
 global active-session cap is 64; each chunk is at most 8 MiB and a manifest has at most 65,536
 chunks. Finalize-body capacity is `16 KiB + 160 bytes × max_chunks`. Media finalization is bounded
-to 30 minutes wall time, 512 MiB output and a 64 MiB free-disk reserve. Values come from
+to 30 minutes wall time, 512 MiB output and a 64 MiB free-disk reserve. Each chunk body also has a
+30-second idle-read deadline and a 300-second total-read deadline. An original body remains capped
+by the negotiated 8 MiB chunk limit; a replay body is capped by the smaller of that limit and its
+committed chunk length. A timeout returns retryable `chunk_timeout` (HTTP 408) after aborting the
+lease, reservation and session lock; an oversized replay returns `chunk_too_large` without changing
+the committed chunk. Values come from
 [`config.py`](../src/asr_studio/config.py), [`extension_ingest.py`](../src/asr_studio/extension_ingest.py)
 and the capabilities response; operators can configure the staging and active-session caps.
 Compose forwards both configurable caps from `.env`. Probe, remux, conversion and
@@ -2418,7 +2429,8 @@ and [`test_extension_media.py`](../tests/test_extension_media.py).
 **Evidence and trade-offs.** Language omission is part of the immutable replay fingerprint, global
 staging includes durable in-flight reservations and chunks for sessions without a raw receipt, and
 exact replay remains possible while a session is still receiving. SQLite ready guards explicitly require non-null
-duration as well as `> 0`. Focused fault tests cover replay, raw receipt ordering, quota,
+duration as well as `> 0`. Focused fault tests cover stalled original/replay bodies, replay byte
+bounds, raw receipt ordering, quota,
 cancellation, corruption, publication/recovery locking, caller-transaction rollback, deletion
 fences, distinct client/library receipt IDs, operator retry authorization and ready invariants;
 the backend handoff also passed the non-browser regression suite. Browser/model and real-device
