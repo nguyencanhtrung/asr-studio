@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -10,7 +12,11 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
-from asr_studio.config import Settings
+from asr_studio.config import (
+    EXTENSION_CHUNK_BODY_IDLE_SECONDS,
+    EXTENSION_CHUNK_BODY_TOTAL_SECONDS,
+    Settings,
+)
 from asr_studio.extension_auth import (
     EXTENSION_API_VERSION,
     EXTENSION_ID,
@@ -79,6 +85,35 @@ def _header_integer(request: Request, name: str, *, required: bool = True) -> in
     if value < 0:
         raise ExtensionIngestError(400, "invalid_request", f"{name} is invalid.")
     return value
+
+
+async def _bounded_chunk_body(
+    request: Request,
+    *,
+    max_body_bytes: int,
+    on_block: Callable[[bytes], None],
+) -> None:
+    """Read a chunk body with idle, total, and byte budgets."""
+    iterator = request.stream().__aiter__()
+    deadline = asyncio.get_running_loop().time() + EXTENSION_CHUNK_BODY_TOTAL_SECONDS
+    received = 0
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError
+        try:
+            block = await asyncio.wait_for(
+                iterator.__anext__(),
+                timeout=min(EXTENSION_CHUNK_BODY_IDLE_SECONDS, remaining),
+            )
+        except StopAsyncIteration:
+            return
+        received += len(block)
+        if received > max_body_bytes:
+            raise ExtensionIngestError(
+                413, "chunk_too_large", "The chunk exceeds its negotiated limit."
+            )
+        on_block(block)
 
 
 def _request_endpoint(request: Request, settings: Settings) -> str:
@@ -405,13 +440,20 @@ def install_extension_routes(
                 settings=settings,
             )
             if lease.replay_ack is None:
-                async for block in request.stream():
-                    lease.write(block)
+                await _bounded_chunk_body(
+                    request,
+                    max_body_bytes=lease.max_chunk_bytes,
+                    on_block=lease.write,
+                )
             else:
                 # Drain a retry body without re-writing a committed chunk. The durable file
                 # and its stored digest were verified before this ACK was prepared.
-                async for _ in request.stream():
-                    pass
+                committed_length = int(lease.replay_ack["next_offset"]) - lease.offset
+                await _bounded_chunk_body(
+                    request,
+                    max_body_bytes=min(lease.max_chunk_bytes, committed_length),
+                    on_block=lambda _block: None,
+                )
             return await run_in_threadpool(lease.commit)
         except ClientDisconnect:
             if lease is not None:
@@ -420,6 +462,10 @@ def install_extension_routes(
                 {"error": {"code": "chunk_interrupted", "message": _CHUNK_ERROR_MESSAGE}},
                 status_code=400,
             )
+        except TimeoutError:
+            if lease is not None:
+                lease.abort()
+            return _ingest_error(ExtensionIngestError(408, "chunk_timeout", _CHUNK_ERROR_MESSAGE))
         except ExtensionAuthError as error:
             return _error(error)
         except ExtensionIngestError as error:

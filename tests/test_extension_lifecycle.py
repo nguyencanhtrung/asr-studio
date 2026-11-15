@@ -4,6 +4,7 @@ import hashlib
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -323,6 +324,132 @@ def test_receipt_cleanup_failure_is_visible_and_retryable_after_recovery(setting
     current = _replay(settings, identity, session, content, "status")
     assert current["state"] == "ready"
     assert current["receipt"] == receipt
+
+
+def test_recovery_skips_terminal_archives_and_reconciles_pending_artifacts(settings, monkeypatch):
+    _identity_ready, ready, ready_content = _prepared_named(
+        settings,
+        owner_id="owner-recovery-ready-0001",
+        client_id="recovery-ready",
+        content=b"ready archive",
+    )
+
+    monkeypatch.setattr(
+        ingest,
+        "normalize_extension_media",
+        lambda *args, **kwargs: SimpleNamespace(duration_seconds=1.0),
+    )
+    _run(settings, ready)
+
+    _identity_failed, failed, failed_content = _prepared_named(
+        settings,
+        owner_id="owner-recovery-failed-0001",
+        client_id="recovery-failed",
+        content=b"failed archive",
+    )
+
+    def fail_media(*args, **kwargs):
+        raise MediaProcessingError("invalid_media")
+
+    monkeypatch.setattr(ingest, "normalize_extension_media", fail_media)
+    _run(settings, failed)
+
+    _identity_pending, pending, pending_content = _prepared_named(
+        settings,
+        owner_id="owner-recovery-pending-0001",
+        client_id="recovery-pending",
+        content=b"pending archive",
+    )
+    raw_tmp = settings.data_dir / "extension-raw" / ".tmp" / f".{pending['id']}-orphan.webm"
+    derivative_tmp = (
+        settings.data_dir / "extension-derivatives" / ".tmp" / f".{pending['id']}-orphan.m4a"
+    )
+    raw_tmp.write_bytes(b"partial raw")
+    derivative_tmp.write_bytes(b"partial derivative")
+
+    original_hash = ingest._hash_file
+    raw_hashes = []
+    opened_sessions = []
+
+    def track_hash(path, **kwargs):
+        if Path(path).parent.name == "extension-raw":
+            raw_hashes.append(Path(path))
+        return original_hash(path, **kwargs)
+
+    original_session_lock = ingest.session_lock
+
+    @contextmanager
+    def track_session_lock(data_dir, session_id):
+        opened_sessions.append(session_id)
+        with original_session_lock(data_dir, session_id):
+            yield
+
+    monkeypatch.setattr(ingest, "_hash_file", track_hash)
+    monkeypatch.setattr(ingest, "session_lock", track_session_lock)
+    ingest.recover_extension_ingest(settings.data_dir)
+
+    assert raw_hashes == []
+    assert opened_sessions == [pending["id"]]
+    assert not raw_tmp.exists()
+    assert not derivative_tmp.exists()
+    assert (
+        settings.data_dir / "extension-staging" / "chunks" / pending["id"] / "0.chunk"
+    ).read_bytes() == pending_content
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert connection.execute(
+            "SELECT state FROM extension_recording_sessions WHERE id = ?", (ready["id"],)
+        ).fetchone() == ("ready",)
+        assert connection.execute(
+            "SELECT state FROM extension_recording_sessions WHERE id = ?", (failed["id"],)
+        ).fetchone() == ("failed",)
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_recording_chunks WHERE session_id = ?",
+                (pending["id"],),
+            ).fetchone()[0]
+            == 1
+        )
+    assert (
+        settings.data_dir / "extension-raw" / f"{ready['id']}.webm"
+    ).read_bytes() == ready_content
+    assert (
+        settings.data_dir / "extension-raw" / f"{failed['id']}.webm"
+    ).read_bytes() == failed_content
+
+
+def test_recovery_fences_active_temp_artifacts_with_session_lock(settings):
+    _identity, pending, _content = _prepared_named(
+        settings,
+        owner_id="owner-recovery-lock-0001",
+        client_id="recovery-lock",
+        content=b"active archive",
+    )
+    active_temp = settings.data_dir / "extension-raw" / ".tmp" / f".{pending['id']}-active.webm"
+    active_temp.write_bytes(b"live archive temp")
+    orphan_id = "e" * 32
+    orphan_temp = settings.data_dir / "extension-derivatives" / ".tmp" / f".{orphan_id}-orphan.m4a"
+    orphan_temp.write_bytes(b"orphan temp")
+    finished = threading.Event()
+    errors = []
+
+    def recover():
+        try:
+            ingest.recover_extension_ingest(settings.data_dir)
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    with ingest.session_lock(settings.data_dir, pending["id"]):
+        worker = threading.Thread(target=recover)
+        worker.start()
+        assert not finished.wait(0.1)
+        assert active_temp.exists()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert errors == []
+    assert not active_temp.exists()
+    assert not orphan_temp.exists()
 
 
 def test_deletion_marked_receipted_session_does_not_starve_queue(settings, monkeypatch):
