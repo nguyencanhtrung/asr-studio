@@ -1104,6 +1104,10 @@ def begin_chunk(
                 raise ExtensionIngestError(
                     409, "writer_epoch_conflict", "The recording writer epoch changed."
                 )
+            if row["receipt_at"] is not None:
+                raise ExtensionIngestError(
+                    409, "session_state_conflict", "The recording is no longer receiving chunks."
+                )
             existing = connection.execute(
                 "SELECT offset_bytes, length_bytes, sha256, storage_key "
                 "FROM extension_recording_chunks WHERE session_id = ? AND sequence = ?",
@@ -1613,6 +1617,48 @@ def _commit_archive_receipt(
         return True
 
 
+def _release_receipted_staging(
+    data_dir: Path, session_id: str, *, raw_verified: bool = False
+) -> bool:
+    """Release acknowledged chunks only after the immutable raw receipt is durable."""
+    with _connect(data_dir) as connection:
+        session = _session_query(connection, session_id)
+        if session is None or session["receipt_at"] is None:
+            return False
+        chunk_rows = connection.execute(
+            "SELECT sequence, storage_key FROM extension_recording_chunks WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+    for row in chunk_rows:
+        expected_key = f"extension-staging/chunks/{session_id}/{int(row['sequence'])}.chunk"
+        if row["storage_key"] != expected_key:
+            raise RuntimeError("An extension chunk has an unexpected storage key")
+    if not raw_verified:
+        try:
+            _complete_raw_archive(data_dir, session)
+        except ExtensionIngestError:
+            return False
+
+    _session_dir(data_dir, session_id)
+    with _managed_extension_directories(data_dir, session_id) as directories:
+        staging_changed = _remove_directory_entries(directories["session"], lambda name: True)
+        if staging_changed:
+            os.fsync(directories["session"])
+        with suppress(FileNotFoundError):
+            os.rmdir(session_id, dir_fd=directories["chunks"])
+        os.fsync(directories["chunks"])
+    with _connect(data_dir) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "DELETE FROM extension_recording_reservations WHERE session_id = ?", (session_id,)
+        )
+        connection.execute(
+            "DELETE FROM extension_recording_chunks WHERE session_id = ?", (session_id,)
+        )
+        connection.commit()
+    return True
+
+
 def publish_ready_derivative(
     connection: sqlite3.Connection,
     session_id: str,
@@ -1675,6 +1721,18 @@ def _mark_media_failure(data_dir: Path, session_id: str, error: MediaProcessingE
         error_code=error.code,
         error_message=(
             "The raw recording was archived, but media finalization failed. Retry normalization."
+        ),
+    )
+
+
+def _mark_staging_cleanup_failure(data_dir: Path, session_id: str) -> None:
+    _set_session_state(
+        data_dir,
+        session_id,
+        state="failed",
+        error_code="staging_cleanup_failed",
+        error_message=(
+            "The raw recording was archived, but staging cleanup failed. Retry recording."
         ),
     )
 
@@ -1751,12 +1809,22 @@ def _process_session(
             if not committed:
                 _unlink(raw_path)
                 return
-            row = None
+        with _connect(data_dir) as connection:
+            row = _session_query(connection, session_id)
+        if row is None or row["deletion_requested_at"] is not None or row["state"] == "canceled":
+            return
+        if row["receipt_at"] is not None:
+            try:
+                _release_receipted_staging(data_dir, session_id)
+            except (OSError, RuntimeError, sqlite3.Error):
+                # A failed cleanup must leave a visible terminal state. Failed
+                # sessions are not selected again until an operator retries them.
+                _mark_staging_cleanup_failure(data_dir, session_id)
+                return
             with _connect(data_dir) as connection:
                 row = _session_query(connection, session_id)
-            if row is None:
+            if row is None or row["deletion_requested_at"] is not None:
                 return
-
         if row["receipt_at"] is None or row["state"] not in {"archived", "finalizing"}:
             return
         if _session_should_cancel(data_dir, session_id, stop_event):
@@ -1804,6 +1872,7 @@ def _process_session(
                 max_output_bytes=limits["media_output_bytes"],
                 timeout_seconds=limits["media_wall_seconds"],
                 should_cancel=lambda: _session_should_cancel(data_dir, session_id, stop_event),
+                remux_prefix=f".{session_id}-",
             )
             with Path(temporary_name).open("rb") as output:
                 os.fsync(output.fileno())
@@ -1865,8 +1934,14 @@ class ExtensionIngestWorker:
         try:
             with _connect(self.settings.data_dir) as connection:
                 row = connection.execute(
-                    "SELECT id FROM extension_recording_sessions "
-                    "WHERE state IN ('finalizing', 'archiving', 'archived') "
+                    "SELECT sessions.id FROM extension_recording_sessions AS sessions "
+                    "WHERE sessions.state IN ('finalizing', 'archiving', 'archived') "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM recordings "
+                    "JOIN meetings ON meetings.id = recordings.meeting_id "
+                    "WHERE recordings.extension_session_id = sessions.id "
+                    "AND meetings.deletion_requested_at IS NOT NULL"
+                    ") "
                     "ORDER BY updated_at ASC, id ASC LIMIT 1"
                 ).fetchone()
         except sqlite3.Error:
@@ -1989,26 +2064,27 @@ def recover_extension_ingest(data_dir: Path) -> None:
                     (session_id,),
                 )
 
-            corrupt = False
-            for row in chunk_rows:
-                path = _chunk_path(data_dir, session_id, int(row["sequence"]))
-                try:
-                    length, digest = _hash_file(path, expected_length=int(row["length_bytes"]))
-                except ExtensionIngestError:
-                    corrupt = True
-                    continue
-                if length != row["length_bytes"] or digest != row["sha256"]:
-                    corrupt = True
-            if corrupt:
-                with _connect(data_dir) as connection, connection:
-                    connection.execute(
-                        "UPDATE extension_recording_sessions SET state = 'failed', "
-                        "error_code = 'chunk_corrupt', "
-                        "error_message = 'An acknowledged chunk is corrupt or missing.', "
-                        "updated_at = ? WHERE id = ? AND receipt_at IS NULL "
-                        "AND state <> 'canceled'",
-                        (_now_text(), session_id),
-                    )
+            if session["receipt_at"] is None:
+                corrupt = False
+                for row in chunk_rows:
+                    path = _chunk_path(data_dir, session_id, int(row["sequence"]))
+                    try:
+                        length, digest = _hash_file(path, expected_length=int(row["length_bytes"]))
+                    except ExtensionIngestError:
+                        corrupt = True
+                        continue
+                    if length != row["length_bytes"] or digest != row["sha256"]:
+                        corrupt = True
+                if corrupt:
+                    with _connect(data_dir) as connection, connection:
+                        connection.execute(
+                            "UPDATE extension_recording_sessions SET state = 'failed', "
+                            "error_code = 'chunk_corrupt', "
+                            "error_message = 'An acknowledged chunk is corrupt or missing.', "
+                            "updated_at = ? WHERE id = ? AND receipt_at IS NULL "
+                            "AND state <> 'canceled'",
+                            (_now_text(), session_id),
+                        )
 
             if session["raw_key"] not in {None, f"extension-raw/{session_id}.webm"}:
                 raise RuntimeError("An extension session has an unexpected raw storage key")
@@ -2064,6 +2140,11 @@ def recover_extension_ingest(data_dir: Path) -> None:
                         "AND state <> 'canceled'",
                         (_now_text(), session_id),
                     )
+            elif session["receipt_at"] is not None:
+                try:
+                    _release_receipted_staging(data_dir, session_id, raw_verified=True)
+                except (OSError, RuntimeError, sqlite3.Error):
+                    _mark_staging_cleanup_failure(data_dir, session_id)
 
 
 def cleanup_extension_session_artifacts(data_dir: Path, session_id: str) -> None:

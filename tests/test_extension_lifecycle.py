@@ -4,6 +4,8 @@ import hashlib
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from test_extension_ingest import _create_payload, _identity, _manifest
@@ -47,6 +49,289 @@ def _prepared(settings, content=b"synthetic archived bytes"):
         settings=settings,
     )
     return identity, session, content
+
+
+def _prepared_named(settings, *, owner_id, client_id, content):
+    initialize(settings.data_dir)
+    identity = _identity(settings, owner_id)
+    payload = {
+        **_create_payload(),
+        "client_recording_id": client_id,
+        "capture_epoch": f"capture-{client_id}",
+    }
+    session, _ = ingest.create_recording_session(
+        settings.data_dir,
+        identity=identity,
+        payload=payload,
+        backend_id="b" * 32,
+        settings=settings,
+    )
+    lease = ingest.begin_chunk(
+        settings.data_dir,
+        identity=identity,
+        session_id=session["id"],
+        sequence=0,
+        offset=0,
+        sha256=hashlib.sha256(content).hexdigest(),
+        epoch=1,
+        declared_length=len(content),
+        settings=settings,
+    )
+    lease.write(content)
+    lease.commit()
+    manifest = _manifest(content, epoch=1)
+    manifest.update(
+        capture_epoch=f"capture-{client_id}",
+        finalize_id=f"finalize-{client_id}",
+    )
+    ingest.finalize_recording_session(
+        settings.data_dir,
+        identity=identity,
+        session_id=session["id"],
+        payload=manifest,
+        backend_id="b" * 32,
+        settings=settings,
+    )
+    return identity, session, content
+
+
+def _install_receipt(settings, session_id, content, *, state="archived"):
+    raw_path = settings.data_dir / "extension-raw" / f"{session_id}.webm"
+    raw_path.write_bytes(content)
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        connection.execute(
+            "UPDATE extension_recording_sessions SET state = ?, raw_key = ?, raw_bytes = ?, "
+            "archive_sha256 = ?, receipt_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (
+                state,
+                f"extension-raw/{session_id}.webm",
+                len(content),
+                hashlib.sha256(content).hexdigest(),
+                session_id,
+            ),
+        )
+
+
+def test_receipt_cleanup_releases_quota_and_rejects_closed_chunk_replay(settings, monkeypatch):
+    quota_settings = replace(settings, extension_max_staging_bytes=4)
+
+    def normalize(*args, **kwargs):
+        return SimpleNamespace(duration_seconds=1.0)
+
+    monkeypatch.setattr(ingest, "normalize_extension_media", normalize)
+    identity, session, content = _prepared(quota_settings, content=b"four")
+    _run(quota_settings, session)
+
+    current = _replay(quota_settings, identity, session, content, "status")
+    assert current["state"] == "ready"
+    chunk = quota_settings.data_dir / "extension-staging" / "chunks" / session["id"] / "0.chunk"
+    assert not chunk.exists()
+    with sqlite3.connect(database_path(quota_settings.data_dir)) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_recording_chunks WHERE session_id = ?",
+                (session["id"],),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_recording_reservations WHERE session_id = ?",
+                (session["id"],),
+            ).fetchone()[0]
+            == 0
+        )
+
+    with pytest.raises(ingest.ExtensionIngestError) as replay:
+        ingest.begin_chunk(
+            quota_settings.data_dir,
+            identity=identity,
+            session_id=session["id"],
+            sequence=0,
+            offset=0,
+            sha256=hashlib.sha256(content).hexdigest(),
+            epoch=1,
+            declared_length=len(content),
+            settings=quota_settings,
+        )
+    assert replay.value.code == "session_state_conflict"
+
+    later, status = ingest.create_recording_session(
+        quota_settings.data_dir,
+        identity=identity,
+        payload={
+            **_create_payload(),
+            "client_recording_id": "later-recording",
+            "capture_epoch": "later-capture",
+        },
+        backend_id="b" * 32,
+        settings=quota_settings,
+    )
+    assert status == 201
+    assert later["state"] == "receiving"
+
+
+def test_receipt_cleanup_recovery_removes_partial_staging_after_raw_verification(settings):
+    identity, session, content = _prepared(settings)
+    _install_receipt(settings, session["id"], content)
+    chunk = settings.data_dir / "extension-staging" / "chunks" / session["id"] / "0.chunk"
+    chunk.unlink()
+
+    ingest.recover_extension_ingest(settings.data_dir)
+
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        stored = connection.execute(
+            "SELECT state, raw_bytes, archive_sha256, receipt_at "
+            "FROM extension_recording_sessions WHERE id = ?",
+            (session["id"],),
+        ).fetchone()
+        assert stored[0] == "archived"
+        assert stored[1:] == (len(content), hashlib.sha256(content).hexdigest(), stored[3])
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_recording_chunks WHERE session_id = ?",
+                (session["id"],),
+            ).fetchone()[0]
+            == 0
+        )
+    assert (settings.data_dir / "extension-raw" / f"{session['id']}.webm").read_bytes() == content
+
+
+def test_receipt_cleanup_never_releases_staging_without_durable_raw(settings):
+    _identity_value, session, content = _prepared(settings)
+    _install_receipt(settings, session["id"], content)
+    raw_path = settings.data_dir / "extension-raw" / f"{session['id']}.webm"
+    raw_path.unlink()
+    chunk = settings.data_dir / "extension-staging" / "chunks" / session["id"] / "0.chunk"
+
+    ingest.recover_extension_ingest(settings.data_dir)
+
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_recording_chunks WHERE session_id = ?",
+                (session["id"],),
+            ).fetchone()[0]
+            == 1
+        )
+    assert chunk.exists()
+
+
+def test_receipt_cleanup_failure_is_visible_and_retryable_after_recovery(settings, monkeypatch):
+    identity, session, content = _prepared(settings)
+    original_release = ingest._release_receipted_staging
+    failed_once = True
+
+    def fail_first_cleanup(*args, **kwargs):
+        nonlocal failed_once
+        if failed_once:
+            failed_once = False
+            raise OSError("simulated staging cleanup interruption")
+        return original_release(*args, **kwargs)
+
+    monkeypatch.setattr(ingest, "_release_receipted_staging", fail_first_cleanup)
+    _run(settings, session)
+
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        stored = connection.execute(
+            "SELECT state, error_code, raw_bytes, archive_sha256, receipt_at "
+            "FROM extension_recording_sessions WHERE id = ?",
+            (session["id"],),
+        ).fetchone()
+        assert stored[0:2] == ("failed", "staging_cleanup_failed")
+        assert stored[2] == len(content)
+        assert stored[3] == hashlib.sha256(content).hexdigest()
+        assert stored[4] is not None
+    assert ingest.ExtensionIngestWorker(settings)._pending_session() is None
+
+    monkeypatch.setattr(ingest, "_release_receipted_staging", original_release)
+    ingest.recover_extension_ingest(settings.data_dir)
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM extension_recording_chunks WHERE session_id = ?",
+                (session["id"],),
+            ).fetchone()[0]
+            == 0
+        )
+
+    def normalize(*args, **kwargs):
+        return SimpleNamespace(duration_seconds=1.0)
+
+    monkeypatch.setattr(ingest, "normalize_extension_media", normalize)
+    receipt = _replay(settings, identity, session, content, "status")["receipt"]
+    meeting_id = session["meeting_url"].rsplit("/", 1)[-1]
+    enqueued = []
+    retried = ingest.retry_recording_session(settings.data_dir, meeting_id, enqueue=enqueued.append)
+    assert retried == {
+        "meeting_id": meeting_id,
+        "recording_state": "finalizing",
+        "retry_requested": True,
+    }
+    assert enqueued == [session["id"]]
+    _run(settings, session)
+    current = _replay(settings, identity, session, content, "status")
+    assert current["state"] == "ready"
+    assert current["receipt"] == receipt
+
+
+def test_deletion_marked_receipted_session_does_not_starve_queue(settings, monkeypatch):
+    identity_a, session_a, content_a = _prepared_named(
+        settings,
+        owner_id="owner-queue-a-0001",
+        client_id="queue-a",
+        content=b"aaaa",
+    )
+    _identity_b, session_b, content_b = _prepared_named(
+        settings,
+        owner_id="owner-queue-b-0001",
+        client_id="queue-b",
+        content=b"bbbb",
+    )
+    _install_receipt(settings, session_a["id"], content_a)
+    meeting_a = session_a["meeting_url"].rsplit("/", 1)[-1]
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        connection.execute(
+            "UPDATE meetings SET deletion_requested_at = ?, deletion_error_code = ? WHERE id = ?",
+            ("2026-11-15T00:00:00Z", "cleanup_failed", meeting_a),
+        )
+        connection.execute(
+            "UPDATE extension_recording_sessions SET updated_at = ? WHERE id = ?",
+            ("2026-11-15T00:00:00Z", session_a["id"]),
+        )
+        connection.execute(
+            "UPDATE extension_recording_sessions SET updated_at = ? WHERE id = ?",
+            ("2026-11-15T00:00:01Z", session_b["id"]),
+        )
+
+    def normalize(*args, **kwargs):
+        return SimpleNamespace(duration_seconds=1.0)
+
+    monkeypatch.setattr(ingest, "normalize_extension_media", normalize)
+    worker = ingest.ExtensionIngestWorker(settings)
+    assert worker._pending_session() == session_b["id"]
+    ingest._process_session(
+        settings.data_dir,
+        session_b["id"],
+        settings=settings,
+        stop_event=threading.Event(),
+    )
+
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert (
+            connection.execute(
+                "SELECT receipt_at FROM extension_recording_sessions WHERE id = ?",
+                (session_b["id"],),
+            ).fetchone()[0]
+            is not None
+        )
+        assert (
+            connection.execute(
+                "SELECT receipt_at FROM extension_recording_sessions WHERE id = ?",
+                (session_a["id"],),
+            ).fetchone()[0]
+            is not None
+        )
 
 
 def _replay(settings, identity, session, content, operation):

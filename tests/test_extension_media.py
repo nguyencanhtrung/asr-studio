@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 from media_tools import require_media_tools
@@ -50,6 +52,37 @@ def test_streaming_webm_without_duration_becomes_playable_without_changing_raw(t
     assert 0 < result.duration_seconds <= 2
     assert media.probe_media(output, max_duration_seconds=2).codec_name == "aac"
     assert source.read_bytes() == original
+    assert list((tmp_path / ".tmp").iterdir()) == []
+
+
+def test_streaming_remux_temp_name_can_be_scoped_to_session(tmp_path, monkeypatch):
+    source = tmp_path / "source.webm"
+    source.write_bytes(b"raw")
+    (tmp_path / ".tmp").mkdir()
+    session_id = "a" * 32
+    captured: dict[str, Path] = {}
+
+    monkeypatch.setattr(
+        media,
+        "_probe_extension_webm",
+        lambda *args, **kwargs: ("webm", "opus", 0, None),
+    )
+
+    def fail_remux(argv, **kwargs):
+        captured["path"] = Path(argv[-1])
+        raise media.MediaProcessingError("media_processing_failed")
+
+    monkeypatch.setattr(media, "_run_bounded", fail_remux)
+    with pytest.raises(media.MediaProcessingError):
+        media.normalize_extension_media(
+            source,
+            tmp_path / "audio.m4a",
+            max_duration_seconds=2,
+            max_output_bytes=1024**2,
+            timeout_seconds=10,
+            remux_prefix=f".{session_id}-",
+        )
+    assert captured["path"].name.startswith(f".{session_id}-")
     assert list((tmp_path / ".tmp").iterdir()) == []
 
 
@@ -184,3 +217,49 @@ def test_truncated_extension_webm_is_rejected_and_raw_retained(tmp_path, streami
     assert not output.exists()
     assert source.read_bytes() == truncated
     assert list((tmp_path / ".tmp").iterdir()) == []
+
+
+def test_extension_decoder_rejects_invalid_late_opus_packet(tmp_path):
+    source = _webm(tmp_path, duration=6)
+    packet_dump = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_packets",
+            "-show_data",
+            "-show_entries",
+            "packet=data",
+            "-of",
+            "json",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    packets = json.loads(packet_dump.stdout)["packets"]
+    payload = bytes.fromhex(
+        "".join(
+            line.split(":", 1)[1].split("  ", 1)[0].strip().replace(" ", "")
+            for line in packets[-1]["data"].splitlines()
+            if ":" in line
+        )
+    )
+    raw = source.read_bytes()
+    offset = raw.rfind(payload)
+    assert offset >= 0 and len(payload) >= 2
+    # Invalid code-3 Opus frame count, inside an otherwise complete WebM block.
+    source.write_bytes(raw[:offset] + b"\x03\x00" + raw[offset + 2 :])
+    # Stream/header inspection succeeds; the full decode must still reject it.
+    assert media._probe_extension_webm(source, timeout_seconds=5)[1] == "opus"
+    with pytest.raises(media.MediaProcessingError):
+        media.normalize_extension_media(
+            source,
+            tmp_path / "bad.m4a",
+            max_duration_seconds=10,
+            max_output_bytes=1024**2,
+            timeout_seconds=10,
+        )
+    assert not (tmp_path / "bad.m4a").exists()

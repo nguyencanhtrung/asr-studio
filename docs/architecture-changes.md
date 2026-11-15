@@ -2376,7 +2376,9 @@ accepted session creates one pending meeting and one source-aware recording link
 artifact lifecycle and error state live in `extension_recording_sessions`; `recordings` keeps the
 nullable extension link and derivative fields, so the two tables cannot disagree about lifecycle.
 Chunk bytes are written through bounded temporary files, fsynced and renamed into managed staging;
-the exact raw archive is fsynced and receipt-committed before media normalization. A single durable,
+the exact raw archive is fsynced and receipt-committed before media normalization. After that commit,
+the worker fsyncs and removes the session's staging chunks before deleting their database rows.
+Recovery repeats this cleanup only after it verifies the immutable raw receipt. A single durable,
 bounded media worker publishes the derivative and only then marks the artifact ready. Recovery,
 upload, publication and deletion share a per-session ownership lock; deletion leaves a tombstone
 fence for old replay and status requests.
@@ -2412,15 +2414,15 @@ owned process group before returning. See [`media.py`](../src/asr_studio/media.p
 and [`test_extension_media.py`](../tests/test_extension_media.py).
 
 **Evidence and trade-offs.** Language omission is part of the immutable replay fingerprint, global
-staging includes durable in-flight reservations and retained canceled/failed chunks, and exact
-committed replay remains possible at capacity. SQLite ready guards explicitly require non-null
+staging includes durable in-flight reservations and chunks for sessions without a raw receipt, and
+exact replay remains possible while a session is still receiving. SQLite ready guards explicitly require non-null
 duration as well as `> 0`. Focused fault tests cover replay, raw receipt ordering, quota,
 cancellation, corruption, publication/recovery locking, caller-transaction rollback, deletion
 fences, distinct client/library receipt IDs, operator retry authorization and ready invariants;
 the backend handoff also passed the non-browser regression suite. Browser/model and real-device
 qualification remain separate acceptance work. The design retains raw bytes after a media failure
-for bounded retry, which consumes staging/storage until operator cleanup rather than inventing a
-time-based deletion policy.
+for bounded retry. Incomplete or canceled sessions without a raw receipt can consume staging until
+operator cleanup. Receipted sessions do not retain their chunk staging.
 Invalid or foreign ingest IDs are checked before allocating lifecycle lock files.
 Finalize replay cannot restart failed media work through extension authority.
 Operator retry hashes the retained archive outside SQLite's write transaction;
@@ -2453,3 +2455,17 @@ the raw receipt or terminating the media loop. A standby application keeps waiti
 exclusive service lock after another instance starts first; it does not infer ownership from an
 old heartbeat. Disk-exhaustion and ownership-transfer regressions are in
 `tests/test_extension_lifecycle.py`.
+
+The [CI quality log](https://github.com/nguyencanhtrung/asr-studio/actions/runs/43705934863/job/132786889750)
+records Ubuntu 26.04 and FFmpeg 8.0.1 and exposed an Opus parser diagnostic on otherwise
+valid streaming WebM. The strict extension path now skips that optional parser during
+remux and full decoding, while retaining WebM demux validation, decoder error rejection,
+timestamp filling, duration/output limits and the shared deadline. This is limited to
+extension WebM/Opus; ordinary uploads keep their existing command options. The
+[FFmpeg 8 parser source](https://www.ffmpeg.org/doxygen/8.0/opus_2parser_8c_source.html)
+shows the complete-frame branch reaching duration parsing without the empty-input guard
+used by its other branch; the EOF-flush explanation is an inference from that source and
+reproduction with a generated valid file. `tests/test_extension_media.py` covers streaming
+and seekable inputs, duration overflow, truncated containers and an invalid late Opus
+packet that passes the initial header probe but must fail full decoding. No diagnostic
+string is allowlisted and no error log is suppressed.

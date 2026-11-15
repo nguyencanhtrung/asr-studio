@@ -33,8 +33,10 @@ Compose passes the optional endpoint setting to the app service. Keep the auth a
 
 Compose also passes `ASR_EXTENSION_MAX_STAGING_BYTES` and
 `ASR_EXTENSION_MAX_ACTIVE_SESSIONS` from `.env`. The staging budget is shared by
-all devices and includes retained chunks and in-flight reservations. Remove
-unneeded incomplete recordings through the library to release retained staging.
+all devices and includes chunks for sessions without a durable raw receipt plus
+in-flight reservations. A durable raw receipt releases that session's staging
+chunks automatically. Remove unneeded incomplete or canceled recordings through
+the library to release staging that cannot receive a raw receipt.
 
 The database also remembers the installation's public identity. After initialization, a missing, corrupt or mismatched private auth file prevents startup; API reads never recreate it. Restore the matching auth state rather than deleting the file to reset pairing. This preserves server identity even before the first device pairs.
 

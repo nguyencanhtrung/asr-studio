@@ -526,8 +526,10 @@ The default operational guards are finite: 8 MiB per chunk, 65,536 chunks per ma
 recording cap, 512 MiB global retained staging, 64 active sessions, a 30-minute media wall limit,
 512 MiB normalized output, and a 64 MiB free-disk reserve. The effective recording/staging cap is
 the configured minimum of the upload limit, the 4 GiB cap and `ASR_EXTENSION_MAX_STAGING_BYTES`.
-Staging admission includes in-flight reservations and retained failed/canceled chunks, so a
-replay of an already committed chunk remains possible even when new bytes are refused. These are
+Staging admission includes in-flight reservations and chunks for sessions without a durable raw
+receipt. A replay of a chunk from a session that has not received a raw receipt remains possible
+while new bytes are refused. After the raw receipt commits, the server fsyncs and removes that
+session's staging chunks and retains the raw archive for media finalization or retry. These are
 guards, not a promise of throughput or long-recording reliability. Their authoritative sources
 are [`config.py`](../src/asr_studio/config.py),
 [`extension_ingest.py`](../src/asr_studio/extension_ingest.py), and the capabilities response.

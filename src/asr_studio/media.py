@@ -309,6 +309,9 @@ def normalize_media(
             "-y",
             "-protocol_whitelist",
             LOCAL_PROTOCOLS,
+            # WebM carries complete Opus packets. Keep timestamp filling but skip
+            # the optional parser: FFmpeg 8 logs an error for its empty EOF flush.
+            *(["-fflags", "+noparse"] if strict_input and source.codec_name == "opus" else []),
             "-i",
             str(source_path),
             "-map",
@@ -427,6 +430,7 @@ def normalize_extension_media(
     max_output_bytes: int,
     timeout_seconds: int,
     should_cancel: Callable[[], bool] | None = None,
+    remux_prefix: str = ".extension-remux-",
 ) -> MediaProbe:
     """Validate bounded WebM/Opus and normalize it without altering the raw archive."""
     if timeout_seconds < 1 or max_output_bytes < 1:
@@ -452,7 +456,7 @@ def normalize_extension_media(
                 raise MediaProcessingError("media_processing_cancelled")
             try:
                 remux_fd, remux_name = tempfile.mkstemp(
-                    prefix=".extension-remux-", suffix=".webm", dir=source_path.parent / ".tmp"
+                    prefix=remux_prefix, suffix=".webm", dir=source_path.parent / ".tmp"
                 )
                 os.fchmod(remux_fd, 0o600)
                 os.close(remux_fd)
@@ -471,6 +475,8 @@ def normalize_extension_media(
                     "-y",
                     "-protocol_whitelist",
                     LOCAL_PROTOCOLS,
+                    "-fflags",
+                    "+noparse",
                     "-i",
                     str(source_path),
                     "-map",
