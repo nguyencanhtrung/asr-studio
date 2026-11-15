@@ -14,6 +14,7 @@ const { t, getLocale, onLanguageChange } = (() => {
   const attributes = [];
   const originalTitle = document.title;
   const EN = {
+    "Chrome chưa cấp quyền cho server. Bấm Thử gửi lại để cấp quyền và tiếp tục.": "Chrome has not granted server access. Select Retry upload to grant access and continue.",
     "Audio vẫn được giữ. Mở thiết lập để xem lỗi và gửi lại.": "Audio is retained. Open setup to review the error and retry.",
     "Audio đã giữ lại nhưng chưa hoàn tất.": "Audio is retained, but the recording is incomplete.",
     "Bạn có thể đóng cửa sổ này; ghi âm vẫn tiếp tục.": "You can close this window; recording will continue.",

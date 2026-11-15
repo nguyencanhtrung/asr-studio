@@ -219,6 +219,30 @@ def test_pipeline_gates_pull_requests_main_and_version_tags():
     assert check_step["env"]["ASR_REQUIRE_MEDIA_TOOLS"] == "1"
 
 
+def test_internal_extension_artifact_requires_native_capture_gate():
+    quality = load_yaml(PIPELINE_PATH)["jobs"]["quality"]
+    steps = quality["steps"]
+    names = [step["name"] for step in steps]
+    native = steps[names.index("Test native Chrome extension")]
+    assert native["env"] == {
+        "ASR_RUN_EXTENSION_TESTS": "1",
+        "ASR_EXTENSION_DISPOSABLE_XVFB": "1",
+    }
+    assert "xvfb-run" in native["run"]
+    assert "tests/test_browser_extension_capture.py" in native["run"]
+    bundle = steps[names.index("Build internal Chrome extension bundle")]
+    assert "scripts/bundle-extension.py" in bundle["run"]
+    assert '--source-commit "${GITHUB_SHA}"' in bundle["run"]
+    upload = steps[names.index("Upload internal Chrome extension bundle")]
+    assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["path"].endswith("asr-studio-extension.zip*")
+    assert names.index(native["name"]) < names.index(bundle["name"]) < names.index(upload["name"])
+    assert all("if" not in step for step in (native, bundle, upload))
+    checks = (ROOT / "scripts/check.sh").read_text()
+    assert "'extensions/chrome/tests/*.test.mjs'" in checks
+
+
 def test_media_gate_skips_locally_but_fails_when_ci_requires_tools(monkeypatch):
     monkeypatch.setenv("PATH", "")
     monkeypatch.delenv("ASR_REQUIRE_MEDIA_TOOLS", raising=False)

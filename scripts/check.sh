@@ -24,6 +24,7 @@ find src/asr_studio/web -type f -name '*.js' -print | while IFS= read -r javascr
     node --check "$javascript_file"
 done
 # Node 24 treats a directory argument as a module path, so pass a glob.
-node --test 'tests/web/*.test.mjs'
+node --test 'tests/web/*.test.mjs' 'extensions/chrome/tests/*.test.mjs'
+find extensions/chrome -maxdepth 1 -type f -name '*.js' -exec node --check {} \;
 
 docker compose config --quiet

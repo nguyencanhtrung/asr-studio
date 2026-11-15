@@ -7,6 +7,7 @@ import {
   makeError,
   MIME_TYPE,
   normalizeServerUrl,
+  permissionPattern,
   redactedBinding,
   resolveMeetingUrl,
   sameBinding,
@@ -168,7 +169,13 @@ function publicErrorForRemote(status) {
   return ["backend_error", "The ASR Studio backend rejected the request."];
 }
 
-async function fetchJson(url, init = {}, timeoutMs = 15000) {
+async function fetchJson(serverUrl, relativePath, init = {}, timeoutMs = 15000) {
+  // CORS may allow a fetch even after Chrome host access is revoked.
+  // Check the user's current grant before every credential or audio request.
+  if (!await chrome.permissions.contains({ origins: [permissionPattern(serverUrl)] })) {
+    throw makeError("host_permission", "Chrome has not granted access to this server.");
+  }
+  const url = endpointUrl(serverUrl, relativePath);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
@@ -210,8 +217,8 @@ async function fetchJson(url, init = {}, timeoutMs = 15000) {
   }
 }
 
-async function requestJson(url, method, payload, extraHeaders = {}) {
-  return fetchJson(url, {
+async function requestJson(serverUrl, relativePath, method, payload, extraHeaders = {}) {
+  return fetchJson(serverUrl, relativePath, {
     method,
     headers: { "Content-Type": "application/json", ...extraHeaders },
     body: payload === undefined ? undefined : JSON.stringify(payload)
@@ -244,10 +251,10 @@ async function pairWithServer(serverUrl, code) {
   }
   await setServerUrl(normalized);
 
-  const capabilitiesResponse = await fetchJson(endpointUrl(normalized, "api/extension/v1/capabilities"));
+  const capabilitiesResponse = await fetchJson(normalized, "api/extension/v1/capabilities");
   const binding = bindingFromCapabilities(normalized, capabilitiesResponse.body);
   const deviceId = await getDeviceId();
-  const pairResponse = await requestJson(endpointUrl(normalized, "api/extension/v1/pair"), "POST", { code, device_id: deviceId });
+  const pairResponse = await requestJson(normalized, "api/extension/v1/pair", "POST", { code, device_id: deviceId });
   const payload = pairResponse.body;
   if (!payload || typeof payload.device_token !== "string" || !payload.device_token ||
       !Object.prototype.hasOwnProperty.call(payload, "device_expires_at") ||
@@ -304,7 +311,7 @@ async function ensureSessionToken(context) {
   const cached = sessionTokens.get(key);
   if (cached && cached.expiresAt > Date.now() + 30000) return cached.token;
   if (!context.deviceToken) throw makeError("pair_required", "Pair the extension with ASR Studio first.");
-  const response = await requestJson(endpointUrl(context.binding.serverUrl, "api/extension/v1/session"), "POST", {}, { Authorization: `Bearer ${context.deviceToken}` });
+  const response = await requestJson(context.binding.serverUrl, "api/extension/v1/session", "POST", {}, { Authorization: `Bearer ${context.deviceToken}` });
   const payload = response.body;
   if (!payload || typeof payload.session_token !== "string" || !payload.session_token || payload.backend_id !== context.binding.backendId) {
     throw makeError("protocol_mismatch", "The session response is invalid.");
@@ -320,7 +327,7 @@ async function authorizedRequest(context, relativePath, init = {}, allowRenew = 
   const headers = new Headers(init.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   try {
-    return await fetchJson(endpointUrl(context.binding.serverUrl, relativePath), { ...init, headers });
+    return await fetchJson(context.binding.serverUrl, relativePath, { ...init, headers });
   } catch (error) {
     if (allowRenew && error.status === 401) {
       sessionTokens.delete(contextKey(context.binding));

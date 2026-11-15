@@ -7,7 +7,14 @@ prototype validation files are not part of this directory.
 
 ## Install for internal testing
 
-Build a bundle from the repository root:
+Download the artifact named `asr-studio-extension-<commit>` from a successful
+**Pipeline** run on `main` in the repository's GitHub **Actions** tab. It contains
+`asr-studio-extension.zip`, its `.sha256`, and its `.metadata.json` sidecars.
+GitHub may require sign-in; Actions artifacts expire according to the workflow's
+retention setting. Check the metadata's `source_commit` against that run's commit.
+On Linux, run `sha256sum -c asr-studio-extension.zip.sha256` before extracting.
+
+Alternatively, build the same bundle from the repository root:
 
 ```sh
 python3 scripts/bundle-extension.py --output /tmp/asr-studio-extension.zip
@@ -48,6 +55,11 @@ for explicit click-only navigation. The client never sends credentials or audio
 to that web URL. Result links must match the pinned web root and the exact
 `/meetings/<id>` shape. A bad result link cannot prevent receipt cleanup.
 
+If Chrome server access is removed, audio stays local. **Retry upload** asks for
+access to that recording's original server before resuming. If the server token
+was revoked, retained audio is not sent under another device or endpoint; the
+recording can be discarded explicitly.
+
 The receipt ends extension work. The client does not poll transcript or meeting
 notes processing. Those results remain in the ASR Studio web app.
 
@@ -56,5 +68,8 @@ notes processing. Those results remain in the ASR Studio web app.
 Update the unpacked extension only after active capture and upload work ends.
 No claim is made here about physical microphone quality or long-duration
 reliability. Synthetic capture tests and focused Node checks do not replace
-those checks. Production browser E2E and the downloadable CI artifact remain
-root integration work after the backend and workflow slices are complete.
+those checks. The native browser gate uses a disposable Chromium profile, a synthetic tab tone
+and a fake microphone tone against the real application API over loopback HTTP
+and a local HTTPS fixture. Its test-only certificate exception is never part of
+the extension. See `tests/test_browser_extension_capture.py`; these checks do not
+validate a deployed tunnel, physical devices, echo, or a multi-hour meeting.

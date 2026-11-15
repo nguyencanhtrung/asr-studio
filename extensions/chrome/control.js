@@ -83,6 +83,7 @@ function localizedError(error) {
     backend_mismatch: t("Server trả về dữ liệu của backend khác."),
     invalid_web_url: t("URL web của server không hợp lệ để mở kết quả."),
     invalid_result_url: t("Link kết quả không thuộc web origin đã ghép."),
+    host_permission: t("Chrome chưa cấp quyền cho server. Bấm Thử gửi lại để cấp quyền và tiếp tục."),
     network_error: t("Không kết nối được tới server."),
     timeout: t("Server phản hồi quá lâu."),
     auth_expired: t("Phiên ghép server đã hết hạn hoặc bị thu hồi. Hãy ghép lại."),
@@ -242,7 +243,13 @@ function renderSessionRow(session) {
     retry.dataset.action = "retry";
     retry.className = "quiet-button";
     retry.textContent = t("Thử gửi lại");
-    retry.addEventListener("click", () => sendRequest("retry", { type: "RETRY_UPLOAD", sessionId: session.id }, loadStatus));
+    retry.addEventListener("click", async () => {
+      if (session.upload.error?.code === "host_permission") {
+        const granted = await chrome.permissions.request({ origins: [permissionPattern(session.endpoint.serverUrl)] });
+        if (!granted) return;
+      }
+      sendRequest("retry", { type: "RETRY_UPLOAD", sessionId: session.id }, loadStatus);
+    });
     actions.append(retry);
   }
   if (session.upload.meetingUrl) {

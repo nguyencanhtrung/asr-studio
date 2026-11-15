@@ -2585,6 +2585,12 @@ traffic requires HTTPS. Meeting links must match the pinned web root and the
 `/meetings/<id>` path. The namespaced storage keys in `sw.js` and the database
 name in `db.js` prevent silent prototype-state adoption.
 
+Each API request also checks the current Chrome host permission for its bound
+endpoint. The native permission-revocation test showed that server CORS can permit
+fetch after Chrome revocation, so browser network behavior alone is insufficient.
+A missing grant leaves audio local and exposes a retry action that asks for the
+same endpoint permission before resuming with the original binding.
+
 The offscreen document remains the capture owner. Stop waits for the durable
 final audio barrier. Upload cleanup occurs only after the matching raw receipt,
 where `receipt.recording_id` is the server session ID. The client then stops
@@ -2597,8 +2603,13 @@ local session and chunks.
 exclusion rules are checked by `tests/test_extension_bundle.py` and implemented
 by `scripts/bundle-extension.py`. The client README records installation,
 update timing, source separation, and the absence of physical-microphone or
-long-duration reliability claims. Browser E2E, CI artifact publication, and
-physical capture qualification remain follow-up work.
+long-duration reliability claims. Native browser capture is checked in `tests/test_browser_extension_capture.py`
+against the production application API over loopback HTTP and a hostname-based
+HTTPS fixture. It closes the actual action popup and control page while the
+native offscreen recorder continues, then stops and checks raw receipt, local
+cleanup, absent processing polling, and both synthetic tone frequencies. The
+fixture uses its own profile, data directory, Xvfb display, and certificate;
+physical capture qualification remains follow-up work.
 
 **Trade-offs.** The bundle uses the existing no-build JavaScript client and
 standard-library Python packaging so the source bytes remain inspectable and no
@@ -2607,7 +2618,9 @@ pending or historical recording. A user must pair the intended endpoint again.
 
 **Follow-ups.** [#218](https://github.com/nguyencanhtrung/asr-studio/issues/218)
 owns the backend ingest contract. [#219](https://github.com/nguyencanhtrung/asr-studio/issues/219)
-owns production E2E and processing integration. The root integration slice adds
-the downloadable CI artifact after those dependencies are ready.
+owns production E2E and processing integration. The quality job runs the native capture gate before creating an internal
+extension zip with checksum and source revision; the pinned artifact action makes
+it downloadable from the successful run. No store publication or deployment is
+performed. `tests/test_delivery_contract.py` checks this delivery ordering.
 Tag: architecture, privacy, design. Target: `extensions/chrome/`,
 `scripts/bundle-extension.py`, and the focused tests above.
