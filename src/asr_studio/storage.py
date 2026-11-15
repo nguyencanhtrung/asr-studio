@@ -6,7 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -566,6 +566,74 @@ def _migrate_v16(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v17(connection: sqlite3.Connection) -> None:
+    """Add durable device, pairing-code and session state for the extension API."""
+    connection.execute(
+        "CREATE TABLE extension_devices ("
+        "id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 16 AND 128), "
+        "owner_id TEXT NOT NULL CHECK(length(owner_id) BETWEEN 16 AND 128), "
+        "device_id TEXT CHECK(device_id IS NULL OR length(device_id) BETWEEN 1 AND 128), "
+        "server_url TEXT CHECK(server_url IS NULL OR length(server_url) BETWEEN 1 AND 256), "
+        "device_lifetime TEXT NOT NULL CHECK(device_lifetime IN ('7d', '30d', '90d', 'never')), "
+        "device_expires_at TEXT, "
+        "pending_expires_at TEXT, "
+        "created_at TEXT NOT NULL, "
+        "last_seen_at TEXT, "
+        "revoked_at TEXT, "
+        "generation INTEGER NOT NULL CHECK(generation >= 0), "
+        "device_token_hash BLOB UNIQUE"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX extension_devices_status_idx "
+        "ON extension_devices(server_url, revoked_at, device_expires_at)"
+    )
+    connection.execute(
+        "CREATE TABLE extension_pairing_codes ("
+        "id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 16 AND 128), "
+        "device_record_id TEXT NOT NULL REFERENCES extension_devices(id) ON DELETE RESTRICT, "
+        "code_hash BLOB NOT NULL UNIQUE CHECK(length(code_hash) = 32), "
+        "server_url TEXT CHECK(server_url IS NULL OR length(server_url) BETWEEN 1 AND 256), "
+        "device_lifetime TEXT NOT NULL CHECK(device_lifetime IN ('7d', '30d', '90d', 'never')), "
+        "created_at TEXT NOT NULL, "
+        "expires_at TEXT NOT NULL, "
+        "consumed_at TEXT, "
+        "invalidated_at TEXT"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX extension_pairing_codes_device_idx "
+        "ON extension_pairing_codes(device_record_id, expires_at)"
+    )
+    connection.execute(
+        "CREATE TABLE extension_sessions ("
+        "token_hash BLOB PRIMARY KEY NOT NULL CHECK(length(token_hash) = 32), "
+        "device_record_id TEXT NOT NULL REFERENCES extension_devices(id) ON DELETE RESTRICT, "
+        "device_generation INTEGER NOT NULL CHECK(device_generation >= 1), "
+        "server_url TEXT NOT NULL CHECK(length(server_url) BETWEEN 1 AND 256), "
+        "scope TEXT NOT NULL CHECK(scope = 'ingest'), "
+        "created_at TEXT NOT NULL, "
+        "expires_at TEXT NOT NULL, "
+        "revoked_at TEXT"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX extension_sessions_device_idx "
+        "ON extension_sessions(device_record_id, device_generation, expires_at)"
+    )
+    connection.execute(
+        "CREATE TABLE extension_pairing_rate ("
+        "id INTEGER PRIMARY KEY CHECK(id = 1), "
+        "window_started_at TEXT NOT NULL, "
+        "attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0)"
+        ")"
+    )
+    connection.execute(
+        "INSERT INTO extension_pairing_rate(id, window_started_at, attempt_count) "
+        "VALUES (1, CURRENT_TIMESTAMP, 0)"
+    )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -693,6 +761,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 16:
             _migrate_v16(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (16)")
+        if current_version < 17:
+            _migrate_v17(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (17)")
         connection.commit()
     finally:
         connection.close()

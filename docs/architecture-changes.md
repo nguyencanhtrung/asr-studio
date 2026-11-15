@@ -2328,3 +2328,36 @@ Tái dùng liên kết giới hạn thay vì thêm lượt model hoặc mở r�
 [PR #184](https://github.com/nguyencanhtrung/asr-studio/pull/184): còn nghiệm thu đầy đủ
 Gemini; [#185](https://github.com/nguyencanhtrung/asr-studio/issues/185): build native.
 Tag: architecture; đích: `docs/backend-contract.md`.
+
+
+## #217 — Extension device access in existing Settings
+
+**Problem.** The prototype used a separate scratch operator server; production ASR Studio
+had no extension authority or device-management surface. Its existing browser cookie
+represented operator access and could not provide separately revocable device access.
+
+**Change.** Add Devices to the current Settings dialog and expose a separate extension
+namespace in the same backend. Pairing codes authorize narrow device credentials; device
+credentials exchange for temporary sessions. The operator controls expiry and revocation.
+Credentials bind to the configured endpoint and server identity. Additional extension origins
+do not widen the existing web cookie/Origin boundary. Keep the private credential-hashing
+key in auth storage and credential hashes/state in the application database.
+
+**Evidence and limits.** The API and Settings regression tests cover synthetic pairing,
+expiry, revocation, explicit re-pairing, endpoint guards and state persistence. This is a
+functional change, not a latency benchmark; no before/after performance measurement is
+claimed. Tests and limitations are recorded in the delivery PR.
+
+**Trade-offs.** Keep the existing operator login separate from extension bearer credentials.
+A shared operator cookie would grant unnecessarily broad access; a separate production
+operator website would duplicate Settings. Endpoint aliases require their own pairing,
+which makes endpoint changes explicit. Persistent auth and data volumes remain necessary.
+Credential hashing does not implement recording encryption or backup.
+
+**Follow-ups.** [#218](https://github.com/nguyencanhtrung/asr-studio/issues/218) adds durable
+audio ingest; [#219](https://github.com/nguyencanhtrung/asr-studio/issues/219) adds automatic
+transcript/notes; [#220](https://github.com/nguyencanhtrung/asr-studio/issues/220) delivers the
+production client. Physical microphone and long-recording validation remain under
+[#205](https://github.com/nguyencanhtrung/asr-studio/issues/205) and
+[#206](https://github.com/nguyencanhtrung/asr-studio/issues/206).
+Tag: architecture, privacy, design. Target: [extension device guide](extension-devices.md).

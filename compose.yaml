@@ -36,6 +36,7 @@ services:
       ASR_PROVIDER_DIR: /var/lib/asr-studio/provider
       ASR_INSTALL_DIR: /var/lib/asr-studio/install
       ASR_PUBLIC_URL: ${ASR_PUBLIC_URL:-http://127.0.0.1:${ASR_PORT:-8765}}
+      ASR_EXTENSION_URLS: ${ASR_EXTENSION_URLS:-}
       ASR_CHATGPT_CALLBACK_URL: ${ASR_CHATGPT_CALLBACK_URL:-}
       ASR_COOKIE_SECURE: ${ASR_COOKIE_SECURE:-false}
       ASR_MAX_UPLOAD_BYTES: ${ASR_MAX_UPLOAD_BYTES:-4294967296}

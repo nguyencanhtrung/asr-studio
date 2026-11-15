@@ -19,6 +19,8 @@ from asr_studio.antigravity import (
 from asr_studio.auth import AuthStateError, AuthStore, session_is_valid
 from asr_studio.chatgpt import ChatGPTAdapter, ChatGPTHTTPAdapter, ChatGPTProvider
 from asr_studio.config import CHATGPT_CALLBACK_PATH, Settings
+from asr_studio.extension_auth import EXTENSION_ID, ExtensionAuthService
+from asr_studio.extension_routes import install_extension_routes
 from asr_studio.meeting_deletion import recover_pending_meeting_deletions
 from asr_studio.notes import assert_provider_mutation_allowed
 from asr_studio.recordings import recover_recordings
@@ -40,6 +42,8 @@ PUBLIC_ROUTES = frozenset(
     }
 )
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+EXTENSION_V1_PREFIX = "/api/extension/v1"
+EXTENSION_ORIGIN = f"chrome-extension://{EXTENSION_ID}"
 
 
 def _normalized_origin(scheme: str, authority: str) -> tuple[str, str, int] | None:
@@ -89,6 +93,35 @@ def _origin_is_expected(origin: str | None, settings: Settings) -> bool:
     return _normalized_origin(parsed.scheme, parsed.netloc) == settings.origin
 
 
+def _is_extension_v1_path(path: str) -> bool:
+    return path == EXTENSION_V1_PREFIX or path.startswith(f"{EXTENSION_V1_PREFIX}/")
+
+
+def _extension_origin_is_expected(origin: str | None) -> bool:
+    return origin == EXTENSION_ORIGIN
+
+
+def _extension_response(
+    request: Request,
+    response: Response,
+) -> Response:
+    response = _with_security_headers(response)
+    if _extension_origin_is_expected(request.headers.get("origin")):
+        response.headers["Access-Control-Allow-Origin"] = EXTENSION_ORIGIN
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Max-Age"] = "300"
+        response.headers.add_vary_header("Origin")
+    return response
+
+
+def _extension_error(request: Request, code: str, message: str, status_code: int) -> Response:
+    return _extension_response(
+        request,
+        JSONResponse({"error": {"code": code, "message": message}}, status_code=status_code),
+    )
+
+
 def _with_security_headers(response: Response) -> Response:
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
@@ -114,6 +147,11 @@ def create_app(
 ) -> FastAPI:
     runtime_settings = settings or Settings.from_env()
     auth_store = AuthStore(runtime_settings.auth_dir)
+    extension_auth = ExtensionAuthService(
+        runtime_settings.data_dir,
+        runtime_settings.extension_server_urls,
+        auth_dir=runtime_settings.auth_dir,
+    )
     provider_dir = runtime_settings.provider_dir
     if provider_dir is None:
         raise ValueError("ASR_PROVIDER_DIR could not be resolved")
@@ -148,6 +186,7 @@ def create_app(
             chatgpt_provider.ensure()
             antigravity_provider.ensure()
             initialize(runtime_settings.data_dir)
+            extension_auth.ensure()
             recover_recordings(runtime_settings.data_dir)
             recover_pending_meeting_deletions(runtime_settings.data_dir)
             yield
@@ -163,6 +202,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.auth_store = auth_store
+    app.state.extension_auth = extension_auth
     app.state.settings = runtime_settings
     app.state.chatgpt_provider = chatgpt_provider
     app.state.antigravity_provider = antigravity_provider
@@ -171,13 +211,60 @@ def create_app(
     async def protect_requests(request: Request, call_next) -> Response:
         method = request.method.upper()
         path = request.url.path
-        if not _host_is_expected(request, runtime_settings):
+        is_extension = _is_extension_v1_path(path)
+        if is_extension:
+            endpoint = runtime_settings.extension_endpoint_for_host(request.headers.get("host"))
+            request.state.extension_endpoint = endpoint
+            if endpoint is None:
+                return _extension_error(
+                    request,
+                    "invalid_endpoint",
+                    "Use a configured server endpoint.",
+                    400,
+                )
+            origin = request.headers.get("origin")
+            if origin is not None and not _extension_origin_is_expected(origin):
+                return _extension_error(
+                    request,
+                    "origin_not_allowed",
+                    "The extension origin is not allowed.",
+                    403,
+                )
+            if method == "OPTIONS":
+                requested_method = request.headers.get("access-control-request-method", "").upper()
+                requested_headers = {
+                    header.strip().lower()
+                    for header in request.headers.get("access-control-request-headers", "").split(
+                        ","
+                    )
+                    if header.strip()
+                }
+                if (
+                    not _extension_origin_is_expected(origin)
+                    or requested_method not in {"GET", "POST"}
+                    or not requested_headers.issubset({"authorization", "content-type"})
+                ):
+                    return _extension_error(
+                        request,
+                        "cors_not_allowed",
+                        "The extension CORS request is not allowed.",
+                        403,
+                    )
+                return _extension_response(request, Response(status_code=204))
+            if method in UNSAFE_METHODS and not _extension_origin_is_expected(origin):
+                return _extension_error(
+                    request,
+                    "origin_required",
+                    "The extension origin is required.",
+                    403,
+                )
+        elif not _host_is_expected(request, runtime_settings):
             return _with_security_headers(PlainTextResponse("Invalid host", status_code=400))
 
         is_public = (method, path) in PUBLIC_ROUTES or (
             method in {"GET", "HEAD"} and path.startswith("/assets/fonts/")
         )
-        if method in UNSAFE_METHODS:
+        if not is_extension and method in UNSAFE_METHODS:
             if not _origin_is_expected(request.headers.get("origin"), runtime_settings):
                 return _with_security_headers(
                     JSONResponse({"detail": "Same-origin request required"}, status_code=403)
@@ -187,7 +274,7 @@ def create_app(
                     JSONResponse({"detail": "Same-origin request required"}, status_code=403)
                 )
 
-        if not is_public:
+        if not is_extension and not is_public:
             try:
                 state = auth_store.load()
             except AuthStateError:
@@ -202,7 +289,7 @@ def create_app(
                     JSONResponse({"detail": "Authentication required"}, status_code=401)
                 )
 
-        if is_public and path == "/api/access/session":
+        if not is_extension and is_public and path == "/api/access/session":
             content_type = request.headers.get("content-type", "").split(";", maxsplit=1)[0]
             if content_type.strip().lower() != "application/json":
                 return _with_security_headers(
@@ -210,9 +297,14 @@ def create_app(
                 )
 
         response = await call_next(request)
-        return _with_security_headers(response)
+        return (
+            _extension_response(request, response)
+            if is_extension
+            else _with_security_headers(response)
+        )
 
     install_routes(app, runtime_settings, chatgpt_provider, antigravity_provider)
+    install_extension_routes(app, runtime_settings, extension_auth)
     return app
 
 

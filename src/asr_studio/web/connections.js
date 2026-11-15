@@ -2,6 +2,7 @@
 // All state and rules live in provider-core.js (contract: docs/adr/0010-frontend-reducer-core.md). This module
 // also creates the one store both providers share; antigravity.js imports it and renders the Google section.
 import { asrSettings, providerChoice } from "./channel.js";
+import { selectDevices } from "./extension-devices-core.js";
 import { createRunner, createStore } from "./store.js";
 import { setAttr, setProp, tr } from "./shell.js";
 import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, initialState, reduce, selectAsr, selectLauncher, selectView } from "./provider-core.js";
@@ -21,6 +22,27 @@ const asrEls = {
   control: document.querySelector("#asr-default-control"),
   select: document.querySelector("#asr-default-select"),
   refusal: document.querySelector("#asr-default-refusal"),
+};
+
+const deviceEls = {
+  panel: document.querySelector("#settings-panel-devices"),
+  form: document.querySelector("#extension-device-code-form"),
+  lifetime: document.querySelector("#extension-device-lifetime"),
+  create: document.querySelector("#extension-device-code-button"),
+  notice: document.querySelector("#extension-device-notice"),
+  error: document.querySelector("#extension-device-error"),
+  errorMessage: document.querySelector("#extension-device-error-message"),
+  codeOutput: document.querySelector("#extension-device-code-output"),
+  code: document.querySelector("#extension-device-code"),
+  codeExpiry: document.querySelector("#extension-device-code-expiry"),
+  codeLifetime: document.querySelector("#extension-device-code-lifetime"),
+  copy: document.querySelector("#extension-device-code-copy"),
+  copyStatus: document.querySelector("#extension-device-code-copy-status"),
+  endpoints: document.querySelector("#extension-device-endpoints"),
+  endpointsEmpty: document.querySelector("#extension-device-endpoints-empty"),
+  listStatus: document.querySelector("#extension-device-list-status"),
+  listEmpty: document.querySelector("#extension-device-list-empty"),
+  list: document.querySelector("#extension-device-list"),
 };
 
 const els = {
@@ -201,6 +223,235 @@ function renderAsr(asr) {
   }
 }
 
+function deviceButton(label, action, id, kind, disabled = false) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = kind;
+  button.dataset.deviceAction = action;
+  button.dataset.deviceId = id;
+  button.disabled = disabled;
+  button.textContent = tr(label);
+  return button;
+}
+
+function deviceLedgerRow(label, value, { code = false } = {}) {
+  const row = document.createElement("div");
+  const term = document.createElement("dt");
+  term.textContent = tr(label);
+  const description = document.createElement("dd");
+  if (code) {
+    const valueElement = document.createElement("code");
+    valueElement.textContent = value;
+    description.append(valueElement);
+  } else {
+    description.textContent = tr(value);
+  }
+  row.append(term, description);
+  return row;
+}
+
+function deviceRow(row) {
+  const item = document.createElement("li");
+  item.className = "extension-device";
+  item.dataset.device = row.id;
+  const deviceLabel = tr(row.deviceLabel);
+
+  const head = document.createElement("div");
+  head.className = "extension-device-head";
+  const id = document.createElement("span");
+  id.className = "extension-device-id";
+  id.tabIndex = -1;
+  id.textContent = tr(row.deviceLabel);
+  id.setAttribute("aria-label", tr(row.deviceAriaLabel));
+  if (row.device_id) id.title = row.device_id;
+  const status = document.createElement("span");
+  status.className = "device-status";
+  status.dataset.status = row.statusValue;
+  status.textContent = tr(row.status);
+  head.append(id, status);
+
+  const ledger = document.createElement("dl");
+  ledger.className = "extension-device-ledger";
+  ledger.append(
+    deviceLedgerRow(t("Mã bản ghi server"), row.recordLabel, { code: true }),
+    deviceLedgerRow(t("Endpoint"), row.server_url ? row.server_url : t("Chưa xác định"), { code: Boolean(row.server_url) }),
+    deviceLedgerRow(t("Thời hạn"), tr(row.lifetime)),
+    deviceLedgerRow(t("Hết hạn"), tr(row.expires)),
+    deviceLedgerRow(t("Lần thấy gần nhất"), tr(row.lastSeen)),
+  );
+
+  const actions = document.createElement("div");
+  actions.className = "extension-device-actions";
+  const repair = deviceButton(
+    t("Cấp mã ghép lại"),
+    "repair",
+    row.id,
+    "secondary-button",
+    !row.canRepair,
+  );
+  repair.setAttribute("aria-label", tr(t("Cấp mã ghép lại cho thiết bị {id}", { id: deviceLabel })));
+  actions.append(repair);
+
+  if (row.statusValue !== "revoked") {
+    const revoke = deviceButton(
+      row.revokePending ? t("Đang thu hồi…") : t("Thu hồi"),
+      row.confirming ? "revoke-cancel" : "revoke",
+      row.id,
+      "text-button device-revoke",
+      row.revokePending,
+    );
+    revoke.setAttribute("aria-label", tr(t("Thu hồi thiết bị {id}", { id: deviceLabel })));
+    actions.append(revoke);
+  }
+
+  if (row.confirming) {
+    const confirm = document.createElement("div");
+    confirm.className = "extension-device-confirm";
+    const copy = document.createElement("p");
+    copy.textContent = tr(t("Thu hồi sẽ vô hiệu hóa các phiên extension của thiết bị này. Bạn có chắc không?"));
+    const keep = deviceButton(t("Giữ lại"), "revoke-cancel", row.id, "secondary-button");
+    const confirmButton = deviceButton(t("Thu hồi thiết bị"), "revoke-confirm", row.id, "primary-button");
+    confirm.append(copy, keep, confirmButton);
+    actions.append(confirm);
+  }
+
+  item.append(head, ledger, actions);
+  return item;
+}
+
+function restoreDeviceFocus() {
+  const id = deviceEls.list.dataset.focusDevice;
+  if (!id) return;
+  if (!els.dialog.open || deviceEls.panel.hidden) {
+    clearDeviceFocus();
+    return;
+  }
+  const action = deviceEls.list.dataset.focusAction;
+  const target = deviceActionTarget(id, action);
+  const row = deviceEls.list.querySelector(`[data-device="${CSS.escape(id)}"]`);
+  if (target && !target.disabled) {
+    target.focus({ preventScroll: true });
+    clearDeviceFocus();
+  } else if (!target) {
+    row?.querySelector(".extension-device-id")?.focus({ preventScroll: true });
+    clearDeviceFocus();
+  }
+}
+
+function deviceActionTarget(id, action) {
+  const candidates = {
+    revoke: ["revoke-confirm", "revoke-cancel", "revoke"],
+    "revoke-confirm": ["revoke", "revoke-confirm"],
+    "revoke-cancel": ["revoke", "revoke-cancel"],
+    repair: ["repair"],
+  }[action] || [action];
+  return candidates
+    .map((candidate) => [...deviceEls.list.querySelectorAll("[data-device-action]")].find((element) => element.dataset.deviceId === id && element.dataset.deviceAction === candidate))
+    .find(Boolean) || null;
+}
+
+function clearDeviceFocus() {
+  delete deviceEls.create.dataset.focusRecoveryRequest;
+  for (const name of ["focusDevice", "focusAction", "focusCodeRequest", "focusRevokeRequest"]) delete deviceEls.list.dataset[name];
+}
+
+function forgetDeviceFocusOnMovement(event) {
+  if (!deviceEls.create.dataset.focusRecoveryRequest && !deviceEls.list.dataset.focusDevice) return;
+  if (event.type === "focusin" && event.target === deviceEls.create) return;
+  if (event.type === "pointerdown" && event.target === deviceEls.create) return;
+  clearDeviceFocus();
+}
+
+function renderDeviceRows(view) {
+  const signature = JSON.stringify(view.rows);
+  if (deviceEls.list.dataset.rows !== signature) {
+    const active = document.activeElement?.closest?.("[data-device-action]");
+    if (active) {
+      deviceEls.list.dataset.focusDevice = active.dataset.deviceId;
+      deviceEls.list.dataset.focusAction = active.dataset.deviceAction;
+      if (view.pendingCode) deviceEls.list.dataset.focusCodeRequest = String(view.codeRequest);
+      if (view.pendingRevoke) deviceEls.list.dataset.focusRevokeRequest = String(view.revokeRequest);
+    }
+    deviceEls.list.dataset.rows = signature;
+    deviceEls.list.replaceChildren(...view.rows.map(deviceRow));
+  }
+  restoreDeviceFocus();
+}
+
+function focusDeviceRecovery(view) {
+  if (!els.dialog.open || deviceEls.panel.hidden) {
+    clearDeviceFocus();
+    return;
+  }
+  let target = null;
+  if (view.ui === "focus-retry") {
+    if (view.pairingFor) {
+      if (deviceEls.list.dataset.focusCodeRequest !== String(view.codeRequest)) return;
+      target = deviceActionTarget(view.pairingFor, "repair");
+    } else if (deviceEls.create.dataset.focusRecoveryRequest === String(view.codeRequest)) {
+      target = deviceEls.create;
+    }
+  } else if (view.ui === "focus-revoke") {
+    if (deviceEls.list.dataset.focusRevokeRequest !== String(view.revokeRequest)) return;
+    target = deviceActionTarget(view.revokeTarget, "revoke-confirm");
+  }
+  if (!target || target.disabled) return;
+  const active = document.activeElement;
+  if (active && active !== document.body && active !== document.documentElement && active !== target) {
+    clearDeviceFocus();
+    return;
+  }
+  clearDeviceFocus();
+  target.focus({ preventScroll: true });
+}
+
+function renderDevices(state) {
+  const view = selectDevices(state);
+  if (view.pendingCode && document.activeElement === deviceEls.create) {
+    deviceEls.create.dataset.focusRecoveryRequest = String(view.codeRequest);
+  }
+  renderOptions(deviceEls.lifetime, view.lifetimeOptions, view.selectedLifetime);
+  setProp(deviceEls.lifetime, "disabled", view.pendingCode);
+  setProp(deviceEls.create, "disabled", view.pendingCode || view.loading);
+  setProp(deviceEls.create, "textContent", view.pendingCode ? t("Đang tạo mã…") : t("Tạo mã ghép"));
+  setProp(deviceEls.notice, "textContent", tr(view.notice));
+  setProp(deviceEls.error, "hidden", !view.error);
+  setProp(deviceEls.errorMessage, "textContent", view.error ? tr(view.error.text) : "");
+  setProp(deviceEls.codeOutput, "hidden", !view.code);
+  setProp(deviceEls.code, "value", view.code || "");
+  setProp(deviceEls.codeExpiry, "textContent", tr(view.codeExpiry));
+  setProp(deviceEls.codeLifetime, "textContent", tr(view.codeLifetime));
+  setProp(deviceEls.copy, "disabled", !view.code);
+  setProp(deviceEls.copyStatus, "textContent", view.copy ? tr(view.copy.text) : "");
+  setAttr(deviceEls.copyStatus, "data-state", view.copy?.state || "");
+
+  const endpointSignature = JSON.stringify(view.serverUrls);
+  if (deviceEls.endpoints.dataset.urls !== endpointSignature) {
+    deviceEls.endpoints.dataset.urls = endpointSignature;
+    deviceEls.endpoints.replaceChildren(...view.serverUrls.map((url) => {
+      const item = document.createElement("li");
+      const endpoint = document.createElement("code");
+      endpoint.textContent = url;
+      item.append(endpoint);
+      return item;
+    }));
+  }
+  setProp(deviceEls.endpointsEmpty, "hidden", view.serverUrls.length > 0 || view.loading);
+  setProp(deviceEls.listStatus, "textContent", view.loading ? t("Đang tải danh sách thiết bị…") : "");
+  setProp(deviceEls.listEmpty, "hidden", !view.empty);
+  renderDeviceRows(view);
+
+  if (view.ui === "focus-code" || view.ui === "select-code") {
+    clearDeviceFocus();
+    deviceEls.code.focus();
+    if (view.ui === "select-code") deviceEls.code.select();
+    dispatch({ type: "extension/devices-ui-handled", ui: view.ui });
+  } else if (view.ui === "focus-retry" || view.ui === "focus-revoke") {
+    focusDeviceRecovery(view);
+    dispatch({ type: "extension/devices-ui-handled", ui: view.ui });
+  }
+}
+
 // The focus went with the button that was replaced (Cài đặt model, Hủy, Thử lại). It goes to the button that
 // took its place as soon as one can take it, unless the user has moved on by then.
 // The row id waits in the list's own dataset: a view keeps no module state (ADR 0010).
@@ -340,6 +591,7 @@ function renderSettingsSection(section) {
 function render(state) {
   renderSettingsSection(state.launcher.section);
   renderAsr(state.asr);
+  renderDevices(state.devices);
   const s = state.chatgpt;
   const view = renderSection(els, CHATGPT, s);
   setProp(els.verificationSection, "hidden", view.modelSectionHidden);
@@ -390,6 +642,15 @@ const base = createRunner({
       const input = document.getElementById(`asr-command-${id}`);
       input?.focus();
       input?.select();
+    },
+    "extension.devices.write": (code) => {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      return navigator.clipboard.writeText(code);
+    },
+    // The one-time code is the only device value that may be selected in the UI.
+    "extension.devices.select-code": () => {
+      deviceEls.code.focus();
+      deviceEls.code.select();
     },
   },
   now: () => Date.now(),
@@ -460,8 +721,28 @@ els.dialog.addEventListener("close", () => dispatch({ type: "provider/dialog-clo
 els.dialog.addEventListener("click", (event) => {
   if (event.target === els.dialog) els.dialog.close();
 });
+document.addEventListener("focusin", forgetDeviceFocusOnMovement);
+document.addEventListener("pointerdown", forgetDeviceFocusOnMovement, true);
 
 asrEls.select.addEventListener("change", () => dispatch({ type: "provider/asr-default-chosen", value: asrEls.select.value }));
+deviceEls.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  dispatch({ type: "extension/devices-code-requested" });
+});
+deviceEls.lifetime.addEventListener("change", () => dispatch({ type: "extension/devices-lifetime-chosen", value: deviceEls.lifetime.value }));
+deviceEls.copy.addEventListener("click", () => dispatch({ type: "extension/devices-copy-requested" }));
+deviceEls.list.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-device-action]");
+  if (!action) return;
+  const deviceId = action.dataset.deviceId;
+  const actionType = {
+    repair: "extension/devices-repair-requested",
+    revoke: "extension/devices-revoke-requested",
+    "revoke-cancel": "extension/devices-revoke-cancelled",
+    "revoke-confirm": "extension/devices-revoke-confirmed",
+  }[action.dataset.deviceAction];
+  if (actionType && deviceId) dispatch({ type: actionType, deviceId });
+});
 
 const chatgpt = (action) => dispatch({ ...action, provider: CHATGPT.id });
 els.signIn.addEventListener("click", () => chatgpt({ type: "provider/login-requested" }));

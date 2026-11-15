@@ -67,7 +67,7 @@ def overflow(page):
     return page.evaluate("document.documentElement.scrollWidth - innerWidth")
 
 
-SECTIONS = ["AI provider", "ASR Model", "Theme", "About"]
+SECTIONS = ["AI provider", "ASR Model", "Thiết bị", "Theme", "About"]
 
 
 def open_section(page, name, gear="Cài đặt"):
@@ -406,7 +406,7 @@ def test_settings_is_complete_in_english(live, signed_in, gpu_worker):
     expect(page.get_by_role("heading", name="Settings", level=2)).to_be_visible()
     text = page.locator("#connections-dialog").inner_text()
     assert VIETNAMESE.findall(text) == [], text
-    for name in ("Theme", "About"):
+    for name in ("Devices", "Theme", "About"):
         page.get_by_role("tab", name=name).click()
         expect(page.get_by_role("heading", name=name, level=3)).to_be_visible()
         text = page.locator("#connections-dialog").inner_text()
@@ -458,7 +458,7 @@ def test_sections_move_with_the_keyboard_and_tab_goes_into_the_content(live, sig
     page.get_by_role("tab", name="AI provider").focus()
     for key, name in (
         ("ArrowDown", "ASR Model"),
-        ("ArrowRight", "Theme"),
+        ("ArrowRight", "Thiết bị"),
         ("End", "About"),
         ("ArrowDown", "AI provider"),
         ("ArrowUp", "About"),
@@ -500,7 +500,7 @@ def test_in_forced_colors_only_the_selected_section_draws_a_border(live, signed_
     color = "element => getComputedStyle(element).borderTopColor"
     selected = page.get_by_role("tab", name="AI provider").evaluate(color)
     canvas = page.locator(".connections-shell").evaluate("e => getComputedStyle(e).backgroundColor")
-    for name in ("ASR Model", "Theme", "About"):
+    for name in ("ASR Model", "Thiết bị", "Theme", "About"):
         assert page.get_by_role("tab", name=name).evaluate(color) == canvas, name
     assert selected != canvas
 
@@ -768,11 +768,11 @@ def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_work
     assert area["y"] + area["height"] <= button["y"], (area, button)
     assert copy.evaluate("e => getComputedStyle(e).fontWeight") == "680"
 
-    # Tidy rows: one row when all four fit, otherwise two even rows, never one left alone.
+    # Tidy rows: one row when all five fit, otherwise two pairs and a full-width final tab.
     rows = {}
     for tab in page.locator("#settings-tabs [role=tab]").all():
         rows.setdefault(round(tab.bounding_box()["y"]), []).append(tab)
-    assert sorted(len(row) for row in rows.values()) == ([4] if width > 360 else [2, 2]), rows
+    assert sorted(len(row) for row in rows.values()) == ([5] if width > 360 else [1, 2, 2]), rows
     page.get_by_role("tab", name="Theme").click()
     for radio in page.locator("#settings-panel-theme label").all():
         label = radio.bounding_box()
