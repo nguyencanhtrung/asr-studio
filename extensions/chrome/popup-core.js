@@ -116,4 +116,3 @@ export function capturePresentation(snapshot) {
   }
   return { label: "Sẵn sàng", detail: "Tab hiện tại sẽ là nguồn ghi.", state: "ready" };
 }
-
