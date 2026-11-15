@@ -2568,3 +2568,46 @@ Antigravity's supported `default` matches its resolved `high` recipe, while a
 different provider/model or genuinely changed effort still requires confirmation.
 The focused regression covers both this accepted equivalence and rejection of
 a changed ChatGPT effort without advancing the workflow.
+
+## #220 — Bounded production extension client
+
+**Problem.** The reviewed client source lived beside a scratch server and a
+prototype operator surface. Copying that tree into an installed extension could
+reuse prototype credentials or IndexedDB audio and could send result navigation
+to an endpoint that did not own the recording.
+
+**Change.** Promote only the extension client into `extensions/chrome`. Keep the
+public key stable. The client checks the production protocol and API version in
+`extensions/chrome/protocol.js`, binds API traffic to the exact configured
+authority and backend identity, and stores the capability web URL as a separate
+click-only navigation root. HTTP accepts only literal loopback. Remote API
+traffic requires HTTPS. Meeting links must match the pinned web root and the
+`/meetings/<id>` path. The namespaced storage keys in `sw.js` and the database
+name in `db.js` prevent silent prototype-state adoption.
+
+The offscreen document remains the capture owner. Stop waits for the durable
+final audio barrier. Upload cleanup occurs only after the matching raw receipt,
+where `receipt.recording_id` is the server session ID. The client then stops
+receipt polling and does not poll transcript or notes processing. History stays
+newest first, interrupted recordings stay recoverable, and discard removes the
+local session and chunks.
+
+**Evidence and limits.** Independent contract tests are in
+`extensions/chrome/tests/`. Bundle reproducibility, checksum, provenance, and
+exclusion rules are checked by `tests/test_extension_bundle.py` and implemented
+by `scripts/bundle-extension.py`. The client README records installation,
+update timing, source separation, and the absence of physical-microphone or
+long-duration reliability claims. Browser E2E, CI artifact publication, and
+physical capture qualification remain follow-up work.
+
+**Trade-offs.** The bundle uses the existing no-build JavaScript client and
+standard-library Python packaging so the source bytes remain inspectable and no
+new dependency is introduced. A changed web origin cannot silently retarget a
+pending or historical recording. A user must pair the intended endpoint again.
+
+**Follow-ups.** [#218](https://github.com/nguyencanhtrung/asr-studio/issues/218)
+owns the backend ingest contract. [#219](https://github.com/nguyencanhtrung/asr-studio/issues/219)
+owns production E2E and processing integration. The root integration slice adds
+the downloadable CI artifact after those dependencies are ready.
+Tag: architecture, privacy, design. Target: `extensions/chrome/`,
+`scripts/bundle-extension.py`, and the focused tests above.
