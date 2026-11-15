@@ -1,0 +1,337 @@
+"""Real-browser coverage for the operator extension-device Settings surface."""
+
+from __future__ import annotations
+
+import json
+import re
+
+import pytest
+from playwright.sync_api import expect
+from test_browser_connections import browser_runtime as browser_runtime  # noqa: F401
+from test_browser_connections import signed_in_page
+
+from asr_studio.extension_auth import EXTENSION_ID
+
+pytestmark = pytest.mark.browser
+EXTENSION_ORIGIN = f"chrome-extension://{EXTENSION_ID}"
+
+
+def extension_json(page, live, method, path, *, body=None, headers=None):
+    request_headers = {"Origin": live.url, **(headers or {})}
+    data = None if body is None else json.dumps(body)
+    response = page.request.fetch(
+        f"{live.url}{path}",
+        method=method,
+        data=data,
+        headers=request_headers,
+    )
+    assert response.ok, (method, path, response.status, response.text())
+    return response.json()
+
+
+def test_delayed_create_failure_restores_focus_to_usable_retry(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+
+    held_routes = []
+
+    def hold_request(route):
+        held_routes.append(route)
+
+    page.route("**/api/extension/pairing-codes", hold_request)
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    create = page.locator("#extension-device-code-button")
+    expect(create).to_be_enabled()
+    create.focus()
+    expect(create).to_be_focused()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(100)
+    assert held_routes
+    expect(create).to_be_disabled()
+    held_routes[0].fulfill(
+        status=429,
+        content_type="application/json",
+        body=json.dumps(
+            {
+                "error": {
+                    "code": "pending_limit",
+                    "message": "internal pending limit details",
+                }
+            }
+        ),
+    )
+    expect(page.locator("#extension-device-error-message")).to_have_text(
+        "Có quá nhiều thiết bị đang chờ ghép. Hãy ghép hoặc thu hồi một thiết bị "
+        "trước khi tạo mã mới."
+    )
+    expect(create).to_be_enabled()
+    assert page.evaluate("document.activeElement.id") == "extension-device-code-button"
+    assert "internal pending limit details" not in page.locator("#connections-dialog").inner_text()
+    context.close()
+
+
+def test_delayed_repair_failure_restores_focus_to_selected_retry(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    page.get_by_role("button", name="Tạo mã ghép").click()
+    expect(page.locator("#extension-device-code")).to_be_visible()
+    pending = page.locator("#extension-device-list > li").first
+    repair = pending.get_by_role("button", name="Cấp mã ghép lại cho thiết bị Đang chờ client")
+    expect(repair).to_be_enabled()
+
+    held_routes = []
+
+    def hold_request(route):
+        held_routes.append(route)
+
+    page.route("**/api/extension/pairing-codes", hold_request)
+    repair.focus()
+    expect(repair).to_be_focused()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(100)
+    assert held_routes
+    expect(repair).to_be_disabled()
+    held_routes[0].fulfill(
+        status=429,
+        content_type="application/json",
+        body=json.dumps(
+            {
+                "error": {
+                    "code": "pending_limit",
+                    "message": "internal pending limit details",
+                }
+            }
+        ),
+    )
+    expect(page.locator("#extension-device-error-message")).to_have_text(
+        "Có quá nhiều thiết bị đang chờ ghép. Hãy ghép hoặc thu hồi một thiết bị "
+        "trước khi tạo mã mới."
+    )
+    expect(repair).to_be_enabled()
+    expect(repair).to_be_focused()
+    context.close()
+
+
+def test_delayed_create_failure_respects_section_focus_movement(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+
+    held_routes = []
+
+    def hold_request(route):
+        held_routes.append(route)
+
+    page.route("**/api/extension/pairing-codes", hold_request)
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    create = page.locator("#extension-device-code-button")
+    create.focus()
+    expect(create).to_be_focused()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(100)
+    assert held_routes
+    expect(create).to_be_disabled()
+
+    theme = page.get_by_role("tab", name="Theme")
+    theme.click()
+    expect(theme).to_be_focused()
+    held_routes[0].fulfill(
+        status=429,
+        content_type="application/json",
+        body=json.dumps({"error": {"code": "pending_limit", "message": "private"}}),
+    )
+    expect(theme).to_be_focused()
+    assert page.evaluate("document.activeElement.id") == "settings-tab-theme"
+    context.close()
+
+
+def test_delayed_create_failure_does_not_steal_control_focus(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+
+    held_routes = []
+
+    def hold_request(route):
+        held_routes.append(route)
+
+    page.route("**/api/extension/pairing-codes", hold_request)
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    create = page.locator("#extension-device-code-button")
+    create.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(100)
+    assert held_routes
+
+    close = page.locator("#connections-close")
+    close.focus()
+    expect(close).to_be_focused()
+    held_routes[0].fulfill(
+        status=429,
+        content_type="application/json",
+        body=json.dumps({"error": {"code": "pending_limit", "message": "private"}}),
+    )
+    expect(close).to_be_focused()
+    expect(page.locator("#extension-device-error-message")).to_have_text(
+        "Có quá nhiều thiết bị đang chờ ghép. Hãy ghép hoặc thu hồi một thiết bị "
+        "trước khi tạo mã mới."
+    )
+    context.close()
+
+
+def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1280, "height": 900},
+    )
+    context.grant_permissions(["clipboard-read", "clipboard-write"])
+
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    page.locator("#extension-device-lifetime").select_option("30d")
+    page.get_by_role("button", name="Tạo mã ghép").click()
+
+    code = page.locator("#extension-device-code")
+    expect(code).to_be_visible()
+    pairing_code = code.input_value()
+    assert pairing_code
+    page.get_by_role("button", name="Sao chép mã").click()
+    expect(page.locator("#extension-device-code-copy-status")).to_have_text("Đã sao chép mã ghép.")
+    assert page.evaluate("navigator.clipboard.readText()") == pairing_code
+
+    # Code issuance creates the server record first. The real operator list must accept its null
+    # client identity and endpoint rather than turning the whole read into an invalid-list error.
+    pending = page.locator("#extension-device-list > li")
+    expect(pending).to_have_count(1)
+    record_id = pending.get_attribute("data-device")
+    assert record_id
+    expect(pending).to_contain_text(record_id)
+    expect(pending.locator(".device-status")).to_have_text("Đang chờ ghép")
+    expect(pending.locator(".device-status")).to_have_attribute("data-status", "pending")
+    expect(pending.locator(".extension-device-id")).to_have_text("Đang chờ client")
+    expect(pending).to_contain_text("Chưa xác định")
+    expect(pending).to_contain_text("Chờ client kích hoạt")
+    expect(page.locator("#extension-device-endpoints")).to_contain_text(live.url)
+    repair_vi = pending.get_by_role("button", name="Cấp mã ghép lại cho thiết bị Đang chờ client")
+    expect(repair_vi).to_have_attribute(
+        "aria-label", "Cấp mã ghép lại cho thiết bị Đang chờ client"
+    )
+    page.get_by_role("button", name="Sao chép mã").focus()
+    page.keyboard.press("Tab")
+    expect(repair_vi).to_be_focused()
+    assert page.evaluate("getComputedStyle(document.activeElement).outlineStyle") == "solid"
+
+    # Switch through the real Settings language control, then keep the same pending record
+    # visible and keyboard-addressable in English. No endpoint selector is needed or rendered.
+    page.get_by_role("tab", name="Theme").click()
+    with page.expect_navigation():
+        page.get_by_role("radio", name="English").check()
+    page.get_by_role("tab", name="Devices").click()
+    pending_en = page.locator(f"#extension-device-list > li[data-device='{record_id}']")
+    expect(pending_en.locator(".device-status")).to_have_text("Pending pairing")
+    expect(pending_en.locator(".extension-device-id")).to_have_text("Waiting for client")
+    repair_en = pending_en.get_by_role(
+        "button", name="Issue a re-pair code for device Waiting for client"
+    )
+    expect(repair_en).to_have_attribute(
+        "aria-label", "Issue a re-pair code for device Waiting for client"
+    )
+    assert "[object Object]" not in repair_en.get_attribute("aria-label")
+    page.locator("#settings-panel-devices").focus()
+    page.keyboard.press("Tab")
+    page.keyboard.press("Tab")
+    page.keyboard.press("Tab")
+    expect(repair_en).to_be_focused()
+    assert page.evaluate("getComputedStyle(document.activeElement).outlineStyle") == "solid"
+    assert page.locator("#settings-panel-devices select").count() == 1
+
+    # Consume the code at the configured endpoint. The operator UI never receives this bearer;
+    # it is held only by this browser test to exercise the pending-before-session contract.
+    paired = extension_json(
+        page,
+        live,
+        "POST",
+        "/api/extension/v1/pair",
+        body={"code": pairing_code, "device_id": "client-217"},
+        headers={"Content-Type": "application/json", "Origin": EXTENSION_ORIGIN},
+    )
+    device_token = paired["device_token"]
+    before_session = extension_json(page, live, "GET", "/api/extension/devices")
+    paired_record = next(
+        device for device in before_session["devices"] if device["id"] == record_id
+    )
+    assert paired_record["device_id"] == "client-217"
+    assert paired_record["server_url"] == live.url
+    assert paired_record["status"] == "pending"
+    assert paired_record["device_expires_at"] is not None
+
+    # Refresh the operator list in the UI: a credential exists, but no session has activated it.
+    page.keyboard.press("Escape")
+    page.get_by_role("button", name="Settings").click()
+    page.get_by_role("tab", name="Devices").click()
+    pending_credential = page.locator(f"#extension-device-list > li[data-device='{record_id}']")
+    expect(pending_credential.locator(".device-status")).to_have_text("Pending pairing")
+    expect(pending_credential.locator(".extension-device-id")).to_have_text("client-217")
+
+    session = extension_json(
+        page,
+        live,
+        "POST",
+        "/api/extension/v1/session",
+        body={},
+        headers={
+            "Authorization": f"Bearer {device_token}",
+            "Content-Type": "application/json",
+            "Origin": EXTENSION_ORIGIN,
+        },
+    )
+    active = extension_json(
+        page,
+        live,
+        "GET",
+        "/api/extension/devices",
+    )
+    active_record = next(device for device in active["devices"] if device["id"] == record_id)
+    assert session["session_token"]
+    assert active_record["status"] == "active"
+    assert active_record["last_seen_at"] is not None
+
+    # The UI can explicitly re-pair the selected record and revoke it afterward; neither operation
+    # relies on a client-supplied identity or endpoint choice.
+    active_row = page.locator(f"#extension-device-list > li[data-device='{record_id}']")
+    active_row.get_by_role(
+        "button", name=re.compile(r"Issue a re-pair code for device client-217")
+    ).click()
+    expect(page.locator("#extension-device-code")).to_have_value(re.compile(r".+"))
+    active_row.get_by_role("button", name=re.compile(r"Revoke device client-217")).click()
+    page.get_by_role("button", name="Revoke device", exact=True).click()
+    revoked = page.locator(f"#extension-device-list > li[data-device='{record_id}']")
+    expect(revoked.locator(".device-status")).to_have_text("Revoked")
+
+    # Tokens are not part of any rendered UI state.
+    rendered = page.locator("#connections-dialog").inner_text()
+    assert device_token not in rendered
+    assert session["session_token"] not in rendered
+    context.close()

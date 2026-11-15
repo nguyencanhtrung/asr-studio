@@ -972,3 +972,26 @@ Mỗi view có store và runner riêng (phụ thuộc khác nhau), nên hai tin 
 Phản hồi hết phiên từ middleware (`401`, `detail: "Authentication required"`) dừng poll transcription/notes và chuyển tới `/access`; các lỗi 401 có code của provider giữ luồng khôi phục provider. Khi nhận thông báo giữa tab, history đọc cuộc họp chính thức rồi notes đọc một lần theo context mới; vẽ lại cùng object context không thêm request notes. Bản nháp và pending request vẫn được giữ trong state khi phát effect điều hướng.
 
 Callback ChatGPT: khi hủy, bỏ request callback đang chạy và vô hiệu hóa phản hồi cũ; nếu hủy lỗi, cho phép gửi URL mới. Đóng Settings xóa ô callback nhưng giữ phiên đăng nhập để tiếp tục. Kết thúc phiên xóa ô nhập và focus thông báo trạng thái. Thao tác tạo lại registration trả trạng thái bắt đầu, chỉ callback thành công mới xác nhận registration mới.
+
+### Thiết bị extension trong Cài đặt (#217)
+
+`extension-devices-core.js` sở hữu lát `devices` trong store Cài đặt của
+`provider-core.js`. `connections.js` vẽ bằng token/component hiện có và nối các
+hiệu ứng mạng, clipboard, focus qua runner. Không có store credential riêng trong
+trang web: state chỉ giữ mã ghép đang hiển thị, không nhận device/session token.
+
+| Sự kiện | Chuyển trạng thái | Hiệu ứng |
+| --- | --- | --- |
+| Mở Cài đặt | Xóa mã cũ, đánh dấu đang tải, tăng định danh lần đọc | Đọc danh sách thiết bị bằng quyền operator |
+| Tạo mã hoặc ghép lại record được chọn | Xóa mã trước, giữ lựa chọn hạn dùng và record đích, đánh dấu đang tạo | POST mã ghép; ghép lại gửi server record ID |
+| Nhận mã đúng lần yêu cầu | Hiển thị mã, hạn mã và hạn thiết bị tách riêng | Focus ô mã; tải lại danh sách |
+| Sao chép | Thông báo thành công hoặc chọn mã để sao chép thủ công | Clipboard chỉ nhận chuỗi mã |
+| Thu hồi | Chờ xác nhận thao tác; chỉ đổi trạng thái sau phản hồi đúng record và `revoked:true` | POST thu hồi rồi đọc lại trạng thái chính thức |
+| Yêu cầu thất bại | Bỏ cờ đang chờ, giữ dữ liệu đã xác nhận, hiện lỗi dịch được | Cho phép thử lại và giữ focus hữu ích |
+| Đóng Cài đặt | Xóa mã, vô hiệu hóa định danh phản hồi đang chờ | Hủy các effect đang chạy |
+| Phản hồi của lần yêu cầu cũ | Giữ nguyên state hiện tại | Không vẽ lại kết quả cũ |
+
+Record pending có thể chưa có định danh client hoặc địa chỉ đã ghép; giao diện
+vẫn hiển thị record máy chủ. Kết nối có thể là localhost hoặc HTTPS từ xa, nên
+thông báo lỗi không mặc định server nằm cùng máy. Hạn mã ghép và hạn token thiết
+bị là hai chính sách khác nhau; “Không hết hạn” chỉ áp dụng cho thiết bị.

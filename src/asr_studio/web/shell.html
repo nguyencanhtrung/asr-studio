@@ -688,6 +688,7 @@
         <div class="settings-tabs" id="settings-tabs" role="tablist" aria-label="Các mục cài đặt" aria-orientation="vertical">
           <button class="settings-tab" id="settings-tab-ai" type="button" role="tab" data-settings-tab="ai" aria-selected="true" aria-controls="settings-panel-ai">AI provider</button>
           <button class="settings-tab" id="settings-tab-asr" type="button" role="tab" data-settings-tab="asr" aria-selected="false" aria-controls="settings-panel-asr" tabindex="-1">ASR Model</button>
+          <button class="settings-tab" id="settings-tab-devices" type="button" role="tab" data-settings-tab="devices" aria-selected="false" aria-controls="settings-panel-devices" tabindex="-1">Thiết bị</button>
           <button class="settings-tab" id="settings-tab-theme" type="button" role="tab" data-settings-tab="theme" aria-selected="false" aria-controls="settings-panel-theme" tabindex="-1">Theme</button>
           <button class="settings-tab" id="settings-tab-about" type="button" role="tab" data-settings-tab="about" aria-selected="false" aria-controls="settings-panel-about" tabindex="-1">About</button>
         </div>
@@ -899,6 +900,72 @@
             <p class="asr-default-refusal" id="asr-default-refusal" role="alert" hidden></p>
             <p class="connection-message" id="asr-status" role="status" aria-live="polite"></p>
             <ul class="asr-models" id="asr-models"></ul>
+          </div>
+
+          <div class="settings-panel" id="settings-panel-devices" role="tabpanel" aria-labelledby="settings-tab-devices" tabindex="0" hidden>
+            <h3 class="settings-group-title">Thiết bị</h3>
+            <p class="connections-intro">Kết nối và quản lý extension trên các máy của bạn.</p>
+
+            <section class="device-section" aria-labelledby="extension-device-code-title">
+              <div class="connection-section-heading">
+                <h4 id="extension-device-code-title">Tạo mã ghép</h4>
+              </div>
+              <p class="device-help">Chọn thời hạn truy cập cho thiết bị rồi tạo mã ghép.</p>
+              <form id="extension-device-code-form">
+                <div class="connection-field">
+                  <label for="extension-device-lifetime">Thời hạn thiết bị</label>
+                  <select id="extension-device-lifetime" name="device_lifetime" aria-describedby="extension-device-lifetime-help">
+                    <option value="7d">7 ngày</option>
+                    <option value="30d" selected>30 ngày</option>
+                    <option value="90d">90 ngày</option>
+                    <option value="never">Không hết hạn</option>
+                  </select>
+                  <p class="connection-help" id="extension-device-lifetime-help">“Không hết hạn” chỉ dành cho máy đáng tin cậy mà bạn kiểm soát.</p>
+                </div>
+                <button class="primary-button" id="extension-device-code-button" type="submit">Tạo mã ghép</button>
+              </form>
+              <p class="connection-message" id="extension-device-notice" role="status" aria-live="polite"></p>
+              <p class="connection-error" id="extension-device-error" role="alert" hidden><span id="extension-device-error-message"></span></p>
+              <div class="device-code-output" id="extension-device-code-output" hidden>
+                <dl class="connection-ledger">
+                  <div>
+                    <dt><label for="extension-device-code">Mã ghép</label></dt>
+                    <dd><input id="extension-device-code" type="text" readonly autocomplete="off" aria-describedby="extension-device-code-help" /></dd>
+                  </div>
+                  <div>
+                    <dt>Hết hạn mã</dt>
+                    <dd id="extension-device-code-expiry"></dd>
+                  </div>
+                  <div>
+                    <dt>Thời hạn thiết bị</dt>
+                    <dd id="extension-device-code-lifetime"></dd>
+                  </div>
+                </dl>
+                <p class="connection-help" id="extension-device-code-help">Nhập mã này trong extension trước khi mã hết hạn.</p>
+                <div class="device-code-actions">
+                  <button class="secondary-button" id="extension-device-code-copy" type="button">Sao chép mã</button>
+                  <p class="connection-message" id="extension-device-code-copy-status" role="status" aria-live="polite"></p>
+                </div>
+              </div>
+            </section>
+
+            <section class="device-section" aria-labelledby="extension-device-endpoints-title">
+              <div class="connection-section-heading">
+                <h4 id="extension-device-endpoints-title">Endpoint máy chủ</h4>
+              </div>
+              <p class="device-help">Client có thể ghép với bất kỳ endpoint nào máy chủ đã cấu hình; endpoint thực tế sẽ được gắn khi client dùng mã. Hiển thị đúng URL máy chủ đã trả về; không có domain triển khai cố định trong giao diện.</p>
+              <ul class="device-endpoints" id="extension-device-endpoints"></ul>
+              <p class="connection-message" id="extension-device-endpoints-empty" role="status" hidden>Chưa có endpoint được công bố.</p>
+            </section>
+
+            <section class="device-section" aria-labelledby="extension-device-list-title">
+              <div class="connection-section-heading">
+                <h4 id="extension-device-list-title">Thiết bị đã ghép</h4>
+              </div>
+              <p class="connection-message" id="extension-device-list-status" role="status" aria-live="polite"></p>
+              <p class="connection-message" id="extension-device-list-empty" role="status" hidden>Chưa có thiết bị nào được ghép.</p>
+              <ul class="extension-device-list" id="extension-device-list"></ul>
+            </section>
           </div>
 
           <div class="settings-panel" id="settings-panel-theme" role="tabpanel" aria-labelledby="settings-tab-theme" tabindex="0" hidden>

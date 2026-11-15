@@ -124,8 +124,13 @@ def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
         "notes_sources",
         "notes_revisions",
         "notes_preferences",
+        "extension_devices",
+        "extension_pairing_codes",
+        "extension_sessions",
+        "extension_pairing_rate",
+        "extension_auth_installation",
     }
-    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    assert versions == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     with sqlite3.connect(database) as connection:
         meeting_columns = {row[1] for row in connection.execute("PRAGMA table_info(meetings)")}
     assert {"deletion_requested_at", "deletion_error_code"}.issubset(meeting_columns)
@@ -169,6 +174,7 @@ def test_schema_v1_database_migrates_transactionally_and_preserves_existing_data
             (14,),
             (15,),
             (16,),
+            (17,),
         ]
         tables = {
             row[0]
@@ -220,7 +226,7 @@ def test_schema_v4_migration_preserves_existing_generation_and_backfills_its_spe
         ).fetchone() == (1, 0)
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (16,)
+        ).fetchone() == (17,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -281,6 +287,7 @@ def test_schema_v5_rebuild_preserves_tasks_transcript_rows_and_processing_slot(t
             (14,),
             (15,),
             (16,),
+            (17,),
         ]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -330,7 +337,7 @@ def test_schema_v6_migration_backfills_existing_notes_as_english(tmp_path):
         ).fetchone() == ("en", "## Overview\n\nLegacy English notes.")
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (16,)
+        ).fetchone() == (17,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -394,7 +401,7 @@ def test_schema_v8_migration_keeps_a_populated_v7_database_and_allows_antigravit
         ]
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (16,)
+        ).fetchone() == (17,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         indexes = {
             row[0]
@@ -483,7 +490,7 @@ def test_schema_v9_adds_a_validated_coverage_column_and_keeps_existing_revisions
         assert connection.execute(
             "SELECT markdown, coverage_json FROM notes_revisions WHERE id = 'old-revision'"
         ).fetchone() == ("Kept notes.", None)
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (16,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (17,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         connection.execute(
             "UPDATE notes_revisions SET coverage_json = ? WHERE id = 'old-revision'",
@@ -545,7 +552,7 @@ def test_schema_v10_adds_a_validated_citations_column_and_keeps_a_populated_v9_d
             "SELECT markdown, edit_version, coverage_json, citations_json FROM notes_revisions "
             "WHERE id = 'old-revision'"
         ).fetchone() == (edited, 4, '{"version":1}', None)
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (16,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (17,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         connection.execute(
             "UPDATE notes_revisions SET citations_json = '[]' WHERE id = 'old-revision'"
@@ -603,7 +610,7 @@ def test_schema_v11_forbids_updating_a_notes_source_and_keeps_a_populated_v10_da
 
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (16,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (17,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
             "SELECT snapshot_json, meeting_date FROM notes_sources WHERE id = 'old-source'"
@@ -627,7 +634,12 @@ def test_schema_v15_records_the_runtime_of_existing_generations(tmp_path):
     database = initialize(data_dir)
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = OFF")
-        connection.execute("DELETE FROM schema_migrations WHERE version IN (15, 16)")
+        connection.execute("DELETE FROM schema_migrations WHERE version IN (15, 16, 17)")
+        connection.execute("DROP TABLE extension_sessions")
+        connection.execute("DROP TABLE extension_pairing_codes")
+        connection.execute("DROP TABLE extension_devices")
+        connection.execute("DROP TABLE extension_pairing_rate")
+        connection.execute("DROP TABLE extension_auth_installation")
         connection.execute("ALTER TABLE tasks DROP COLUMN asr_model")
         connection.execute("ALTER TABLE tasks DROP COLUMN owner_role")
         connection.execute("ALTER TABLE transcript_generations DROP COLUMN device")

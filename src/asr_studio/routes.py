@@ -381,6 +381,10 @@ def install_routes(
     async def provider_core_js() -> FileResponse:
         return _asset_response("provider-core.js", "text/javascript")
 
+    @app.get("/assets/extension-devices-core.js", include_in_schema=False)
+    async def extension_devices_core_js() -> FileResponse:
+        return _asset_response("extension-devices-core.js", "text/javascript")
+
     @app.get("/assets/connections.js", include_in_schema=False)
     async def connections_js() -> Response:
         asset_path = WEB_DIR / "connections.js"

@@ -13,6 +13,7 @@
 import { combine } from "./store.js";
 import { ASR_MODEL_TEXT, bytes, errorMessageForCode } from "./shell-core.js";
 import { ASR_MODEL_GUIDANCE } from "./task-core.js";
+import { initialState as extensionDevicesInitialState, reduce as reduceExtensionDevices } from "./extension-devices-core.js";
 
 const t = (text, params) => (params ? { text, params } : { text });
 const fill = (message, params) => ({ ...message, params });
@@ -359,7 +360,7 @@ function initial(d) {
   };
 }
 
-export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false, section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null, installer: { available: false, models_writable: false }, open: false, notice: null } };
+export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false, section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null, installer: { available: false, models_writable: false }, open: false, notice: null }, devices: extensionDevicesInitialState };
 
 const done = (state, effects = []) => ({ state, effects });
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1186,7 +1187,7 @@ function onFailure(d, s, meta, error) {
 
 // The sections of the settings dialog, and the session key a language change leaves so the reloaded page
 // reopens at its section. i18n.js writes that key: it is a plain script and cannot import this module.
-export const SETTINGS_SECTIONS = ["ai", "asr", "theme", "about"];
+export const SETTINGS_SECTIONS = ["ai", "asr", "devices", "theme", "about"];
 export const SETTINGS_SECTION_KEY = "asr-studio:settings-section";
 
 // The launcher slice: the page-load status read, the one-shot scroll to the Google section, and the open section.
@@ -1319,6 +1320,7 @@ export const reduce = combine({
   antigravity: (state, action) => reduceProvider(ANTIGRAVITY, state, action),
   launcher: reduceLauncher,
   asr: reduceAsr,
+  devices: reduceExtensionDevices,
 });
 
 // ---- selectors ----

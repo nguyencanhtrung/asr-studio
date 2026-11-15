@@ -708,18 +708,23 @@
   }
 
   .settings-tab {
-    flex: 1 1 auto;
+    min-width: 0;
+    flex: 1 1 0;
     padding: 8px 6px;
     text-align: center;
   }
 }
 
-/* Four sections and three display modes do not fit one row here: two even rows, then one choice per row.
+/* Five sections and three display modes do not fit one row here: two pairs, then a full-width final tab.
    In rem, so a larger browser text size reaches this layout sooner. */
 @media (max-width: 22.5rem) {
   .settings-tabs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-tab:last-child {
+    grid-column: 1 / -1;
   }
 
   .settings-field .language-option {
@@ -951,5 +956,262 @@
   .asr-command-field {
     grid-template-columns: minmax(0, 1fr);
     justify-items: start;
+  }
+}
+
+.device-section {
+  padding: 17px 0 18px;
+  border-top: 1px solid var(--hairline);
+}
+
+.device-section > .device-help {
+  margin: 0 0 14px;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  line-height: 1.65;
+}
+
+.device-section form {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.device-section select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-control);
+}
+
+.device-code-output {
+  margin-top: 16px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.device-code-output .connection-ledger {
+  border-bottom: 0;
+}
+
+.device-code-output .connection-ledger > div {
+  grid-template-columns: minmax(112px, 0.65fr) minmax(0, 1.35fr);
+  padding: 8px 0;
+}
+
+.device-code-output input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-reading);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.device-code-output input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  outline-offset: 1px;
+}
+
+.device-code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 12px;
+}
+
+.device-code-actions .connection-message {
+  margin: 0;
+}
+
+.device-endpoints,
+.extension-device-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.device-endpoints {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.device-endpoints li {
+  padding: 9px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.device-endpoints code,
+.extension-device-id,
+.extension-device-ledger dd code {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.extension-device-list {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.extension-device {
+  min-width: 0;
+  padding: 16px 0 17px;
+  border-top: 1px solid var(--hairline);
+}
+
+.extension-device-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.extension-device-id {
+  min-width: 0;
+  margin-right: auto;
+  font-weight: 650;
+}
+
+.device-status {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  line-height: 1.4;
+}
+
+.device-status[data-status="active"] {
+  border-color: color-mix(in srgb, var(--success) 34%, var(--hairline));
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.device-status[data-status="pending"] {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.device-status[data-status="expired"] {
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--hairline));
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.device-status[data-status="revoked"] {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--hairline));
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.extension-device-ledger {
+  margin: 11px 0 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.extension-device-ledger > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.72fr) minmax(0, 1.28fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.extension-device-ledger dt {
+  color: var(--ink-3);
+  font-size: var(--text-small);
+}
+
+.extension-device-ledger dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-control);
+  overflow-wrap: anywhere;
+}
+
+.extension-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 12px;
+}
+
+.extension-device-actions .device-revoke {
+  padding-inline: 0;
+  color: var(--danger);
+}
+
+.extension-device-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: 100%;
+  margin-top: 2px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--hairline));
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+}
+
+.extension-device-confirm p {
+  flex: 1 1 17rem;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+
+.extension-device-confirm .device-revoke-confirm {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+
+@media (max-width: 520px) {
+  .device-code-output .connection-ledger > div,
+  .extension-device-ledger > div {
+    grid-template-columns: minmax(92px, 0.68fr) minmax(0, 1.32fr);
+    gap: 10px;
+  }
+
+  .device-code-actions,
+  .extension-device-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .device-code-actions > button,
+  .extension-device-actions > button {
+    width: 100%;
+  }
+
+  .extension-device-confirm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .extension-device-confirm > button {
+    width: 100%;
   }
 }
