@@ -24,6 +24,8 @@ from zipfile import ZipFile
 import numpy as np
 import pytest
 import uvicorn
+from fake_chatgpt import FakeChatGPTAdapter
+from native_processing_helpers import processing_settings, synthetic_processing_worker
 from playwright.sync_api import expect, sync_playwright
 
 from asr_studio.app import create_app
@@ -110,7 +112,10 @@ def capture_server(tmp_path, request):
         public_url=url,
         extension_max_staging_bytes=quota,
     )
-    app = create_app(settings)
+    adapter = FakeChatGPTAdapter()
+    if request.node.name.startswith("test_native_capture_runs_transcript_and_notes"):
+        settings = processing_settings(settings, tmp_path, adapter)
+    app = create_app(settings, chatgpt_adapter=adapter)
     requests = []
 
     @app.middleware("http")
@@ -401,6 +406,8 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
             "ffmpeg",
             "-v",
             "error",
+            "-fflags",
+            "+noparse",
             "-i",
             str(raw),
             "-f",
@@ -543,3 +550,100 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     control.once("dialog", lambda dialog: dialog.accept())
     control.locator('[data-action="discard"]').click()
     expect(control.locator(".session-row")).to_have_count(0)
+
+
+def test_native_capture_runs_transcript_and_notes_after_client_receipt(
+    capture_server, paired_capture, tmp_path, monkeypatch
+):
+    settings, url, requests, _tls = capture_server
+    context, _worker, operator, control, tab = paired_capture
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
+    tab.wait_for_timeout(1600)
+    control.locator("#stop-button").click()
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        if sessions and sessions[0]["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(100)
+    assert sessions[0]["upload"]["cleaned"]
+    session = sessions[0]
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        meeting_id = db.execute("SELECT id FROM meetings").fetchone()[0]
+        assert db.execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+    extension_requests = [item for item in requests if item[1].startswith("/api/extension/v1/")]
+
+    def processing():
+        return operator.evaluate(
+            "async id => (await (await fetch(`/api/meetings/${id}`)).json()).processing",
+            meeting_id,
+        )
+
+    with synthetic_processing_worker(settings, tmp_path, monkeypatch):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = processing()
+            if state and any(
+                s["kind"] == "transcription" and s["state"] == "succeeded" for s in state["steps"]
+            ):
+                break
+            operator.wait_for_timeout(100)
+        assert state, "ready ingest never created processing workflow"
+        assert (
+            next(s for s in state["steps"] if s["kind"] == "transcription")["state"] == "succeeded"
+        ), state
+        assert (
+            next(s for s in state["steps"] if s["kind"] == "notes")["waiting_reason"]
+            == "provider_unconfigured"
+        ), state
+        preferences = operator.evaluate("""async () => {
+            const response = await fetch('/api/processing-preferences', {method:'PUT',
+              headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+                asr_choice:'auto', asr_language:'vi', notes_provider:'chatgpt',
+                notes_model:'gpt-6.1-sol', notes_reasoning_effort:'high',
+                notes_output_language:'en'})});
+            if (!response.ok) throw new Error(await response.text());
+            return await response.json();
+        }""")
+        operator.evaluate(
+            """async ({id, epoch, version}) => {
+            const response = await fetch(`/api/meetings/${id}/processing/apply-current-settings`, {
+              method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+                expected_pipeline_epoch:epoch, expected_preferences_version:version})});
+            if (!response.ok) throw new Error(await response.text());
+        }""",
+            {"id": meeting_id, "epoch": state["epoch"], "version": preferences["version"]},
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = processing()
+            if state and all(s["state"] == "succeeded" for s in state["steps"]):
+                break
+            operator.wait_for_timeout(100)
+        (tmp_path / "processing.json").write_text(json.dumps(state, indent=2))
+        assert all(s["state"] == "succeeded" for s in state["steps"]), state
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            assert db.execute(
+                "SELECT kind, count(*) FROM tasks GROUP BY kind ORDER BY kind"
+            ).fetchall() == [("notes", 1), ("transcription", 1)]
+            assert db.execute("SELECT count(*) FROM transcript_generations").fetchone()[0] == 1
+            assert db.execute("SELECT count(*) FROM notes_revisions").fetchone()[0] == 1
+        assert [
+            item for item in requests if item[1].startswith("/api/extension/v1/")
+        ] == extension_requests
+        with context.expect_page() as opened:
+            control.locator('[data-action="result"]').click()
+        meeting = opened.value
+        meeting.wait_for_url(session["upload"]["meetingUrl"])
+        meeting.locator("#meeting-tab-transcript").click()
+        expect(
+            meeting.get_by_text("Synthetic meeting transcript.", exact=True).first
+        ).to_be_visible()
+        meeting.locator("#meeting-tab-notes").click()
+        expect(meeting.locator("#notes-preview")).to_contain_text("Synthetic meeting notes.")
+        expect(meeting.locator("#notes-preview")).to_be_visible()
+        meeting.screenshot(path=str(tmp_path / "transcript-and-notes.png"))
+        (tmp_path / "processing.json").write_text(json.dumps(state, indent=2))

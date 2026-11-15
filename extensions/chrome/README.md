@@ -73,3 +73,10 @@ and a fake microphone tone against the real application API over loopback HTTP
 and a local HTTPS fixture. Its test-only certificate exception is never part of
 the extension. See `tests/test_browser_extension_capture.py`; these checks do not
 validate a deployed tunnel, physical devices, echo, or a multi-hour meeting.
+
+The automatic-processing integration checks use synthetic inference output and
+a synthetic notes-provider response. They exercise the real scheduler, task
+worker, source snapshots, notes runner, rendering, and revision publication;
+they do not measure transcription accuracy or provider quality. The client
+receipt is checked before starting that worker, then the test opens the
+completed transcript and notes in the existing meeting page.

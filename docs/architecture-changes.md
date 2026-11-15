@@ -2624,3 +2624,15 @@ it downloadable from the successful run. No store publication or deployment is
 performed. `tests/test_delivery_contract.py` checks this delivery ordering.
 Tag: architecture, privacy, design. Target: `extensions/chrome/`,
 `scripts/bundle-extension.py`, and the focused tests above.
+
+The native processing scenario in
+`tests/test_browser_extension_capture.py::test_native_capture_runs_transcript_and_notes_after_client_receipt`
+also waits for the client receipt before starting the actual task worker. It
+then exercises automatic transcription, the unconfigured-notes wait, explicit
+settings adoption, and publication into the existing meeting page.
+`tests/native_processing_helpers.py` supplies synthetic inference output and
+the external notes-provider response; task admission, slot ownership, immutable
+source checks, the notes runner's version guard, rendering and publication
+remain production code. This catches integration failures that a pre-rendered
+notes result would bypass. It is workflow evidence, not ASR accuracy or live
+provider qualification.
