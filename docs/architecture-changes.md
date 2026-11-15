@@ -2484,3 +2484,9 @@ reproduction with a generated valid file. `tests/test_extension_media.py` covers
 and seekable inputs, duration overflow, truncated containers and an invalid late Opus
 packet that passes the initial header probe but must fail full decoding. No diagnostic
 string is allowlisted and no error log is suppressed.
+
+If retained staging belongs to a receipt whose raw archive is missing or corrupt,
+the archive lane records `raw_corrupt` and keeps the chunks. Both lane selectors
+exclude that failed session, preventing repeated cleanup attempts while the
+client status check continues to reject a cleanup-authorizing receipt. Missing
+and same-size corrupted raw archives have focused lifecycle regressions.

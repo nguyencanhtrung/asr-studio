@@ -228,6 +228,45 @@ def test_receipt_cleanup_never_releases_staging_without_durable_raw(settings):
     assert chunk.exists()
 
 
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_archive_lane_raw_damage_preserves_staging_without_reselection(settings, damage):
+    identity, session, content = _prepared(settings)
+    _install_receipt(settings, session["id"], content)
+    raw_path = settings.data_dir / "extension-raw" / f"{session['id']}.webm"
+    if damage == "missing":
+        raw_path.unlink()
+    else:
+        raw_path.write_bytes(b"x" * len(content))
+    chunk = settings.data_dir / "extension-staging" / "chunks" / session["id"] / "0.chunk"
+
+    ingest._process_archive_session(
+        settings.data_dir, session["id"], settings=settings, stop_event=threading.Event()
+    )
+
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert connection.execute(
+            "SELECT state, error_code FROM extension_recording_sessions WHERE id = ?",
+            (session["id"],),
+        ).fetchone() == ("failed", "raw_corrupt")
+        assert connection.execute(
+            "SELECT COUNT(*) FROM extension_recording_chunks WHERE session_id = ?",
+            (session["id"],),
+        ).fetchone() == (1,)
+    assert chunk.read_bytes() == content
+    worker = ingest.ExtensionIngestWorker(settings)
+    assert worker._pending_archive_session() is None
+    assert worker._pending_media_session() is None
+    with pytest.raises(ingest.ExtensionIngestError) as rejected:
+        ingest.get_recording_session(
+            settings.data_dir,
+            identity=identity,
+            session_id=session["id"],
+            backend_id="b" * 32,
+            settings=settings,
+        )
+    assert rejected.value.code == "raw_corrupt"
+
+
 def test_receipt_cleanup_failure_is_visible_and_retryable_after_recovery(settings, monkeypatch):
     identity, session, content = _prepared(settings)
     original_release = ingest._release_receipted_staging

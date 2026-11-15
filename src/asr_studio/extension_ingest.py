@@ -1822,7 +1822,12 @@ def _process_archive_session(
             return
         if row["receipt_at"] is not None:
             try:
-                _release_receipted_staging(data_dir, session_id)
+                if not _release_receipted_staging(data_dir, session_id):
+                    # Retain staging when the immutable raw receipt cannot be
+                    # verified. A terminal state keeps this session out of both
+                    # lanes instead of repeatedly selecting the same failed work.
+                    _mark_media_failure(data_dir, session_id, MediaProcessingError("raw_corrupt"))
+                    return
             except (OSError, RuntimeError):
                 # A failed cleanup must leave a visible terminal state. Failed
                 # sessions are not selected again until an operator retries them.
