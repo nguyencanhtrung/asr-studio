@@ -2591,6 +2591,12 @@ fetch after Chrome revocation, so browser network behavior alone is insufficient
 A missing grant leaves audio local and exposes a retry action that asks for the
 same endpoint permission before resuming with the original binding.
 
+HTTP 408 and 429 use the existing retryable upload path, retaining local audio
+until a verified receipt. Authentication, ownership and payload conflicts still
+require their existing recovery actions. The native temporary-response scenario
+in `tests/test_browser_extension_capture.py` checks automatic retry against the
+same server without duplicate meetings.
+
 The offscreen document remains the capture owner. Stop waits for the durable
 final audio barrier. Upload cleanup occurs only after the matching raw receipt,
 where `receipt.recording_id` is the server session ID. The client then stops

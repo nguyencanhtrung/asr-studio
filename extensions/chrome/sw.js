@@ -161,7 +161,9 @@ function publicErrorForRemote(status) {
   if (status === 401) return ["auth_expired", "The backend token expired or was revoked."];
   if (status === 403) return ["forbidden", "The backend rejected this extension origin."];
   if (status === 404) return ["not_found", "The backend session is not available to this device."];
+  if (status === 408) return ["timeout", "The backend request timed out."];
   if (status === 409) return ["conflict", "The backend rejected a replay or state conflict."];
+  if (status === 429) return ["backend_unavailable", "The ASR Studio backend is unavailable."];
   if (status === 413) return ["byte_limit", "The backend rejected the configured byte or count limit."];
   if (status === 422) return ["media_invalid", "The backend rejected the WebM/Opus media."];
   if (status === 507) return ["backend_storage", "The backend storage limit was reached."];

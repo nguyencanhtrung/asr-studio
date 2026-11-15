@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 import uvicorn
 from fake_chatgpt import FakeChatGPTAdapter
+from fastapi.responses import JSONResponse
 from native_processing_helpers import processing_settings, synthetic_processing_worker
 from playwright.sync_api import expect, sync_playwright
 
@@ -117,10 +118,22 @@ def capture_server(tmp_path, request):
         settings = processing_settings(settings, tmp_path, adapter)
     app = create_app(settings, chatgpt_adapter=adapter)
     requests = []
+    transient_status = failure.params.get("transient_status") if failure else None
+    # Chromium can transparently retry the first HTTP 408 before fetch sees it.
+    transient_remaining = 2 if transient_status == 408 else 1
 
     @app.middleware("http")
     async def record_requests(request, call_next):
+        nonlocal transient_remaining
         requests.append((request.method, request.url.path))
+        if (
+            transient_status
+            and transient_remaining > 0
+            and request.method == "PUT"
+            and "/chunks/" in request.url.path
+        ):
+            transient_remaining -= 1
+            return JSONResponse({"error": {"code": "temporary"}}, status_code=transient_status)
         return await call_next(request)
 
     ssl = {}
@@ -550,6 +563,41 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     control.once("dialog", lambda dialog: dialog.accept())
     control.locator('[data-action="discard"]').click()
     expect(control.locator(".session-row")).to_have_count(0)
+
+
+@pytest.mark.parametrize("transient_status", [408, 429])
+def test_native_temporary_http_failure_retries_retained_audio(
+    capture_server, paired_capture, transient_status
+):
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
+    tab.wait_for_timeout(1500)
+    control.locator("#stop-button").click()
+    deadline = time.monotonic() + 15
+    session = None
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        session = sessions[0] if sessions else None
+        if session and session["upload"]["error"]:
+            break
+        control.wait_for_timeout(100)
+    assert session and session["upload"]["state"] == "retryable", session
+    assert not session["upload"]["cleaned"] and session["upload"]["receipt"] is None
+    assert session["capture"]["captureComplete"] and session["capture"]["chunkCount"] > 0
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        session = _status(control)["sessions"][0]
+        if session["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(100)
+    assert session["upload"]["cleaned"] and session["upload"]["receipt"], session
+    assert sum(method == "PUT" and "/chunks/" in path for method, path in requests) >= 2
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT count(*) FROM meetings").fetchone()[0] == 1
 
 
 def test_native_capture_runs_transcript_and_notes_after_client_receipt(
