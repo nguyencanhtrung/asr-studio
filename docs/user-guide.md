@@ -515,7 +515,9 @@ remain in [#219](https://github.com/nguyencanhtrung/asr-studio/issues/219),
 
 An extension recording creates its meeting and library row when the first authenticated session
 is accepted. The history and meeting views show whether the source is an extension and whether it
-is receiving, finalizing/archiving, ready, failed or canceled. Playback, transcription and Notes
+is receiving, finalizing/archiving, ready, failed or canceled. Raw archiving and its durable receipt
+run in a separate bounded lane from the single normalization job, so another finalized session can
+receive its receipt while one recording is still normalizing. Playback, transcription and Notes
 remain unavailable until the raw receipt has been durably stored and bounded media finalization
 publishes a derivative with a real positive duration. A media failure keeps the exact raw receipt
 for an explicit retry; deletion removes managed files and leaves a tombstone so an old client

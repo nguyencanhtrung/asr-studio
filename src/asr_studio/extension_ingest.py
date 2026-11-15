@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -16,6 +17,7 @@ import sqlite3
 import stat
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -75,6 +77,11 @@ _DIRECTORY_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
+_WORKER_IDLE_WAIT_SECONDS = 0.25
+_WORKER_SQL_RETRY_INITIAL_SECONDS = 0.25
+_WORKER_SQL_RETRY_MAX_SECONDS = 2.0
+_WORKER_HEARTBEAT_INTERVAL_SECONDS = 5.0
+LOGGER = logging.getLogger(__name__)
 
 
 class ExtensionIngestError(RuntimeError):
@@ -1737,7 +1744,7 @@ def _mark_staging_cleanup_failure(data_dir: Path, session_id: str) -> None:
     )
 
 
-def _process_session(
+def _process_archive_session(
     data_dir: Path,
     session_id: str,
     *,
@@ -1816,16 +1823,46 @@ def _process_session(
         if row["receipt_at"] is not None:
             try:
                 _release_receipted_staging(data_dir, session_id)
-            except (OSError, RuntimeError, sqlite3.Error):
+            except (OSError, RuntimeError):
                 # A failed cleanup must leave a visible terminal state. Failed
                 # sessions are not selected again until an operator retries them.
                 _mark_staging_cleanup_failure(data_dir, session_id)
                 return
-            with _connect(data_dir) as connection:
-                row = _session_query(connection, session_id)
-            if row is None or row["deletion_requested_at"] is not None:
-                return
-        if row["receipt_at"] is None or row["state"] not in {"archived", "finalizing"}:
+            except sqlite3.Error:
+                # A transient database failure must be retried by the archive
+                # lane. Do not turn a recoverable cleanup error into a false
+                # terminal state or let it kill the worker loop.
+                raise
+
+
+def _process_media_session(
+    data_dir: Path,
+    session_id: str,
+    *,
+    settings: Settings,
+    stop_event: threading.Event,
+) -> None:
+    with session_lock(data_dir, session_id):
+        with _connect(data_dir) as connection:
+            row = _session_query(connection, session_id)
+            if row is not None and row["receipt_at"] is not None:
+                has_staging = connection.execute(
+                    "SELECT 1 FROM extension_recording_chunks WHERE session_id = ? "
+                    "UNION ALL "
+                    "SELECT 1 FROM extension_recording_reservations WHERE session_id = ? "
+                    "LIMIT 1",
+                    (session_id, session_id),
+                ).fetchone()
+            else:
+                has_staging = None
+        if (
+            row is None
+            or row["deletion_requested_at"] is not None
+            or row["state"] == "canceled"
+            or row["receipt_at"] is None
+            or row["state"] not in {"archived", "finalizing"}
+            or has_staging is not None
+        ):
             return
         if _session_should_cancel(data_dir, session_id, stop_event):
             return
@@ -1909,44 +1946,140 @@ def _process_session(
                 _unlink(Path(temporary_name))
 
 
+def _process_session(
+    data_dir: Path,
+    session_id: str,
+    *,
+    settings: Settings,
+    stop_event: threading.Event,
+) -> None:
+    """Run both bounded lanes sequentially for direct recovery/test callers."""
+    _process_archive_session(
+        data_dir,
+        session_id,
+        settings=settings,
+        stop_event=stop_event,
+    )
+    if not stop_event.is_set():
+        _process_media_session(
+            data_dir,
+            session_id,
+            settings=settings,
+            stop_event=stop_event,
+        )
+
+
 class ExtensionIngestWorker:
-    """One bounded, durable media worker for the application lifetime."""
+    """One lifetime-owned worker supervising bounded archive and media lanes."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._archive_thread: threading.Thread | None = None
+        self._media_thread: threading.Thread | None = None
         self._service_lock: int | None = None
 
     def start(self) -> None:
         if self._thread is not None:
             return
         self.stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="asr-extension-media", daemon=True)
+        self.wake_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="asr-extension-media-supervisor", daemon=True
+        )
         self._thread.start()
 
     def enqueue(self, session_id: str) -> None:
         if SESSION_ID_RE.fullmatch(session_id) is not None:
             self.wake_event.set()
 
-    def _pending_session(self) -> str | None:
-        try:
-            with _connect(self.settings.data_dir) as connection:
-                row = connection.execute(
-                    "SELECT sessions.id FROM extension_recording_sessions AS sessions "
-                    "WHERE sessions.state IN ('finalizing', 'archiving', 'archived') "
-                    "AND NOT EXISTS ("
-                    "SELECT 1 FROM recordings "
-                    "JOIN meetings ON meetings.id = recordings.meeting_id "
-                    "WHERE recordings.extension_session_id = sessions.id "
-                    "AND meetings.deletion_requested_at IS NOT NULL"
-                    ") "
-                    "ORDER BY updated_at ASC, id ASC LIMIT 1"
-                ).fetchone()
-        except sqlite3.Error:
-            return None
+    def _pending_archive_session(self) -> str | None:
+        with _connect(self.settings.data_dir) as connection:
+            row = connection.execute(
+                "SELECT sessions.id FROM extension_recording_sessions AS sessions "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM recordings "
+                "JOIN meetings ON meetings.id = recordings.meeting_id "
+                "WHERE recordings.extension_session_id = sessions.id "
+                "AND meetings.deletion_requested_at IS NOT NULL"
+                ") AND ("
+                "(sessions.receipt_at IS NULL AND sessions.state IN ('finalizing', 'archiving')) "
+                "OR (sessions.receipt_at IS NOT NULL "
+                "AND sessions.state IN ('archived', 'finalizing') AND ("
+                "EXISTS (SELECT 1 FROM extension_recording_chunks AS chunks "
+                "WHERE chunks.session_id = sessions.id) OR "
+                "EXISTS (SELECT 1 FROM extension_recording_reservations AS reservations "
+                "WHERE reservations.session_id = sessions.id)"
+                "))"
+                ") ORDER BY sessions.updated_at ASC, sessions.id ASC LIMIT 1"
+            ).fetchone()
         return row[0] if row is not None else None
+
+    def _pending_media_session(self) -> str | None:
+        with _connect(self.settings.data_dir) as connection:
+            row = connection.execute(
+                "SELECT sessions.id FROM extension_recording_sessions AS sessions "
+                "WHERE sessions.receipt_at IS NOT NULL "
+                "AND sessions.state IN ('archived', 'finalizing') "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM extension_recording_chunks AS chunks "
+                "WHERE chunks.session_id = sessions.id"
+                ") AND NOT EXISTS ("
+                "SELECT 1 FROM extension_recording_reservations AS reservations "
+                "WHERE reservations.session_id = sessions.id"
+                ") AND NOT EXISTS ("
+                "SELECT 1 FROM recordings "
+                "JOIN meetings ON meetings.id = recordings.meeting_id "
+                "WHERE recordings.extension_session_id = sessions.id "
+                "AND meetings.deletion_requested_at IS NOT NULL"
+                ") ORDER BY sessions.updated_at ASC, sessions.id ASC LIMIT 1"
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def _pending_session(self) -> str | None:
+        """Return the next session for compatibility with direct lifecycle probes."""
+        return self._pending_archive_session() or self._pending_media_session()
+
+    def _wait_for_work(self, seconds: float) -> None:
+        self.wake_event.wait(seconds)
+        self.wake_event.clear()
+
+    def _run_lane(
+        self,
+        lane: str,
+        pending: Callable[[], str | None],
+        process: Callable[..., None],
+    ) -> None:
+        retry_delay = _WORKER_SQL_RETRY_INITIAL_SECONDS
+        while not self.stop_event.is_set():
+            try:
+                session_id = pending()
+                if session_id is None:
+                    retry_delay = _WORKER_SQL_RETRY_INITIAL_SECONDS
+                    self._wait_for_work(_WORKER_IDLE_WAIT_SECONDS)
+                    continue
+                process(
+                    self.settings.data_dir,
+                    session_id,
+                    settings=self.settings,
+                    stop_event=self.stop_event,
+                )
+                retry_delay = _WORKER_SQL_RETRY_INITIAL_SECONDS
+            except sqlite3.Error:
+                LOGGER.warning(
+                    "extension ingest %s lane database error; retrying in %.2fs",
+                    lane,
+                    retry_delay,
+                    exc_info=True,
+                )
+                self._wait_for_work(retry_delay)
+                retry_delay = min(retry_delay * 2, _WORKER_SQL_RETRY_MAX_SECONDS)
+            except Exception:
+                LOGGER.exception("extension ingest %s lane failed; retrying", lane)
+                self._wait_for_work(retry_delay)
+                retry_delay = min(retry_delay * 2, _WORKER_SQL_RETRY_MAX_SECONDS)
 
     def _run(self) -> None:
         descriptor = None
@@ -1958,27 +2091,39 @@ class ExtensionIngestWorker:
         if descriptor is None:
             return
         self._service_lock = descriptor
+        archive_thread = threading.Thread(
+            target=self._run_lane,
+            args=("archive", self._pending_archive_session, _process_archive_session),
+            name="asr-extension-archive",
+            daemon=True,
+        )
+        media_thread = threading.Thread(
+            target=self._run_lane,
+            args=("media", self._pending_media_session, _process_media_session),
+            name="asr-extension-normalize",
+            daemon=True,
+        )
+        self._archive_thread = archive_thread
+        self._media_thread = media_thread
         try:
             write_service_heartbeat(self.settings.data_dir, "media", "starting", role="extension")
-            while not self.stop_event.is_set():
-                session_id = self._pending_session()
-                if session_id is None:
+            archive_thread.start()
+            media_thread.start()
+            write_service_heartbeat(self.settings.data_dir, "media", "running", role="extension")
+            last_heartbeat = time.monotonic()
+            while archive_thread.is_alive() or media_thread.is_alive():
+                if self.stop_event.wait(_WORKER_IDLE_WAIT_SECONDS):
+                    break
+                if time.monotonic() - last_heartbeat >= _WORKER_HEARTBEAT_INTERVAL_SECONDS:
                     write_service_heartbeat(
-                        self.settings.data_dir, "media", "idle", role="extension"
+                        self.settings.data_dir, "media", "running", role="extension"
                     )
-                    self.wake_event.wait(0.25)
-                    self.wake_event.clear()
-                    continue
-                write_service_heartbeat(
-                    self.settings.data_dir, "media", "running", role="extension"
-                )
-                _process_session(
-                    self.settings.data_dir,
-                    session_id,
-                    settings=self.settings,
-                    stop_event=self.stop_event,
-                )
+                    last_heartbeat = time.monotonic()
         finally:
+            self.stop_event.set()
+            self.wake_event.set()
+            archive_thread.join()
+            media_thread.join()
             with suppress(Exception):
                 write_service_heartbeat(
                     self.settings.data_dir, "media", "stopped", role="extension"
@@ -1990,9 +2135,13 @@ class ExtensionIngestWorker:
     def stop(self) -> None:
         self.stop_event.set()
         self.wake_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=EXTENSION_MEDIA_WALL_SECONDS + 5)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=EXTENSION_MEDIA_WALL_SECONDS + 5)
+        if thread is not None and not thread.is_alive():
             self._thread = None
+            self._archive_thread = None
+            self._media_thread = None
 
 
 def recover_extension_ingest(data_dir: Path) -> None:

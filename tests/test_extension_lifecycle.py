@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +53,29 @@ def _prepared(settings, content=b"synthetic archived bytes"):
 
 
 def _prepared_named(settings, *, owner_id, client_id, content):
+    identity, session, content = _prepared_receiving_named(
+        settings,
+        owner_id=owner_id,
+        client_id=client_id,
+        content=content,
+    )
+    manifest = _manifest(content, epoch=1)
+    manifest.update(
+        capture_epoch=f"capture-{client_id}",
+        finalize_id=f"finalize-{client_id}",
+    )
+    ingest.finalize_recording_session(
+        settings.data_dir,
+        identity=identity,
+        session_id=session["id"],
+        payload=manifest,
+        backend_id="b" * 32,
+        settings=settings,
+    )
+    return identity, session, content
+
+
+def _prepared_receiving_named(settings, *, owner_id, client_id, content):
     initialize(settings.data_dir)
     identity = _identity(settings, owner_id)
     payload = {
@@ -79,19 +103,6 @@ def _prepared_named(settings, *, owner_id, client_id, content):
     )
     lease.write(content)
     lease.commit()
-    manifest = _manifest(content, epoch=1)
-    manifest.update(
-        capture_epoch=f"capture-{client_id}",
-        finalize_id=f"finalize-{client_id}",
-    )
-    ingest.finalize_recording_session(
-        settings.data_dir,
-        identity=identity,
-        session_id=session["id"],
-        payload=manifest,
-        backend_id="b" * 32,
-        settings=settings,
-    )
     return identity, session, content
 
 
@@ -332,6 +343,186 @@ def test_deletion_marked_receipted_session_does_not_starve_queue(settings, monke
             ).fetchone()[0]
             is not None
         )
+
+
+def test_real_worker_archive_lane_receipts_b_before_a_normalization_releases(settings, monkeypatch):
+    _identity_a, session_a, content_a = _prepared_named(
+        settings,
+        owner_id="owner-cross-worker-a",
+        client_id="cross-worker-a",
+        content=b"first worker recording",
+    )
+    identity_b, session_b, content_b = _prepared_receiving_named(
+        settings,
+        owner_id="owner-cross-worker-b",
+        client_id="cross-worker-b",
+        content=b"second worker recording",
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def normalize(raw_path, *args, **kwargs):
+        if Path(raw_path).name == f"{session_a['id']}.webm":
+            entered.set()
+            assert release.wait(5)
+            raise MediaProcessingError("invalid_media")
+        return SimpleNamespace(duration_seconds=1.0)
+
+    monkeypatch.setattr(ingest, "normalize_extension_media", normalize)
+    worker = ingest.ExtensionIngestWorker(settings)
+    worker.start()
+    try:
+        assert entered.wait(5), "A did not enter normalization on the real worker"
+        manifest_b = _manifest(content_b, epoch=1)
+        manifest_b.update(
+            capture_epoch="capture-cross-worker-b",
+            finalize_id="finalize-cross-worker-b",
+        )
+        finalized = ingest.finalize_recording_session(
+            settings.data_dir,
+            identity=identity_b,
+            session_id=session_b["id"],
+            payload=manifest_b,
+            backend_id="b" * 32,
+            settings=settings,
+            enqueue=worker.enqueue,
+        )
+        assert finalized["receipt"] is None
+
+        deadline = threading.Event()
+        receipt = None
+        for _ in range(100):
+            receipt = ingest.get_recording_session(
+                settings.data_dir,
+                identity=identity_b,
+                session_id=session_b["id"],
+                backend_id="b" * 32,
+                settings=settings,
+            )["receipt"]
+            if receipt is not None:
+                break
+            deadline.wait(0.05)
+        assert receipt is not None, "B did not receive a verified raw receipt while A was paused"
+    finally:
+        release.set()
+        worker.stop()
+
+
+def test_real_worker_operator_retry_does_not_hold_archive_lane(settings, monkeypatch):
+    _identity_a, session_a, _content_a = _prepared_named(
+        settings,
+        owner_id="owner-retry-worker-a",
+        client_id="retry-worker-a",
+        content=b"retry worker recording",
+    )
+    identity_b, session_b, content_b = _prepared_receiving_named(
+        settings,
+        owner_id="owner-retry-worker-b",
+        client_id="retry-worker-b",
+        content=b"archive behind retry",
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def normalize(raw_path, *args, **kwargs):
+        if Path(raw_path).name == f"{session_a['id']}.webm":
+            entered.set()
+            assert release.wait(5)
+            raise MediaProcessingError("invalid_media")
+        return SimpleNamespace(duration_seconds=1.0)
+
+    monkeypatch.setattr(ingest, "normalize_extension_media", normalize)
+    worker = ingest.ExtensionIngestWorker(settings)
+    executor = ThreadPoolExecutor(max_workers=1)
+    worker.start()
+    retry = None
+    try:
+        assert entered.wait(5), "A did not enter normalization on the real worker"
+        meeting_id = session_a["meeting_url"].rsplit("/", 1)[-1]
+        retry = executor.submit(
+            ingest.retry_recording_session,
+            settings.data_dir,
+            meeting_id,
+            enqueue=worker.enqueue,
+        )
+        with pytest.raises(TimeoutError):
+            retry.result(timeout=0.2)
+
+        manifest_b = _manifest(content_b, epoch=1)
+        manifest_b.update(
+            capture_epoch="capture-retry-worker-b",
+            finalize_id="finalize-retry-worker-b",
+        )
+        finalized = ingest.finalize_recording_session(
+            settings.data_dir,
+            identity=identity_b,
+            session_id=session_b["id"],
+            payload=manifest_b,
+            backend_id="b" * 32,
+            settings=settings,
+            enqueue=worker.enqueue,
+        )
+        assert finalized["receipt"] is None
+        deadline = threading.Event()
+        for _ in range(100):
+            status = ingest.get_recording_session(
+                settings.data_dir,
+                identity=identity_b,
+                session_id=session_b["id"],
+                backend_id="b" * 32,
+                settings=settings,
+            )
+            if status["receipt"] is not None:
+                break
+            deadline.wait(0.05)
+        assert status["receipt"] is not None
+    finally:
+        release.set()
+        if retry is not None:
+            retry.result(timeout=5)
+        worker.stop()
+        executor.shutdown(wait=True)
+
+
+def test_real_worker_restart_resumes_operator_retry(settings, monkeypatch):
+    identity, session, content = _prepared(settings)
+    failed_once = threading.Event()
+
+    def normalize(*args, **kwargs):
+        if not failed_once.is_set():
+            failed_once.set()
+            raise MediaProcessingError("invalid_media")
+        return SimpleNamespace(duration_seconds=1.0)
+
+    monkeypatch.setattr(ingest, "normalize_extension_media", normalize)
+    worker = ingest.ExtensionIngestWorker(settings)
+    worker.start()
+    try:
+        deadline = threading.Event()
+        for _ in range(100):
+            status = _replay(settings, identity, session, content, "status")
+            if status["state"] == "failed":
+                break
+            deadline.wait(0.05)
+        assert status["state"] == "failed"
+    finally:
+        worker.stop()
+    assert worker._thread is None
+
+    meeting_id = session["meeting_url"].rsplit("/", 1)[-1]
+    retried = ingest.retry_recording_session(settings.data_dir, meeting_id)
+    assert retried["retry_requested"] is True
+
+    restarted = ingest.ExtensionIngestWorker(settings)
+    restarted.start()
+    try:
+        deadline = threading.Event()
+        for _ in range(100):
+            status = _replay(settings, identity, session, content, "status")
+            if status["state"] == "ready":
+                break
+            deadline.wait(0.05)
+        assert status["state"] == "ready"
+    finally:
+        restarted.stop()
 
 
 def _replay(settings, identity, session, content, operation):
@@ -692,7 +883,7 @@ def test_waiting_media_worker_acquires_ownership_after_previous_owner_releases(
         ingest._set_session_state(data_dir, session_id, state="failed", error_code="synthetic")
         processed.set()
 
-    monkeypatch.setattr(ingest, "_process_session", process)
+    monkeypatch.setattr(ingest, "_process_archive_session", process)
     worker = ingest.ExtensionIngestWorker(settings)
     worker.start()
     try:
@@ -703,4 +894,39 @@ def test_waiting_media_worker_acquires_ownership_after_previous_owner_releases(
     finally:
         if held is not None:
             os.close(held)
+        worker.stop()
+
+
+def test_worker_retries_transient_sql_without_killing_archive_lane(settings, monkeypatch, caplog):
+    identity, session, content = _prepared(settings)
+    monkeypatch.setattr(
+        ingest,
+        "normalize_extension_media",
+        lambda *args, **kwargs: SimpleNamespace(duration_seconds=1.0),
+    )
+    original_pending = ingest.ExtensionIngestWorker._pending_archive_session
+    attempts = 0
+
+    def transient_pending(worker):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            raise sqlite3.OperationalError("synthetic busy")
+        return original_pending(worker)
+
+    monkeypatch.setattr(ingest.ExtensionIngestWorker, "_pending_archive_session", transient_pending)
+    caplog.set_level(30, logger=ingest.LOGGER.name)
+    worker = ingest.ExtensionIngestWorker(settings)
+    worker.start()
+    try:
+        deadline = threading.Event()
+        for _ in range(100):
+            status = _replay(settings, identity, session, content, "status")
+            if status["state"] == "ready":
+                break
+            deadline.wait(0.05)
+        assert status["state"] == "ready"
+        assert attempts >= 3
+        assert any("database error" in record.message for record in caplog.records)
+    finally:
         worker.stop()

@@ -2377,11 +2377,13 @@ artifact lifecycle and error state live in `extension_recording_sessions`; `reco
 nullable extension link and derivative fields, so the two tables cannot disagree about lifecycle.
 Chunk bytes are written through bounded temporary files, fsynced and renamed into managed staging;
 the exact raw archive is fsynced and receipt-committed before media normalization. After that commit,
-the worker fsyncs and removes the session's staging chunks before deleting their database rows.
-Recovery repeats this cleanup only after it verifies the immutable raw receipt. A single durable,
-bounded media worker publishes the derivative and only then marks the artifact ready. Recovery,
-upload, publication and deletion share a per-session ownership lock; deletion leaves a tombstone
-fence for old replay and status requests.
+the archive lane fsyncs and removes the session's staging chunks before deleting their database rows.
+Recovery repeats this cleanup only after it verifies the immutable raw receipt. One lifetime-owned,
+bounded worker supervises separate archive/receipt and normalization lanes: there is one archive
+operation and one normalization job at a time, while an archive can proceed when normalization is
+paused. The normalization lane publishes the derivative and only then marks the artifact ready.
+Recovery, upload, publication and deletion share a per-session ownership lock; deletion leaves a
+tombstone fence for old replay and status requests.
 
 **Client and operator seams.** The session summary advertises the negotiated `limits` object used by
 the promoted client. Its receipt `recording_id` is the extension upload session ID
@@ -2455,6 +2457,19 @@ the raw receipt or terminating the media loop. A standby application keeps waiti
 exclusive service lock after another instance starts first; it does not infer ownership from an
 old heartbeat. Disk-exhaustion and ownership-transfer regressions are in
 `tests/test_extension_lifecycle.py`.
+
+The required cross-session correction separates raw archiving from normalization under the same
+`media` lifetime lock. The archive lane selects receipt-less finalizations first and also retries
+receipt-bearing sessions whose staging cleanup still has durable rows; the normalization lane only
+selects a verified receipt after staging rows are gone. This keeps the single normalization job
+bounded without allowing a paused A normalization to delay B's raw receipt. Stop joins both lanes
+before releasing the lock, and a standby/restarted application therefore cannot duplicate either
+owner. On Linux, each bounded media subprocess inherits a kernel parent-death kill guard and all
+platforms verify the spawning parent before `exec`, so a hard-killed worker cannot leave
+ffprobe/ffmpeg running after the media flock is released. This child guard belongs only to the
+normalization lane; it is not a shared lease that can block archive receipts after restart.
+Transient SQLite errors are logged and retried with bounded lane backoff rather than ending the
+worker loop or spinning.
 
 The [CI quality log](https://github.com/nguyencanhtrung/asr-studio/actions/runs/43705934863/job/132786889750)
 records Ubuntu 26.04 and FFmpeg 8.0.1 and exposed an Opus parser diagnostic on otherwise

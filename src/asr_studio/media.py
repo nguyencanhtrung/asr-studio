@@ -38,17 +38,29 @@ LOCAL_PROTOCOLS = "file,pipe,crypto,data"
 DECODE_DURATION_TOLERANCE_SECONDS = 2.0
 ESTIMATED_DURATION_FORMATS = frozenset({"aac", "adts", "mp3"})
 
-# Apply the limit in a fresh interpreter, not preexec_fn: media runs in an app
-# thread, where executing Python between fork and exec can deadlock.
+# Apply the limit and Linux parent-death guard in a fresh interpreter, not
+# preexec_fn: media runs in an app thread, where executing Python between fork
+# and exec can deadlock. Every bounded command uses this launcher. Linux gets a
+# kernel parent-death signal; all platforms still perform the post-registration
+# parent-PID check before exec.
 _FILE_LIMIT_EXEC = """
-import os, resource, sys
-limit = int(sys.argv[1])
-soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
-for inherited in (soft, hard):
-    if inherited != resource.RLIM_INFINITY:
-        limit = min(limit, inherited)
-resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
-os.execv(sys.argv[2], sys.argv[2:])
+import ctypes, os, signal, sys
+parent_pid = int(sys.argv[1])
+if sys.platform.startswith("linux"):
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGKILL) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_PDEATHSIG) failed")
+if os.getppid() != parent_pid:
+    os._exit(1)
+limit = int(sys.argv[2])
+if limit:
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    for inherited in (soft, hard):
+        if inherited != resource.RLIM_INFINITY:
+            limit = min(limit, inherited)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+os.execv(sys.argv[3], sys.argv[3:])
 """
 
 
@@ -93,10 +105,16 @@ def _run_bounded(
         command_deadline = min(command_deadline, deadline)
     if command_deadline <= time.monotonic():
         raise MediaProcessingError("media_processing_timeout")
-    if file_size_limit is not None:
-        if isinstance(file_size_limit, bool) or file_size_limit < 1:
-            raise ValueError("file_size_limit must be positive")
-        argv = [sys.executable, "-c", _FILE_LIMIT_EXEC, str(file_size_limit), *argv]
+    if file_size_limit is not None and (isinstance(file_size_limit, bool) or file_size_limit < 1):
+        raise ValueError("file_size_limit must be positive")
+    argv = [
+        sys.executable,
+        "-c",
+        _FILE_LIMIT_EXEC,
+        str(os.getpid()),
+        str(file_size_limit or 0),
+        *argv,
+    ]
     try:
         process = subprocess.Popen(
             argv,

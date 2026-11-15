@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -196,6 +197,61 @@ def test_command_deadline_still_kills_and_reaps_after_output_pipes_close(tmp_pat
     assert rejected.value.code == "media_processing_timeout"
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
+
+
+def _process_is_running(pid: int) -> bool:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except OSError:
+        return False
+    try:
+        state = stat.rsplit(") ", 1)[1].split(maxsplit=1)[0]
+    except (IndexError, ValueError):
+        return False
+    return state != "Z"
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="requires Linux parent-death signal"
+)
+def test_bounded_media_child_dies_with_disposable_parent(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    child_code = (
+        "import os, pathlib, sys, time; "
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='ascii'); "
+        "time.sleep(60)"
+    )
+    command = [sys.executable, "-c", child_code, str(pid_file)]
+    helper_code = (
+        f"from asr_studio import media; media._run_bounded({command!r}, timeout_seconds=60)"
+    )
+    environment = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        value for value in (source_root, environment.get("PYTHONPATH")) if value
+    )
+    parent = subprocess.Popen([sys.executable, "-c", helper_code], env=environment)
+    child_pid = None
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not pid_file.exists():
+            time.sleep(0.02)
+        assert pid_file.exists(), "disposable worker did not start its media child"
+        child_pid = int(pid_file.read_text(encoding="ascii"))
+        assert _process_is_running(child_pid)
+
+        parent.kill()
+        parent.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and _process_is_running(child_pid):
+            time.sleep(0.02)
+        assert not _process_is_running(child_pid), "media child survived its killed parent"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        parent.wait(timeout=5)
+        if child_pid is not None and _process_is_running(child_pid):
+            os.kill(child_pid, signal.SIGKILL)
 
 
 @pytest.mark.parametrize("streaming", [True, False])
