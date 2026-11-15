@@ -2490,3 +2490,81 @@ the archive lane records `raw_corrupt` and keeps the chunks. Both lane selectors
 exclude that failed session, preventing repeated cleanup attempts while the
 client status check continues to reject a cleanup-authorizing receipt. Missing
 and same-size corrupted raw archives have focused lifecycle regressions.
+
+## #219 — Durable automatic transcript and meeting-notes processing
+
+**Problem.** Ready extension recordings previously stopped at the recording
+boundary. Automatic transcription and Notes needed to reuse the existing task
+workers/providers without turning a waiting intention into a task or losing the
+operator's source and account choices across restart.
+
+**Change.** Schema migration 19 adds singleton processing preferences, one
+workflow per extension session, transcription/Notes steps and attempts, an
+outbox, immutable Notes source snapshots, and task-to-workflow fencing. Ready
+derivative publication creates the workflow in the caller's transaction.
+Admission inserts the task, advances the attempt/step, and claims the existing
+processing slot in that same transaction; idempotency replay is checked first.
+The bounded scheduler uses the existing runtime/model readiness and task
+workers, FIFO scans, a finite GUI grace window across scheduler passes and both
+automatic task kinds, and a process-lifetime service lock. Notes admission also
+requires the existing split Notes service or legacy worker readiness. Provider
+operation locks and account pins are acquired before SQLite work; provider
+calls and media work never run inside a database transaction. Automatic Notes
+tasks copy the production prompt/schema versions and reject a changed provider
+effort until the operator explicitly adopts the current recipe.
+
+**Operator seams.** Processing preferences and meeting processing state are
+additive API surfaces documented in
+[automatic processing](extension-automatic-processing.md). Explicit cancel, Notes retry, current-settings adoption,
+and current-source adoption compare the displayed workflow/preferences/source
+revisions. Active, canceled, and deletion-marked work is fenced; a configured
+provider is never selected implicitly. A successful automatic transcript keeps
+its frozen source even when Notes configuration is absent, so Notes-only retry
+does not rerun ASR. Existing manual transcript and Notes routes continue to
+create and retain manual revisions. The authenticated asset allowlist serves
+the processing core modules used by the workspace shell.
+
+**Evidence and limits.** Backend fault tests cover ready handoff rollback,
+idempotent/restarted admission, slot serialization, worker/model/provider
+waiting, late cancellation/deletion fences, source/account/version changes,
+Notes-only retry, manual revision retention, ownership fairness, Notes runner
+contract compatibility, worker readiness recovery, and authenticated
+processing-asset delivery. No live provider, inference, browser, or media
+qualification is claimed here; the production client remains a separate
+integration surface.
+
+Tag: architecture, storage, privacy. Targets:
+[`processing.py`](../src/asr_studio/processing.py),
+[`processing_routes.py`](../src/asr_studio/processing_routes.py),
+[`storage.py`](../src/asr_studio/storage.py), [`tasks.py`](../src/asr_studio/tasks.py),
+[`notes.py`](../src/asr_studio/notes.py), and the backend tests.
+
+**Frontend integration.** Settings → Devices uses the existing modal, catalogs
+and design tokens for explicit ASR and Notes preferences. The existing meeting
+page shows separate transcript and Notes progress, waiting reasons, and
+version-checked recovery actions. Pure reducers emit request and scheduling
+effects; stale responses are rejected by request, meeting and workflow
+identities. Polling stops on navigation or hidden pages. Completion refreshes
+the existing meeting state while retaining local transcript edits. The view
+keeps temporary keyboard focus ownership only while the user remains on the
+pending action.
+
+The authenticated asset routes include both processing core modules. Browser
+regressions cover successful and failed preference saves in English and
+Vietnamese under light and dark themes, plus cancellation and stale-action
+focus. `tests/test_browser_automatic_processing.py` passed seven cases after
+correcting translation-object rendering and save-focus recovery. The matching
+pure-core and shell-view checks passed 25 cases. Internal source identifiers
+remain in API requests; the meeting UI shows readable content and meeting
+information revisions.
+
+The UI reads the standalone processing endpoint when a meeting response lacks
+its additive processing field, preserving manual-meeting compatibility without
+maintaining a second workflow state. No provider fallback or implicit ASR rerun
+is introduced. See [automatic processing](extension-automatic-processing.md).
+
+Settings adoption uses the same provider-effort resolution as task admission:
+Antigravity's supported `default` matches its resolved `high` recipe, while a
+different provider/model or genuinely changed effort still requires confirmation.
+The focused regression covers both this accepted equivalence and rejection of
+a changed ChatGPT effort without advancing the workflow.

@@ -387,6 +387,12 @@ def cancel_task(data_dir: Path, task_id: str) -> dict[str, object]:
                 "WHERE slot_id = 1 AND active_task_id = ?",
                 (task_id,),
             )
+            if row["processing_workflow_id"] is not None:
+                from asr_studio.processing import automatic_task_terminal_tx
+
+                automatic_task_terminal_tx(
+                    connection, row, "canceled", "canceled_by_operator", "Canceled by operator."
+                )
         elif row["status"] == "running":
             connection.execute(
                 "UPDATE tasks SET status = 'stopping', stage = 'stopping', "
@@ -394,6 +400,12 @@ def cancel_task(data_dir: Path, task_id: str) -> dict[str, object]:
                 "WHERE id = ? AND status = 'running'",
                 (task_id,),
             )
+            if row["processing_workflow_id"] is not None:
+                from asr_studio.processing import automatic_task_terminal_tx
+
+                automatic_task_terminal_tx(
+                    connection, row, "canceled", "canceled_by_operator", "Canceled by operator."
+                )
         updated = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         assert updated is not None
         return _task_summary(updated)
@@ -454,6 +466,28 @@ def claim_next_task(
         )
         if cursor.rowcount != 1:
             return None
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import automatic_task_started_tx
+
+            if not automatic_task_started_tx(
+                connection,
+                task_id,
+                task["processing_workflow_id"],
+                task["processing_step_id"],
+                task["processing_attempt_id"],
+                task["processing_epoch"],
+            ):
+                connection.execute(
+                    "UPDATE tasks SET status = 'canceled', stage = 'canceled', "
+                    "completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (task_id,),
+                )
+                connection.execute(
+                    "UPDATE processing_slot SET active_task_id = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE active_task_id = ?",
+                    (task_id,),
+                )
+                return None
         row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         assert row is not None
         return dict(row)
@@ -528,7 +562,7 @@ def fail_task(
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         task = connection.execute(
-            "SELECT status FROM tasks WHERE id = ? AND owner_id = ?", (task_id, owner_id)
+            "SELECT * FROM tasks WHERE id = ? AND owner_id = ?", (task_id, owner_id)
         ).fetchone()
         if task is None or task["status"] not in {"running", "stopping"}:
             return False
@@ -553,6 +587,16 @@ def fail_task(
             "WHERE slot_id = 1 AND active_task_id = ?",
             (task_id,),
         )
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import automatic_task_terminal_tx
+
+            automatic_task_terminal_tx(
+                connection,
+                task,
+                "canceled" if task["status"] == "stopping" else "failed",
+                error_code,
+                message,
+            )
         return True
 
 
@@ -562,6 +606,9 @@ def finish_canceled_task(
     """Release the slot only after the worker has terminated and reaped its runner group."""
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
+        task = connection.execute(
+            "SELECT * FROM tasks WHERE id = ? AND owner_id = ?", (task_id, owner_id)
+        ).fetchone()
         cursor = connection.execute(
             "UPDATE tasks SET status = 'canceled', stage = 'canceled', elapsed_seconds = ?, "
             "completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
@@ -574,6 +621,12 @@ def finish_canceled_task(
                 "WHERE slot_id = 1 AND active_task_id = ?",
                 (task_id,),
             )
+            if task is not None and task["processing_workflow_id"] is not None:
+                from asr_studio.processing import automatic_task_terminal_tx
+
+                automatic_task_terminal_tx(
+                    connection, task, "canceled", "canceled_by_operator", "Canceled by operator."
+                )
             return True
         return False
 
@@ -589,7 +642,7 @@ def finish_interrupted_task(
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         task = connection.execute(
-            "SELECT status, kind FROM tasks WHERE id = ? AND owner_id = ?", (task_id, owner_id)
+            "SELECT * FROM tasks WHERE id = ? AND owner_id = ?", (task_id, owner_id)
         ).fetchone()
         if task is None or task["status"] not in {"running", "stopping"}:
             return False
@@ -618,6 +671,16 @@ def finish_interrupted_task(
             "WHERE slot_id = 1 AND active_task_id = ?",
             (task_id,),
         )
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import automatic_task_terminal_tx
+
+            automatic_task_terminal_tx(
+                connection,
+                task,
+                "canceled" if task["status"] == "stopping" else "interrupted",
+                "worker_stopped" if task["status"] != "stopping" else "canceled_by_operator",
+                message,
+            )
         return True
 
 
@@ -810,6 +873,11 @@ def publish_complete_generation(
             or slot["active_task_id"] != task_id
         ):
             return None
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import publication_allowed_tx
+
+            if not publication_allowed_tx(connection, task):
+                return None
 
         generation_id = uuid.uuid4().hex
         generation_number = connection.execute(
@@ -886,6 +954,10 @@ def publish_complete_generation(
             "UPDATE meetings SET current_generation_id = ? WHERE id = ?",
             (generation_id, task["meeting_id"]),
         )
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import transcript_published_tx
+
+            transcript_published_tx(connection, task, generation_id)
         cursor = connection.execute(
             "UPDATE tasks SET status = 'succeeded', stage = 'complete', "
             "result_scope = 'transcript_only', transcript_end_seconds = ?, segment_count = ?, "
@@ -928,8 +1000,7 @@ def recover_abandoned_tasks(
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         rows = connection.execute(
-            "SELECT id, kind, status, owner_role FROM tasks "
-            "WHERE status IN ('accepted', 'running', 'stopping')"
+            "SELECT * FROM tasks WHERE status IN ('accepted', 'running', 'stopping')"
         ).fetchall()
         task_ids: list[str] = []
         for row in rows:
@@ -968,6 +1039,19 @@ def recover_abandoned_tasks(
             f"WHERE status IN ('accepted', 'running') AND id IN ({placeholders})",
             task_ids,
         )
+        from asr_studio.processing import automatic_task_terminal_tx
+
+        task_id_set = set(task_ids)
+        for row in rows:
+            if row["id"] not in task_id_set or row["processing_workflow_id"] is None:
+                continue
+            automatic_task_terminal_tx(
+                connection,
+                row,
+                "canceled" if row["status"] == "stopping" else "interrupted",
+                "worker_restarted",
+                "The worker restarted before processing finished.",
+            )
         connection.execute(
             "UPDATE processing_slot SET active_task_id = NULL, updated_at = CURRENT_TIMESTAMP "
             f"WHERE slot_id = 1 AND active_task_id IN ({placeholders})",

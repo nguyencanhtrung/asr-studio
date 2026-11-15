@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+
 """SQLite initialization for the durable app data volume."""
 
 from __future__ import annotations
@@ -6,7 +8,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -793,6 +795,110 @@ def _migrate_v18(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v19(connection: sqlite3.Connection) -> None:
+    """Add the durable automatic processing state machine.
+
+    The tables deliberately keep workflow state separate from the existing task
+    queue.  The latter remains the execution primitive used by the manual UI and
+    workers; these rows are the durable intent/fence around it.
+    """
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS processing_preferences ("
+        "id INTEGER PRIMARY KEY CHECK(id = 1), "
+        "asr_choice TEXT NOT NULL DEFAULT 'auto', "
+        "asr_language TEXT NOT NULL DEFAULT 'vi' CHECK(asr_language IN ('en', 'vi')), "
+        "notes_provider TEXT CHECK(notes_provider IS NULL OR notes_provider IN ('chatgpt', 'antigravity')), "
+        "notes_model TEXT, notes_reasoning_effort TEXT, "
+        "notes_output_language TEXT NOT NULL DEFAULT 'en' CHECK(notes_output_language IN ('en', 'vi')), "
+        "version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1), "
+        "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    )
+    connection.execute("INSERT OR IGNORE INTO processing_preferences(id) VALUES (1)")
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS processing_workflows ("
+        "id TEXT PRIMARY KEY CHECK(length(id) = 32), "
+        "meeting_id TEXT NOT NULL UNIQUE REFERENCES meetings(id) ON DELETE RESTRICT, "
+        "recording_id TEXT NOT NULL UNIQUE REFERENCES recordings(id) ON DELETE RESTRICT, "
+        "extension_session_id TEXT UNIQUE REFERENCES extension_recording_sessions(id) ON DELETE RESTRICT, "
+        "state TEXT NOT NULL CHECK(state IN ('waiting', 'running', 'succeeded', 'canceled', 'deleted', 'needs_attention')), "
+        "epoch INTEGER NOT NULL DEFAULT 1 CHECK(epoch >= 1), "
+        "ready_sequence INTEGER NOT NULL DEFAULT 0 CHECK(ready_sequence >= 0), "
+        "asr_choice TEXT NOT NULL DEFAULT 'auto', "
+        "asr_language TEXT NOT NULL CHECK(asr_language IN ('en', 'vi')), "
+        "notes_provider TEXT CHECK(notes_provider IS NULL OR notes_provider IN ('chatgpt', 'antigravity')), "
+        "notes_model TEXT, notes_reasoning_effort TEXT, notes_output_language TEXT NOT NULL DEFAULT 'en' CHECK(notes_output_language IN ('en', 'vi')), "
+        "preferences_version INTEGER NOT NULL DEFAULT 1 CHECK(preferences_version >= 1), "
+        "last_error_code TEXT, last_error_message TEXT, "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS processing_workflows_queue_idx ON processing_workflows(state, ready_sequence, id)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS processing_steps ("
+        "id TEXT PRIMARY KEY CHECK(length(id) = 32), "
+        "workflow_id TEXT NOT NULL REFERENCES processing_workflows(id) ON DELETE RESTRICT, "
+        "kind TEXT NOT NULL CHECK(kind IN ('transcription', 'notes')), "
+        "state TEXT NOT NULL CHECK(state IN ('waiting', 'accepted', 'running', 'succeeded', 'failed', 'canceled', 'needs_attention')), "
+        "waiting_reason TEXT, next_eligible_at REAL NOT NULL DEFAULT 0, attempt_number INTEGER NOT NULL DEFAULT 0 CHECK(attempt_number >= 0), "
+        "task_id TEXT, current_attempt_id TEXT, source_snapshot_id TEXT, source_generation_id TEXT, source_version INTEGER, notes_source_version INTEGER, metadata_version INTEGER, "
+        "asr_choice TEXT, asr_language TEXT, asr_model TEXT, asr_model_path TEXT, device TEXT, compute_type TEXT, diarization_model_path TEXT, "
+        "notes_provider TEXT, notes_model TEXT, notes_reasoning_effort TEXT, notes_output_language TEXT, notes_connection_version INTEGER, recipe_version INTEGER NOT NULL DEFAULT 1, "
+        "last_error_code TEXT, last_error_message TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "UNIQUE(workflow_id, kind)"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS processing_steps_ready_idx ON processing_steps(state, next_eligible_at, updated_at, id)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS processing_attempts ("
+        "id TEXT PRIMARY KEY CHECK(length(id) = 32), step_id TEXT NOT NULL REFERENCES processing_steps(id) ON DELETE RESTRICT, "
+        "attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1), request_id TEXT NOT NULL UNIQUE, request_hash TEXT NOT NULL, workflow_epoch INTEGER NOT NULL CHECK(workflow_epoch >= 1), "
+        "state TEXT NOT NULL CHECK(state IN ('waiting', 'accepted', 'running', 'succeeded', 'failed', 'canceled', 'interrupted')), task_id TEXT UNIQUE, execution_no INTEGER NOT NULL DEFAULT 1 CHECK(execution_no >= 1), "
+        "error_code TEXT, error_message TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(step_id, attempt_number)"
+        ")"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS processing_attempts_step_idx ON processing_attempts(step_id, attempt_number DESC)"
+    )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS processing_outbox ("
+        "id TEXT PRIMARY KEY CHECK(length(id) = 32), event_key TEXT NOT NULL UNIQUE, workflow_id TEXT NOT NULL REFERENCES processing_workflows(id) ON DELETE RESTRICT, "
+        "event_type TEXT NOT NULL, payload_json TEXT NOT NULL CHECK(json_valid(payload_json)), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, processed_at TEXT"
+        ")"
+    )
+    task_columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
+    for column in (
+        "processing_workflow_id",
+        "processing_step_id",
+        "processing_attempt_id",
+        "processing_epoch",
+    ):
+        if column not in task_columns:
+            column_type = "INTEGER" if column == "processing_epoch" else "TEXT"
+            connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {column_type}")
+    preference_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(processing_preferences)")
+    }
+    if "version" not in preference_columns:
+        connection.execute(
+            "ALTER TABLE processing_preferences ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+        )
+    workflow_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(processing_workflows)")
+    }
+    if "preferences_version" not in workflow_columns:
+        connection.execute(
+            "ALTER TABLE processing_workflows ADD COLUMN preferences_version INTEGER NOT NULL DEFAULT 1"
+        )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS tasks_processing_workflow_idx ON tasks(processing_workflow_id, processing_step_id)"
+    )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -946,6 +1052,14 @@ def initialize(data_dir: Path) -> Path:
                 raise
             finally:
                 connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        current_version = connection.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+        ).fetchone()[0]
+        if current_version < 19:
+            _migrate_v19(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (19)")
+        connection.commit()
     finally:
         connection.close()
     os.chmod(path, 0o600)

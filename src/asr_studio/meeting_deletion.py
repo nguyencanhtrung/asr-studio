@@ -78,6 +78,25 @@ def _mark_meeting_for_deletion(data_dir: Path, meeting_id: str) -> None:
             raise MeetingDeletionError(404, "meeting_not_found", "Meeting not found.")
         if _active_task(connection, meeting_id):
             raise MeetingDeletionError(409, "meeting_task_active", _DELETE_GUIDANCE)
+        connection.execute(
+            "UPDATE processing_workflows SET state = 'deleted', epoch = epoch + 1, "
+            "last_error_code = 'meeting_deleted', updated_at = CURRENT_TIMESTAMP "
+            "WHERE meeting_id = ? AND state NOT IN ('deleted', 'succeeded')",
+            (meeting_id,),
+        )
+        connection.execute(
+            "UPDATE processing_steps SET state = 'canceled', waiting_reason = 'meeting_deleted', "
+            "updated_at = CURRENT_TIMESTAMP WHERE workflow_id IN "
+            "(SELECT id FROM processing_workflows WHERE meeting_id = ?)",
+            (meeting_id,),
+        )
+        connection.execute(
+            "UPDATE processing_attempts SET state = 'canceled', updated_at = CURRENT_TIMESTAMP "
+            "WHERE step_id IN (SELECT id FROM processing_steps WHERE workflow_id IN "
+            "(SELECT id FROM processing_workflows WHERE meeting_id = ?)) "
+            "AND state IN ('waiting', 'accepted')",
+            (meeting_id,),
+        )
         if meeting["deletion_requested_at"] is None:
             connection.execute(
                 "UPDATE meetings SET deletion_requested_at = CURRENT_TIMESTAMP, "
@@ -331,6 +350,25 @@ def _finalize_database_delete(data_dir: Path, meeting_id: str) -> None:
                 "UPDATE processing_slot SET active_task_id = NULL, updated_at = CURRENT_TIMESTAMP "
                 "WHERE active_task_id IN (SELECT id FROM tasks WHERE meeting_id = ?)",
                 (meeting_id,),
+            )
+            connection.execute(
+                "DELETE FROM processing_outbox WHERE workflow_id IN "
+                "(SELECT id FROM processing_workflows WHERE meeting_id = ?)",
+                (meeting_id,),
+            )
+            connection.execute(
+                "DELETE FROM processing_attempts WHERE step_id IN "
+                "(SELECT id FROM processing_steps WHERE workflow_id IN "
+                "(SELECT id FROM processing_workflows WHERE meeting_id = ?))",
+                (meeting_id,),
+            )
+            connection.execute(
+                "DELETE FROM processing_steps WHERE workflow_id IN "
+                "(SELECT id FROM processing_workflows WHERE meeting_id = ?)",
+                (meeting_id,),
+            )
+            connection.execute(
+                "DELETE FROM processing_workflows WHERE meeting_id = ?", (meeting_id,)
             )
             connection.execute(
                 "DELETE FROM transcript_generations WHERE meeting_id = ?", (meeting_id,)

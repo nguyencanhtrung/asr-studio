@@ -19,6 +19,7 @@ SERVICE_FILES = {
     "transcription": (".transcription.lock", "transcription.liveness"),
     "notes": (".notes-service.lock", "notes-service.liveness"),
     "media": (".media.lock", "media.liveness"),
+    "processing": (".processing.lock", "processing.liveness"),
 }
 
 

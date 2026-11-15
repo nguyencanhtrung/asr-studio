@@ -260,6 +260,26 @@
             <li class="meeting-status-item" id="status-transcript" data-state="idle"><span aria-hidden="true"></span><span>Transcript · Chưa chép lời</span></li>
             <li class="meeting-status-item" id="status-notes" data-state="idle"><span aria-hidden="true"></span><span>Notes · Đang kiểm tra</span></li>
           </ul>
+          <section class="automatic-processing-panel" id="automatic-processing-panel" aria-labelledby="automatic-processing-title" hidden>
+            <div class="automatic-processing-heading">
+              <div>
+                <h3 id="automatic-processing-title" tabindex="-1">Xử lý tự động</h3>
+                <p id="automatic-processing-message" role="status" aria-live="polite"></p>
+              </div>
+              <span class="connection-state-badge" id="automatic-processing-state"></span>
+            </div>
+            <ol class="automatic-processing-steps" id="automatic-processing-steps"></ol>
+            <p class="automatic-processing-source" id="automatic-processing-source"></p>
+            <p class="automatic-processing-intent" id="automatic-processing-intent" role="status" aria-live="polite"></p>
+            <p class="automatic-processing-notice" id="automatic-processing-notice" role="status" aria-live="polite"></p>
+            <p class="automatic-processing-error" id="automatic-processing-error" role="alert"></p>
+            <div class="automatic-processing-actions" id="automatic-processing-actions">
+              <button class="secondary-button" id="automatic-processing-cancel" type="button">Hủy xử lý</button>
+              <button class="secondary-button" id="automatic-processing-retry-notes" type="button">Thử lại notes</button>
+              <button class="secondary-button" id="automatic-processing-apply-settings" type="button">Áp dụng cài đặt hiện tại</button>
+              <button class="primary-button" id="automatic-processing-use-source" type="button">Dùng nguồn đang hiển thị</button>
+            </div>
+          </section>
           <div class="meeting-tabs" id="meeting-tabs" role="tablist" aria-label="Nội dung cuộc họp">
             <button class="meeting-tab" id="meeting-tab-notes" type="button" role="tab" data-meeting-tab="notes" aria-selected="false" aria-controls="meeting-panel-notes" tabindex="0">Meeting notes</button>
             <button class="meeting-tab" id="meeting-tab-transcript" type="button" role="tab" data-meeting-tab="transcript" aria-selected="false" aria-controls="meeting-panel-transcript" tabindex="-1"><span>Transcript &amp; bản ghi</span> <span class="meeting-tab-count" id="meeting-tab-count"></span></button>
@@ -912,6 +932,51 @@
           <div class="settings-panel" id="settings-panel-devices" role="tabpanel" aria-labelledby="settings-tab-devices" tabindex="0" hidden>
             <h3 class="settings-group-title">Thiết bị</h3>
             <p class="connections-intro">Kết nối và quản lý extension trên các máy của bạn.</p>
+
+            <section class="device-section automatic-preferences-section" aria-labelledby="automatic-preferences-title">
+              <div class="connection-section-heading">
+                <h4 id="automatic-preferences-title" tabindex="-1">Xử lý tự động</h4>
+                <span class="connection-state-badge" id="automatic-preferences-version"></span>
+              </div>
+              <p class="device-help">Chọn rõ model chép lời, ngôn ngữ và công thức notes cho các bản ghi mới từ extension. Không chọn provider nghĩa là transcript vẫn có thể hoàn tất nhưng notes sẽ chờ.</p>
+              <form id="automatic-preferences-form">
+                <div class="connection-field">
+                  <label for="automatic-preferences-asr-choice">Model ASR</label>
+                  <select id="automatic-preferences-asr-choice" aria-describedby="automatic-preferences-asr-help"></select>
+                  <p class="connection-help" id="automatic-preferences-asr-help">Lựa chọn này áp dụng cho workflow tự động mới.</p>
+                </div>
+                <div class="connection-field">
+                  <label for="automatic-preferences-asr-language">Ngôn ngữ transcript</label>
+                  <select id="automatic-preferences-asr-language">
+                    <option value="en">English</option>
+                    <option value="vi">Tiếng Việt</option>
+                  </select>
+                </div>
+                <div class="connection-field">
+                  <label for="automatic-preferences-provider">Provider notes</label>
+                  <select id="automatic-preferences-provider" aria-describedby="automatic-preferences-provider-help"></select>
+                  <p class="connection-help" id="automatic-preferences-provider-help"></p>
+                </div>
+                <div class="connection-field" id="automatic-preferences-model-field">
+                  <label for="automatic-preferences-model">Model notes</label>
+                  <select id="automatic-preferences-model"></select>
+                </div>
+                <div class="connection-field" id="automatic-preferences-effort-field">
+                  <label for="automatic-preferences-effort">Mức suy luận</label>
+                  <select id="automatic-preferences-effort"></select>
+                </div>
+                <div class="connection-field">
+                  <label for="automatic-preferences-output-language">Ngôn ngữ đầu ra notes</label>
+                  <select id="automatic-preferences-output-language">
+                    <option value="en">English</option>
+                    <option value="vi">Tiếng Việt</option>
+                  </select>
+                </div>
+                <p class="connection-message" id="automatic-preferences-notice" role="status" aria-live="polite"></p>
+                <p class="connection-error" id="automatic-preferences-error" role="alert" hidden></p>
+                <button class="primary-button" id="automatic-preferences-save" type="submit">Lưu cài đặt xử lý</button>
+              </form>
+            </section>
 
             <section class="device-section" aria-labelledby="extension-device-code-title">
               <div class="connection-section-heading">

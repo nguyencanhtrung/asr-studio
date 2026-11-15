@@ -40,6 +40,7 @@ from asr_studio.meeting_deletion import MeetingDeletionError, delete_meeting
 from asr_studio.model_install import InstallStore
 from asr_studio.notes import has_active_notes_task
 from asr_studio.notes_routes import install_notes_routes
+from asr_studio.processing import save_asr_preference
 from asr_studio.recordings import (
     RecordingError,
     begin_upload,
@@ -393,6 +394,14 @@ def install_routes(
     async def extension_devices_core_js() -> FileResponse:
         return _asset_response("extension-devices-core.js", "text/javascript")
 
+    @app.get("/assets/processing-core.js", include_in_schema=False)
+    async def processing_core_js() -> FileResponse:
+        return _asset_response("processing-core.js", "text/javascript")
+
+    @app.get("/assets/processing-preferences-core.js", include_in_schema=False)
+    async def processing_preferences_core_js() -> FileResponse:
+        return _asset_response("processing-preferences-core.js", "text/javascript")
+
     @app.get("/assets/connections.js", include_in_schema=False)
     async def connections_js() -> Response:
         asset_path = WEB_DIR / "connections.js"
@@ -504,6 +513,7 @@ def install_routes(
             if not choice["ready"]:
                 raise refuse(409, str(choice["reason"]), "This model cannot run here yet.")
         await run_in_threadpool(write_default_model, settings, chosen)
+        await run_in_threadpool(save_asr_preference, settings.data_dir, chosen or AUTO)
         return {"default_model": chosen}
 
     @app.post("/api/asr-models/{asr_model}/install", status_code=202)

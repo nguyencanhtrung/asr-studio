@@ -6,6 +6,7 @@ import { selectDevices } from "./extension-devices-core.js";
 import { createRunner, createStore } from "./store.js";
 import { setAttr, setProp, tr } from "./shell.js";
 import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, initialState, reduce, selectAsr, selectLauncher, selectView } from "./provider-core.js";
+import { selectPreferences } from "./processing-preferences-core.js";
 
 const launcherElements = {
   chatgpt: document.querySelector("#launcher-chatgpt"),
@@ -43,6 +44,24 @@ const deviceEls = {
   listStatus: document.querySelector("#extension-device-list-status"),
   listEmpty: document.querySelector("#extension-device-list-empty"),
   list: document.querySelector("#extension-device-list"),
+};
+
+const processingPreferenceEls = {
+  title: document.querySelector("#automatic-preferences-title"),
+  form: document.querySelector("#automatic-preferences-form"),
+  version: document.querySelector("#automatic-preferences-version"),
+  asrChoice: document.querySelector("#automatic-preferences-asr-choice"),
+  asrLanguage: document.querySelector("#automatic-preferences-asr-language"),
+  provider: document.querySelector("#automatic-preferences-provider"),
+  providerHelp: document.querySelector("#automatic-preferences-provider-help"),
+  modelField: document.querySelector("#automatic-preferences-model-field"),
+  model: document.querySelector("#automatic-preferences-model"),
+  effortField: document.querySelector("#automatic-preferences-effort-field"),
+  effort: document.querySelector("#automatic-preferences-effort"),
+  outputLanguage: document.querySelector("#automatic-preferences-output-language"),
+  notice: document.querySelector("#automatic-preferences-notice"),
+  error: document.querySelector("#automatic-preferences-error"),
+  save: document.querySelector("#automatic-preferences-save"),
 };
 
 const els = {
@@ -452,6 +471,74 @@ function renderDevices(state) {
   }
 }
 
+function processingCatalogs(state) {
+  return {
+    asrModels: state.asr.models,
+    providers: {
+      chatgpt: {
+        status: state.chatgpt.info?.status,
+        account: state.chatgpt.info?.account?.label || null,
+        models: state.chatgpt.models,
+        effortOptions: selectView(CHATGPT, state.chatgpt).effortOptions || [],
+      },
+      antigravity: {
+        status: state.antigravity.info?.status,
+        account: state.antigravity.info?.account?.label || null,
+        models: state.antigravity.models,
+        effortOptions: selectView(ANTIGRAVITY, state.antigravity).effortOptions || [],
+      },
+    },
+  };
+}
+
+function renderProcessingPreferences(state, rootState) {
+  const view = selectPreferences(state, processingCatalogs(rootState));
+  const draft = view.draft;
+  const form = processingPreferenceEls.form;
+  if (view.saving && document.activeElement === processingPreferenceEls.save) {
+    form.dataset.focusMutation = String(state.mutation);
+  }
+  setProp(processingPreferenceEls.version, "textContent", view.version ? `v${view.version}` : "");
+  setAttr(processingPreferenceEls.version, "data-state", view.status === "error" ? "error" : view.status);
+  if (!draft) {
+    setAttr(processingPreferenceEls.form, "aria-busy", view.loading ? "true" : "false");
+    setProp(processingPreferenceEls.notice, "textContent", view.message ? tr(view.message) : "");
+    setProp(processingPreferenceEls.error, "hidden", !view.error);
+    setProp(processingPreferenceEls.error, "textContent", view.error ? tr(view.error.text) : "");
+    setProp(processingPreferenceEls.save, "disabled", true);
+    return;
+  }
+  renderOptions(processingPreferenceEls.asrChoice, view.asrOptions, draft.asr.choice);
+  setProp(processingPreferenceEls.asrLanguage, "value", draft.asr.language);
+  renderOptions(processingPreferenceEls.provider, view.providerOptions, view.providerValue);
+  renderOptions(processingPreferenceEls.model, view.modelOptions, view.modelValue);
+  renderOptions(processingPreferenceEls.effort, view.effortOptions, view.effortValue);
+  setProp(processingPreferenceEls.outputLanguage, "value", draft.notes.output_language);
+  setProp(processingPreferenceEls.modelField, "hidden", view.waiting);
+  setProp(processingPreferenceEls.effortField, "hidden", view.waiting);
+  setProp(processingPreferenceEls.providerHelp, "textContent", tr(view.providerStatus));
+  const disabled = view.loading || view.saving;
+  for (const control of [processingPreferenceEls.asrChoice, processingPreferenceEls.asrLanguage, processingPreferenceEls.provider, processingPreferenceEls.model, processingPreferenceEls.effort, processingPreferenceEls.outputLanguage]) {
+    setProp(control, "disabled", disabled || (view.waiting && (control === processingPreferenceEls.model || control === processingPreferenceEls.effort)));
+  }
+  setProp(processingPreferenceEls.save, "disabled", !view.canSave);
+  setProp(processingPreferenceEls.save, "textContent", view.saving ? t("Đang lưu cài đặt…") : t("Lưu cài đặt xử lý"));
+  setAttr(processingPreferenceEls.form, "aria-busy", view.saving || view.loading ? "true" : "false");
+  setProp(processingPreferenceEls.notice, "textContent", view.notice ? tr(view.notice) : view.message ? tr(view.message) : "");
+  setProp(processingPreferenceEls.error, "hidden", !view.error);
+  setProp(processingPreferenceEls.error, "textContent", view.error ? tr(view.error.text) : "");
+  if (!view.saving && form.dataset.focusMutation) {
+    const matches = form.dataset.focusMutation === String(state.mutation);
+    delete form.dataset.focusMutation;
+    const active = document.activeElement;
+    if (matches && state.open && form.getClientRects().length
+      && (!active || active === document.body || active === processingPreferenceEls.save)) {
+      const target = view.error ? processingPreferenceEls.save : processingPreferenceEls.title;
+      target.focus({ preventScroll: true });
+    }
+  }
+}
+
 // The focus went with the button that was replaced (Cài đặt model, Hủy, Thử lại). It goes to the button that
 // took its place as soon as one can take it, unless the user has moved on by then.
 // The row id waits in the list's own dataset: a view keeps no module state (ADR 0010).
@@ -592,6 +679,7 @@ function render(state) {
   renderSettingsSection(state.launcher.section);
   renderAsr(state.asr);
   renderDevices(state.devices);
+  renderProcessingPreferences(state.processingPreferences, state);
   const s = state.chatgpt;
   const view = renderSection(els, CHATGPT, s);
   setProp(els.verificationSection, "hidden", view.modelSectionHidden);
@@ -721,10 +809,28 @@ els.dialog.addEventListener("close", () => dispatch({ type: "provider/dialog-clo
 els.dialog.addEventListener("click", (event) => {
   if (event.target === els.dialog) els.dialog.close();
 });
+// A pending save may restore lost button focus only while the user stays here.
+function forgetPreferenceFocusOnMovement(event) {
+  if (event.target !== processingPreferenceEls.save) {
+    delete processingPreferenceEls.form.dataset.focusMutation;
+  }
+}
+document.addEventListener("focusin", forgetPreferenceFocusOnMovement);
+document.addEventListener("pointerdown", forgetPreferenceFocusOnMovement, true);
 document.addEventListener("focusin", forgetDeviceFocusOnMovement);
 document.addEventListener("pointerdown", forgetDeviceFocusOnMovement, true);
 
 asrEls.select.addEventListener("change", () => dispatch({ type: "provider/asr-default-chosen", value: asrEls.select.value }));
+processingPreferenceEls.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  dispatch({ type: "provider/processing-preferences-save-requested" });
+});
+processingPreferenceEls.asrChoice.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "asr_choice", value: processingPreferenceEls.asrChoice.value }));
+processingPreferenceEls.asrLanguage.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "asr_language", value: processingPreferenceEls.asrLanguage.value }));
+processingPreferenceEls.provider.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_provider", value: processingPreferenceEls.provider.value || null }));
+processingPreferenceEls.model.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_model", value: processingPreferenceEls.model.value || null }));
+processingPreferenceEls.effort.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_reasoning_effort", value: processingPreferenceEls.effort.value || null }));
+processingPreferenceEls.outputLanguage.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_output_language", value: processingPreferenceEls.outputLanguage.value }));
 deviceEls.form.addEventListener("submit", (event) => {
   event.preventDefault();
   dispatch({ type: "extension/devices-code-requested" });
