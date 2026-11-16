@@ -535,6 +535,9 @@ session's staging chunks and retains the raw archive for media finalization or r
 guards, not a promise of throughput or long-recording reliability. Their authoritative sources
 are [`config.py`](../src/asr_studio/config.py),
 [`extension_ingest.py`](../src/asr_studio/extension_ingest.py), and the capabilities response.
+The configured `ASR_DATA_DIR` root may be a symlink to an existing storage location.
+The application resolves that root for extension storage checks, but rejects symlinks in
+managed child directories.
 
 Chunk uploads have a 30-second idle-read and 300-second total-read budget. A stalled upload is
 aborted with a retryable `chunk_timeout`; the server releases its temporary reservation and session

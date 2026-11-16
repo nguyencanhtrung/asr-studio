@@ -272,7 +272,7 @@ def _ensure_private_directory(path: Path) -> None:
 
 
 def ensure_extension_storage(data_dir: Path) -> None:
-    root = Path(data_dir)
+    root = Path(os.path.realpath(os.fspath(data_dir)))
     _ensure_private_directory(root)
     for relative in (
         "extension-staging",
