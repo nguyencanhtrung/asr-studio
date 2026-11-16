@@ -1012,6 +1012,26 @@
   line-height: 1.65;
 }
 
+.device-archive-toggle {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.device-archive-toggle input {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--teal);
+}
+
 .device-section form {
   display: grid;
   justify-items: start;

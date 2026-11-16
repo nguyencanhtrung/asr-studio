@@ -45,6 +45,7 @@ export const initialState = {
   loading: false,
   request: 0,
   devices: [],
+  showRevoked: false,
   backendId: null,
   extensionId: null,
   serverUrls: [],
@@ -70,6 +71,14 @@ const same = (state) => done(state);
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const validLifetime = (value) => DEVICE_LIFETIMES.includes(value);
 const validTimestamp = (value) => typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
+
+function compareDevices(left, right) {
+  const leftCreated = left.created_at ? Date.parse(left.created_at) : Number.NEGATIVE_INFINITY;
+  const rightCreated = right.created_at ? Date.parse(right.created_at) : Number.NEGATIVE_INFINITY;
+  if (leftCreated !== rightCreated) return rightCreated - leftCreated;
+  if (left.id === right.id) return 0;
+  return left.id > right.id ? -1 : 1;
+}
 
 const requestInit = (method, body) => ({
   method,
@@ -119,6 +128,7 @@ function normalizeList(body) {
   if (!isObject(body) || !Array.isArray(body.devices)) return { error: t("Máy chủ trả về danh sách thiết bị không hợp lệ.") };
   const devices = body.devices.map(safeDevice);
   if (devices.some((device) => device === null)) return { error: t("Máy chủ trả về danh sách thiết bị không hợp lệ.") };
+  devices.sort(compareDevices);
   return {
     backendId: typeof body.backend_id === "string" ? body.backend_id : null,
     extensionId: typeof body.extension_id === "string" ? body.extension_id : null,
@@ -153,6 +163,7 @@ function load(state, { clearCode = false } = {}) {
     request,
     error: null,
     notice: null,
+    showRevoked: false,
     ...(clearCode
       ? { code: null, codeExpiresAt: null, codeLifetime: null, pairingFor: null, copy: null }
       : {}),
@@ -250,6 +261,7 @@ export function reduce(state, action) {
         pendingRevoke: null,
         revokeTarget: null,
         confirmingRevoke: null,
+        showRevoked: false,
         error: null,
         notice: null,
         copy: null,
@@ -257,6 +269,8 @@ export function reduce(state, action) {
       }, cancelEffects);
     case "extension/devices-lifetime-chosen":
       return validLifetime(action.value) ? done({ ...state, selectedLifetime: action.value, error: null }) : same(state);
+    case "extension/devices-revoked-visibility-changed":
+      return state.open && typeof action.value === "boolean" ? done({ ...state, showRevoked: action.value }) : same(state);
     case "extension/devices-code-requested":
       if (!state.open || state.pendingCode || !validLifetime(state.selectedLifetime)) return same(state);
       return codeEffect(state);
@@ -334,6 +348,7 @@ export function reduce(state, action) {
         confirmingRevoke: null,
         error: null,
         notice: t("Thiết bị đã được thu hồi. Danh sách đang được cập nhật."),
+        ui: "focus-revoke-status",
         devices: state.devices.map((device) => device.id === deviceId ? { ...device, status: "revoked" } : device),
       }, [listEffect(request)]);
     }
@@ -361,12 +376,16 @@ function expiryText(device) {
 }
 
 export function selectDevices(state) {
+  const visibleDevices = state.devices.filter((device) => state.showRevoked || device.status !== "revoked");
+  const revokedCount = state.devices.reduce((count, device) => count + (device.status === "revoked" ? 1 : 0), 0);
   return {
     loading: state.loading,
     error: state.error,
     notice: state.notice,
     copy: state.copy,
     ui: state.ui,
+    showRevoked: state.showRevoked,
+    revokedCount,
     selectedLifetime: state.selectedLifetime,
     lifetimeOptions: DEVICE_LIFETIMES.map((value) => ({ value, label: LIFETIME_TEXT[value] })),
     pendingCode: state.pendingCode,
@@ -379,8 +398,11 @@ export function selectDevices(state) {
     revokeRequest: state.revokeRequest,
     revokeTarget: state.revokeTarget,
     serverUrls: state.serverUrls,
-    empty: !state.loading && state.devices.length === 0,
-    rows: state.devices.map((device) => ({
+    empty: !state.loading && visibleDevices.length === 0,
+    emptyText: state.devices.length > 0 && visibleDevices.length === 0
+      ? t("Không có thiết bị nào đang hiển thị. Bật “Hiện thiết bị đã thu hồi” để xem lại.")
+      : t("Chưa có thiết bị nào được ghép."),
+    rows: visibleDevices.map((device) => ({
       id: device.id,
       device_id: device.device_id,
       recordLabel: device.id,

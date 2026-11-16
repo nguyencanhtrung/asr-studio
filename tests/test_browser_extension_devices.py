@@ -199,6 +199,131 @@ def test_delayed_create_failure_does_not_steal_control_focus(browser_runtime):
     context.close()
 
 
+def test_rendered_device_list_orders_multiple_devices_newest_first(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+    devices = [
+        {
+            "id": "older",
+            "device_id": "client-older",
+            "server_url": live.url,
+            "device_lifetime": "30d",
+            "device_expires_at": "2026-12-01T00:00:00+00:00",
+            "created_at": "2026-11-01T00:00:00+00:00",
+            "last_seen_at": None,
+            "revoked_at": None,
+            "status": "active",
+        },
+        {
+            "id": "tie-a",
+            "device_id": "client-tie-a",
+            "server_url": live.url,
+            "device_lifetime": "30d",
+            "device_expires_at": "2026-12-01T00:00:00+00:00",
+            "created_at": "2026-11-10T00:00:00+00:00",
+            "last_seen_at": None,
+            "revoked_at": None,
+            "status": "active",
+        },
+        {
+            "id": "newest",
+            "device_id": "client-newest",
+            "server_url": live.url,
+            "device_lifetime": "30d",
+            "device_expires_at": "2026-12-01T00:00:00+00:00",
+            "created_at": "2026-11-11T00:00:00+00:00",
+            "last_seen_at": None,
+            "revoked_at": None,
+            "status": "active",
+        },
+        {
+            "id": "tie-z",
+            "device_id": "client-tie-z",
+            "server_url": live.url,
+            "device_lifetime": "30d",
+            "device_expires_at": "2026-12-01T00:00:00+00:00",
+            "created_at": "2026-11-10T00:00:00+00:00",
+            "last_seen_at": None,
+            "revoked_at": None,
+            "status": "active",
+        },
+    ]
+
+    def serve_synthetic_list(route):
+        if route.request.method != "GET":
+            route.fallback()
+            return
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "backend_id": "synthetic-backend",
+                    "extension_id": EXTENSION_ID,
+                    "server_urls": [live.url],
+                    "devices": devices,
+                }
+            ),
+        )
+
+    page.route("**/api/extension/devices", serve_synthetic_list)
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    rows = page.locator("#extension-device-list > li")
+    expect(rows).to_have_count(4)
+    assert rows.evaluate_all("items => items.map(item => item.dataset.device)") == [
+        "newest",
+        "tie-z",
+        "tie-a",
+        "older",
+    ]
+    context.close()
+
+
+def test_failed_revoke_keeps_device_visible_and_restores_keyboard_retry(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    page.get_by_role("button", name="Tạo mã ghép").click()
+    row = page.locator("#extension-device-list > li").first
+    record_id = row.get_attribute("data-device")
+    assert record_id
+    revoke = row.get_by_role("button", name=re.compile(r"Thu hồi thiết bị"))
+
+    def fail_revoke(route):
+        route.fulfill(
+            status=503,
+            content_type="application/json",
+            body=json.dumps(
+                {"error": {"code": "service_unavailable", "message": "private details"}}
+            ),
+        )
+
+    page.route("**/api/extension/devices/*/revoke", fail_revoke)
+    revoke.focus()
+    revoke.click()
+    page.get_by_role("button", name="Thu hồi thiết bị", exact=True).click()
+
+    expect(page.locator(f"#extension-device-list > li[data-device='{record_id}']")).to_have_count(1)
+    expect(page.locator("#extension-device-error-message")).to_have_text(
+        "Máy chủ chưa thể hoàn tất yêu cầu thiết bị. Hãy thử lại sau."
+    )
+    expect(revoke).to_be_enabled()
+    expect(revoke).to_be_focused()
+    assert "private details" not in page.locator("#connections-dialog").inner_text()
+    context.close()
+
+
 def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(browser_runtime):
     live, browser = browser_runtime
     context, page, _api = signed_in_page(
@@ -328,6 +453,24 @@ def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(
     active_row.get_by_role("button", name=re.compile(r"Revoke device client-217")).click()
     page.get_by_role("button", name="Revoke device", exact=True).click()
     revoked = page.locator(f"#extension-device-list > li[data-device='{record_id}']")
+    expect(page.locator("#extension-device-notice")).to_have_text(
+        "The device was revoked. Updating the list."
+    )
+    expect(page.locator("#extension-device-notice")).to_be_focused()
+    expect(revoked).to_have_count(0)
+
+    show_revoked = page.get_by_role("checkbox", name="Show revoked devices")
+    expect(show_revoked).not_to_be_checked()
+    show_revoked.check()
+    expect(revoked.locator(".device-status")).to_have_text("Revoked")
+
+    page.keyboard.press("Escape")
+    page.get_by_role("button", name="Settings").click()
+    page.get_by_role("tab", name="Devices").click()
+    show_revoked = page.get_by_role("checkbox", name="Show revoked devices")
+    expect(show_revoked).not_to_be_checked()
+    expect(revoked).to_have_count(0)
+    show_revoked.check()
     expect(revoked.locator(".device-status")).to_have_text("Revoked")
 
     # Tokens are not part of any rendered UI state.

@@ -952,7 +952,7 @@
                 </div>
                 <button class="primary-button" id="extension-device-code-button" type="submit">Tạo mã ghép</button>
               </form>
-              <p class="connection-message" id="extension-device-notice" role="status" aria-live="polite"></p>
+              <p class="connection-message" id="extension-device-notice" role="status" aria-live="polite" tabindex="-1"></p>
               <p class="connection-error" id="extension-device-error" role="alert" hidden><span id="extension-device-error-message"></span></p>
               <div class="device-code-output" id="extension-device-code-output" hidden>
                 <dl class="connection-ledger">
@@ -993,6 +993,10 @@
               <p class="connection-message" id="extension-device-list-status" role="status" aria-live="polite"></p>
               <p class="connection-message" id="extension-device-list-empty" role="status" hidden>Chưa có thiết bị nào được ghép.</p>
               <ul class="extension-device-list" id="extension-device-list"></ul>
+              <label class="device-archive-toggle">
+                <input id="extension-device-show-revoked" type="checkbox" aria-controls="extension-device-list" />
+                <span>Hiện thiết bị đã thu hồi</span>
+              </label>
             </section>
             <section class="device-section automatic-preferences-section" aria-labelledby="automatic-preferences-title">
               <div class="connection-section-heading">
