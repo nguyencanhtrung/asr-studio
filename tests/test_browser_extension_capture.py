@@ -119,13 +119,20 @@ def capture_server(tmp_path, request):
     app = create_app(settings, chatgpt_adapter=adapter)
     requests = []
     transient_status = failure.params.get("transient_status") if failure else None
+    activation_status = failure.params.get("activation_status") if failure else None
+    activation_after = failure.params.get("activation_after", 0) if failure else 0
+    activation_requests = 0
     # Chromium can transparently retry the first HTTP 408 before fetch sees it.
     transient_remaining = 2 if transient_status == 408 else 1
 
     @app.middleware("http")
     async def record_requests(request, call_next):
-        nonlocal transient_remaining
+        nonlocal transient_remaining, activation_requests
         requests.append((request.method, request.url.path))
+        if request.url.path == "/api/extension/v1/session":
+            activation_requests += 1
+            if activation_status and activation_requests > activation_after:
+                return JSONResponse({"error": {"code": "temporary"}}, status_code=activation_status)
         if (
             transient_status
             and transient_remaining > 0
@@ -293,7 +300,7 @@ class NativePopup:
 
 
 @pytest.fixture
-def paired_capture(capture_server, capture_client, tmp_path):
+def paired_capture(capture_server, capture_client, tmp_path, request):
     settings, url, requests, tls = capture_server
     mic = tmp_path / "mic.wav"
     _tone(mic)
@@ -354,10 +361,20 @@ def paired_capture(capture_server, capture_client, tmp_path):
             control.locator("#pair-button").click()
             control.wait_for_timeout(500)
             _approve_host_permission()
-            expect(control.locator("#connection-dot")).to_have_class(
-                "status-dot is-ready", timeout=20000
-            )
-            expect(control.locator("#connection-label")).to_have_text(url)
+            callspec = getattr(request.node, "callspec", None)
+            if (
+                callspec
+                and callspec.params.get("activation_status")
+                and not callspec.params.get("activation_after", 0)
+            ):
+                expect(control.locator("#global-error")).to_have_text(
+                    "The server is temporarily unavailable.", timeout=20000
+                )
+            else:
+                expect(control.locator("#connection-dot")).to_have_class(
+                    "status-dot is-ready", timeout=20000
+                )
+                expect(control.locator("#connection-label")).to_have_text(url)
             tab = context.new_page()
             tab.goto(url + "?synthetic-tab=1")
             tab.set_content('<button id="tone">Synthetic tab</button>')
@@ -754,3 +771,60 @@ def test_native_capture_runs_transcript_and_notes_after_client_receipt(
         expect(meeting.locator("#notes-preview")).to_be_visible()
         meeting.screenshot(path=str(tmp_path / "transcript-and-notes.png"))
         (tmp_path / "processing.json").write_text(json.dumps(state, indent=2))
+
+
+def test_native_pairing_success_activates_device_before_any_recording(
+    capture_server, paired_capture
+):
+    _settings, _url, requests, _tls = capture_server
+    _context, _worker, operator, control, _tab = paired_capture
+    devices = operator.evaluate(
+        "async () => (await (await fetch('/api/extension/devices')).json()).devices"
+    )
+    assert len(devices) == 1
+    assert devices[0]["status"] == "active", (
+        "Extension reports connected but server still reports pending"
+    )
+    assert devices[0]["last_seen_at"] is not None
+    assert not any(path == "/api/extension/v1/recording-sessions" for _method, path in requests)
+    assert not _status(control)["sessions"]
+
+
+@pytest.mark.parametrize("activation_status", [503])
+def test_native_pairing_session_failure_does_not_report_connected(
+    capture_server, paired_capture, activation_status
+):
+    _settings, _url, requests, _tls = capture_server
+    _context, _worker, operator, control, _tab = paired_capture
+    assert activation_status == 503
+    expect(control.locator("#connection-dot")).not_to_have_class("status-dot is-ready")
+    expect(control.locator("#pair-button")).to_be_enabled()
+    assert not _status(control)["connection"].get("paired")
+    devices = operator.evaluate(
+        "async () => (await (await fetch('/api/extension/devices')).json()).devices"
+    )
+    assert devices[0]["status"] == "pending"
+    assert devices[0]["last_seen_at"] is None
+    assert ("POST", "/api/extension/v1/session") in requests
+
+
+@pytest.mark.parametrize("activation_status,activation_after", [(503, 1)])
+def test_native_repair_session_failure_clears_previous_connected_state(
+    capture_server, paired_capture, activation_status, activation_after
+):
+    _settings, _url, _requests, _tls = capture_server
+    _context, _worker, operator, control, _tab = paired_capture
+    assert (activation_status, activation_after) == (503, 1)
+    devices = operator.evaluate(
+        "async () => (await (await fetch('/api/extension/devices')).json()).devices"
+    )
+    code = _pair_again_code(operator, devices[0]["id"])
+    control.locator("#setup-toggle").click()
+    control.locator("#pair-code").fill(code)
+    control.locator("#pair-button").click()
+    expect(control.locator("#global-error")).to_have_text(
+        "The server is temporarily unavailable.", timeout=20000
+    )
+    expect(control.locator("#pair-button")).to_be_enabled()
+    assert not _status(control)["connection"].get("paired")
+    expect(control.locator("#connection-dot")).not_to_have_class("status-dot is-ready")
