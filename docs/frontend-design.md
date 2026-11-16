@@ -988,7 +988,9 @@ trang web: state chỉ giữ mã ghép đang hiển thị, không nhận device/
 | Tạo mã hoặc ghép lại record được chọn | Xóa mã trước, giữ lựa chọn hạn dùng và record đích, đánh dấu đang tạo | POST mã ghép; ghép lại gửi server record ID |
 | Nhận mã đúng lần yêu cầu | Hiển thị mã, hạn mã và hạn thiết bị tách riêng | Focus ô mã; tải lại danh sách |
 | Sao chép | Thông báo thành công hoặc chọn mã để sao chép thủ công | Clipboard chỉ nhận chuỗi mã |
-| Thu hồi | Chờ xác nhận thao tác; chỉ đổi trạng thái sau phản hồi đúng record và `revoked:true` | POST thu hồi rồi đọc lại trạng thái chính thức |
+| Mở danh sách | Chuẩn hóa theo `created_at` giảm dần, rồi `id` giảm dần; mặc định chỉ hiện record chưa thu hồi | Đọc danh sách server đã sắp thứ tự |
+| Bật/tắt **Hiện thiết bị đã thu hồi** | Core giữ filter; bật lên cho phép xem record đã thu hồi và ghép lại, tắt đi ẩn chúng | Không có effect mạng |
+| Thu hồi | Chờ xác nhận thao tác; chỉ đổi trạng thái sau phản hồi đúng record và `revoked:true`; record biến mất khỏi danh sách mặc định nhưng vẫn giữ trong state | POST thu hồi rồi đọc lại trạng thái chính thức; focus dòng thông báo thành công |
 | Yêu cầu thất bại | Bỏ cờ đang chờ, giữ dữ liệu đã xác nhận, hiện lỗi dịch được | Cho phép thử lại và giữ focus hữu ích |
 | Đóng Cài đặt | Xóa mã, vô hiệu hóa định danh phản hồi đang chờ | Hủy các effect đang chạy |
 | Phản hồi của lần yêu cầu cũ | Giữ nguyên state hiện tại | Không vẽ lại kết quả cũ |
@@ -997,6 +999,10 @@ Record pending có thể chưa có định danh client hoặc địa chỉ đã 
 vẫn hiển thị record máy chủ. Kết nối có thể là localhost hoặc HTTPS từ xa, nên
 thông báo lỗi không mặc định server nằm cùng máy. Hạn mã ghép và hạn token thiết
 bị là hai chính sách khác nhau; “Không hết hạn” chỉ áp dụng cho thiết bị.
+Record đã thu hồi không bị xóa: dữ liệu audio và ownership liên quan vẫn thuộc
+luồng lưu trữ hiện có, còn filter chỉ thay đổi những gì Settings render. Mở lại
+Settings reset filter về mặc định ẩn record đã thu hồi. Phản hồi revoke thất bại
+hoặc cũ không được phép đổi trạng thái record hợp lệ.
 
 
 ### Xử lý tự động cuộc họp (`processing-core.js`, #219)

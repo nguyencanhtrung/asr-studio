@@ -461,7 +461,7 @@ class ExtensionAuthService:
             rows = connection.execute(
                 "SELECT id, device_id, server_url, device_lifetime, device_expires_at, "
                 "created_at, last_seen_at, revoked_at, device_token_hash, pending_expires_at "
-                "FROM extension_devices ORDER BY created_at ASC, id ASC"
+                "FROM extension_devices ORDER BY created_at DESC, id DESC"
             ).fetchall()
         finally:
             connection.close()

@@ -2364,6 +2364,37 @@ production client. Physical microphone and long-recording validation remain unde
 [#206](https://github.com/nguyencanhtrung/asr-studio/issues/206).
 Tag: architecture, privacy, design. Target: [extension device guide](extension-devices.md).
 
+## Settings Devices — newest-first list and retained revocations
+
+**Problem.** The Devices panel originally rendered server rows in insertion order and kept
+revoked rows in the default list, making recent access harder to find and obscuring the
+recovery path for a device whose recordings still belong to the retained record.
+
+**Design change.** The auth service now returns device records ordered by `created_at` descending
+with a deterministic descending record-ID tie break; the pure frontend core applies the same
+normalization before rendering. Revoked rows remain in server state and are hidden by default.
+Settings owns an explicit **Show revoked devices** filter, resets it when the dialog reopens,
+and uses the retained row for explicit re-pairing. A confirmed revoke marks only the matching
+record revoked, refreshes authoritative state, hides it from the default list immediately, and
+focuses the translated status line. Failed or stale replies leave the valid record and its
+retry focus intact.
+
+**Evidence and limits.** Focused Python, reducer, and rendered-browser regressions use disposable
+synthetic device records to cover ordering, filtering, revoke failure/staleness, focus, status
+announcements, and retained re-pair behavior. No performance measurement or live-service
+qualification is claimed.
+
+**Trade-offs.** Filtering at the core keeps revoked records available for recovery without
+deleting device or recording data. Sorting at both the server and normalization boundary keeps
+API consumers and out-of-order test input deterministic. A separate archive store or hard delete
+was rejected because it would obscure ownership and make re-pair recovery unsafe.
+
+**Follow-up.** Keep recording ownership and explicit data deletion in their existing workflows;
+this change does not alter recording or echo code. Issue [#227](https://github.com/nguyencanhtrung/asr-studio/issues/227).
+
+Tag: architecture, privacy, design. Targets: `extension_auth.py`, `extension-devices-core.js`,
+the Settings device view, and [extension device guide](extension-devices.md).
+
 ## #218 — Durable bounded extension recording ingest
 
 **Problem.** #217 established extension device authority, but the production application still

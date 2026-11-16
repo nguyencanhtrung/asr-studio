@@ -43,6 +43,7 @@ const deviceEls = {
   endpointsEmpty: document.querySelector("#extension-device-endpoints-empty"),
   listStatus: document.querySelector("#extension-device-list-status"),
   listEmpty: document.querySelector("#extension-device-list-empty"),
+  showRevoked: document.querySelector("#extension-device-show-revoked"),
   list: document.querySelector("#extension-device-list"),
 };
 
@@ -424,6 +425,15 @@ function focusDeviceRecovery(view) {
   target.focus({ preventScroll: true });
 }
 
+function focusDeviceStatus() {
+  const active = document.activeElement;
+  if (active && active !== document.body && active !== document.documentElement && !deviceEls.list.dataset.focusDevice) {
+    return;
+  }
+  clearDeviceFocus();
+  deviceEls.notice.focus({ preventScroll: true });
+}
+
 function renderDevices(state) {
   const view = selectDevices(state);
   if (view.pendingCode && document.activeElement === deviceEls.create) {
@@ -458,6 +468,8 @@ function renderDevices(state) {
   setProp(deviceEls.endpointsEmpty, "hidden", view.serverUrls.length > 0 || view.loading);
   setProp(deviceEls.listStatus, "textContent", view.loading ? t("Đang tải danh sách thiết bị…") : "");
   setProp(deviceEls.listEmpty, "hidden", !view.empty);
+  setProp(deviceEls.listEmpty, "textContent", tr(view.emptyText));
+  setProp(deviceEls.showRevoked, "checked", view.showRevoked);
   renderDeviceRows(view);
 
   if (view.ui === "focus-code" || view.ui === "select-code") {
@@ -467,6 +479,9 @@ function renderDevices(state) {
     dispatch({ type: "extension/devices-ui-handled", ui: view.ui });
   } else if (view.ui === "focus-retry" || view.ui === "focus-revoke") {
     focusDeviceRecovery(view);
+    dispatch({ type: "extension/devices-ui-handled", ui: view.ui });
+  } else if (view.ui === "focus-revoke-status") {
+    focusDeviceStatus();
     dispatch({ type: "extension/devices-ui-handled", ui: view.ui });
   }
 }
@@ -836,6 +851,7 @@ deviceEls.form.addEventListener("submit", (event) => {
   dispatch({ type: "extension/devices-code-requested" });
 });
 deviceEls.lifetime.addEventListener("change", () => dispatch({ type: "extension/devices-lifetime-chosen", value: deviceEls.lifetime.value }));
+deviceEls.showRevoked.addEventListener("change", () => dispatch({ type: "extension/devices-revoked-visibility-changed", value: deviceEls.showRevoked.checked }));
 deviceEls.copy.addEventListener("click", () => dispatch({ type: "extension/devices-copy-requested" }));
 deviceEls.list.addEventListener("click", (event) => {
   const action = event.target.closest("[data-device-action]");

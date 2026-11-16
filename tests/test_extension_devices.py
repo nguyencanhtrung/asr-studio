@@ -88,6 +88,33 @@ async def _pair(client, code, device_id):
     )
 
 
+def test_list_devices_orders_newest_first_with_descending_id_tie_break(settings):
+    initialize(settings.data_dir)
+    service = ExtensionAuthService(
+        settings.data_dir,
+        settings.extension_server_urls,
+        auth_dir=settings.auth_dir,
+    )
+    service.ensure()
+    older = datetime(2035, 1, 1, tzinfo=UTC)
+    tied = datetime(2035, 1, 2, tzinfo=UTC)
+    newer = datetime(2035, 1, 3, tzinfo=UTC)
+
+    service.create_pairing_code(device_lifetime="30d", device_record_id=None, now=older)
+    service.create_pairing_code(device_lifetime="30d", device_record_id=None, now=tied)
+    service.create_pairing_code(device_lifetime="30d", device_record_id=None, now=tied)
+    service.create_pairing_code(device_lifetime="30d", device_record_id=None, now=newer)
+
+    devices = service.list_devices(now=newer)
+    tied_ids = sorted(
+        device["id"] for device in devices if device["created_at"] == devices[1]["created_at"]
+    )
+    assert [device["created_at"] for device in devices] == sorted(
+        (device["created_at"] for device in devices), reverse=True
+    )
+    assert [device["id"] for device in devices[1:3]] == tied_ids[::-1]
+
+
 async def test_pairing_code_is_atomic_one_use_and_session_requires_device_bearer(client, settings):
     await _authenticate_operator(client, settings)
     issued = await _create_code(client, settings, lifetime="7d")

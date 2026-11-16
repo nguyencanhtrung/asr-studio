@@ -44,6 +44,10 @@ function loaded() {
   });
 }
 
+function record(id, overrides = {}) {
+  return { ...listReply.devices[0], id, ...overrides };
+}
+
 test("opening Settings loads the operator device list with same-origin credentials", () => {
   const result = open();
 
@@ -113,6 +117,61 @@ test("a pending server record before pair may omit client id and endpoint", () =
   assert.equal(row.recordLabel, "pending-record");
   assert.equal(row.expires.text, "Chờ client kích hoạt");
   assert.equal(row.deviceLabel.text, "Đang chờ client");
+});
+
+test("normalizes an out-of-order device reply newest first with a deterministic tie break", () => {
+  const opened = open();
+  const result = reduce(opened.state, {
+    type: "extension/devices-loaded",
+    meta: { request: opened.state.request },
+    response: {
+      body: {
+        ...listReply,
+        devices: [
+          record("older", { created_at: T0 }),
+          record("tie-a", { created_at: T0 }),
+          record("newest", { created_at: T1 }),
+          record("tie-z", { created_at: T0 }),
+        ],
+      },
+    },
+  });
+
+  assert.deepEqual(result.state.devices.map((device) => device.id), ["newest", "tie-z", "tie-a", "older"]);
+  assert.deepEqual(selectDevices(result.state).rows.map((row) => row.id), ["newest", "tie-z", "tie-a", "older"]);
+});
+
+test("hides revoked devices by default, restores them for re-pair, and resets on reopen", () => {
+  const opened = open();
+  const loadedWithRevoked = reduce(opened.state, {
+    type: "extension/devices-loaded",
+    meta: { request: opened.state.request },
+    response: {
+      body: {
+        ...listReply,
+        devices: [
+          record("revoked", { created_at: T1, status: "revoked", revoked_at: T1 }),
+          record("active", { created_at: T0, status: "active" }),
+        ],
+      },
+    },
+  });
+
+  assert.equal(loadedWithRevoked.state.showRevoked, false);
+  assert.deepEqual(selectDevices(loadedWithRevoked.state).rows.map((row) => row.id), ["active"]);
+
+  const shown = reduce(loadedWithRevoked.state, {
+    type: "extension/devices-revoked-visibility-changed",
+    value: true,
+  });
+  assert.equal(shown.state.showRevoked, true);
+  assert.deepEqual(selectDevices(shown.state).rows.map((row) => row.id), ["revoked", "active"]);
+  assert.equal(selectDevices(shown.state).rows[0].canRepair, true);
+
+  const closed = reduce(shown.state, { type: "provider/dialog-closed" });
+  assert.equal(closed.state.showRevoked, false);
+  const reopened = reduce(closed.state, { type: "provider/dialog-opened" });
+  assert.equal(reopened.state.showRevoked, false);
 });
 
 test("a stale list reply cannot replace the latest Settings request", () => {
@@ -209,7 +268,30 @@ test("revoke changes status only after the persisted revoke response", () => {
   assert.equal(succeeded.state.devices[0].revoked_at, null);
   assert.equal(succeeded.state.pendingRevoke, null);
   assert.equal(succeeded.state.revokeTarget, null);
+  assert.deepEqual(selectDevices(succeeded.state).rows, []);
+  assert.equal(succeeded.state.ui, "focus-revoke-status");
   assert.ok(succeeded.effects.some((item) => item.key === "extension/devices/list"));
+});
+
+test("a stale revoke answer cannot hide or revoke the current device", () => {
+  const ready = loaded().state;
+  const confirmed = reduce(ready, {
+    type: "extension/devices-revoke-requested",
+    deviceId: "record-1",
+  });
+  const requested = reduce(confirmed.state, {
+    type: "extension/devices-revoke-confirmed",
+    deviceId: "record-1",
+  });
+  const stale = reduce(requested.state, {
+    type: "extension/devices-revoked",
+    meta: { deviceId: "record-1", request: requested.state.revokeRequest - 1 },
+    response: { body: { id: "record-1", revoked: true } },
+  });
+
+  assert.strictEqual(stale.state, requested.state);
+  assert.equal(selectDevices(stale.state).rows[0].statusValue, "active");
+  assert.equal(selectDevices(stale.state).rows[0].canRevoke, false);
 });
 
 test("copy effect receives only the one-time code and never an expiry or device credential", () => {
