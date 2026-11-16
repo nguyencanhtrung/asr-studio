@@ -1028,7 +1028,7 @@ function renderAutomaticProcessing(processing) {
   setProp(cancel, "textContent", action?.kind === "cancel" ? t("Đang hủy…") : t("Hủy xử lý"));
   setProp(retry, "textContent", action?.kind === "retry_notes" ? t("Đang yêu cầu thử lại…") : t("Thử lại notes"));
   setProp(apply, "textContent", action?.kind === "apply_current_settings" ? t("Đang đọc cài đặt…") : t("Áp dụng cài đặt hiện tại"));
-  setProp(source, "textContent", action?.kind === "use_current_source" ? t("Đang áp dụng nguồn…") : t("Dùng nguồn đang hiển thị"));
+  setProp(source, "textContent", action?.kind === "use_current_source" ? t("Đang áp dụng nguồn…") : tr(view.sourceActionLabel));
   setAttr(panel, "aria-busy", busy ? "true" : "false");
   if (focusedAction && (focusedAction.hidden || focusedAction.disabled)) {
     const active = document.activeElement;
@@ -1052,7 +1052,7 @@ function renderMeetingProcessingStatus(task, generation, processing = store.getS
   );
 
   const automatic = selectProcessing(processing);
-  if (automatic.visible && shouldRenderAutomaticStatus(automatic.workflow, task)) {
+  if (automatic.visible && shouldRenderAutomaticStatus(automatic.workflow, { task, generation, notes: nav().notes })) {
     const transcript = automatic.steps.find((step) => step.kind === "transcription");
     const notes = automatic.steps.find((step) => step.kind === "notes");
     setStatusItem("transcript", "Transcript", tr(transcript.value), transcript.state);

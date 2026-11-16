@@ -521,6 +521,165 @@ def test_use_current_source_terminalizes_a_waiting_transcription_step(tmp_path, 
     assert attempt["state"] == "canceled"
 
 
+def test_use_current_source_recovers_metadata_only_pretranscript_workflow(tmp_path):
+    data_dir, meeting_id, _ = _ready_source(tmp_path, "metadata-only")
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE meetings SET metadata_version = 2 WHERE id = ?", (meeting_id,))
+        connection.commit()
+
+    transcription_step = next(step for step in state["steps"] if step["kind"] == "transcription")
+    transcription_attempt = next(
+        attempt for attempt in state["attempts"] if attempt["step_id"] == transcription_step["id"]
+    )
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        assert (
+            admit_automatic_transcription(
+                connection,
+                workflow_id=state["id"],
+                epoch=state["epoch"],
+                request_id=transcription_attempt["request_id"],
+                request_hash=_hash(state["id"], "transcription", state["epoch"], "whisper-small"),
+                model_path=Path("/models/whisper-small"),
+                asr_model="whisper-small",
+                language_hint="vi",
+                device="cpu",
+                compute_type="int8",
+                diarization_model_path=Path("/models/speaker-diarization-community-1"),
+                duration_seconds=12.0,
+            )
+            is None
+        )
+    fenced = processing_state(data_dir, meeting_id)
+    assert fenced is not None and fenced["state"] == "needs_attention"
+    assert fenced["current_source"] == {
+        "generation_id": None,
+        "source_version": None,
+        "metadata_version": 2,
+        "notes_source_version": 1,
+    }
+
+    with pytest.raises(ProcessingError) as stale:
+        use_current_source(
+            data_dir,
+            meeting_id,
+            expected_epoch=1,
+            expected_generation_id=None,
+            expected_source_version=None,
+            expected_metadata_version=1,
+            expected_notes_source_version=1,
+        )
+    assert stale.value.code == "source_changed"
+
+    adopted = use_current_source(
+        data_dir,
+        meeting_id,
+        expected_epoch=1,
+        expected_generation_id=None,
+        expected_source_version=None,
+        expected_metadata_version=2,
+        expected_notes_source_version=1,
+    )
+    assert adopted["state"] == "waiting"
+    assert adopted["epoch"] == 2
+    transcription = next(step for step in adopted["steps"] if step["kind"] == "transcription")
+    notes = next(step for step in adopted["steps"] if step["kind"] == "notes")
+    assert {
+        key: transcription[key]
+        for key in (
+            "state",
+            "waiting_reason",
+            "task_id",
+            "source_generation_id",
+            "source_version",
+            "notes_source_version",
+            "metadata_version",
+        )
+    } == {
+        "state": "waiting",
+        "waiting_reason": None,
+        "task_id": None,
+        "source_generation_id": None,
+        "source_version": None,
+        "notes_source_version": 1,
+        "metadata_version": 2,
+    }
+    assert {
+        key: notes[key]
+        for key in (
+            "state",
+            "waiting_reason",
+            "task_id",
+            "source_snapshot_id",
+            "source_generation_id",
+            "source_version",
+            "notes_source_version",
+            "metadata_version",
+        )
+    } == {
+        "state": "waiting",
+        "waiting_reason": "transcript_required",
+        "task_id": None,
+        "source_snapshot_id": None,
+        "source_generation_id": None,
+        "source_version": None,
+        "notes_source_version": 1,
+        "metadata_version": 2,
+    }
+    current_transcription_attempt = next(
+        attempt
+        for attempt in adopted["attempts"]
+        if attempt["step_id"] == transcription["id"] and attempt["attempt_number"] == 2
+    )
+    assert current_transcription_attempt["state"] == "waiting"
+    assert (
+        next(
+            attempt
+            for attempt in adopted["attempts"]
+            if attempt["step_id"] == transcription["id"] and attempt["attempt_number"] == 1
+        )["state"]
+        == "canceled"
+    )
+
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        admitted = admit_automatic_transcription(
+            connection,
+            workflow_id=adopted["id"],
+            epoch=adopted["epoch"],
+            request_id=current_transcription_attempt["request_id"],
+            request_hash=_hash(adopted["id"], "transcription", adopted["epoch"], "whisper-small"),
+            model_path=Path("/models/whisper-small"),
+            asr_model="whisper-small",
+            language_hint="vi",
+            device="cpu",
+            compute_type="int8",
+            diarization_model_path=Path("/models/speaker-diarization-community-1"),
+            duration_seconds=12.0,
+        )
+    assert admitted is not None
+
+
+def test_use_current_source_rejects_mixed_null_generation_and_source_version(tmp_path):
+    data_dir, meeting_id, _ = _ready_source(tmp_path, "metadata-mixed")
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE meetings SET metadata_version = 2 WHERE id = ?", (meeting_id,))
+        connection.commit()
+    with pytest.raises(ProcessingError) as error:
+        use_current_source(
+            data_dir,
+            meeting_id,
+            expected_epoch=1,
+            expected_generation_id=None,
+            expected_source_version=1,
+            expected_metadata_version=2,
+            expected_notes_source_version=1,
+        )
+    assert error.value.code == "invalid_source_revision"
+
+
 def test_automatic_publication_rechecks_metadata_source_and_releases_blocked_task(tmp_path):
     data_dir, meeting_id, _ = _ready_source(tmp_path)
     state = processing_state(data_dir, meeting_id)
