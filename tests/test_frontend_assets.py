@@ -10,6 +10,31 @@ from asr_studio.auth import AuthStore
 pytestmark = pytest.mark.anyio
 
 
+@pytest.mark.parametrize(
+    ("asset", "required_export"),
+    [
+        ("processing-core.js", "export function reduce"),
+        ("processing-preferences-core.js", "export function reduce"),
+    ],
+)
+async def test_processing_core_assets_are_served_from_authenticated_asset_allowlist(
+    client: AsyncClient, settings, asset: str, required_export: str
+):
+    state = AuthStore(settings.auth_dir).load()
+    session = await client.post(
+        "/api/access/session",
+        headers={"Origin": settings.public_url},
+        json={"token": state.token},
+    )
+    assert session.status_code == 204
+
+    response = await client.get(f"/assets/{asset}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/javascript")
+    assert required_export in response.text
+
+
 async def test_extension_devices_core_is_served_from_the_authenticated_asset_allowlist(
     client: AsyncClient, settings
 ):

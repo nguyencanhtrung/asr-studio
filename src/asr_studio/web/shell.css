@@ -768,6 +768,119 @@ textarea:focus-visible {
   background: var(--danger);
 }
 
+.automatic-processing-panel {
+  margin: -4px 0 20px;
+  padding: 15px 16px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.automatic-processing-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.automatic-processing-heading h3 {
+  margin: 0;
+  font-size: var(--text-subtitle);
+  font-weight: 620;
+}
+
+.automatic-processing-heading p,
+.automatic-processing-source,
+.automatic-processing-intent,
+.automatic-processing-notice,
+.automatic-processing-error {
+  margin: 5px 0 0;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+
+.automatic-processing-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.automatic-processing-step {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.automatic-processing-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.automatic-processing-step-label {
+  font-weight: 650;
+}
+
+.automatic-processing-step-state {
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+}
+
+.automatic-processing-step[data-state="done"] .automatic-processing-step-state {
+  color: var(--success);
+}
+
+.automatic-processing-step[data-state="active"] .automatic-processing-step-state {
+  color: var(--accent);
+}
+
+.automatic-processing-step[data-state="problem"] .automatic-processing-step-state {
+  color: var(--danger);
+}
+
+.automatic-processing-step[data-state="warning"] .automatic-processing-step-state {
+  color: var(--warning);
+}
+
+.automatic-processing-step-reason {
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: var(--text-label);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.automatic-processing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin-top: 13px;
+}
+
+.automatic-processing-notice {
+  color: var(--success);
+}
+
+.automatic-processing-error {
+  color: var(--danger);
+}
+
+@media (max-width: 42rem) {
+  .automatic-processing-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* WAI-ARIA tabs: the selected tab carries an accent underline and heavier type, so colour is never alone. */
 .meeting-tabs {
   display: flex;

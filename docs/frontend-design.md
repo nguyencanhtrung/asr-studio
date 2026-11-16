@@ -207,6 +207,8 @@ Các thao tác sửa metadata/gán speaker là hành vi bổ sung sau prototype,
 | Xóa cuộc họp | Hộp thoại nêu tên cuộc họp, nút giữ lại/xóa; cuộc họp đang có tác vụ phải hủy và chờ backend xác nhận đã dừng trước khi xóa. Xóa dữ liệu ứng dụng quản lý theo đặc tả, không xóa file nguồn bên ngoài |
 | Lưu/copy/xuất | Phản hồi thành công hoặc lỗi rõ ràng; không báo đã lưu thành công trước khi backend xác nhận |
 
+**Thứ bậc dải trạng thái.** Nếu cuộc họp có tác vụ transcript thủ công, thế hệ transcript thủ công hiện tại, hoặc Notes đang chạy/đã có bản lưu (trạng thái hay số bản), dải **Bản ghi · Transcript · Notes** giữ kết quả thủ công và không để workflow tự động che mất. Workflow tự động đã hủy chỉ hiện cảnh báo hủy khi không có task, thế hệ hay bản Notes thủ công để hiển thị; workflow đã hoàn tất hoặc đã bị đánh dấu xóa không tự giành lại dải trạng thái. Trường hợp chưa có transcript, nút xác nhận ghi rõ **Xác nhận thông tin cuộc họp**, dòng phụ nêu phiên bản metadata, và thông báo thành công nói ASR sẽ chép lời bản ghi gốc.
+
 Giữ lời nhắc trong form nhập: **Transcript giữ nguyên ngôn ngữ đã nói. Meeting notes viết bằng ngôn ngữ đầu ra đã chọn (English hoặc Tiếng Việt).** Định dạng và giới hạn file phải phản ánh khả năng backend đã công bố; không lấy `audio/*,video/*` trong prototype làm cam kết hỗ trợ mọi codec.
 
 QR/link truy cập được cung cấp từ terminal. Không hiển thị token dùng chung hoặc cơ chế tự cấp quyền ở trang chưa xác thực. Chi tiết theo [ADR về token](adr/0002-localhost-reusable-token.md); không bổ sung tài khoản/mật khẩu hoặc quản lý nhiều người dùng trong v1.
@@ -995,3 +997,61 @@ Record pending có thể chưa có định danh client hoặc địa chỉ đã 
 vẫn hiển thị record máy chủ. Kết nối có thể là localhost hoặc HTTPS từ xa, nên
 thông báo lỗi không mặc định server nằm cùng máy. Hạn mã ghép và hạn token thiết
 bị là hai chính sách khác nhau; “Không hết hạn” chỉ áp dụng cho thiết bị.
+
+
+### Xử lý tự động cuộc họp (`processing-core.js`, #219)
+
+Core sở hữu lát `processing` trong store history; runner thực hiện fetch, timer và
+`meeting.refresh`. State giữ `meetingId`, `loadId`, workflow, `visible`/`hidden`,
+`readId`/`readPending`, `pollId`/`pollPending`, một `action`, lỗi và thông báo.
+Workflow có trạng thái riêng từ server; core không tự suy ra đã lưu transcript/notes.
+
+| Sự kiện | Chuyển trạng thái | Hiệu ứng |
+| --- | --- | --- |
+| `history/meeting-requested`, `meeting-link-clicked` | Reset về state đầu, giữ `hidden`, đặt cuộc họp đích, tăng `loadId` | Hủy poll, legacy read, action read và action POST |
+| `history/meeting-change-received` đúng cuộc họp | Reset cùng cuộc họp; phản hồi cuộc họp khác không đổi state | Hủy bốn effect như trên |
+| `history/home-clicked`, `home-shown`, `popped` | Reset, bỏ cuộc họp, tăng `loadId` | Hủy bốn effect |
+| `history/meeting-loaded`, `meeting-fetched`, recording/settings/task refresh hoặc transcript reload | Install cuộc họp hợp lệ; bỏ khác cuộc họp hoặc `loadId` cũ. Đặt workflow từ payload, `visible=true`, xóa action/lỗi/thông báo, tăng `readId`, bỏ cờ poll | Hủy poll/read cũ; action đang gửi không bị hủy nhưng phản hồi muộn bị bỏ; nếu payload thiếu thuộc tính `processing`, đặt `readPending=true` và GET trạng thái; lên lịch poll nếu workflow còn hoạt động, đang hiện và tab không ẩn |
+| `processing/meeting-read-loaded` đúng meeting/load/read và đang pending | Workflow hợp lệ: lưu workflow, bỏ pending/lỗi/thông báo; payload sai: bỏ pending, hiện `invalid_response` | Hợp lệ: lên lịch poll; sai: không tự retry legacy read |
+| `processing/meeting-read-failed` đúng lần đọc | 404: workflow null, không lỗi; lỗi khác: bỏ pending, hiện lỗi yêu cầu tải lại cuộc họp | Không tự retry legacy read |
+| `task/visibility-changed` ẩn | `hidden=true`, bỏ `pollPending` | Hủy poll |
+| `task/visibility-changed` hiện | `hidden=false` | Lên lịch poll nếu workflow còn hoạt động và cuộc họp đang hiện |
+| `processing/poll-due` đúng meeting/load, đang hiện, không ẩn, workflow hoạt động và chưa pending | Tăng `pollId`, đặt pending | GET trạng thái processing |
+| `processing/poll-loaded` đúng meeting/load/poll và pending | Lưu workflow, bỏ pending/lỗi; giữ thông báo nếu cùng epoch, xóa nếu epoch đổi | Khi vừa chuyển sang `succeeded`, gọi `meeting.refresh`; tiếp tục poll workflow hoạt động |
+| Poll trả payload sai hoặc `processing/poll-failed` đúng lần đọc | Bỏ pending, hiện lỗi; giữ workflow đã biết | Lên lịch lại sau 2 giây nếu vẫn đủ điều kiện poll |
+| Bấm cancel khi server cho phép, không có action khác | `action={kind:cancel, requestId, phase:sending}`, xóa lỗi/thông báo, bỏ poll pending | Hủy poll; POST cancel với epoch đang hiển thị |
+| Bấm retry notes, apply settings hoặc use source khi được phép, không có action khác | Một action `phase=reading`; lưu ý định ban đầu, xóa lỗi/thông báo, bỏ poll pending | Hủy poll; đọc workflow hiện tại trước khi gửi thao tác |
+| `processing/action-state-loaded` của apply settings | Workflow mới được lưu, action sang `reading-preferences`, giữ epoch vừa đọc | GET processing preferences |
+| `processing/apply-preferences-loaded` hợp lệ | Action sang `sending`, ý định là preferences vừa đọc | POST apply-current-settings với epoch và preferences version vừa đọc |
+| `processing/action-state-loaded` của use source | Nguồn hợp lệ: `sending`, ý định là generation/source/metadata/notes-source version vừa đọc | POST use-current-source; nguồn null generation hợp lệ dùng để xác nhận metadata trước ASR |
+| `processing/action-state-loaded` của retry notes | Snapshot và recipe hợp lệ: `sending`, ý định là snapshot/recipe vừa đọc | POST retry-notes với request ID, epoch, snapshot và recipe version; không yêu cầu chạy lại ASR |
+| Đọc action/preferences có payload sai, khác cuộc họp hoặc thiếu nguồn/recipe | Bỏ action, hiện lỗi tương ứng | Không POST, không lên lịch poll lại; người dùng có thể thử lại hoặc tải lại cuộc họp |
+| `processing/action-succeeded` đúng action, workflow hợp lệ | Lưu workflow, bỏ action/poll pending/lỗi; đặt thông báo theo thao tác | Hủy poll cũ, tiếp tục poll nếu hoạt động; use source có generation gọi `meeting.refresh`; xác nhận metadata-only không refresh ngay để giữ thông báo/focus |
+| `processing/action-succeeded` có workflow sai | Bỏ action, hiện `invalid_response` | Không công bố thành công, không lên lịch poll lại |
+| `processing/action-state-failed`, `apply-preferences-failed`, `action-failed` đúng action | Bỏ action/poll pending, hiện lỗi, xóa thông báo | Hủy poll cũ; lên lịch lại sau 2 giây nếu đủ điều kiện |
+| Bấm thêm action khi đã có action, thao tác server không cho phép, hoặc response cũ | Giữ state | Không effect mới |
+
+Poll thường dùng khoảng 1 giây. Legacy read lọc bằng meeting/load/read ID;
+poll lọc bằng meeting/load/poll ID và cờ pending; action lọc bằng meeting ID,
+request ID; riêng phản hồi đọc preferences kiểm tra thêm kind. Reset vô hiệu hóa các phản hồi muộn bằng định danh và state.
+Read trước POST dùng phiên bản vừa đọc, không phải cam kết rằng đó chính là phiên
+bản người dùng đã thấy trước khi bấm. Server vẫn kiểm tra epoch và các version.
+
+### Cài đặt xử lý tự động (`processing-preferences-core.js`, #219)
+
+Core sở hữu lát `processingPreferences` trong store provider. State có
+`idle|loading|ready|saving|error`, `open`, bản `saved`, bản `draft`, định danh
+`request`/`mutation`, lỗi và thông báo. Catalog chỉ cung cấp lựa chọn để vẽ;
+đổi provider không tự chọn model hoặc account khác.
+
+| Sự kiện | Chuyển trạng thái | Hiệu ứng |
+| --- | --- | --- |
+| `provider/dialog-opened` | `open=true`, `loading`, tăng request, xóa lỗi/thông báo | GET processing preferences |
+| `provider/processing-preferences-loaded` đúng request khi đang mở | Hợp lệ: `ready`, thay saved/draft bằng bản server; sai: `error`, hiện `invalid_response` | Không tự lưu |
+| `provider/processing-preferences-failed` đúng request khi đang mở | `error`, hiện lỗi, xóa thông báo | Không ghi đè saved/draft |
+| `provider/processing-preference-edited` có draft và chưa saving | Sửa trường hợp lệ trong draft, xóa lỗi/thông báo. Đổi hoặc bỏ provider xóa model/effort | Không request mạng |
+| `provider/processing-preferences-save-requested` đang mở, có draft khác saved, chưa saving | `saving`, tăng mutation, xóa lỗi/thông báo | PUT `/api/processing-preferences` với 6 trường của draft; không gửi version, server trả version mới (save đồng thời dùng bản ghi cuối) |
+| `provider/processing-preferences-saved` đúng mutation khi đang mở | Hợp lệ: `ready`, thay saved/draft, hiện thông báo; sai: `ready`, giữ dữ liệu, hiện `invalid_response` | Chỉ phản hồi hợp lệ gọi `asr.settings-changed` qua runner |
+| `provider/processing-preferences-save-failed` đúng mutation khi đang mở | `ready`, giữ draft để sửa/thử lại, hiện lỗi, xóa thông báo | Không thông báo đã lưu |
+| `provider/dialog-closed` | `open=false`, về ready nếu có saved hoặc idle; tăng cả request và mutation | Hủy read/save; phản hồi muộn không đổi state |
+| Save khi đang saving, draft không đổi/không có, dialog đóng; edit khi saving/không draft; response sai định danh hoặc dialog đã đóng | Giữ state | Không effect |

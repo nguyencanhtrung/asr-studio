@@ -716,9 +716,11 @@ def get_meeting(data_dir: Path, meeting_id: str) -> dict[str, object]:
         raise RecordingError(404, "meeting_not_found", "Meeting not found.")
     summary = _meeting_summary(row)
     summary["notes_source_locked"] = source_locked
+    from asr_studio.processing import processing_state
     from asr_studio.tasks import transcription_state
 
     summary["transcription"] = transcription_state(data_dir, meeting_id)
+    summary["processing"] = processing_state(data_dir, meeting_id)
     return summary
 
 
@@ -766,7 +768,11 @@ def list_meetings(data_dir: Path, *, query: str | None = None) -> dict[str, obje
             "ORDER BY meetings.meeting_date IS NULL, meetings.meeting_date DESC, "
             "meetings.created_at DESC, meetings.rowid DESC"
         ).fetchall()
+    from asr_studio.processing import processing_state
+
     items = [_history_item(row) for row in rows]
+    for item in items:
+        item["processing"] = processing_state(data_dir, str(item["id"]))
     needle = _search_key(query.strip()) if query else ""
     matches = [item for item in items if needle in _search_key(str(item["title"]))]
     return {

@@ -24,6 +24,8 @@ from asr_studio.extension_ingest import ExtensionIngestWorker, recover_extension
 from asr_studio.extension_routes import install_extension_routes
 from asr_studio.meeting_deletion import recover_pending_meeting_deletions
 from asr_studio.notes import assert_provider_mutation_allowed
+from asr_studio.processing import AutomaticProcessingScheduler
+from asr_studio.processing_routes import install_processing_routes
 from asr_studio.recordings import recover_recordings
 from asr_studio.routes import SESSION_COOKIE, install_routes
 from asr_studio.storage import initialize
@@ -178,6 +180,9 @@ def create_app(
             runtime_settings.data_dir, "antigravity"
         ),
     )
+    processing_scheduler = AutomaticProcessingScheduler(
+        runtime_settings, chatgpt_provider, antigravity_provider
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -195,9 +200,11 @@ def create_app(
             recover_recordings(runtime_settings.data_dir)
             recover_pending_meeting_deletions(runtime_settings.data_dir)
             extension_ingest_worker.start()
+            processing_scheduler.start()
             try:
                 yield
             finally:
+                processing_scheduler.stop()
                 extension_ingest_worker.stop()
         finally:
             os.umask(previous_umask)
@@ -216,6 +223,7 @@ def create_app(
     app.state.settings = runtime_settings
     app.state.chatgpt_provider = chatgpt_provider
     app.state.antigravity_provider = antigravity_provider
+    app.state.processing_scheduler = processing_scheduler
 
     @app.middleware("http")
     async def protect_requests(request: Request, call_next) -> Response:
@@ -322,6 +330,7 @@ def create_app(
         )
 
     install_routes(app, runtime_settings, chatgpt_provider, antigravity_provider)
+    install_processing_routes(app, runtime_settings, chatgpt_provider, antigravity_provider)
     install_extension_routes(app, runtime_settings, extension_auth)
     return app
 

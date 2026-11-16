@@ -1743,6 +1743,12 @@ def publish_ready_derivative(
         "WHERE id = ? AND state IN ('archived', 'finalizing')",
         (_now_text(), session_id),
     )
+    # The processing workflow is part of the same caller-owned ready handoff.
+    # Import locally to keep the ingest/storage dependency one-way and avoid a
+    # second BEGIN inside this publication transaction.
+    from asr_studio.processing import ready_handoff_tx
+
+    ready_handoff_tx(connection, session_id)
     return True
 
 

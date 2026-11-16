@@ -8,7 +8,7 @@
 // Announces the open meeting on the channel (channel.js) and offers notes.js its commands (meetingHistory).
 import { combine, createRunner, createStore } from "./store.js";
 import { asrSettings, meetingChanges, meetingContext } from "./channel.js";
-import { formatMeetingDate, meetingIdFromPath, sameOriginAudioSource, setProp, tr } from "./shell.js";
+import { formatMeetingDate, meetingIdFromPath, sameOriginAudioSource, setAttr, setProp, tr } from "./shell.js";
 import {
   ACTIVE_TASK_STATES,
   LANGUAGES,
@@ -64,6 +64,12 @@ import {
   reduce as reduceTranscript,
   speakerAddReady,
 } from "./transcript-core.js";
+import {
+  initialState as processingInitialState,
+  reduce as reduceProcessing,
+  selectProcessing,
+  shouldRenderAutomaticStatus,
+} from "./processing-core.js";
 
 const $ = (selector) => document.querySelector(selector);
 const MEETING_CHANGE_CHANNEL = "asr-studio:meeting-changes";
@@ -186,11 +192,12 @@ const run = createRunner({
     "clipboard.select": selectDiagnosticCommand,
     "transcript.copy": copyTranscriptDraft,
     "playback.seek": seekAudio,
+    "meeting.refresh": (meetingId) => meetingHistory.refreshMeeting(meetingId),
   },
 });
 const store = createStore({
-  reduce: combine({ history: reduce, task: reduceTask, transcript: reduceTranscript, playback: reducePlayback }),
-  initialState: { history: initialState, task: taskInitialState, transcript: transcriptInitialState, playback: playbackInitialState },
+  reduce: combine({ history: reduce, task: reduceTask, transcript: reduceTranscript, playback: reducePlayback, processing: reduceProcessing }),
+  initialState: { history: initialState, task: taskInitialState, transcript: transcriptInitialState, playback: playbackInitialState, processing: processingInitialState },
   run: (effect, send) => run(effect, (action) => send(stamp(action))),
 });
 
@@ -231,9 +238,11 @@ const render = ((memory) => (root) => {
   const s = root.history;
   const p = memory.history;
   const taskRev = root.task.rev !== memory.task.rev;
-  const playbackOnly = s === p && root.task === memory.task && root.transcript === memory.transcript;
+  const processingChanged = root.processing !== memory.processing;
+  const playbackOnly = s === p && root.task === memory.task && root.transcript === memory.transcript && !processingChanged;
   memory.history = s;
   memory.task = root.task;
+  memory.processing = root.processing;
   if (playbackOnly) {
     paintPlayback(root, memory);
     return;
@@ -261,7 +270,11 @@ const render = ((memory) => (root) => {
   if (s.meetings !== p.meetings || s.calendar !== p.calendar) renderCalendars(s);
   if (s.summaryRev !== p.summaryRev && s.meeting) {
     const transcription = s.meeting.transcription || {};
-    renderMeetingProcessingStatus(transcription.task, transcription.generation);
+    renderMeetingProcessingStatus(transcription.task, transcription.generation, root.processing);
+  }
+  if (processingChanged && s.meeting) {
+    const transcription = s.meeting.transcription || {};
+    renderMeetingProcessingStatus(transcription.task, transcription.generation, root.processing);
   }
   if (s.contextRev !== p.contextRev) notifyMeetingContext();
   if (s.readyRev !== p.readyRev && s.meeting) meetingReady(s.meeting);
@@ -269,7 +282,7 @@ const render = ((memory) => (root) => {
   if (s.editor && p.editor && s.editor.focusDate !== p.editor.focusDate) $("#edit-date").focus();
   paintTranscript(root, memory);
   paintPlayback(root, memory);
-})({ history: initialState, task: taskInitialState, transcript: transcriptInitialState, playback: playbackInitialState });
+})({ history: initialState, task: taskInitialState, transcript: transcriptInitialState, playback: playbackInitialState, processing: processingInitialState });
 
 // The sidebar marks the open meeting by id; a task answer replaces the meeting object every second.
 const openMeetingId = (s) => (s.meeting ? s.meeting.id : null);
@@ -947,7 +960,85 @@ function renderRecordingStatus(meeting, state = nav()) {
 }
 
 // The header strip: one short line per stage. The words carry the state; the dot only repeats it.
-function renderMeetingProcessingStatus(task, generation) {
+function automaticProcessingStateLabel(workflow) {
+  if (workflow.state === "succeeded") return t("Hoàn tất");
+  if (workflow.state === "canceled") return t("Đã hủy");
+  if (workflow.state === "needs_attention") return t("Cần xác nhận");
+  if (workflow.state === "running") return t("Đang chạy");
+  return t("Đang chờ");
+}
+
+function renderAutomaticProcessing(processing) {
+  const view = selectProcessing(processing);
+  const panel = $("#automatic-processing-panel");
+  const focusedAction = document.activeElement?.closest?.("#automatic-processing-actions button");
+  setProp(panel, "hidden", !view.visible);
+  if (!view.visible) return;
+  const workflow = view.workflow;
+  setAttr($("#automatic-processing-state"), "data-state", workflow.state === "succeeded" ? "done" : workflow.state === "canceled" ? "warning" : workflow.state === "needs_attention" ? "problem" : workflow.state === "running" ? "active" : "idle");
+  setProp($("#automatic-processing-state"), "textContent", tr(automaticProcessingStateLabel(workflow)));
+  setProp($("#automatic-processing-message"), "textContent", tr(view.message));
+  setProp($("#automatic-processing-source"), "textContent", tr(view.source));
+  setProp($("#automatic-processing-intent"), "textContent", tr(view.intended));
+  setProp($("#automatic-processing-notice"), "textContent", tr(view.notice));
+  setProp($("#automatic-processing-error"), "textContent", view.error ? tr(view.error.text) : "");
+  setProp($("#automatic-processing-error"), "hidden", !view.error);
+  setProp($("#automatic-processing-source"), "hidden", !view.source);
+  setProp($("#automatic-processing-intent"), "hidden", !view.intended);
+  setProp($("#automatic-processing-notice"), "hidden", !view.notice);
+  const stepElements = [];
+  for (const step of view.steps) {
+    const item = document.createElement("li");
+    item.className = "automatic-processing-step";
+    item.dataset.state = step.state;
+    const head = document.createElement("div");
+    head.className = "automatic-processing-step-head";
+    const label = document.createElement("span");
+    label.className = "automatic-processing-step-label";
+    label.textContent = step.label;
+    const stateText = document.createElement("span");
+    stateText.className = "automatic-processing-step-state";
+    stateText.textContent = tr(step.value);
+    head.append(label, stateText);
+    item.append(head);
+    if (step.reason) {
+      const reason = document.createElement("span");
+      reason.className = "automatic-processing-step-reason";
+      reason.textContent = tr(step.reason);
+      item.append(reason);
+    }
+    stepElements.push(item);
+  }
+  // The two-step list has no interactive children, so rebuilding it cannot steal focus.
+  $("#automatic-processing-steps").replaceChildren(...stepElements);
+  const action = view.action;
+  const busy = view.busy;
+  const cancel = $("#automatic-processing-cancel");
+  const retry = $("#automatic-processing-retry-notes");
+  const apply = $("#automatic-processing-apply-settings");
+  const source = $("#automatic-processing-use-source");
+  setProp(cancel, "hidden", !view.actions.cancel);
+  setProp(retry, "hidden", !view.actions.retryNotes);
+  setProp(apply, "hidden", !view.actions.applySettings);
+  setProp(source, "hidden", !view.actions.useSource);
+  for (const button of [cancel, retry, apply, source]) {
+    setProp(button, "disabled", false);
+    setAttr(button, "aria-disabled", String(busy));
+  }
+  setProp(cancel, "textContent", action?.kind === "cancel" ? t("Đang hủy…") : t("Hủy xử lý"));
+  setProp(retry, "textContent", action?.kind === "retry_notes" ? t("Đang yêu cầu thử lại…") : t("Thử lại notes"));
+  setProp(apply, "textContent", action?.kind === "apply_current_settings" ? t("Đang đọc cài đặt…") : t("Áp dụng cài đặt hiện tại"));
+  setProp(source, "textContent", action?.kind === "use_current_source" ? t("Đang áp dụng nguồn…") : tr(view.sourceActionLabel));
+  setAttr(panel, "aria-busy", busy ? "true" : "false");
+  if (focusedAction && (focusedAction.hidden || focusedAction.disabled)) {
+    const active = document.activeElement;
+    if (active !== focusedAction && active !== document.body && active?.isConnected) return;
+    const next = [cancel, retry, apply, source].find((button) => !button.hidden && !button.disabled) || $("#automatic-processing-title");
+    next.focus({ preventScroll: true });
+  }
+}
+
+function renderMeetingProcessingStatus(task, generation, processing = store.getState().processing) {
   const meeting = nav().meeting;
   const info = recordingInfo(meeting);
   renderRecordingStatus(meeting, nav());
@@ -959,6 +1050,17 @@ function renderMeetingProcessingStatus(task, generation) {
       : tr(info.statusLabel),
     info.statusState,
   );
+
+  const automatic = selectProcessing(processing);
+  if (automatic.visible && shouldRenderAutomaticStatus(automatic.workflow, { task, generation, notes: nav().notes })) {
+    const transcript = automatic.steps.find((step) => step.kind === "transcription");
+    const notes = automatic.steps.find((step) => step.kind === "notes");
+    setStatusItem("transcript", "Transcript", tr(transcript.value), transcript.state);
+    setStatusItem("notes", "Notes", tr(notes.value), notes.state);
+    renderAutomaticProcessing(processing);
+    return;
+  }
+  renderAutomaticProcessing(processing);
 
   const transcriptEnd = task && Object.hasOwn(RUN_END_LABELS, task.status) ? task.status : null;
   if (task && ACTIVE_TASK_STATES.includes(task.status)) {
@@ -2683,6 +2785,10 @@ $("#recording-status-retry").addEventListener("click", (event) => {
 $("#transcription-model").addEventListener("change", (event) => dispatch({ type: "task/model-chosen", model: event.target.value }));
 $("#start-transcription").addEventListener("click", () => dispatch({ type: "task/start-clicked", requestId: newRequestId() }));
 $("#cancel-transcription").addEventListener("click", () => dispatch({ type: "task/cancel-clicked" }));
+$("#automatic-processing-cancel").addEventListener("click", () => dispatch({ type: "processing/cancel-clicked", requestId: newRequestId() }));
+$("#automatic-processing-retry-notes").addEventListener("click", () => dispatch({ type: "processing/retry-notes-clicked", requestId: newRequestId() }));
+$("#automatic-processing-apply-settings").addEventListener("click", () => dispatch({ type: "processing/apply-settings-clicked", requestId: newRequestId() }));
+$("#automatic-processing-use-source").addEventListener("click", () => dispatch({ type: "processing/use-source-clicked", requestId: newRequestId() }));
 $("#task-diagnostic-copy").addEventListener("click", () => dispatch({ type: "task/copy-clicked" }));
 $("#generation-selector").addEventListener("change", (event) => {
   dispatch({ type: "transcript/generation-chosen", id: event.currentTarget.value });

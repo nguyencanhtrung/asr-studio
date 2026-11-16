@@ -277,6 +277,12 @@ def save_notes_preference(
         antigravity_provider.save_notes_preference(model, reasoning_effort)
     with _connect(data_dir) as connection, connection:
         _record_last_provider(connection, chosen)
+        connection.execute(
+            "UPDATE processing_preferences SET notes_provider = ?, notes_model = ?, "
+            "notes_reasoning_effort = ?, version = version + 1, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+            (chosen, model, reasoning_effort),
+        )
     return notes_preferences(
         data_dir, chatgpt_provider=chatgpt_provider, antigravity_provider=antigravity_provider
     )
@@ -1007,6 +1013,11 @@ def publish_notes_revision(
         ).fetchone()
         if slot is None or slot["active_task_id"] != task_id:
             return None
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import publication_allowed_tx
+
+            if not publication_allowed_tx(connection, task):
+                return None
         citations_json = _citations_json(connection, task["notes_source_id"], citations)
         revision_id = uuid.uuid4().hex
         connection.execute(
@@ -1031,6 +1042,10 @@ def publish_notes_revision(
                 citations_json,
             ),
         )
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import notes_published_tx
+
+            notes_published_tx(connection, task, revision_id)
         connection.execute(
             "UPDATE tasks SET status = 'succeeded', stage = 'succeeded', "
             "elapsed_seconds = ?, completed_at = CURRENT_TIMESTAMP, "
