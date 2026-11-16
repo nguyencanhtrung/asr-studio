@@ -75,10 +75,16 @@ function active(workflow) {
   return Boolean(workflow) && !TERMINAL.has(workflow.state);
 }
 
-export function shouldRenderAutomaticStatus(workflow, task) {
-  return Boolean(workflow)
-    && !TERMINAL.has(workflow.state)
-    && !["accepted", "running", "stopping"].includes(task?.status);
+function hasManualStatus({ task = null, generation = null, notes = null } = {}) {
+  return Boolean(task)
+    || Boolean(generation)
+    || typeof notes?.status === "string" && notes.status.length > 0
+    || Number(notes?.count) > 0;
+}
+
+export function shouldRenderAutomaticStatus(workflow, manual = {}) {
+  if (!workflow || hasManualStatus(manual)) return false;
+  return workflow.state === "canceled" || !TERMINAL.has(workflow.state);
 }
 
 function actionMatches(state, action) {
@@ -216,14 +222,24 @@ function startAction(state, kind, requestId, intended = null) {
 
 function sourceValues(workflow) {
   const source = workflow?.current_source;
-  if (!source || typeof source.generation_id !== "string") return null;
+  if (!source) return null;
+  const generationId = source.generation_id;
+  if (generationId !== null && (typeof generationId !== "string" || !generationId)) return null;
+  const sourceVersion = source.source_version === null ? null : Number(source.source_version);
+  if ((generationId === null) !== (sourceVersion === null)) return null;
   const values = {
-    generation_id: source.generation_id,
-    source_version: Number(source.source_version),
+    generation_id: generationId,
+    source_version: sourceVersion,
     metadata_version: Number(source.metadata_version),
     notes_source_version: Number(source.notes_source_version),
   };
-  return Object.values(values).every((value) => typeof value === "string" || Number.isSafeInteger(value)) ? values : null;
+  return (values.source_version === null || Number.isSafeInteger(values.source_version))
+    && Number.isSafeInteger(values.metadata_version)
+    && values.metadata_version > 0
+    && Number.isSafeInteger(values.notes_source_version)
+    && values.notes_source_version > 0
+    ? values
+    : null;
 }
 
 function postReadAction(state, workflow) {
@@ -281,7 +297,9 @@ function actionSucceeded(state, action) {
   const notice = kind === "retry_notes"
     ? t("Đã yêu cầu thử lại notes từ nguồn transcript hiện tại. Transcript không chạy lại.")
     : kind === "use_current_source"
-      ? t("Đã áp dụng nguồn transcript đang hiển thị. Notes sẽ dùng phiên bản đã xác nhận.")
+      ? state.action.intended?.generation_id
+        ? t("Đã áp dụng nguồn transcript đang hiển thị. Notes sẽ dùng phiên bản đã xác nhận.")
+        : t("Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.")
       : kind === "apply_current_settings"
         ? t("Đã áp dụng cài đặt đang hiển thị cho workflow này.")
         : t("Đã hủy xử lý tự động. Workflow đã được khóa, không tự chạy lại.");
@@ -402,7 +420,8 @@ const WAITING_REASONS = {
   provider_unavailable: t("Provider notes hiện chưa khả dụng."),
   account_changed: t("Tài khoản provider đã thay đổi. Hãy xác nhận lại cài đặt."),
   recipe_changed: t("Công thức notes đã thay đổi. Hãy xác nhận lại rồi thử lại."),
-  source_confirmation_required: t("Cần xác nhận nguồn transcript đang hiển thị."),
+  source_confirmation_required: t("Cần xác nhận nguồn dữ liệu đang hiển thị."),
+  transcript_required: t("Đang chờ transcript trước khi tạo notes."),
   canceled_by_operator: t("Đã hủy bởi người dùng."),
 };
 
@@ -428,6 +447,11 @@ function overallText(workflow) {
 
 function sourceText(source) {
   if (!source) return null;
+  if (source.generation_id === null && source.source_version === null) {
+    return t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc.", {
+      metadata: source.metadata_version,
+    });
+  }
   return t("Transcript đã chọn · nội dung phiên bản {source} · thông tin cuộc họp phiên bản {metadata}", {
     source: source.source_version,
     metadata: source.metadata_version,
@@ -441,6 +465,7 @@ export function selectProcessing(state) {
   const notes = stepView(stepOf(workflow, "notes"));
   const action = state.action;
   const intent = action?.intended;
+  const source = sourceText(workflow.current_source);
   const intended = action?.kind === "apply_current_settings" && intent?.asr
     ? t("Áp dụng ASR {choice} · {language}; notes {provider} · {model} · {effort} · {output}.", {
       choice: intent.asr.choice,
@@ -450,7 +475,7 @@ export function selectProcessing(state) {
       effort: intent.notes.reasoning_effort || t("mặc định"),
       output: intent.notes.output_language,
     })
-    : action?.kind === "use_current_source" && intent?.generation_id
+    : action?.kind === "use_current_source" && intent && Object.hasOwn(intent, "generation_id")
       ? sourceText(intent)
       : action?.kind === "retry_notes" && intent?.source_snapshot_id
         ? t("Tạo lại notes từ bản transcript đã lưu · cài đặt phiên bản {recipe}.", { recipe: intent.recipe_version })
@@ -469,7 +494,10 @@ export function selectProcessing(state) {
       useSource: workflow.actions.use_current_source === true,
     },
     message: overallText(workflow),
-    source: sourceText(workflow.current_source),
+    source,
+    sourceActionLabel: workflow.current_source?.generation_id === null && workflow.current_source?.source_version === null
+      ? t("Xác nhận thông tin cuộc họp")
+      : t("Dùng nguồn đang hiển thị"),
     error: state.error,
     notice: state.notice,
     action,

@@ -1480,19 +1480,28 @@ def use_current_source(
             raise ProcessingError(
                 409, "processing_epoch_changed", "Processing changed; reload and retry."
             )
-        if not isinstance(expected_generation_id, str) or not expected_generation_id:
+        if (
+            isinstance(expected_generation_id, bool)
+            or expected_generation_id is not None
+            and (not isinstance(expected_generation_id, str) or not expected_generation_id)
+        ):
             raise ProcessingError(
                 400,
                 "invalid_generation_id",
-                "Provide the current generation shown to the operator.",
+                "Provide the current generation shown to the operator, or null before the first transcript.",
             )
+        if (expected_generation_id is None) != (expected_source_version is None):
+            raise ProcessingError(
+                400,
+                "invalid_source_revision",
+                "Generation and source revision must both be present or both be null.",
+            )
+        revision_values = (expected_metadata_version, expected_notes_source_version)
+        if expected_source_version is not None:
+            revision_values += (expected_source_version,)
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 1
-            for value in (
-                expected_source_version,
-                expected_metadata_version,
-                expected_notes_source_version,
-            )
+            for value in revision_values
         ):
             raise ProcessingError(
                 400,
@@ -1503,73 +1512,153 @@ def use_current_source(
             "SELECT current_generation_id, metadata_version, notes_source_version FROM meetings WHERE id = ?",
             (meeting_id,),
         ).fetchone()
-        generation = connection.execute(
-            "SELECT id, source_version FROM transcript_generations WHERE id = ? AND meeting_id = ?",
-            (expected_generation_id, meeting_id),
-        ).fetchone()
+        generation = (
+            connection.execute(
+                "SELECT id, source_version FROM transcript_generations WHERE id = ? AND meeting_id = ?",
+                (expected_generation_id, meeting_id),
+            ).fetchone()
+            if expected_generation_id is not None
+            else None
+        )
         if (
             meeting is None
             or meeting["current_generation_id"] != expected_generation_id
             or meeting["metadata_version"] != expected_metadata_version
             or meeting["notes_source_version"] != expected_notes_source_version
-            or generation is None
-            or generation["source_version"] != expected_source_version
+            or expected_generation_id is not None
+            and (generation is None or generation["source_version"] != expected_source_version)
         ):
             raise ProcessingError(
                 409,
                 "source_changed",
                 "The current source changed; reload and confirm it before adopting it.",
             )
-        if generation["id"] is None:
-            raise ProcessingError(409, "transcript_required", "A current transcript is required.")
-        snapshot_id = _freeze_notes_source(connection, meeting_id, expected_generation_id)
-        step = connection.execute(
-            "SELECT * FROM processing_steps WHERE workflow_id = ? AND kind = 'notes'",
-            (workflow["id"],),
-        ).fetchone()
         new_epoch = expected_epoch + 1
-        connection.execute(
-            "UPDATE processing_workflows SET epoch = ?, state = 'waiting', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (new_epoch, workflow["id"]),
-        )
-        connection.execute(
-            "UPDATE processing_attempts SET state = 'canceled', updated_at = CURRENT_TIMESTAMP "
-            "WHERE id = (SELECT current_attempt_id FROM processing_steps WHERE workflow_id = ? AND kind = 'transcription') "
-            "AND state IN ('waiting', 'accepted')",
-            (workflow["id"],),
-        )
-        connection.execute(
-            "UPDATE processing_steps SET state = 'succeeded', waiting_reason = NULL, updated_at = CURRENT_TIMESTAMP "
-            "WHERE workflow_id = ? AND kind = 'transcription' "
-            "AND state IN ('waiting', 'needs_attention', 'failed')",
-            (workflow["id"],),
-        )
-        connection.execute(
-            "UPDATE processing_steps SET state = 'waiting', waiting_reason = NULL, task_id = NULL, source_snapshot_id = ?, source_generation_id = ?, source_version = ?, notes_source_version = ?, metadata_version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (
-                snapshot_id,
-                expected_generation_id,
-                expected_source_version,
-                expected_notes_source_version,
-                expected_metadata_version,
-                step["id"],
-            ),
-        )
-        step = connection.execute(
-            "SELECT * FROM processing_steps WHERE id = ?", (step["id"],)
-        ).fetchone()
-        attempt_id = _insert_attempt(
-            connection,
-            step=step,
-            workflow_epoch=new_epoch,
-            attempt_number=step["attempt_number"] + 1,
-            request_id=f"source:{meeting_id}:{new_epoch}",
-            request_hash=_hash(meeting_id, "source", snapshot_id, new_epoch),
-        )
-        connection.execute(
-            "UPDATE processing_steps SET current_attempt_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (attempt_id, step["id"]),
-        )
+        if expected_generation_id is None:
+            transcription = connection.execute(
+                "SELECT * FROM processing_steps WHERE workflow_id = ? AND kind = 'transcription'",
+                (workflow["id"],),
+            ).fetchone()
+            notes = connection.execute(
+                "SELECT * FROM processing_steps WHERE workflow_id = ? AND kind = 'notes'",
+                (workflow["id"],),
+            ).fetchone()
+            if transcription is None or notes is None:
+                raise ProcessingError(
+                    404, "processing_not_found", "Processing workflow steps not found."
+                )
+            connection.execute(
+                "UPDATE processing_workflows SET epoch = ?, state = 'waiting', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (new_epoch, workflow["id"]),
+            )
+            connection.execute(
+                "UPDATE processing_attempts SET state = 'canceled', updated_at = CURRENT_TIMESTAMP "
+                "WHERE id IN (?, ?) AND state IN ('waiting', 'accepted')",
+                (transcription["current_attempt_id"], notes["current_attempt_id"]),
+            )
+            connection.execute(
+                "UPDATE processing_steps SET state = 'waiting', waiting_reason = NULL, task_id = NULL, "
+                "source_snapshot_id = NULL, source_generation_id = NULL, source_version = NULL, "
+                "notes_source_version = ?, metadata_version = ?, asr_choice = ?, asr_language = ?, "
+                "asr_model = NULL, asr_model_path = NULL, device = NULL, compute_type = NULL, "
+                "diarization_model_path = NULL, last_error_code = NULL, last_error_message = NULL, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (
+                    expected_notes_source_version,
+                    expected_metadata_version,
+                    workflow["asr_choice"],
+                    workflow["asr_language"],
+                    transcription["id"],
+                ),
+            )
+            connection.execute(
+                "UPDATE processing_steps SET state = 'waiting', waiting_reason = 'transcript_required', task_id = NULL, "
+                "source_snapshot_id = NULL, source_generation_id = NULL, source_version = NULL, "
+                "notes_source_version = ?, metadata_version = ?, last_error_code = NULL, last_error_message = NULL, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (expected_notes_source_version, expected_metadata_version, notes["id"]),
+            )
+            transcription = connection.execute(
+                "SELECT * FROM processing_steps WHERE id = ?", (transcription["id"],)
+            ).fetchone()
+            notes = connection.execute(
+                "SELECT * FROM processing_steps WHERE id = ?", (notes["id"],)
+            ).fetchone()
+            transcription_attempt_id = _insert_attempt(
+                connection,
+                step=transcription,
+                workflow_epoch=new_epoch,
+                attempt_number=transcription["attempt_number"] + 1,
+                request_id=f"source:{meeting_id}:{new_epoch}",
+                request_hash=_hash(meeting_id, "source", "transcription", new_epoch),
+            )
+            notes_attempt_id = _insert_attempt(
+                connection,
+                step=notes,
+                workflow_epoch=new_epoch,
+                attempt_number=notes["attempt_number"] + 1,
+                request_id=f"auto:{workflow['id']}:notes:{new_epoch}",
+                request_hash=_hash(workflow["id"], "notes", new_epoch, None),
+            )
+            connection.execute(
+                "UPDATE processing_steps SET current_attempt_id = CASE id WHEN ? THEN ? WHEN ? THEN ? END, updated_at = CURRENT_TIMESTAMP WHERE id IN (?, ?)",
+                (
+                    transcription["id"],
+                    transcription_attempt_id,
+                    notes["id"],
+                    notes_attempt_id,
+                    transcription["id"],
+                    notes["id"],
+                ),
+            )
+        else:
+            snapshot_id = _freeze_notes_source(connection, meeting_id, expected_generation_id)
+            step = connection.execute(
+                "SELECT * FROM processing_steps WHERE workflow_id = ? AND kind = 'notes'",
+                (workflow["id"],),
+            ).fetchone()
+            connection.execute(
+                "UPDATE processing_workflows SET epoch = ?, state = 'waiting', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (new_epoch, workflow["id"]),
+            )
+            connection.execute(
+                "UPDATE processing_attempts SET state = 'canceled', updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = (SELECT current_attempt_id FROM processing_steps WHERE workflow_id = ? AND kind = 'transcription') "
+                "AND state IN ('waiting', 'accepted')",
+                (workflow["id"],),
+            )
+            connection.execute(
+                "UPDATE processing_steps SET state = 'succeeded', waiting_reason = NULL, updated_at = CURRENT_TIMESTAMP "
+                "WHERE workflow_id = ? AND kind = 'transcription' "
+                "AND state IN ('waiting', 'needs_attention', 'failed')",
+                (workflow["id"],),
+            )
+            connection.execute(
+                "UPDATE processing_steps SET state = 'waiting', waiting_reason = NULL, task_id = NULL, source_snapshot_id = ?, source_generation_id = ?, source_version = ?, notes_source_version = ?, metadata_version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (
+                    snapshot_id,
+                    expected_generation_id,
+                    expected_source_version,
+                    expected_notes_source_version,
+                    expected_metadata_version,
+                    step["id"],
+                ),
+            )
+            step = connection.execute(
+                "SELECT * FROM processing_steps WHERE id = ?", (step["id"],)
+            ).fetchone()
+            attempt_id = _insert_attempt(
+                connection,
+                step=step,
+                workflow_epoch=new_epoch,
+                attempt_number=step["attempt_number"] + 1,
+                request_id=f"source:{meeting_id}:{new_epoch}",
+                request_hash=_hash(meeting_id, "source", snapshot_id, new_epoch),
+            )
+            connection.execute(
+                "UPDATE processing_steps SET current_attempt_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (attempt_id, step["id"]),
+            )
     return processing_state(data_dir, meeting_id) or {}
 
 

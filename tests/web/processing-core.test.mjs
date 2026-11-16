@@ -60,11 +60,16 @@ test("visible workflow installs both steps and schedules only the current meetin
   assert.ok(left.effects.some((effect) => effect.type === "cancel" && effect.key === "processing/poll"));
 });
 
-test("manual active tasks and terminal workflows retain the history status strip", () => {
-  assert.equal(shouldRenderAutomaticStatus(workflow(), { status: "running" }), false);
-  assert.equal(shouldRenderAutomaticStatus(workflow({ state: "succeeded" }), { status: "succeeded" }), false);
-  assert.equal(shouldRenderAutomaticStatus(workflow({ state: "canceled" }), null), false);
-  assert.equal(shouldRenderAutomaticStatus(workflow(), null), true);
+test("manual task, generation, and notes status/revisions retain the history status strip", () => {
+  const emptyManual = { task: null, generation: null, notes: { known: true, count: 0, status: null } };
+  assert.equal(shouldRenderAutomaticStatus(workflow(), { ...emptyManual, task: { status: "running" } }), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow(), { ...emptyManual, task: { status: "succeeded" } }), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow(), { ...emptyManual, generation: { id: "generation-1" } }), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow(), { ...emptyManual, notes: { known: true, count: 0, status: "running" } }), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow(), { ...emptyManual, notes: { known: true, count: 1, status: null } }), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow(), emptyManual), true);
+  assert.equal(shouldRenderAutomaticStatus(workflow({ state: "canceled" }), emptyManual), true);
+  assert.equal(shouldRenderAutomaticStatus(workflow({ state: "succeeded" }), emptyManual), false);
 });
 
 test("a meeting without embedded processing reads the durable workflow endpoint", () => {
@@ -215,4 +220,69 @@ test("source adoption reads all four source versions before posting", () => {
     expected_metadata_version: 5,
     expected_notes_source_version: 2,
   });
+});
+
+test("metadata-only source adoption posts paired null generation and source versions", () => {
+  const metadataOnly = workflow({
+    state: "needs_attention",
+    current_source: {
+      generation_id: null,
+      source_version: null,
+      metadata_version: 2,
+      notes_source_version: 1,
+    },
+    actions: { cancel: true, retry_notes: false, apply_current_settings: false, use_current_source: true },
+  });
+  const state = reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: metadataOnly } },
+  }).state;
+  const started = reduce(state, { type: "processing/use-source-clicked", requestId: "source-metadata-1" });
+  const read = reduce(started.state, {
+    type: "processing/action-state-loaded",
+    meta: { meetingId: "meeting-1", requestId: "source-metadata-1", kind: "use_current_source" },
+    response: { body: metadataOnly },
+  });
+  const effect = read.effects.find((item) => item.type === "fetch" && item.key === "processing/action");
+  assert.deepEqual(JSON.parse(effect.init.body), {
+    expected_pipeline_epoch: 2,
+    expected_generation_id: null,
+    expected_source_version: null,
+    expected_metadata_version: 2,
+    expected_notes_source_version: 1,
+  });
+  assert.equal(selectProcessing(read.state).source.text, "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc.");
+  const succeeded = reduce(read.state, {
+    type: "processing/action-succeeded",
+    meta: { meetingId: "meeting-1", requestId: "source-metadata-1", kind: "use_current_source" },
+    response: { body: workflow({ epoch: 3, current_source: metadataOnly.current_source }) },
+  });
+  assert.equal(selectProcessing(succeeded.state).notice.text, "Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.");
+});
+
+test("source adoption rejects a mixed null generation/source pair before posting", () => {
+  const mixed = workflow({
+    state: "needs_attention",
+    current_source: {
+      generation_id: null,
+      source_version: 3,
+      metadata_version: 5,
+      notes_source_version: 2,
+    },
+    actions: { cancel: true, retry_notes: false, apply_current_settings: false, use_current_source: true },
+  });
+  const state = reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: mixed } },
+  }).state;
+  const started = reduce(state, { type: "processing/use-source-clicked", requestId: "source-mixed-1" });
+  const read = reduce(started.state, {
+    type: "processing/action-state-loaded",
+    meta: { meetingId: "meeting-1", requestId: "source-mixed-1", kind: "use_current_source" },
+    response: { body: mixed },
+  });
+  assert.equal(read.state.error.code, "source_changed");
+  assert.equal(read.effects.some((item) => item.type === "fetch" && item.key === "processing/action"), false);
 });
