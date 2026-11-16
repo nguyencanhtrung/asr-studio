@@ -91,6 +91,11 @@ def _new_id() -> str:
     return uuid.uuid4().hex
 
 
+def _automatic_request_id(workflow_id: str, kind: str, attempt_number: int) -> str:
+    """Build a fresh automatic key without colliding with legacy epoch keys."""
+    return f"auto:{workflow_id}:{kind}:attempt:{attempt_number}"
+
+
 def _hash(*parts: object) -> str:
     encoded = json.dumps(parts, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -268,7 +273,7 @@ def _initial_attempts(connection: sqlite3.Connection, workflow_id: str, epoch: i
             "SELECT * FROM processing_steps WHERE workflow_id = ? AND kind = ?", (workflow_id, kind)
         ).fetchone()
         assert step is not None
-        request_id = f"auto:{workflow_id}:{kind}:1"
+        request_id = _automatic_request_id(workflow_id, kind, 1)
         _insert_attempt(
             connection,
             step=step,
@@ -1437,7 +1442,9 @@ def apply_current_settings(
                 step=notes_step,
                 workflow_epoch=new_epoch,
                 attempt_number=notes_step["attempt_number"] + 1,
-                request_id=f"auto:{workflow['id']}:notes:{new_epoch}",
+                request_id=_automatic_request_id(
+                    workflow["id"], "notes", notes_step["attempt_number"] + 1
+                ),
                 request_hash=_hash(
                     workflow["id"],
                     "notes",
@@ -1589,7 +1596,9 @@ def use_current_source(
                 step=transcription,
                 workflow_epoch=new_epoch,
                 attempt_number=transcription["attempt_number"] + 1,
-                request_id=f"source:{meeting_id}:{new_epoch}",
+                request_id=_automatic_request_id(
+                    workflow["id"], "transcription", transcription["attempt_number"] + 1
+                ),
                 request_hash=_hash(meeting_id, "source", "transcription", new_epoch),
             )
             notes_attempt_id = _insert_attempt(
@@ -1597,7 +1606,9 @@ def use_current_source(
                 step=notes,
                 workflow_epoch=new_epoch,
                 attempt_number=notes["attempt_number"] + 1,
-                request_id=f"auto:{workflow['id']}:notes:{new_epoch}",
+                request_id=_automatic_request_id(
+                    workflow["id"], "notes", notes["attempt_number"] + 1
+                ),
                 request_hash=_hash(workflow["id"], "notes", new_epoch, None),
             )
             connection.execute(
@@ -1652,7 +1663,9 @@ def use_current_source(
                 step=step,
                 workflow_epoch=new_epoch,
                 attempt_number=step["attempt_number"] + 1,
-                request_id=f"source:{meeting_id}:{new_epoch}",
+                request_id=_automatic_request_id(
+                    workflow["id"], "notes", step["attempt_number"] + 1
+                ),
                 request_hash=_hash(meeting_id, "source", snapshot_id, new_epoch),
             )
             connection.execute(
@@ -1818,7 +1831,7 @@ class AutomaticProcessingScheduler:
                     workflow_id=row["id"],
                     epoch=row["epoch"],
                     request_id=row["attempt_request_id"]
-                    or f"auto:{row['id']}:transcription:{row['epoch']}",
+                    or _automatic_request_id(row["id"], "transcription", row["attempt_number"] + 1),
                     request_hash=_hash(row["id"], "transcription", row["epoch"], run["asr_model"]),
                     model_path=Path(run["model_path"]),
                     asr_model=str(run["asr_model"]),
@@ -1883,7 +1896,7 @@ class AutomaticProcessingScheduler:
                             workflow_id=row["id"],
                             epoch=row["epoch"],
                             request_id=row["attempt_request_id"]
-                            or f"auto:{row['id']}:notes:{row['epoch']}",
+                            or _automatic_request_id(row["id"], "notes", row["attempt_number"] + 1),
                             request_hash=_hash(row["id"], "notes", row["epoch"], pin),
                             pin=pin,
                         )
@@ -1911,23 +1924,32 @@ class AutomaticProcessingScheduler:
                 if step["attempt_number"] >= MAX_RETRIES:
                     continue
                 attempt_number = step["attempt_number"] + 1
-                request_id = f"auto:{step['workflow_id']}:{step['kind']}:{attempt_number}"
-                _insert_attempt(
-                    connection,
-                    step=step,
-                    workflow_epoch=step["epoch"],
-                    attempt_number=attempt_number,
-                    request_id=request_id,
-                    request_hash=_hash(
-                        step["workflow_id"], step["kind"], step["epoch"], attempt_number
-                    ),
-                )
-                connection.execute(
-                    "UPDATE processing_steps SET state = 'waiting', waiting_reason = ?, "
-                    "next_eligible_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (
-                        step["last_error_code"] or "retry",
-                        self.clock() + RETRY_BASE_SECONDS * attempt_number,
-                        step["id"],
-                    ),
-                )
+                try:
+                    connection.execute("SAVEPOINT requeue_failed_step")
+                    _insert_attempt(
+                        connection,
+                        step=step,
+                        workflow_epoch=step["epoch"],
+                        attempt_number=attempt_number,
+                        request_id=_automatic_request_id(
+                            step["workflow_id"], step["kind"], attempt_number
+                        ),
+                        request_hash=_hash(
+                            step["workflow_id"], step["kind"], step["epoch"], attempt_number
+                        ),
+                    )
+                    connection.execute(
+                        "UPDATE processing_steps SET state = 'waiting', waiting_reason = ?, "
+                        "next_eligible_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (
+                            step["last_error_code"] or "retry",
+                            self.clock() + RETRY_BASE_SECONDS * attempt_number,
+                            step["id"],
+                        ),
+                    )
+                    connection.execute("RELEASE SAVEPOINT requeue_failed_step")
+                except sqlite3.IntegrityError:
+                    # A corrupt legacy row must not abort admission for other workflows.
+                    with suppress(sqlite3.Error):
+                        connection.execute("ROLLBACK TO SAVEPOINT requeue_failed_step")
+                        connection.execute("RELEASE SAVEPOINT requeue_failed_step")

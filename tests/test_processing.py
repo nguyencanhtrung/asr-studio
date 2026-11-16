@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -144,6 +145,25 @@ def _notes_pin(effort: str = "high") -> dict[str, object]:
     }
 
 
+def _patch_scheduler_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("asr_studio.worker.is_healthy", lambda _data_dir, role=None: True)
+    monkeypatch.setattr("asr_studio.runtime.read_runtime_profile", lambda _data_dir: object())
+    monkeypatch.setattr(
+        processing_module,
+        "resolve_run",
+        lambda *_args: {
+            "asr_model": "whisper-small",
+            "model_path": "/models/whisper-small",
+            "device": "cpu",
+            "compute_type": "int8",
+        },
+    )
+    monkeypatch.setattr(processing_module, "engine_of", lambda *_args: "whisper")
+    monkeypatch.setattr(processing_module, "prepared_engine_directory", lambda *_args: None)
+    monkeypatch.setattr(processing_module, "prepared_diarization_directory", lambda *_args: None)
+    monkeypatch.setattr(processing_module.notes_service, "is_ready", lambda _data_dir: True)
+
+
 def _publish_manual_transcript(
     data_dir: Path, meeting_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> dict[str, object]:
@@ -184,13 +204,17 @@ def _ready_notes_workflow(
     data_dir, meeting_id, _ = _ready_source(tmp_path)
     state = processing_state(data_dir, meeting_id)
     assert state is not None
+    transcription_step = next(step for step in state["steps"] if step["kind"] == "transcription")
+    transcription_attempt = next(
+        attempt for attempt in state["attempts"] if attempt["step_id"] == transcription_step["id"]
+    )
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         admitted = admit_automatic_transcription(
             connection,
             workflow_id=state["id"],
             epoch=state["epoch"],
-            request_id=f"auto:{state['id']}:transcription:1",
+            request_id=transcription_attempt["request_id"],
             request_hash=_hash(state["id"], "transcription", 1, "whisper-small"),
             model_path=Path("/models/whisper-small"),
             asr_model="whisper-small",
@@ -293,13 +317,21 @@ def test_two_automatic_admissions_serialize_on_the_shared_slot(tmp_path):
     def admit(data_dir: Path, meeting_id: str) -> dict[str, object] | None:
         state = processing_state(data_dir, meeting_id)
         assert state is not None
+        transcription_step = next(
+            step for step in state["steps"] if step["kind"] == "transcription"
+        )
+        transcription_attempt = next(
+            attempt
+            for attempt in state["attempts"]
+            if attempt["step_id"] == transcription_step["id"]
+        )
         with _connect(data_dir) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             return admit_automatic_transcription(
                 connection,
                 workflow_id=state["id"],
                 epoch=1,
-                request_id=f"auto:{state['id']}:transcription:1",
+                request_id=transcription_attempt["request_id"],
                 request_hash=_hash(state["id"], "transcription", 1, "whisper-small"),
                 model_path=Path("/models/whisper-small"),
                 asr_model="whisper-small",
@@ -364,7 +396,12 @@ def test_automatic_transcription_replay_claim_and_atomic_late_cancel_fence(tmp_p
     state = processing_state(data_dir, meeting_id)
     assert state is not None
     workflow_id = state["id"]
-    request_id = f"auto:{workflow_id}:transcription:1"
+    transcription_step = next(step for step in state["steps"] if step["kind"] == "transcription")
+    request_id = next(
+        attempt["request_id"]
+        for attempt in state["attempts"]
+        if attempt["step_id"] == transcription_step["id"]
+    )
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         admitted = admit_automatic_transcription(
@@ -662,6 +699,132 @@ def test_use_current_source_recovers_metadata_only_pretranscript_workflow(tmp_pa
     assert admitted is not None
 
 
+def test_repeated_source_adoption_keeps_notes_attempt_keys_in_their_kind_namespace(
+    tmp_path, monkeypatch
+):
+    data_dir, meeting_id, _ = _ready_source(tmp_path, "repeated-source")
+    initial = processing_state(data_dir, meeting_id)
+    assert initial is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE meetings SET metadata_version = 2 WHERE id = ?", (meeting_id,))
+        connection.commit()
+    metadata_confirmed = use_current_source(
+        data_dir,
+        meeting_id,
+        expected_epoch=initial["epoch"],
+        expected_generation_id=None,
+        expected_source_version=None,
+        expected_metadata_version=2,
+        expected_notes_source_version=1,
+    )
+    assert metadata_confirmed["epoch"] == 2
+
+    _patch_scheduler_runtime(monkeypatch)
+    scheduler = AutomaticProcessingScheduler(
+        Settings(data_dir=data_dir, auth_dir=tmp_path / "auth"),
+        None,
+        None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+    )
+    assert scheduler.reconcile_once() == 1
+    transcription = claim_next_task(
+        data_dir, owner_id="repeated-source-transcription", role="transcription"
+    )
+    assert transcription is not None
+    assert fail_task(
+        data_dir,
+        transcription["id"],
+        owner_id="repeated-source-transcription",
+        error_code="test_failure",
+        message="test failure",
+        elapsed_seconds=0.1,
+    )
+    assert scheduler.reconcile_once() == 0
+    after_retry = processing_state(data_dir, meeting_id)
+    assert after_retry is not None
+    transcription_step = next(
+        step for step in after_retry["steps"] if step["kind"] == "transcription"
+    )
+    notes_step = next(step for step in after_retry["steps"] if step["kind"] == "notes")
+    assert transcription_step["attempt_number"] == 3
+    assert notes_step["attempt_number"] == 2
+
+    _publish_manual_transcript(data_dir, meeting_id, monkeypatch)
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_workflows SET state = 'needs_attention' WHERE meeting_id = ?",
+            (meeting_id,),
+        )
+        connection.execute(
+            "UPDATE processing_steps SET state = 'waiting', waiting_reason = 'source_confirmation_required' "
+            "WHERE workflow_id = (SELECT id FROM processing_workflows WHERE meeting_id = ?) "
+            "AND kind = 'transcription'",
+            (meeting_id,),
+        )
+        connection.commit()
+    before_adoption = processing_state(data_dir, meeting_id)
+    assert before_adoption is not None and before_adoption["current_source"] is not None
+    source = before_adoption["current_source"]
+    first_adoption = use_current_source(
+        data_dir,
+        meeting_id,
+        expected_epoch=before_adoption["epoch"],
+        expected_generation_id=source["generation_id"],
+        expected_source_version=source["source_version"],
+        expected_metadata_version=source["metadata_version"],
+        expected_notes_source_version=source["notes_source_version"],
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE meetings SET metadata_version = 3 WHERE id = ?", (meeting_id,))
+        connection.execute(
+            "UPDATE processing_workflows SET state = 'needs_attention' WHERE meeting_id = ?",
+            (meeting_id,),
+        )
+        connection.commit()
+    second_source = first_adoption["current_source"]
+    assert second_source is not None
+    second_adoption = use_current_source(
+        data_dir,
+        meeting_id,
+        expected_epoch=first_adoption["epoch"],
+        expected_generation_id=second_source["generation_id"],
+        expected_source_version=second_source["source_version"],
+        expected_metadata_version=3,
+        expected_notes_source_version=second_source["notes_source_version"],
+    )
+
+    notes_attempts = [
+        attempt
+        for attempt in second_adoption["attempts"]
+        if attempt["step_id"]
+        == next(step for step in second_adoption["steps"] if step["kind"] == "notes")["id"]
+    ]
+    transcription_attempts = [
+        attempt
+        for attempt in second_adoption["attempts"]
+        if attempt["step_id"]
+        == next(step for step in second_adoption["steps"] if step["kind"] == "transcription")["id"]
+    ]
+    assert [attempt["attempt_number"] for attempt in notes_attempts[-2:]] == [3, 4]
+    assert [attempt["request_id"] for attempt in notes_attempts[-2:]] == [
+        f"auto:{second_adoption['id']}:notes:attempt:3",
+        f"auto:{second_adoption['id']}:notes:attempt:4",
+    ]
+    assert transcription_attempts[-1]["request_id"] == (
+        f"auto:{second_adoption['id']}:transcription:attempt:3"
+    )
+    assert (
+        len(
+            {
+                attempt["request_id"]
+                for attempt in (*notes_attempts[-2:], transcription_attempts[-1])
+            }
+        )
+        == 3
+    )
+
+
 def test_use_current_source_rejects_mixed_null_generation_and_source_version(tmp_path):
     data_dir, meeting_id, _ = _ready_source(tmp_path, "metadata-mixed")
     with sqlite3.connect(database_path(data_dir)) as connection:
@@ -775,13 +938,17 @@ def test_successful_transcript_freezes_source_and_notes_retry_reuses_it(tmp_path
     state = processing_state(data_dir, meeting_id)
     assert state is not None
     workflow_id = state["id"]
+    transcription_step = next(step for step in state["steps"] if step["kind"] == "transcription")
+    transcription_attempt = next(
+        attempt for attempt in state["attempts"] if attempt["step_id"] == transcription_step["id"]
+    )
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         result = admit_automatic_transcription(
             connection,
             workflow_id=workflow_id,
             epoch=1,
-            request_id=f"auto:{workflow_id}:transcription:1",
+            request_id=transcription_attempt["request_id"],
             request_hash=_hash(workflow_id, "transcription", 1, "whisper-small"),
             model_path=Path("/models/whisper-small"),
             asr_model="whisper-small",
@@ -993,6 +1160,184 @@ def test_settings_adoption_replaces_a_terminal_notes_attempt(tmp_path):
         key=lambda attempt: attempt["attempt_number"],
     )
     assert current_attempt["state"] == "waiting"
+
+
+def test_scheduler_requeues_legacy_notes_attempt_after_metadata_confirmation_and_keeps_queue_open(
+    tmp_path, monkeypatch
+):
+    data_dir, meeting_id, _ = _ready_source(tmp_path, "legacy-requeue")
+    preferences = save_processing_preferences(
+        data_dir,
+        asr_choice="auto",
+        asr_language="vi",
+        notes_provider="chatgpt",
+        notes_model="stub-model",
+        notes_reasoning_effort="high",
+        notes_output_language="en",
+    )
+    initial = processing_state(data_dir, meeting_id)
+    assert initial is not None
+    adopted_settings = apply_current_settings(
+        data_dir,
+        meeting_id,
+        expected_epoch=initial["epoch"],
+        expected_preferences_version=preferences["version"],
+        confirmed_pin=_notes_pin("high"),
+    )
+    assert adopted_settings["epoch"] == initial["epoch"] + 1
+    assert len(adopted_settings["attempts"]) == len(initial["attempts"])
+
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE meetings SET metadata_version = 2 WHERE id = ?", (meeting_id,))
+        connection.commit()
+    confirmed = use_current_source(
+        data_dir,
+        meeting_id,
+        expected_epoch=adopted_settings["epoch"],
+        expected_generation_id=None,
+        expected_source_version=None,
+        expected_metadata_version=2,
+        expected_notes_source_version=1,
+    )
+    assert confirmed["epoch"] == adopted_settings["epoch"] + 1
+    notes_step = next(step for step in confirmed["steps"] if step["kind"] == "notes")
+    legacy_request_id = f"auto:{confirmed['id']}:notes:3"
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_attempts SET request_id = ? WHERE id = ?",
+            (
+                legacy_request_id,
+                next(
+                    attempt["id"]
+                    for attempt in confirmed["attempts"]
+                    if attempt["step_id"] == notes_step["id"]
+                    and attempt["attempt_number"] == notes_step["attempt_number"]
+                ),
+            ),
+        )
+        connection.commit()
+
+    _patch_scheduler_runtime(monkeypatch)
+    provider = _ProcessingNotesProvider(effort="high")
+    scheduler = AutomaticProcessingScheduler(
+        Settings(data_dir=data_dir, auth_dir=tmp_path / "auth"),
+        provider,
+        provider,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+    )
+    assert scheduler.reconcile_once() == 1
+    transcription = claim_next_task(
+        data_dir, owner_id="legacy-requeue-transcription", role="transcription"
+    )
+    assert transcription is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE tasks SET stage = 'publishing' WHERE id = ?", (transcription["id"],)
+        )
+    assert (
+        publish_complete_generation(
+            data_dir,
+            transcription["id"],
+            owner_id="legacy-requeue-transcription",
+            segments=[{"id": "e" * 32, "start_seconds": 0, "end_seconds": 1, "text": "Legacy."}],
+            language_probability=None,
+            elapsed_seconds=0.1,
+        )
+        is not None
+    )
+    assert scheduler.reconcile_once() == 1
+    notes_task = claim_next_task(data_dir, owner_id="legacy-requeue-notes", role="notes")
+    assert notes_task is not None
+    assert fail_task(
+        data_dir,
+        notes_task["id"],
+        owner_id="legacy-requeue-notes",
+        error_code="test_failure",
+        message="test failure",
+        elapsed_seconds=0.1,
+    )
+
+    _, unrelated_meeting, _ = _ready_source(tmp_path, "unrelated")
+    assert scheduler.reconcile_once() == 0
+    assert scheduler.reconcile_once() == 1
+    unrelated = processing_state(data_dir, unrelated_meeting)
+    assert unrelated is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        admitted = connection.execute(
+            "SELECT id, processing_workflow_id, request_id FROM tasks "
+            "WHERE processing_workflow_id = ? AND status = 'accepted'",
+            (unrelated["id"],),
+        ).fetchone()
+    assert admitted is not None
+    first_after_retry = processing_state(data_dir, meeting_id)
+    assert first_after_retry is not None
+    current_notes_step = next(
+        step for step in first_after_retry["steps"] if step["kind"] == "notes"
+    )
+    current_notes_attempt = max(
+        (
+            attempt
+            for attempt in first_after_retry["attempts"]
+            if attempt["step_id"] == current_notes_step["id"]
+        ),
+        key=lambda attempt: attempt["attempt_number"],
+    )
+    assert current_notes_attempt["attempt_number"] == 3
+    assert current_notes_attempt["request_id"] != legacy_request_id
+    assert current_notes_attempt["request_id"].endswith(":attempt:3")
+    cancel_task(data_dir, admitted[0])
+
+
+def test_scheduler_isolates_a_malformed_failed_step_from_unrelated_admission(tmp_path, monkeypatch):
+    data_dir, malformed_meeting, _ = _ready_source(tmp_path, "malformed")
+    _, unrelated_meeting, _ = _ready_source(tmp_path, "unrelated-malformed-x")
+    malformed = processing_state(data_dir, malformed_meeting)
+    assert malformed is not None
+    transcription = next(step for step in malformed["steps"] if step["kind"] == "transcription")
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_steps SET state = 'failed', last_error_code = 'test_failure' "
+            "WHERE id = ?",
+            (transcription["id"],),
+        )
+        connection.execute(
+            "INSERT INTO processing_attempts(id, step_id, attempt_number, request_id, request_hash, workflow_epoch, state) "
+            "VALUES (?, ?, 2, ?, ?, 1, 'failed')",
+            (
+                uuid.uuid4().hex,
+                transcription["id"],
+                "malformed-attempt-0001",
+                "f" * 64,
+            ),
+        )
+        connection.commit()
+
+    _patch_scheduler_runtime(monkeypatch)
+    scheduler = AutomaticProcessingScheduler(
+        Settings(data_dir=data_dir, auth_dir=tmp_path / "auth"),
+        None,
+        None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+    )
+    assert scheduler.reconcile_once() == 1
+    unrelated = processing_state(data_dir, unrelated_meeting)
+    assert unrelated is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        admitted = connection.execute(
+            "SELECT id, processing_workflow_id FROM tasks "
+            "WHERE processing_workflow_id = ? AND status = 'accepted'",
+            (unrelated["id"],),
+        ).fetchone()
+    assert admitted is not None
+    still_malformed = processing_state(data_dir, malformed_meeting)
+    assert still_malformed is not None
+    malformed_step = next(
+        step for step in still_malformed["steps"] if step["kind"] == "transcription"
+    )
+    assert malformed_step["state"] == "failed"
+    cancel_task(data_dir, admitted[0])
 
 
 def test_notes_scheduler_waits_for_worker_then_admits_once_on_recovery(tmp_path, monkeypatch):
