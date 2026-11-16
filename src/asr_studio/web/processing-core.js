@@ -304,7 +304,8 @@ function actionSucceeded(state, action) {
         ? t("Đã áp dụng cài đặt đang hiển thị cho workflow này.")
         : t("Đã hủy xử lý tự động. Workflow đã được khóa, không tự chạy lại.");
   const next = { ...state, workflow, action: null, pollPending: false, error: null, notice };
-  const effects = [cancelPoll, ...(kind === "use_current_source" ? [refreshEffect(state.meetingId)] : []), ...pollAgain(next)];
+  const refreshSource = kind === "use_current_source" && state.action.intended?.generation_id;
+  const effects = [cancelPoll, ...(refreshSource ? [refreshEffect(state.meetingId)] : []), ...pollAgain(next)];
   return done(next, effects);
 }
 
@@ -355,7 +356,7 @@ export function reduce(state, action) {
       const workflow = normalizeWorkflow(action.response?.body);
       if (!workflow || workflow.meeting_id !== state.meetingId) return done({ ...state, pollPending: false, error: { code: "invalid_response", text: t("Máy chủ trả về trạng thái xử lý không hợp lệ.") } }, pollAgain(state, POLL_ERROR_DELAY));
       const becameComplete = workflow.state === "succeeded" && state.workflow?.state !== "succeeded";
-      const next = { ...state, workflow, pollPending: false, error: null, notice: null };
+      const next = { ...state, workflow, pollPending: false, error: null, notice: workflow.epoch === state.workflow?.epoch ? state.notice : null };
       return done(next, [...(becameComplete ? [refreshEffect(state.meetingId)] : []), ...pollAgain(next)]);
     }
     case "processing/meeting-read-loaded": {

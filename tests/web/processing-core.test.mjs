@@ -259,6 +259,21 @@ test("metadata-only source adoption posts paired null generation and source vers
     response: { body: workflow({ epoch: 3, current_source: metadataOnly.current_source }) },
   });
   assert.equal(selectProcessing(succeeded.state).notice.text, "Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.");
+  assert.equal(succeeded.effects.some((item) => item.name === "meeting.refresh"), false);
+  const due = reduce(succeeded.state, { type: "processing/poll-due", meetingId: "meeting-1", loadId: succeeded.state.loadId });
+  const polled = reduce(due.state, {
+    type: "processing/poll-loaded",
+    meta: { meetingId: "meeting-1", loadId: due.state.loadId, pollId: due.state.pollId },
+    response: { body: workflow({ epoch: 3, current_source: metadataOnly.current_source }) },
+  });
+  assert.deepEqual(polled.state.notice, succeeded.state.notice);
+  const changedDue = reduce(polled.state, { type: "processing/poll-due", meetingId: "meeting-1", loadId: polled.state.loadId });
+  const changed = reduce(changedDue.state, {
+    type: "processing/poll-loaded",
+    meta: { meetingId: "meeting-1", loadId: changedDue.state.loadId, pollId: changedDue.state.pollId },
+    response: { body: workflow({ epoch: 4, current_source: metadataOnly.current_source }) },
+  });
+  assert.equal(changed.state.notice, null);
 });
 
 test("source adoption rejects a mixed null generation/source pair before posting", () => {
