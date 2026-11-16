@@ -7,12 +7,13 @@ import sqlite3
 import threading
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from asr_studio import extension_routes
-from asr_studio.app import EXTENSION_ORIGIN
+from asr_studio.app import EXTENSION_ORIGIN, create_app
 from asr_studio.auth import AuthStore
 from asr_studio.extension_auth import ExtensionSessionIdentity
 from asr_studio.extension_ingest import (
@@ -20,6 +21,7 @@ from asr_studio.extension_ingest import (
     begin_chunk,
     cancel_recording_session,
     create_recording_session,
+    ensure_extension_storage,
     finalize_recording_session,
     publish_ready_derivative,
     recover_extension_ingest,
@@ -152,6 +154,91 @@ async def test_authenticated_chunk_replay_and_pending_library_guard(client, sett
     audio = await client.get(f"/api/meetings/{session['meeting_url'].rsplit('/', 1)[-1]}/audio")
     assert audio.status_code == 409
     assert audio.json()["detail"]["code"] == "recording_not_ready"
+
+
+async def test_symlinked_data_root_supports_lifespan_and_ingest_round_trip(
+    settings, tmp_path, monkeypatch
+):
+    real_data_dir = tmp_path / "physical-data"
+    real_data_dir.mkdir()
+    configured_data_dir = tmp_path / "configured-data"
+    configured_data_dir.symlink_to(real_data_dir, target_is_directory=True)
+    symlinked_settings = replace(settings, data_dir=configured_data_dir)
+
+    def fake_normalize(_source, output, **_kwargs):
+        Path(output).write_bytes(b"normalized-through-symlink")
+        return SimpleNamespace(duration_seconds=0.25)
+
+    monkeypatch.setattr("asr_studio.extension_ingest.normalize_extension_media", fake_normalize)
+    app = create_app(symlinked_settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app), base_url=symlinked_settings.public_url
+        ) as client,
+    ):
+        token = await _extension_session(client, symlinked_settings)
+        auth = {"Origin": EXTENSION_ORIGIN, "Authorization": f"Bearer {token}"}
+        content = b"symlinked-root-round-trip"
+        created = await client.post(
+            "/api/extension/v1/recording-sessions",
+            headers=auth,
+            json=_create_payload(),
+        )
+        assert created.status_code == 201, created.text
+        session_id = created.json()["id"]
+        digest = hashlib.sha256(content).hexdigest()
+        chunk = await client.put(
+            f"/api/extension/v1/recording-sessions/{session_id}/chunks/0",
+            headers={
+                **auth,
+                "X-Chunk-Offset": "0",
+                "X-Chunk-SHA256": digest,
+                "X-Writer-Epoch": "1",
+            },
+            content=content,
+        )
+        assert chunk.status_code == 200, chunk.text
+        assert chunk.json()["next_offset"] == len(content)
+
+        finalized = await client.post(
+            f"/api/extension/v1/recording-sessions/{session_id}/finalize",
+            headers=auth,
+            json=_manifest(content, epoch=1),
+        )
+        assert finalized.status_code == 202, finalized.text
+
+        status = None
+        for _ in range(200):
+            status = await client.get(
+                f"/api/extension/v1/recording-sessions/{session_id}", headers=auth
+            )
+            if status.json()["state"] == "ready":
+                break
+            await asyncio.sleep(0.01)
+        assert status is not None
+        assert status.json()["state"] == "ready", status.text
+
+    assert (real_data_dir / "extension-raw" / f"{session_id}.webm").read_bytes() == content
+    assert (
+        real_data_dir / "extension-derivatives" / f"{session_id}.m4a"
+    ).read_bytes() == b"normalized-through-symlink"
+
+
+def test_managed_child_symlink_is_rejected_under_configured_root(tmp_path):
+    real_data_dir = tmp_path / "physical-data"
+    real_data_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (real_data_dir / "extension-staging").symlink_to(outside, target_is_directory=True)
+    configured_data_dir = tmp_path / "configured-data"
+    configured_data_dir.symlink_to(real_data_dir, target_is_directory=True)
+
+    with pytest.raises(ExtensionIngestError) as rejected:
+        ensure_extension_storage(configured_data_dir)
+
+    assert rejected.value.code == "storage_unavailable"
+    assert not (outside / "chunks").exists()
 
 
 @pytest.mark.parametrize("replay", [False, True])

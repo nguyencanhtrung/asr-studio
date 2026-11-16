@@ -2378,6 +2378,9 @@ nullable extension link and derivative fields, so the two tables cannot disagree
 Chunk bytes are written through bounded temporary files, fsynced and renamed into managed staging;
 the exact raw archive is fsynced and receipt-committed before media normalization. After that commit,
 the archive lane fsyncs and removes the session's staging chunks before deleting their database rows.
+The configured `ASR_DATA_DIR` root is resolved before extension storage checks, so an existing
+symlinked data root remains supported. Managed child directories are still required to be private
+real directories, and child symlinks are rejected.
 Recovery repeats this cleanup only after it verifies the immutable raw receipt. Startup selects
 receiving/finalizing/archiving sessions and any session with retained staging, while ready/failed
 terminal archives without staging are left untouched; their raw receipt remains verified by the

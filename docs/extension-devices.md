@@ -38,6 +38,10 @@ in-flight reservations. A durable raw receipt releases that session's staging
 chunks automatically. Remove unneeded incomplete or canceled recordings through
 the library to release staging that cannot receive a raw receipt.
 
+`ASR_DATA_DIR` may point through a symlink to an existing data root. Extension
+storage resolves that configured root before it checks its managed directories.
+Managed child directories must remain private real directories. Child symlinks are rejected.
+
 The database also remembers the installation's public identity. After initialization, a missing, corrupt or mismatched private auth file prevents startup; API reads never recreate it. Restore the matching auth state rather than deleting the file to reset pairing. This preserves server identity even before the first device pairs.
 
 ## API authority
