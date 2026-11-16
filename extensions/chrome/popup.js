@@ -69,7 +69,11 @@ function localizedError(error) {
     network_error: t("Không kết nối được tới server."),
     timeout: t("Server phản hồi quá lâu."),
     backend_unavailable: t("Server tạm thời không sẵn sàng."),
-    auth_expired: t("Phiên ghép server đã hết hạn hoặc bị thu hồi. Hãy ghép lại."),
+    auth_expired: t("Phiên ghép server đã hết hạn hoặc bị thu hồi. Mở Settings → Devices trong ASR Studio và dùng Pair again cho đúng thiết bị; audio vẫn được giữ lại."),
+    not_found: t("Server không tìm thấy phiên của thiết bị này. Mở Settings → Devices và dùng Pair again cho đúng thiết bị; audio vẫn được giữ lại."),
+    binding_locked: t("Mã ghép thuộc server hoặc thiết bị khác. Mở Settings → Devices và dùng Pair again cho đúng thiết bị; audio vẫn được giữ lại."),
+    pair_locked: t("Không thể ghép lại khi đang ghi. Hãy dừng bản ghi trước; audio đã lưu vẫn được giữ lại."),
+    url_locked: t("Không thể đổi server khi còn audio đang chờ xử lý."),
     backend_error: t("Server không nhận yêu cầu này.")
   };
   return known[code] || t("Không thực hiện được yêu cầu. Hãy thử lại.");

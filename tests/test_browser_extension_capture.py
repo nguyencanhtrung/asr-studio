@@ -185,6 +185,21 @@ def _status(page):
     )
 
 
+def _pair_again_code(operator, record_id):
+    return operator.evaluate(
+        """async recordId => {
+            const response = await fetch('/api/extension/pairing-codes', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({device_lifetime: 'never', device_record_id: recordId})
+            });
+            if (!response.ok) throw new Error(`pair-again ${response.status}`);
+            return (await response.json()).code;
+        }""",
+        record_id,
+    )
+
+
 class NativePopup:
     """Attach to Chrome's action popup, which Playwright does not expose as a Page."""
 
@@ -474,6 +489,14 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     assert failed and failed["capture"]["captureComplete"] and failed["upload"]["error"], failed
     assert failed["capture"]["chunkCount"] > 0
     assert failed["upload"]["receipt"] is None
+    create_requests_before_repair = sum(
+        method == "POST" and path == "/api/extension/v1/recording-sessions"
+        for method, path in requests
+    )
+    record_id = operator.evaluate(
+        "async () => (await (await fetch('/api/extension/devices')).json()).devices[0].id"
+    )
+    repair_code = _pair_again_code(operator, record_id)
     cdp = context.browser.new_browser_cdp_session()
     try:
         worker_target = next(
@@ -510,17 +533,40 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
             assert control.evaluate("document.activeElement.dataset.action") == "retry"
             expect(first.locator(".error")).not_to_be_empty()
             control.screenshot(path=str(tmp_path / f"revoked-{language}-{theme}.png"))
-    control.once("dialog", lambda dialog: dialog.accept())
-    control.locator('[data-action="discard"]').first.click()
-    expect(control.locator(".session-row")).to_have_count(1)
-    retained = _status(control)["sessions"]
-    assert len(retained) == 1 and retained[0]["id"] == session["id"]
+
+    control.locator("#setup-toggle").click()
+    control.locator("#pair-code").fill(repair_code)
+    control.locator("#pair-button").click()
+    expect(control.locator("#setup-panel")).to_be_hidden(timeout=20000)
+    deadline = time.monotonic() + 45
+    recovered = None
+    while time.monotonic() < deadline:
+        recovered = next(
+            (item for item in _status(control)["sessions"] if item["id"] == failed["id"]),
+            None,
+        )
+        if recovered and recovered["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(150)
+    assert recovered and recovered["upload"]["cleaned"] and recovered["upload"]["receipt"], (
+        recovered
+    )
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT count(*) FROM meetings").fetchone()[0] == 2
+    assert (
+        sum(
+            method == "POST" and path == "/api/extension/v1/recording-sessions"
+            for method, path in requests
+        )
+        == create_requests_before_repair + 1
+    )
+    assert len(_status(control)["sessions"]) == 2
 
 
 @pytest.mark.parametrize("failure", ["permission", "quota"])
 def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     _settings, url, requests, _tls = capture_server
-    context, _worker, _operator, control, tab = paired_capture
+    context, _worker, operator, control, tab = paired_capture
     popup = NativePopup(context, tab)
     popup.click("#start-button")
     popup.wait_text("#capture-state", "Recording")
@@ -542,6 +588,19 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     if failure == "quota":
         assert session["capture"]["interrupted"] and not session["capture"]["captureComplete"]
         assert not any("/recording-sessions" in path for _method, path in requests)
+        record_id = operator.evaluate(
+            "async () => (await (await fetch('/api/extension/devices')).json()).devices[0].id"
+        )
+        repair_code = _pair_again_code(operator, record_id)
+        control.locator("#setup-toggle").click()
+        control.locator("#pair-code").fill(repair_code)
+        control.locator("#pair-button").click()
+        expect(control.locator("#setup-panel")).to_be_hidden(timeout=20000)
+        retained_after_repair = next(
+            item for item in _status(control)["sessions"] if item["id"] == session["id"]
+        )
+        assert retained_after_repair["capture"]["interrupted"]
+        assert retained_after_repair["capture"]["totalBytes"] == session["capture"]["totalBytes"]
     else:
         assert session["capture"]["captureComplete"] and session["upload"]["error"]
         assert session["upload"]["error"]["code"] == "host_permission"

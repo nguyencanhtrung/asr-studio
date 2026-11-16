@@ -42,6 +42,9 @@ adopt prototype buffers.
    route.
 2. Create a pairing code in the web app. In the extension setup page, enter the
    exact API URL, grant the requested origin, allow microphone access, and pair.
+   When recovering retained audio after expiry or revocation, use **Pair again**
+   for the existing device in **Settings → Devices**. Do not create a new device
+   code for that recovery.
 3. Return to the meeting tab and start from the popup. The popup and control page
    can close while the offscreen capture and upload continue.
 4. Stop from the popup or control page. The client waits for the final local
@@ -57,8 +60,12 @@ to that web URL. Result links must match the pinned web root and the exact
 
 If Chrome server access is removed, audio stays local. **Retry upload** asks for
 access to that recording's original server before resuming. If the server token
-was revoked, retained audio is not sent under another device or endpoint; the
-recording can be discarded explicitly.
+expires or is revoked, use **Pair again** for the existing device in **Settings →
+Devices**; same-binding retained uploads resume without repointing the recording.
+An interrupted recording remains in local history and does not block that repair.
+If a wrong new-device code causes a 404, the audio remains local; pair the
+existing device and retry. The client never silently discards or rebinds it to a
+different endpoint.
 
 The receipt ends extension work. The client does not poll transcript or meeting
 notes processing. Those results remain in the ASR Studio web app.

@@ -31,6 +31,7 @@ import {
   patchSession,
   purgeDiscardedCaptures
 } from "./db.js";
+import { pairingGuard, uploadStateForError } from "./recovery-core.js";
 
 const STORAGE_NAMESPACE = "asr-extension-production-v1";
 const TRUSTED_CONTEXTS = `${STORAGE_NAMESPACE}:trusted-contexts`;
@@ -160,7 +161,7 @@ async function setMicSetup(selectedDeviceId) {
 function publicErrorForRemote(status) {
   if (status === 401) return ["auth_expired", "The backend token expired or was revoked."];
   if (status === 403) return ["forbidden", "The backend rejected this extension origin."];
-  if (status === 404) return ["not_found", "The backend session is not available to this device."];
+  if (status === 404) return ["not_found", "The backend session is not available to this device. Use Pair again for the existing device in Settings → Devices; retained audio stays local."];
   if (status === 408) return ["timeout", "The backend request timed out."];
   if (status === 409) return ["conflict", "The backend rejected a replay or state conflict."];
   if (status === 429) return ["backend_unavailable", "The ASR Studio backend is unavailable."];
@@ -243,18 +244,14 @@ async function pendingAudioExists() {
 
 async function pairWithServer(serverUrl, code) {
   const normalized = normalizeServerUrl(serverUrl);
-  const existing = await getCurrentContext();
   const pending = await pendingAudioSessions();
-  if (pending.length && (!existing || existing.binding.serverUrl !== normalized)) {
-    throw makeError("url_locked", "The server URL cannot change while capture bytes are pending.");
-  }
-  if (pending.length) {
-    throw makeError("pair_locked", "Pairing cannot replace the active device while capture bytes are pending.");
-  }
-  await setServerUrl(normalized);
+  const preliminaryGuard = pairingGuard(pending, normalized);
+  if (preliminaryGuard) throw makeError(preliminaryGuard.code, preliminaryGuard.message);
 
   const capabilitiesResponse = await fetchJson(normalized, "api/extension/v1/capabilities");
   const binding = bindingFromCapabilities(normalized, capabilitiesResponse.body);
+  const bindingGuard = pairingGuard(pending, normalized, binding);
+  if (bindingGuard) throw makeError(bindingGuard.code, bindingGuard.message);
   const deviceId = await getDeviceId();
   const pairResponse = await requestJson(normalized, "api/extension/v1/pair", "POST", { code, device_id: deviceId });
   const payload = pairResponse.body;
@@ -264,6 +261,7 @@ async function pairWithServer(serverUrl, code) {
     throw makeError("protocol_mismatch", "The pairing response is invalid.");
   }
 
+  await setServerUrl(normalized);
   const key = contextKey(binding);
   const stored = await storageGet(TRUSTED_CONTEXTS);
   const contexts = { ...(stored[TRUSTED_CONTEXTS] || {}) };
@@ -275,6 +273,7 @@ async function pairWithServer(serverUrl, code) {
   };
   await storageSet({ [TRUSTED_CONTEXTS]: contexts, [ACTIVE_CONTEXT]: key });
   sessionTokens.delete(key);
+  void resumeUploads().catch(() => {});
   return contextPublic(contexts[key]);
 }
 
@@ -780,7 +779,7 @@ async function uploadSession(sessionId) {
       session = await submitFinalize(session, context);
       return await pollRemoteStatus(session, context);
     } catch (error) {
-      const state = error.code === "pair_required" || error.code === "binding_locked" ? "needs_reconnect" : error.code === "auth_expired" ? "auth_required" : error.code === "receipt_mismatch" || error.code === "invalid_result_url" ? "receipt_mismatch" : isRetryable(error) ? "retryable" : "failed";
+      const state = uploadStateForError(error, isRetryable(error));
       try {
         session = await patchSession(sessionId, "upload", {
           state,
