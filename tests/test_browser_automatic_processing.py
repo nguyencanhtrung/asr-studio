@@ -6,6 +6,7 @@ import sqlite3
 import uuid
 
 import pytest
+from notes_helpers import seed_cited_notes
 from playwright.sync_api import expect
 from test_browser_history import live as live  # noqa: F401
 from test_browser_history import open_page  # noqa: F401
@@ -107,6 +108,62 @@ def test_cancel_success_restores_focus_and_cannot_resurrect_workflow(live, signe
     expect(page.locator("#automatic-processing-cancel")).to_be_hidden()
     expect(page.locator("#automatic-processing-title")).to_be_focused()
     expect(page.locator("#status-transcript")).to_have_attribute("data-state", "warning")
+    context.close()
+
+
+def test_manual_generation_and_notes_revision_keep_history_status_over_waiting_automatic_workflow(
+    live, signed_in
+):
+    meeting_id = _seed_ready_processing_meeting(live, "Manual status precedence")
+    source_meeting_id, _revision, _snapshot, _segments = seed_cited_notes(
+        live.settings.data_dir, title="Manual status source"
+    )
+    context, page = signed_in(viewport={"width": 1024, "height": 860})
+    source_meeting = context.request.get(f"{live.url}/api/meetings/{source_meeting_id}").json()
+    source_notes = context.request.get(f"{live.url}/api/meetings/{source_meeting_id}/notes").json()
+    for revision in source_notes["revisions"]:
+        revision["meeting_id"] = meeting_id
+
+    def meeting_with_manual_result(route):
+        payload = route.fetch().json()
+        payload["transcription"] = {**source_meeting["transcription"], "task": None}
+        route.fulfill(json=payload)
+
+    context.route(f"{live.url}/api/meetings/{meeting_id}", meeting_with_manual_result)
+    context.route(
+        f"{live.url}/api/meetings/{meeting_id}/notes",
+        lambda route: route.fulfill(json=source_notes),
+    )
+    page = open_page(context, live, f"/meetings/{meeting_id}")
+    expect(page.locator("#status-transcript")).to_have_attribute("data-state", "done")
+    expect(page.locator("#status-notes")).to_have_attribute("data-state", "done")
+    context.close()
+
+
+def test_active_manual_notes_status_keeps_history_status_over_waiting_automatic_workflow(
+    live, signed_in
+):
+    meeting_id = _seed_ready_processing_meeting(live, "Active manual notes status")
+    source_meeting_id, _revision, _snapshot, _segments = seed_cited_notes(
+        live.settings.data_dir, title="Active notes source"
+    )
+    context, page = signed_in(viewport={"width": 1024, "height": 860})
+    source_meeting = context.request.get(f"{live.url}/api/meetings/{source_meeting_id}").json()
+    source_notes = context.request.get(f"{live.url}/api/meetings/{source_meeting_id}/notes").json()
+    source_notes["task"] = {**source_notes["task"], "status": "running"}
+
+    def meeting_with_manual_task(route):
+        payload = route.fetch().json()
+        payload["transcription"] = {**source_meeting["transcription"], "task": None}
+        route.fulfill(json=payload)
+
+    context.route(f"{live.url}/api/meetings/{meeting_id}", meeting_with_manual_task)
+    context.route(
+        f"{live.url}/api/meetings/{meeting_id}/notes",
+        lambda route: route.fulfill(json=source_notes),
+    )
+    page = open_page(context, live, f"/meetings/{meeting_id}")
+    expect(page.locator("#status-notes")).to_have_attribute("data-state", "active")
     context.close()
 
 

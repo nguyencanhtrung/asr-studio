@@ -207,6 +207,8 @@ Các thao tác sửa metadata/gán speaker là hành vi bổ sung sau prototype,
 | Xóa cuộc họp | Hộp thoại nêu tên cuộc họp, nút giữ lại/xóa; cuộc họp đang có tác vụ phải hủy và chờ backend xác nhận đã dừng trước khi xóa. Xóa dữ liệu ứng dụng quản lý theo đặc tả, không xóa file nguồn bên ngoài |
 | Lưu/copy/xuất | Phản hồi thành công hoặc lỗi rõ ràng; không báo đã lưu thành công trước khi backend xác nhận |
 
+**Thứ bậc dải trạng thái.** Nếu cuộc họp có tác vụ transcript thủ công, thế hệ transcript thủ công hiện tại, hoặc Notes đang chạy/đã có bản lưu (trạng thái hay số bản), dải **Bản ghi · Transcript · Notes** giữ kết quả thủ công và không để workflow tự động che mất. Workflow tự động đã hủy chỉ hiện cảnh báo hủy khi không có task, thế hệ hay bản Notes thủ công để hiển thị; workflow đã hoàn tất hoặc đã bị đánh dấu xóa không tự giành lại dải trạng thái. Trường hợp chưa có transcript, nút xác nhận ghi rõ **Xác nhận thông tin cuộc họp**, dòng phụ nêu phiên bản metadata, và thông báo thành công nói ASR sẽ chép lời bản ghi gốc.
+
 Giữ lời nhắc trong form nhập: **Transcript giữ nguyên ngôn ngữ đã nói. Meeting notes viết bằng ngôn ngữ đầu ra đã chọn (English hoặc Tiếng Việt).** Định dạng và giới hạn file phải phản ánh khả năng backend đã công bố; không lấy `audio/*,video/*` trong prototype làm cam kết hỗ trợ mọi codec.
 
 QR/link truy cập được cung cấp từ terminal. Không hiển thị token dùng chung hoặc cơ chế tự cấp quyền ở trang chưa xác thực. Chi tiết theo [ADR về token](adr/0002-localhost-reusable-token.md); không bổ sung tài khoản/mật khẩu hoặc quản lý nhiều người dùng trong v1.

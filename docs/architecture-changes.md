@@ -2539,6 +2539,15 @@ does not rerun ASR. Existing manual transcript and Notes routes continue to
 create and retain manual revisions. The authenticated asset allowlist serves
 the processing core modules used by the workspace shell.
 
+Current-source adoption also covers the pre-transcript metadata-only state with
+a paired null generation/source revision. It requires the current metadata and
+Notes-source revisions, starts a fresh viable ASR attempt against the original
+recording, and does not create a Notes snapshot until ASR publishes a
+generation. Existing transcript adoption remains Notes-only. The history status
+strip gives manual transcript tasks/generations and Notes status/revisions
+precedence; a canceled automatic warning is retained only when no manual result
+exists.
+
 **Evidence and limits.** Backend fault tests cover ready handoff rollback,
 idempotent/restarted admission, slot serialization, worker/model/provider
 waiting, late cancellation/deletion fences, source/account/version changes,
@@ -2566,17 +2575,17 @@ pending action.
 
 The authenticated asset routes include both processing core modules. Browser
 regressions cover successful and failed preference saves in English and
-Vietnamese under light and dark themes, plus cancellation and stale-action
-focus. `tests/test_browser_automatic_processing.py` passed seven cases after
-correcting translation-object rendering and save-focus recovery. The matching
-pure-core and shell-view checks passed 25 cases. Internal source identifiers
-remain in API requests; the meeting UI shows readable content and meeting
-information revisions.
+Vietnamese under light and dark themes, plus cancellation, metadata-only
+confirmation, manual transcript/Notes precedence, and stale-action focus.
+Internal source identifiers remain in API requests; the meeting UI shows
+readable content and meeting-information revisions.
 
 The UI reads the standalone processing endpoint when a meeting response lacks
 its additive processing field, preserving manual-meeting compatibility without
 maintaining a second workflow state. No provider fallback or implicit ASR rerun
-is introduced. See [automatic processing](extension-automatic-processing.md).
+is introduced. Metadata-only confirmation is labeled separately from transcript
+source adoption, and the canceled-workflow exception is limited to meetings
+without a manual task, generation, or Notes result. See [automatic processing](extension-automatic-processing.md).
 
 Settings adoption uses the same provider-effort resolution as task admission:
 Antigravity's supported `default` matches its resolved `high` recipe, while a
