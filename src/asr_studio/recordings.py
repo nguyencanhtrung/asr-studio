@@ -25,6 +25,7 @@ from asr_studio.storage import database_path
 
 _UPLOAD_KEY_RE = re.compile(r"uploads/[0-9a-f]{32}\.part\Z")
 _AUDIO_KEY_RE = re.compile(r"recordings/[0-9a-f]{32}\.m4a\Z")
+_EXTENSION_AUDIO_KEY_RE = re.compile(r"extension-derivatives/[0-9a-f]{32}\.m4a\Z")
 _FILENAME_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 STALE_UPLOAD_SECONDS = 24 * 60 * 60
 REDACTED_UPLOAD_FILENAME = "removed-upload"
@@ -76,7 +77,11 @@ def _ensure_private_directory(path: Path) -> None:
 
 
 def _path_for_key(data_dir: Path, key: str) -> Path:
-    if _UPLOAD_KEY_RE.fullmatch(key) or _AUDIO_KEY_RE.fullmatch(key):
+    if (
+        _UPLOAD_KEY_RE.fullmatch(key)
+        or _AUDIO_KEY_RE.fullmatch(key)
+        or _EXTENSION_AUDIO_KEY_RE.fullmatch(key)
+    ):
         return Path(data_dir) / key
     raise RecordingError(500, "storage_unavailable", "Recording storage is unavailable.")
 
@@ -568,8 +573,13 @@ def create_meeting(
         connection.execute("BEGIN IMMEDIATE")
         existing = connection.execute(
             "SELECT meetings.*, recordings.id AS recording_id, recordings.upload_id, "
-            "recordings.storage_key, recordings.content_type, recordings.duration_seconds "
+            "recordings.extension_session_id, recordings.storage_key, recordings.content_type, "
+            "recordings.duration_seconds, sessions.state AS extension_state, "
+            "sessions.error_code AS extension_error_code, "
+            "sessions.error_message AS extension_error_message "
             "FROM recordings JOIN meetings ON meetings.id = recordings.meeting_id "
+            "LEFT JOIN extension_recording_sessions AS sessions "
+            "ON sessions.id = recordings.extension_session_id "
             "WHERE recordings.upload_id = ?",
             (upload_id,),
         ).fetchone()
@@ -622,8 +632,13 @@ def create_meeting(
             raise RecordingError(409, "upload_not_ready", "Upload state changed.")
         row = connection.execute(
             "SELECT meetings.*, recordings.id AS recording_id, recordings.upload_id, "
-            "recordings.storage_key, recordings.content_type, recordings.duration_seconds "
+            "recordings.extension_session_id, recordings.storage_key, recordings.content_type, "
+            "recordings.duration_seconds, sessions.state AS extension_state, "
+            "sessions.error_code AS extension_error_code, "
+            "sessions.error_message AS extension_error_message "
             "FROM recordings JOIN meetings ON meetings.id = recordings.meeting_id "
+            "LEFT JOIN extension_recording_sessions AS sessions "
+            "ON sessions.id = recordings.extension_session_id "
             "WHERE meetings.id = ?",
             (meeting_id,),
         ).fetchone()
@@ -635,6 +650,29 @@ def _meeting_summary(row: sqlite3.Row) -> dict[str, object]:
     meeting_id = row["id"]
     deletion_requested_at = row["deletion_requested_at"]
     deletion_error_code = row["deletion_error_code"]
+    extension_session_id = row["extension_session_id"]
+    artifact_state = row["extension_state"] if extension_session_id is not None else "ready"
+    artifact_error_code = row["extension_error_code"] if extension_session_id is not None else None
+    artifact_error_message = (
+        row["extension_error_message"] if extension_session_id is not None else None
+    )
+    recording: dict[str, object] = {
+        "id": row["recording_id"],
+        "duration_seconds": row["duration_seconds"],
+        "content_type": row["content_type"],
+        "state": artifact_state,
+        "source": "extension" if extension_session_id is not None else "upload",
+        "audio_url": (
+            f"/api/meetings/{meeting_id}/audio"
+            if artifact_state == "ready" and row["storage_key"] is not None
+            else None
+        ),
+    }
+    if artifact_error_code is not None:
+        recording["error"] = {
+            "code": artifact_error_code,
+            "message": artifact_error_message,
+        }
     return {
         "id": meeting_id,
         "meeting_url": f"/meetings/{meeting_id}",
@@ -648,12 +686,7 @@ def _meeting_summary(row: sqlite3.Row) -> dict[str, object]:
         if deletion_requested_at
         else None,
         "deletion_error_code": deletion_error_code,
-        "recording": {
-            "id": row["recording_id"],
-            "duration_seconds": row["duration_seconds"],
-            "content_type": row["content_type"],
-            "audio_url": f"/api/meetings/{meeting_id}/audio",
-        },
+        "recording": recording,
     }
 
 
@@ -661,8 +694,13 @@ def get_meeting(data_dir: Path, meeting_id: str) -> dict[str, object]:
     with _connect(data_dir) as connection:
         row = connection.execute(
             "SELECT meetings.*, recordings.id AS recording_id, recordings.upload_id, "
-            "recordings.storage_key, recordings.content_type, recordings.duration_seconds "
+            "recordings.extension_session_id, recordings.storage_key, recordings.content_type, "
+            "recordings.duration_seconds, sessions.state AS extension_state, "
+            "sessions.error_code AS extension_error_code, "
+            "sessions.error_message AS extension_error_message "
             "FROM meetings JOIN recordings ON recordings.meeting_id = meetings.id "
+            "LEFT JOIN extension_recording_sessions AS sessions "
+            "ON sessions.id = recordings.extension_session_id "
             "WHERE meetings.id = ?",
             (meeting_id,),
         ).fetchone()
@@ -687,6 +725,9 @@ def get_meeting(data_dir: Path, meeting_id: str) -> dict[str, object]:
 def _history_item(row: sqlite3.Row) -> dict[str, object]:
     deletion_requested_at = row["deletion_requested_at"]
     deletion_error_code = row["deletion_error_code"]
+    extension_session_id = row["extension_session_id"]
+    artifact_state = row["extension_state"] if extension_session_id is not None else "ready"
+    artifact_error_code = row["extension_error_code"] if extension_session_id is not None else None
     return {
         "id": row["id"],
         "meeting_url": f"/meetings/{row['id']}",
@@ -694,6 +735,9 @@ def _history_item(row: sqlite3.Row) -> dict[str, object]:
         "meeting_date": row["meeting_date"],
         "metadata_version": row["metadata_version"],
         "duration_seconds": row["duration_seconds"],
+        "recording_state": artifact_state,
+        "recording_source": "extension" if extension_session_id is not None else "upload",
+        "recording_error_code": artifact_error_code,
         "deletion_status": ("failed" if deletion_error_code else "pending")
         if deletion_requested_at
         else None,
@@ -713,8 +757,12 @@ def list_meetings(data_dir: Path, *, query: str | None = None) -> dict[str, obje
         rows = connection.execute(
             "SELECT meetings.id, meetings.title, meetings.meeting_date, "
             "meetings.metadata_version, meetings.deletion_requested_at, "
-            "meetings.deletion_error_code, recordings.duration_seconds "
+            "meetings.deletion_error_code, recordings.extension_session_id, "
+            "recordings.duration_seconds, sessions.state AS extension_state, "
+            "sessions.error_code AS extension_error_code "
             "FROM meetings JOIN recordings ON recordings.meeting_id = meetings.id "
+            "LEFT JOIN extension_recording_sessions AS sessions "
+            "ON sessions.id = recordings.extension_session_id "
             "ORDER BY meetings.meeting_date IS NULL, meetings.meeting_date DESC, "
             "meetings.created_at DESC, meetings.rowid DESC"
         ).fetchall()
@@ -794,11 +842,31 @@ def update_meeting(
 def get_audio_recording(data_dir: Path, meeting_id: str) -> dict[str, object]:
     with _connect(data_dir) as connection:
         row = connection.execute(
-            "SELECT id, storage_key, content_type FROM recordings WHERE meeting_id = ?",
+            "SELECT recordings.id, recordings.storage_key, recordings.content_type, "
+            "recordings.duration_seconds, recordings.extension_session_id, "
+            "sessions.state AS extension_state, sessions.error_code AS extension_error_code, "
+            "sessions.error_message AS extension_error_message "
+            "FROM recordings LEFT JOIN extension_recording_sessions AS sessions "
+            "ON sessions.id = recordings.extension_session_id WHERE recordings.meeting_id = ?",
             (meeting_id,),
         ).fetchone()
     if row is None:
         raise RecordingError(404, "meeting_not_found", "Meeting recording not found.")
+    if row["extension_session_id"] is not None and (
+        row["extension_state"] != "ready"
+        or any(
+            row[column] is None for column in ("storage_key", "content_type", "duration_seconds")
+        )
+    ):
+        raise RecordingError(
+            409,
+            "recording_not_ready",
+            "The recording is not ready for playback yet. Retry after media finalization.",
+            details={
+                "state": row["extension_state"],
+                "error_code": row["extension_error_code"],
+            },
+        )
     return {
         "id": row["id"],
         "storage_key": row["storage_key"],

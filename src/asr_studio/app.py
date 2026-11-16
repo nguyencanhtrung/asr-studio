@@ -20,6 +20,7 @@ from asr_studio.auth import AuthStateError, AuthStore, session_is_valid
 from asr_studio.chatgpt import ChatGPTAdapter, ChatGPTHTTPAdapter, ChatGPTProvider
 from asr_studio.config import CHATGPT_CALLBACK_PATH, Settings
 from asr_studio.extension_auth import EXTENSION_ID, ExtensionAuthService
+from asr_studio.extension_ingest import ExtensionIngestWorker, recover_extension_ingest
 from asr_studio.extension_routes import install_extension_routes
 from asr_studio.meeting_deletion import recover_pending_meeting_deletions
 from asr_studio.notes import assert_provider_mutation_allowed
@@ -108,8 +109,10 @@ def _extension_response(
     response = _with_security_headers(response)
     if _extension_origin_is_expected(request.headers.get("origin")):
         response.headers["Access-Control-Allow-Origin"] = EXTENSION_ORIGIN
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, X-Chunk-Offset, X-Chunk-SHA256, X-Writer-Epoch"
+        )
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
         response.headers["Access-Control-Max-Age"] = "300"
         response.headers.add_vary_header("Origin")
     return response
@@ -152,6 +155,7 @@ def create_app(
         runtime_settings.extension_server_urls,
         auth_dir=runtime_settings.auth_dir,
     )
+    extension_ingest_worker = ExtensionIngestWorker(runtime_settings)
     provider_dir = runtime_settings.provider_dir
     if provider_dir is None:
         raise ValueError("ASR_PROVIDER_DIR could not be resolved")
@@ -187,9 +191,14 @@ def create_app(
             antigravity_provider.ensure()
             initialize(runtime_settings.data_dir)
             extension_auth.ensure()
+            recover_extension_ingest(runtime_settings.data_dir)
             recover_recordings(runtime_settings.data_dir)
             recover_pending_meeting_deletions(runtime_settings.data_dir)
-            yield
+            extension_ingest_worker.start()
+            try:
+                yield
+            finally:
+                extension_ingest_worker.stop()
         finally:
             os.umask(previous_umask)
 
@@ -203,6 +212,7 @@ def create_app(
     )
     app.state.auth_store = auth_store
     app.state.extension_auth = extension_auth
+    app.state.extension_ingest_worker = extension_ingest_worker
     app.state.settings = runtime_settings
     app.state.chatgpt_provider = chatgpt_provider
     app.state.antigravity_provider = antigravity_provider
@@ -241,8 +251,16 @@ def create_app(
                 }
                 if (
                     not _extension_origin_is_expected(origin)
-                    or requested_method not in {"GET", "POST"}
-                    or not requested_headers.issubset({"authorization", "content-type"})
+                    or requested_method not in {"GET", "POST", "PUT"}
+                    or not requested_headers.issubset(
+                        {
+                            "authorization",
+                            "content-type",
+                            "x-chunk-offset",
+                            "x-chunk-sha256",
+                            "x-writer-epoch",
+                        }
+                    )
                 ):
                     return _extension_error(
                         request,

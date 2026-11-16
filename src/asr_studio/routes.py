@@ -34,6 +34,7 @@ from asr_studio.asr_models import (
 from asr_studio.auth import AuthStateError, create_session_cookie, token_matches
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
 from asr_studio.config import Settings
+from asr_studio.extension_ingest import ExtensionIngestError, retry_recording_session
 from asr_studio.media import ALLOWED_EXTENSIONS, OUTPUT_BITRATE, OUTPUT_CODEC
 from asr_studio.meeting_deletion import MeetingDeletionError, delete_meeting
 from asr_studio.model_install import InstallStore
@@ -169,6 +170,13 @@ def _raise_meeting_deletion_error(error: MeetingDeletionError) -> None:
     raise HTTPException(
         status_code=error.status_code,
         detail={"code": error.code, "message": error.message},
+    ) from None
+
+
+def _raise_extension_ingest_error(error: ExtensionIngestError) -> None:
+    raise HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message, **error.details},
     ) from None
 
 
@@ -985,6 +993,20 @@ def install_routes(
             return await run_in_threadpool(delete_meeting, settings.data_dir, meeting_id)
         except MeetingDeletionError as error:
             _raise_meeting_deletion_error(error)
+
+    @app.post("/api/meetings/{meeting_id}/recording/retry", status_code=202)
+    async def retry_meeting_recording(meeting_id: str) -> dict[str, object]:
+        worker = getattr(app.state, "extension_ingest_worker", None)
+        enqueue = worker.enqueue if worker is not None else None
+        try:
+            return await run_in_threadpool(
+                retry_recording_session,
+                settings.data_dir,
+                meeting_id,
+                enqueue=enqueue,
+            )
+        except ExtensionIngestError as error:
+            _raise_extension_ingest_error(error)
 
     @app.get("/api/meetings/{meeting_id}")
     async def read_meeting(meeting_id: str) -> dict[str, object]:

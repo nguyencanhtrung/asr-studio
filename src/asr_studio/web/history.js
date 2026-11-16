@@ -23,6 +23,8 @@ import {
   initialState,
   parseKey,
   reduce,
+  recordingInfo,
+  recordingReady,
   selectCalendar,
   selectDeletion,
   selectEditor,
@@ -144,7 +146,7 @@ function shownNow() {
     installRev: state.installRev,
     generation: Boolean(generation),
     generationLanguage: generation ? generation.language_hint : null,
-    blocked: coreSourceMutationUnavailable(state),
+    blocked: coreSourceMutationUnavailable(state) || !recordingReady(meeting),
     tab: state.tab,
     generationId: onScreen ? onScreen.id : null,
     // The playback slice reasons about the rows on the page: those of the generation whose list is painted.
@@ -243,6 +245,8 @@ const render = ((memory) => (root) => {
   const tabFirst = s.installRev === p.installRev && s.tab !== p.tab && s.view === "meeting" && p.view === "meeting";
   if (tabFirst) renderTabs(s);
   if (s.paintRev !== p.paintRev && s.meeting) renderMeeting(s.meeting);
+  else if (s.installRev !== p.installRev && s.meeting) renderRecordingStatus(s.meeting, s);
+  if (s.recordingRefresh !== p.recordingRefresh && s.meeting) renderRecordingStatus(s.meeting, s);
   // A task answer repaints the transcription unless the meeting was painted above anyway.
   const painted = (s.paintRev !== p.paintRev && s.meeting) || s.installRev !== p.installRev || s.lockRev !== p.lockRev;
   if (taskRev && !painted) repaintTranscription();
@@ -307,15 +311,28 @@ function renderMeeting(meeting) {
   if (date.dateTime) dateElement.setAttribute("datetime", date.dateTime);
   else dateElement.removeAttribute("datetime");
   $("#meeting-language").textContent = tr(LANGUAGES[meeting.language_hint]);
+  renderRecordingStatus(meeting, nav());
   renderTranscription(meeting.transcription);
 }
 
 function loadAudio(meeting) {
   const audio = $("#meeting-audio");
-  if (audio.dataset.meetingId === meeting.id) return;
-  const audioUrl = meeting.audio_url || (meeting.recording && meeting.recording.audio_url);
-  audio.src = sameOriginAudioSource(audioUrl, meeting.id);
+  const player = $(".player-bar");
+  const info = recordingInfo(meeting);
+  const audioUrl = info.playable ? sameOriginAudioSource(info.audioUrl, meeting.id) : "";
+  const audioKey = `${meeting.id}:${info.playable ? audioUrl : "unavailable"}`;
+  player.hidden = !info.playable;
+  audio.controls = info.playable;
   audio.dataset.meetingId = meeting.id;
+  if (audio.dataset.audioKey === audioKey) return;
+  audio.dataset.audioKey = audioKey;
+  if (info.playable) {
+    audio.src = audioUrl;
+    audio.removeAttribute("aria-disabled");
+  } else {
+    audio.removeAttribute("src");
+    audio.setAttribute("aria-disabled", "true");
+  }
   audio.load();
 }
 
@@ -432,21 +449,32 @@ function renderSidebar(s) {
 }
 
 function meetingLink(meeting, className) {
+  const info = recordingInfo(meeting);
   const link = document.createElement("a");
   link.className = className;
   link.href = `/meetings/${encodeURIComponent(meeting.id)}`;
   link.dataset.meetingLink = meeting.id;
   link.title = meeting.title;
-  link.setAttribute("aria-label", meeting.title);
+  const sourceState = info.source === "extension"
+    ? t("{source} · {status}", { source: tr(info.sourceLabel), status: tr(info.statusLabel) })
+    : "";
+  link.setAttribute("aria-label", sourceState ? `${meeting.title} · ${sourceState}` : meeting.title);
   const title = document.createElement("span");
   title.className = "link-title";
   title.textContent = meeting.title;
   const date = document.createElement("span");
   date.className = "link-date";
   const parts = [meeting.meeting_date ? displayDate(meeting.meeting_date) : t("Chưa đặt ngày")];
-  if (meeting.duration_seconds > 0) parts.push(tr(formatRecordingDuration(meeting.duration_seconds)));
+  if (info.ready && info.durationSeconds !== null) parts.push(tr(formatRecordingDuration(info.durationSeconds)));
   date.textContent = parts.join(" · ");
   link.append(title, date);
+  if (info.source === "extension") {
+    const recordingState = document.createElement("span");
+    recordingState.className = "meeting-link-recording-state";
+    recordingState.dataset.state = info.state;
+    recordingState.textContent = sourceState;
+    link.append(recordingState);
+  }
   if (meeting.deletion_status) {
     const deletionState = document.createElement("span");
     deletionState.className = "meeting-link-deletion-state";
@@ -855,15 +883,81 @@ function setStatusItem(id, name, value, itemState) {
   item.lastElementChild.textContent = `${name} · ${value}`;
 }
 
+function renderRecordingStatus(meeting, state = nav()) {
+  const info = recordingInfo(meeting);
+  const refresh = state.recordingRefresh && state.recordingRefresh.meetingId === meeting.id
+    ? state.recordingRefresh
+    : { pending: false, error: null };
+  const retryState = state.recordingRetry && state.recordingRetry.meetingId === meeting.id
+    ? state.recordingRetry
+    : { pending: false, error: null };
+  const sourceText = t("Nguồn cuộc họp · {source}", { source: tr(info.sourceLabel) });
+  $("#recording-source").textContent = sourceText;
+
+  const status = $("#recording-status");
+  const retrying = Boolean(retryState.pending);
+  const checking = Boolean(refresh.pending);
+  const busy = retrying || checking;
+  const retryError = retryState.error;
+  const refreshError = refresh.error;
+  const announcesStatus = busy || !info.ready || Boolean(retryError) || Boolean(refreshError);
+  if (announcesStatus) {
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+  } else {
+    status.removeAttribute("role");
+    status.removeAttribute("aria-live");
+  }
+  const message = retrying
+    ? t("Đang yêu cầu xử lý lại bản ghi…")
+    : checking
+      ? t("Đang kiểm tra trạng thái bản ghi…")
+      : retryError || refreshError || info.statusMessage;
+  status.hidden = info.ready && !busy && !retryError && !refreshError;
+  status.dataset.state = busy ? "active" : retryError || refreshError ? "problem" : info.statusState;
+  status.setAttribute("aria-busy", busy ? "true" : "false");
+  $("#recording-status-message").textContent = tr(message);
+
+  const errorCode = $("#recording-error-code");
+  errorCode.textContent = info.errorCode;
+  $("#recording-status-error").hidden = !info.errorCode;
+
+  const retryButton = $("#recording-status-retry");
+  const canRetry = info.retryable;
+  const canRefresh = info.refreshable;
+  retryButton.hidden = !canRetry && !canRefresh;
+  retryButton.disabled = busy;
+  retryButton.dataset.action = canRetry ? "retry" : canRefresh ? "refresh" : "";
+  retryButton.textContent = retrying
+    ? t("Đang xử lý lại…")
+    : checking
+      ? t("Đang kiểm tra trạng thái bản ghi…")
+      : canRetry ? t("Thử xử lý lại") : t("Tải lại trạng thái");
+
+  if (retryButton.dataset.focusRecovery) {
+    const active = document.activeElement;
+    if (retryButton.dataset.focusRecovery !== meeting.id || (active && active !== document.body && active !== document.documentElement && active !== retryButton)) {
+      delete retryButton.dataset.focusRecovery;
+    } else if (!busy) {
+      delete retryButton.dataset.focusRecovery;
+      const target = retryButton.hidden ? $("#meeting-title") : retryButton;
+      if (active !== target) target.focus({ preventScroll: true });
+    }
+  }
+}
+
 // The header strip: one short line per stage. The words carry the state; the dot only repeats it.
 function renderMeetingProcessingStatus(task, generation) {
   const meeting = nav().meeting;
-  const seconds = Number(meeting && meeting.recording && meeting.recording.duration_seconds);
+  const info = recordingInfo(meeting);
+  renderRecordingStatus(meeting, nav());
   setStatusItem(
     "recording",
     t("Bản ghi"),
-    seconds > 0 ? t("Đã lưu · {duration}", { duration: tr(formatRecordingDuration(seconds)) }) : t("Đã lưu"),
-    "done",
+    info.ready && info.durationSeconds !== null
+      ? t("Đã lưu · {duration}", { duration: tr(formatRecordingDuration(info.durationSeconds)) })
+      : tr(info.statusLabel),
+    info.statusState,
   );
 
   const transcriptEnd = task && Object.hasOwn(RUN_END_LABELS, task.status) ? task.status : null;
@@ -1573,6 +1667,7 @@ function buildSegmentRow(generation, segment, editable) {
     "aria-label",
     t("Phát bản ghi từ {time}", { time: formatTimestamp(segment.start_seconds) }),
   );
+  timestamp.disabled = !recordingReady(nav().meeting);
 
   const head = document.createElement("div");
   head.className = "segment-head";
@@ -1733,6 +1828,7 @@ function audioFacts() {
 
 // The command of the effect `playback.seek`: the answer is the audio as it is now.
 function seekAudio(seconds) {
+  if (!recordingReady(nav().meeting)) return audioFacts();
   $("#meeting-audio").currentTime = seconds;
   return audioFacts();
 }
@@ -1803,7 +1899,7 @@ function markNotesSource(segmentId, startSeconds) {
 // Start the recording where it is, but only while its player is on screen: the Transcript tab. A browser
 // may also refuse without a recent gesture, which is not an error.
 async function playRecording() {
-  if (!canPlay(shownNow())) return false;
+  if (!recordingReady(nav().meeting) || !canPlay(shownNow())) return false;
   const audio = $("#meeting-audio");
   try {
     await audio.play();
@@ -2308,6 +2404,7 @@ function renderTaskProgress(progress, task) {
 
 function renderTranscription(transcription) {
   const meeting = nav().meeting;
+  const recording = recordingInfo(meeting);
   const task = transcription && transcription.task;
   const generation = transcription && transcription.generation;
   const view = selectTask(store.getState().task, shownNow());
@@ -2321,7 +2418,7 @@ function renderTranscription(transcription) {
   renderRuntimeProfile(transcription && transcription.runtime);
 
   startButton.hidden = view.active;
-  startButton.disabled = view.requestBusy || sourceMutationUnavailable() || Boolean(view.model && view.model.blocked);
+  startButton.disabled = view.requestBusy || sourceMutationUnavailable() || !recording.ready || Boolean(view.model && view.model.blocked);
   startButton.textContent = generation ? t("Chạy lại") : t("Chép lời");
   // The first run is the decisive action; running again over a transcript is not.
   startButton.classList.toggle("primary-button", !generation);
@@ -2336,11 +2433,13 @@ function renderTranscription(transcription) {
   // With the button off, the model guidance says what to do: do not also invite a click on it.
   const modelBlocked = Boolean(view.model && view.model.blocked);
   if (!task) {
-    $("#transcription-status").textContent = generation
-      ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
-      : modelBlocked
-        ? t("Bản ghi đã lưu.")
-        : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local.");
+    $("#transcription-status").textContent = !recording.ready
+      ? tr(recording.statusMessage)
+      : generation
+        ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
+        : modelBlocked
+          ? t("Bản ghi đã lưu.")
+          : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local.");
   } else {
     const statusText = {
       accepted: t("Tác vụ đã được nhận. Worker sẽ bắt đầu xử lý."),
@@ -2370,6 +2469,9 @@ function renderTranscription(transcription) {
   status.dataset.workerState = task && task.worker_state ? task.worker_state : "";
   status.classList.toggle("is-checking-worker", workerChecking);
   renderMeetingProcessingStatus(task, generation);
+  for (const timestamp of $("#transcript-segments").querySelectorAll("button[data-seek-seconds]")) {
+    timestamp.disabled = !recording.ready;
+  }
   if (transcriptSynced(store.getState())) paintTranscriptTail(transcription);
   notifyMeetingContext();
 }
@@ -2573,6 +2675,11 @@ $("#meeting-edit").addEventListener("submit", (event) => {
 $("#transcription-language").addEventListener("change", (event) => {
   dispatch({ type: "task/language-chosen", language: event.currentTarget.value });
 });
+$("#recording-status-retry").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  if (document.activeElement === button) button.dataset.focusRecovery = nav().meeting.id;
+  dispatch({ type: button.dataset.action === "retry" ? "history/recording-retry-clicked" : "history/recording-refresh-clicked" });
+});
 $("#transcription-model").addEventListener("change", (event) => dispatch({ type: "task/model-chosen", model: event.target.value }));
 $("#start-transcription").addEventListener("click", () => dispatch({ type: "task/start-clicked", requestId: newRequestId() }));
 $("#cancel-transcription").addEventListener("click", () => dispatch({ type: "task/cancel-clicked" }));
@@ -2743,6 +2850,7 @@ $("#transcript-segments").addEventListener("click", (event) => {
   }
   const timestamp = event.target.closest("button[data-seek-seconds]");
   if (!timestamp) return;
+  if (!recordingReady(nav().meeting)) return;
   const audio = $("#meeting-audio");
   const seconds = Number(timestamp.dataset.seekSeconds);
   if (!Number.isFinite(seconds) || seconds < 0) return;

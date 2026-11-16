@@ -12,6 +12,7 @@
 // history.replaceState leave as `call` effects.
 
 import { errorMessageForCode, isWorkspaceAuthenticationFailure, responseCode, responseMessage } from "./shell-core.js";
+import { recordingReady } from "./history-core.js";
 
 export const VIEW_MODE_KEY = "asr-studio:notes-view-mode";
 export const ACTIVE_TASK_STATES = ["accepted", "running", "stopping"];
@@ -741,6 +742,7 @@ function canStartNotes(state) {
     !meeting
     || !data
     || !generation
+    || !recordingReady(meeting)
     || transcriptionBusy(state, meeting)
     || !hasRequestVersions(meeting, generation)
     || !data.sourceLockKnown
