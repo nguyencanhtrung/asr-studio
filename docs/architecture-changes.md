@@ -2519,6 +2519,11 @@ outbox, immutable Notes source snapshots, and task-to-workflow fencing. Ready
 derivative publication creates the workflow in the caller's transaction.
 Admission inserts the task, advances the attempt/step, and claims the existing
 processing slot in that same transaction; idempotency replay is checked first.
+Automatic attempts use the namespaced key
+`auto:<workflow>:<kind>:attempt:<attempt_number>`, leaving epoch-suffixed legacy
+keys readable while preventing a later epoch from reusing one. Failed-step
+requeue uses a savepoint per row, so a malformed legacy attempt cannot abort
+admission for unrelated workflows.
 The bounded scheduler uses the existing runtime/model readiness and task
 workers, FIFO scans, a finite GUI grace window across scheduler passes and both
 automatic task kinds, and a process-lifetime service lock. Notes admission also
@@ -2554,10 +2559,10 @@ exists.
 idempotent/restarted admission, slot serialization, worker/model/provider
 waiting, late cancellation/deletion fences, source/account/version changes,
 Notes-only retry, manual revision retention, ownership fairness, Notes runner
-contract compatibility, worker readiness recovery, and authenticated
-processing-asset delivery. No live provider, inference, browser, or media
-qualification is claimed here; the production client remains a separate
-integration surface.
+contract compatibility, worker readiness recovery, legacy automatic-key retry,
+isolated malformed-step requeue, and authenticated processing-asset delivery.
+No live provider, inference, browser, or media qualification is claimed here;
+the production client remains a separate integration surface.
 
 Tag: architecture, storage, privacy. Targets:
 [`processing.py`](../src/asr_studio/processing.py),
