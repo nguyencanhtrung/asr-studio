@@ -32,7 +32,13 @@ from asr_studio.processing import (
     use_current_source,
 )
 from asr_studio.storage import database_path, initialize
-from asr_studio.tasks import claim_next_task, publish_complete_generation
+from asr_studio.tasks import (
+    accept_transcription_task,
+    cancel_task,
+    claim_next_task,
+    fail_task,
+    publish_complete_generation,
+)
 
 
 @pytest.mark.anyio
@@ -138,6 +144,40 @@ def _notes_pin(effort: str = "high") -> dict[str, object]:
     }
 
 
+def _publish_manual_transcript(
+    data_dir: Path, meeting_id: str, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, object]:
+    monkeypatch.setattr("asr_studio.tasks.prepared_engine_directory", lambda *_args: None)
+    monkeypatch.setattr("asr_studio.tasks.prepared_diarization_directory", lambda *_args: None)
+    accepted = accept_transcription_task(
+        data_dir,
+        meeting_id=meeting_id,
+        request_id="manual-source-0001",
+        model_path=Path("/models/whisper-small"),
+        language_hint="vi",
+        diarization_model_path=Path("/models/speaker-diarization-community-1"),
+        device="cpu",
+        compute_type="int8",
+        worker_ready=True,
+        asr_model="whisper-small",
+        asr_choice="whisper-small",
+    )
+    claimed = claim_next_task(data_dir, owner_id="manual-source-owner", role="transcription")
+    assert claimed is not None and claimed["id"] == accepted["id"]
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE tasks SET stage = 'publishing' WHERE id = ?", (claimed["id"],))
+    generation = publish_complete_generation(
+        data_dir,
+        claimed["id"],
+        owner_id="manual-source-owner",
+        segments=[{"id": "d" * 32, "start_seconds": 0, "end_seconds": 1, "text": "Manual."}],
+        language_probability=None,
+        elapsed_seconds=0.1,
+    )
+    assert generation is not None
+    return generation
+
+
 def _ready_notes_workflow(
     tmp_path: Path, *, effort: str = "high"
 ) -> tuple[Path, str, dict[str, object]]:
@@ -225,6 +265,13 @@ def test_ready_handoff_creates_exactly_one_waiting_workflow_without_claiming_slo
     assert state["epoch"] == 1
     assert len(state["steps"]) == 2
     assert state["steps"][0]["state"] in {"waiting", "needs_attention"}
+    transcription = next(step for step in state["steps"] if step["kind"] == "transcription")
+    assert (
+        transcription["source_generation_id"],
+        transcription["source_version"],
+        transcription["notes_source_version"],
+        transcription["metadata_version"],
+    ) == (None, None, 1, 1)
     with sqlite3.connect(database_path(data_dir)) as connection:
         assert connection.execute(
             "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
@@ -400,6 +447,168 @@ def test_automatic_transcription_replay_claim_and_atomic_late_cancel_fence(tmp_p
             duration_seconds=12.0,
         )
     assert error.value.code == "processing_epoch_changed"
+
+
+def test_automatic_admission_requires_source_confirmation_after_manual_transcript(
+    tmp_path, monkeypatch
+):
+    data_dir, meeting_id, _ = _ready_source(tmp_path)
+    _publish_manual_transcript(data_dir, meeting_id, monkeypatch)
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None and state["current_source"]["generation_id"] is not None
+    transcription = next(step for step in state["steps"] if step["kind"] == "transcription")
+    attempt = next(
+        attempt for attempt in state["attempts"] if attempt["step_id"] == transcription["id"]
+    )
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        result = admit_automatic_transcription(
+            connection,
+            workflow_id=state["id"],
+            epoch=state["epoch"],
+            request_id=attempt["request_id"],
+            request_hash=_hash(state["id"], "transcription", state["epoch"], "whisper-small"),
+            model_path=Path("/models/whisper-small"),
+            asr_model="whisper-small",
+            language_hint="vi",
+            device="cpu",
+            compute_type="int8",
+            diarization_model_path=Path("/models/speaker-diarization-community-1"),
+            duration_seconds=12.0,
+        )
+    assert result is None
+    fenced = processing_state(data_dir, meeting_id)
+    assert fenced is not None
+    assert fenced["state"] == "needs_attention"
+    fenced_step = next(step for step in fenced["steps"] if step["kind"] == "transcription")
+    assert fenced_step["state"] == "needs_attention"
+    assert fenced_step["waiting_reason"] == "source_confirmation_required"
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone() == (1,)
+
+
+def test_use_current_source_terminalizes_a_waiting_transcription_step(tmp_path, monkeypatch):
+    data_dir, meeting_id, _ = _ready_source(tmp_path)
+    _publish_manual_transcript(data_dir, meeting_id, monkeypatch)
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None and state["current_source"] is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_workflows SET state = 'needs_attention' WHERE id = ?",
+            (state["id"],),
+        )
+        connection.execute(
+            "UPDATE processing_steps SET state = 'waiting', waiting_reason = 'source_confirmation_required' "
+            "WHERE workflow_id = ? AND kind = 'transcription'",
+            (state["id"],),
+        )
+        connection.commit()
+    source = state["current_source"]
+    adopted = use_current_source(
+        data_dir,
+        meeting_id,
+        expected_epoch=state["epoch"],
+        expected_generation_id=source["generation_id"],
+        expected_source_version=source["source_version"],
+        expected_metadata_version=source["metadata_version"],
+        expected_notes_source_version=source["notes_source_version"],
+    )
+    transcription = next(step for step in adopted["steps"] if step["kind"] == "transcription")
+    assert transcription["state"] == "succeeded"
+    attempt = next(
+        attempt for attempt in adopted["attempts"] if attempt["step_id"] == transcription["id"]
+    )
+    assert attempt["state"] == "canceled"
+
+
+def test_automatic_publication_rechecks_metadata_source_and_releases_blocked_task(tmp_path):
+    data_dir, meeting_id, _ = _ready_source(tmp_path)
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    transcription = next(step for step in state["steps"] if step["kind"] == "transcription")
+    attempt = next(
+        attempt for attempt in state["attempts"] if attempt["step_id"] == transcription["id"]
+    )
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        admitted = admit_automatic_transcription(
+            connection,
+            workflow_id=state["id"],
+            epoch=state["epoch"],
+            request_id=attempt["request_id"],
+            request_hash=_hash(state["id"], "transcription", state["epoch"], "whisper-small"),
+            model_path=Path("/models/whisper-small"),
+            asr_model="whisper-small",
+            language_hint="vi",
+            device="cpu",
+            compute_type="int8",
+            diarization_model_path=Path("/models/speaker-diarization-community-1"),
+            duration_seconds=12.0,
+        )
+    assert admitted is not None
+    claimed = claim_next_task(data_dir, owner_id="publication-owner", role="transcription")
+    assert claimed is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE tasks SET stage = 'publishing' WHERE id = ?", (claimed["id"],))
+        connection.execute("UPDATE meetings SET metadata_version = 2 WHERE id = ?", (meeting_id,))
+        connection.commit()
+    assert (
+        publish_complete_generation(
+            data_dir,
+            claimed["id"],
+            owner_id="publication-owner",
+            segments=[{"id": "e" * 32, "start_seconds": 0, "end_seconds": 1, "text": "Blocked."}],
+            language_probability=None,
+            elapsed_seconds=0.1,
+        )
+        is None
+    )
+    fenced = processing_state(data_dir, meeting_id)
+    assert fenced is not None and fenced["state"] == "needs_attention"
+    assert (
+        next(step for step in fenced["steps"] if step["kind"] == "transcription")["waiting_reason"]
+        == "source_confirmation_required"
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM transcript_generations").fetchone() == (0,)
+        assert connection.execute(
+            "SELECT status FROM tasks WHERE id = ?", (claimed["id"],)
+        ).fetchone() == ("interrupted",)
+        assert connection.execute(
+            "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
+        ).fetchone() == (None,)
+
+
+def test_automatic_admission_rejects_a_nonwaiting_attempt(tmp_path):
+    data_dir, meeting_id, _ = _ready_source(tmp_path)
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    transcription = next(step for step in state["steps"] if step["kind"] == "transcription")
+    attempt = next(
+        attempt for attempt in state["attempts"] if attempt["step_id"] == transcription["id"]
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_attempts SET state = 'failed' WHERE id = ?", (attempt["id"],)
+        )
+        connection.commit()
+    with pytest.raises(ProcessingError) as error, _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        admit_automatic_transcription(
+            connection,
+            workflow_id=state["id"],
+            epoch=state["epoch"],
+            request_id=attempt["request_id"],
+            request_hash=_hash(state["id"], "transcription", state["epoch"], "whisper-small"),
+            model_path=Path("/models/whisper-small"),
+            asr_model="whisper-small",
+            language_hint="vi",
+            device="cpu",
+            compute_type="int8",
+            diarization_model_path=Path("/models/speaker-diarization-community-1"),
+            duration_seconds=12.0,
+        )
+    assert error.value.code == "processing_attempt_changed"
 
 
 def test_successful_transcript_freezes_source_and_notes_retry_reuses_it(tmp_path):
@@ -591,6 +800,42 @@ def test_automatic_notes_rejects_changed_effort_until_settings_are_adopted(tmp_p
         ).fetchone() == ("low",)
 
 
+def test_settings_adoption_replaces_a_terminal_notes_attempt(tmp_path):
+    data_dir, meeting_id, state = _ready_notes_workflow(tmp_path, effort="high")
+    notes_step = next(step for step in state["steps"] if step["kind"] == "notes")
+    notes_attempt = next(
+        attempt for attempt in state["attempts"] if attempt["step_id"] == notes_step["id"]
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_attempts SET state = 'failed' WHERE id = ?", (notes_attempt["id"],)
+        )
+        connection.commit()
+    preferences = save_processing_preferences(
+        data_dir,
+        asr_choice="auto",
+        asr_language="vi",
+        notes_provider="chatgpt",
+        notes_model="stub-model",
+        notes_reasoning_effort="high",
+        notes_output_language="en",
+    )
+    adopted = apply_current_settings(
+        data_dir,
+        meeting_id,
+        expected_epoch=state["epoch"],
+        expected_preferences_version=preferences["version"],
+        confirmed_pin=_notes_pin("high"),
+    )
+    assert len(adopted["attempts"]) == len(state["attempts"]) + 1
+    current_notes = next(step for step in adopted["steps"] if step["kind"] == "notes")
+    current_attempt = max(
+        (attempt for attempt in adopted["attempts"] if attempt["step_id"] == current_notes["id"]),
+        key=lambda attempt: attempt["attempt_number"],
+    )
+    assert current_attempt["state"] == "waiting"
+
+
 def test_notes_scheduler_waits_for_worker_then_admits_once_on_recovery(tmp_path, monkeypatch):
     data_dir, meeting_id, _ = _ready_notes_workflow(tmp_path, effort="high")
     provider = _ProcessingNotesProvider(effort="high")
@@ -653,13 +898,39 @@ def test_scheduler_gui_grace_spans_sequential_asr_and_notes_passes(tmp_path, mon
     monkeypatch.setattr(processing_module, "engine_of", lambda *_args: "whisper")
     monkeypatch.setattr(processing_module, "prepared_engine_directory", lambda *_args: None)
     monkeypatch.setattr(processing_module, "prepared_diarization_directory", lambda *_args: None)
+    monkeypatch.setattr("asr_studio.tasks.prepared_engine_directory", lambda *_args: None)
+    monkeypatch.setattr("asr_studio.tasks.prepared_diarization_directory", lambda *_args: None)
     grace_sleeps: list[float] = []
+    manual_task: dict[str, object] = {}
+
+    def grace_sleep(seconds: float) -> None:
+        grace_sleeps.append(seconds)
+        with sqlite3.connect(database_path(data_dir)) as connection:
+            assert connection.execute(
+                "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
+            ).fetchone() == (None,)
+        manual_task.update(
+            accept_transcription_task(
+                data_dir,
+                meeting_id=meeting_id,
+                request_id="manual-grace-0001",
+                model_path=Path("/models/whisper-small"),
+                language_hint="vi",
+                diarization_model_path=Path("/models/speaker-diarization-community-1"),
+                device="cpu",
+                compute_type="int8",
+                worker_ready=True,
+                asr_model="whisper-small",
+                asr_choice="whisper-small",
+            )
+        )
+
     provider = _ProcessingNotesProvider(effort="high")
     scheduler = AutomaticProcessingScheduler(
         Settings(data_dir=data_dir, auth_dir=tmp_path / "auth"),
         provider,
         provider,
-        sleep=grace_sleeps.append,
+        sleep=grace_sleep,
     )
 
     assert scheduler.reconcile_once() == 1
@@ -701,12 +972,25 @@ def test_scheduler_gui_grace_spans_sequential_asr_and_notes_passes(tmp_path, mon
     monkeypatch.setattr(processing_module.notes_service, "is_ready", lambda _data_dir: True)
 
     assert scheduler.reconcile_once() == 1
+    notes_task = claim_next_task(data_dir, owner_id="grace-notes-owner", role="notes")
+    assert notes_task is not None
+    assert fail_task(
+        data_dir,
+        notes_task["id"],
+        owner_id="grace-notes-owner",
+        error_code="test_failure",
+        message="test failure",
+        elapsed_seconds=0.1,
+    )
+    assert scheduler.reconcile_once() == 0
     assert grace_sleeps == [1.0]
+    assert manual_task["status"] == "accepted"
     with sqlite3.connect(database_path(data_dir)) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone() == (2,)
-        assert connection.execute("SELECT kind FROM tasks WHERE kind = 'notes'").fetchone() == (
-            "notes",
-        )
+        assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone() == (3,)
+        assert connection.execute(
+            "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
+        ).fetchone() == (manual_task["id"],)
+    cancel_task(data_dir, manual_task["id"])
 
 
 def test_scheduler_records_durable_worker_waiting_reason_and_does_not_claim_slot(tmp_path):

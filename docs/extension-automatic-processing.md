@@ -27,6 +27,8 @@ The workflow supports these public actions:
 
 The UI reads the current workflow and preference/source versions immediately before adoption. Notes retry creates only a notes attempt. It does not rerun ASR. Cancel fences the workflow and does not restart it. Current-source adoption is explicit and cannot overwrite unconfirmed transcript or metadata edits.
 
+Automatic ASR records the transcript generation, transcript source, notes-source, and meeting-metadata revisions observed at handoff. It checks those revisions again before admission and publication; a change pauses the workflow for an explicit source choice. After the bounded automatic-admission budget is reached, the scheduler waits for a free processing slot and gives the GUI grace window before admitting another automatic task.
+
 ## Frontend state boundary
 
 `processing-core.js` and `processing-preferences-core.js` contain pure reducers. They return data-only effects. The view renders selectors, dispatches user actions, and owns only DOM focus. Request IDs, workflow epochs, meeting IDs, load IDs, and poll IDs make stale replies inert.
@@ -34,5 +36,7 @@ The UI reads the current workflow and preference/source versions immediately bef
 The meeting page accepts the additive `processing` object on meeting responses. During rollout, if that object is absent, the core reads the same durable state from `GET /api/meetings/{id}/processing`. If the endpoint returns 404, the meeting remains a legacy/manual meeting and the automatic panel stays hidden.
 
 Polling runs only while an active workflow is visible. Navigation, hidden-page transitions, cancellation, and terminal workflow states cancel or stop the poll. A completed workflow asks the existing meeting-history boundary to refresh the current meeting. The refresh keeps the current page and uses the existing transcript merge rules, so it does not replace local edits with an older response.
+
+When a meeting still has an active manual task, or its automatic workflow is terminal, the existing history status strip remains authoritative for the transcript and notes labels.
 
 All user-facing core text remains translation data. The UI is tested in Vietnamese and English, with light and dark themes, failed and successful actions, status updates, and focus recovery.

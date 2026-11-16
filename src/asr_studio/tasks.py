@@ -874,9 +874,10 @@ def publish_complete_generation(
         ):
             return None
         if task["processing_workflow_id"] is not None:
-            from asr_studio.processing import publication_allowed_tx
+            from asr_studio.processing import publication_allowed_tx, publication_blocked_tx
 
             if not publication_allowed_tx(connection, task):
+                publication_blocked_tx(connection, task)
                 return None
 
         generation_id = uuid.uuid4().hex

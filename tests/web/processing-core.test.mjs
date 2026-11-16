@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { initialState, reduce, selectProcessing } from "../../src/asr_studio/web/processing-core.js";
+import {
+  initialState,
+  reduce,
+  selectProcessing,
+  shouldRenderAutomaticStatus,
+} from "../../src/asr_studio/web/processing-core.js";
 
 const workflow = (overrides = {}) => ({
   id: "workflow-1",
@@ -53,6 +58,13 @@ test("visible workflow installs both steps and schedules only the current meetin
   const left = reduce(result.state, { type: "history/home-clicked" });
   assert.equal(left.state.workflow, null);
   assert.ok(left.effects.some((effect) => effect.type === "cancel" && effect.key === "processing/poll"));
+});
+
+test("manual active tasks and terminal workflows retain the history status strip", () => {
+  assert.equal(shouldRenderAutomaticStatus(workflow(), { status: "running" }), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow({ state: "succeeded" }), { status: "succeeded" }), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow({ state: "canceled" }), null), false);
+  assert.equal(shouldRenderAutomaticStatus(workflow(), null), true);
 });
 
 test("a meeting without embedded processing reads the durable workflow endpoint", () => {
