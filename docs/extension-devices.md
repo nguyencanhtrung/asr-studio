@@ -12,7 +12,9 @@ uses a different protocol and cannot pair with this API.
 
 Sign into the regular ASR Studio web app. Open **Settings → Devices**, choose how long the device may connect, then create a pairing code. Copy the code into the extension on the client computer. The code's short validity is separate from the selected device lifetime. “Never expires” is an explicit choice for a trusted computer; revoke it in Settings when access is no longer needed.
 
-The list shows pending, active, expired and revoked devices. Creating another code for a selected device explicitly authorizes re-pairing its existing ownership. A newly supplied client device identifier cannot recover another device's ownership. Successful re-pairing invalidates the previous credentials; revoking access also invalidates current sessions. Neither action deletes recordings or cancels server processing.
+The list shows pending, active, expired and revoked devices. The extension exchanges the new device token for an authenticated session before reporting pairing success; this activates the device immediately, without waiting for a recording. If that exchange fails, the extension reports an error; issue a new re-pair code for the same device and try again. Reopen the Devices tab to load the current server status.
+
+Creating another code for a selected device explicitly authorizes re-pairing its existing ownership. A newly supplied client device identifier cannot recover another device's ownership. Successful re-pairing invalidates the previous credentials; revoking access also invalidates current sessions. Neither action deletes recordings or cancels server processing.
 
 The web page receives the pairing code once. It never receives the extension's device/session bearer tokens. Copy copies only the code; the expiry is displayed separately. If the pairing response is lost, generate a new code rather than replaying the consumed code.
 

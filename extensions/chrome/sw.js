@@ -261,20 +261,34 @@ async function pairWithServer(serverUrl, code) {
     throw makeError("protocol_mismatch", "The pairing response is invalid.");
   }
 
-  await setServerUrl(normalized);
-  const key = contextKey(binding);
-  const stored = await storageGet(TRUSTED_CONTEXTS);
-  const contexts = { ...(stored[TRUSTED_CONTEXTS] || {}) };
-  contexts[key] = {
+  const context = {
     binding,
     deviceToken: payload.device_token,
     deviceExpiresAt: payload.device_expires_at,
     pairedAt: new Date().toISOString()
   };
-  await storageSet({ [TRUSTED_CONTEXTS]: contexts, [ACTIVE_CONTEXT]: key });
+  const key = contextKey(binding);
   sessionTokens.delete(key);
+  const previous = await storageGet([TRUSTED_CONTEXTS, ACTIVE_CONTEXT]);
+  const previousContexts = { ...(previous[TRUSTED_CONTEXTS] || {}) };
+  if (previousContexts[key]) {
+    // Pairing rotated this device's bearer; its previous context is no longer valid.
+    delete previousContexts[key];
+    await storageSet({
+      [TRUSTED_CONTEXTS]: previousContexts,
+      [ACTIVE_CONTEXT]: previous[ACTIVE_CONTEXT] === key ? null : previous[ACTIVE_CONTEXT]
+    });
+    await broadcastStatus();
+  }
+  // The server activates a paired device only after its bearer proves usable.
+  // Complete that exchange before persisting or announcing a connected context.
+  await ensureSessionToken(context);
+  await setServerUrl(normalized);
+  const stored = await storageGet(TRUSTED_CONTEXTS);
+  const contexts = { ...(stored[TRUSTED_CONTEXTS] || {}), [key]: context };
+  await storageSet({ [TRUSTED_CONTEXTS]: contexts, [ACTIVE_CONTEXT]: key });
   void resumeUploads().catch(() => {});
-  return contextPublic(contexts[key]);
+  return contextPublic(context);
 }
 
 async function setServerUrl(serverUrl) {
