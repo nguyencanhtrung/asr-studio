@@ -286,9 +286,13 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
         "sessions.language_hint_omitted, recordings.id AS recording_id, recordings.meeting_id, "
         "meetings.current_generation_id, meetings.deletion_requested_at, meetings.language_hint, "
         "meetings.metadata_version, meetings.notes_source_version, "
+        "current_generation.source_version AS current_source_version, "
         "recordings.duration_seconds FROM extension_recording_sessions AS sessions "
         "JOIN recordings ON recordings.extension_session_id = sessions.id "
-        "JOIN meetings ON meetings.id = recordings.meeting_id WHERE sessions.id = ?",
+        "JOIN meetings ON meetings.id = recordings.meeting_id "
+        "LEFT JOIN transcript_generations AS current_generation "
+        "ON current_generation.id = meetings.current_generation_id "
+        "WHERE sessions.id = ?",
         (session_id,),
     ).fetchone()
     if row is None or row["state"] != "ready" or row["deletion_requested_at"] is not None:
@@ -335,8 +339,20 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
         waiting_reason = "source_confirmation_required" if state == "needs_attention" else None
         step_state = "needs_attention" if state == "needs_attention" else "waiting"
         connection.execute(
-            "INSERT INTO processing_steps(id, workflow_id, kind, state, waiting_reason) VALUES (?, ?, ?, ?, ?)",
-            (step_id, workflow_id, kind, step_state, waiting_reason),
+            "INSERT INTO processing_steps(id, workflow_id, kind, state, waiting_reason, "
+            "source_generation_id, source_version, notes_source_version, metadata_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                step_id,
+                workflow_id,
+                kind,
+                step_state,
+                waiting_reason,
+                row["current_generation_id"],
+                row["current_source_version"],
+                row["notes_source_version"],
+                row["metadata_version"],
+            ),
         )
     _initial_attempts(connection, workflow_id, 1)
     _queue_event(connection, workflow_id, "ready", {"epoch": 1, "meeting_id": row["meeting_id"]})
@@ -475,6 +491,66 @@ def _mark_waiting(
     )
 
 
+def _current_source_row(connection: sqlite3.Connection, meeting_id: str) -> sqlite3.Row | None:
+    return connection.execute(
+        "SELECT meetings.current_generation_id, generations.source_version, "
+        "meetings.notes_source_version, meetings.metadata_version "
+        "FROM meetings LEFT JOIN transcript_generations AS generations "
+        "ON generations.id = meetings.current_generation_id WHERE meetings.id = ?",
+        (meeting_id,),
+    ).fetchone()
+
+
+def _source_matches_handoff(
+    connection: sqlite3.Connection, workflow_id: str, step: sqlite3.Row | None = None
+) -> bool:
+    if step is None:
+        step = connection.execute(
+            "SELECT * FROM processing_steps WHERE workflow_id = ? AND kind = 'transcription'",
+            (workflow_id,),
+        ).fetchone()
+    workflow = connection.execute(
+        "SELECT meeting_id FROM processing_workflows WHERE id = ?", (workflow_id,)
+    ).fetchone()
+    source = (
+        _current_source_row(connection, workflow["meeting_id"]) if workflow is not None else None
+    )
+    return bool(
+        step is not None
+        and source is not None
+        and step["source_generation_id"] == source["current_generation_id"]
+        and step["source_version"] == source["source_version"]
+        and step["notes_source_version"] == source["notes_source_version"]
+        and step["metadata_version"] == source["metadata_version"]
+    )
+
+
+def _mark_source_confirmation_required(connection: sqlite3.Connection, workflow_id: str) -> None:
+    message = "The current transcript or meeting details changed. Confirm the displayed source."
+    connection.execute(
+        "UPDATE processing_workflows SET state = 'needs_attention', "
+        "last_error_code = 'source_confirmation_required', last_error_message = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state NOT IN ('canceled', 'deleted')",
+        (message, workflow_id),
+    )
+    connection.execute(
+        "UPDATE processing_steps SET state = 'needs_attention', "
+        "waiting_reason = 'source_confirmation_required', last_error_code = ?, "
+        "last_error_message = ?, updated_at = CURRENT_TIMESTAMP "
+        "WHERE workflow_id = ? AND kind = 'transcription' "
+        "AND state IN ('waiting', 'accepted', 'running', 'failed')",
+        ("source_confirmation_required", message, workflow_id),
+    )
+    connection.execute(
+        "UPDATE processing_steps SET state = 'needs_attention', "
+        "waiting_reason = 'source_confirmation_required', last_error_code = ?, "
+        "last_error_message = ?, updated_at = CURRENT_TIMESTAMP "
+        "WHERE workflow_id = ? AND kind = 'notes' AND source_snapshot_id IS NULL "
+        "AND state IN ('waiting', 'accepted', 'running', 'failed')",
+        ("source_confirmation_required", message, workflow_id),
+    )
+
+
 def _assert_actionable_workflow(
     connection: sqlite3.Connection, workflow: sqlite3.Row, *, allow_succeeded: bool = False
 ) -> None:
@@ -513,15 +589,6 @@ def _automatic_task_common(
     kind: str,
 ) -> tuple[sqlite3.Row, sqlite3.Row, sqlite3.Row, str] | dict[str, object] | None:
     """Return workflow/step/attempt or a replay summary; called inside BEGIN IMMEDIATE."""
-    existing = connection.execute(
-        "SELECT * FROM tasks WHERE request_id = ?", (request_id,)
-    ).fetchone()
-    if existing is not None:
-        if existing["request_hash"] != request_hash:
-            raise ProcessingError(
-                409, "idempotency_conflict", "This request_id was already used differently."
-            )
-        return {"task_id": existing["id"], "replay": True}
     workflow = connection.execute(
         "SELECT * FROM processing_workflows WHERE id = ?", (workflow_id,)
     ).fetchone()
@@ -548,6 +615,25 @@ def _automatic_task_common(
         if step["current_attempt_id"]
         else None
     )
+    if attempt is not None and attempt["request_id"] != request_id:
+        raise ProcessingError(
+            409, "processing_attempt_changed", "Another attempt is already pending."
+        )
+    existing = connection.execute(
+        "SELECT * FROM tasks WHERE request_id = ?", (request_id,)
+    ).fetchone()
+    if existing is not None:
+        if attempt is None or attempt["state"] not in {"waiting", "accepted", "running"}:
+            raise ProcessingError(
+                409,
+                "processing_attempt_changed",
+                "The current processing attempt is no longer waiting.",
+            )
+        if existing["request_hash"] != request_hash:
+            raise ProcessingError(
+                409, "idempotency_conflict", "This request_id was already used differently."
+            )
+        return {"task_id": existing["id"], "replay": True}
     if attempt is None:
         attempt_id = _insert_attempt(
             connection,
@@ -560,9 +646,11 @@ def _automatic_task_common(
         attempt = connection.execute(
             "SELECT * FROM processing_attempts WHERE id = ?", (attempt_id,)
         ).fetchone()
-    elif attempt["request_id"] != request_id:
+    elif attempt["state"] != "waiting":
         raise ProcessingError(
-            409, "processing_attempt_changed", "Another attempt is already pending."
+            409,
+            "processing_attempt_changed",
+            "The current processing attempt is no longer waiting.",
         )
     return workflow, step, attempt, "new"
 
@@ -593,6 +681,9 @@ def admit_automatic_transcription(
     if replay_or_rows is None or isinstance(replay_or_rows, dict):
         return replay_or_rows
     workflow, step, attempt, _ = replay_or_rows
+    if not _source_matches_handoff(connection, workflow["id"], step):
+        _mark_source_confirmation_required(connection, workflow["id"])
+        return None
     recording = connection.execute(
         "SELECT storage_key, content_type, duration_seconds FROM recordings WHERE id = ?",
         (workflow["recording_id"],),
@@ -892,9 +983,9 @@ def publication_allowed_tx(connection: sqlite3.Connection, task: sqlite3.Row) ->
     if workflow_id is None:
         return True
     workflow = connection.execute(
-        "SELECT state, epoch FROM processing_workflows WHERE id = ?", (workflow_id,)
+        "SELECT * FROM processing_workflows WHERE id = ?", (workflow_id,)
     ).fetchone()
-    return bool(
+    allowed = bool(
         workflow is not None
         and _same_epoch(workflow["epoch"], task["processing_epoch"])
         and workflow["state"] not in {"canceled", "deleted", "needs_attention"}
@@ -902,6 +993,50 @@ def publication_allowed_tx(connection: sqlite3.Connection, task: sqlite3.Row) ->
             "SELECT deletion_requested_at FROM meetings WHERE id = ?", (task["meeting_id"],)
         ).fetchone()[0]
         is None
+    )
+    if not allowed:
+        return False
+    if task["kind"] == "transcription":
+        step = connection.execute(
+            "SELECT * FROM processing_steps WHERE id = ?", (task["processing_step_id"],)
+        ).fetchone()
+        if not _source_matches_handoff(connection, workflow_id, step):
+            _mark_source_confirmation_required(connection, workflow_id)
+            return False
+    return True
+
+
+def publication_blocked_tx(connection: sqlite3.Connection, task: sqlite3.Row) -> None:
+    """Release an automatic ASR task blocked by a changed source fence."""
+    if task["processing_workflow_id"] is None or task["kind"] != "transcription":
+        return
+    workflow = connection.execute(
+        "SELECT state FROM processing_workflows WHERE id = ?",
+        (task["processing_workflow_id"],),
+    ).fetchone()
+    if workflow is None or workflow["state"] != "needs_attention":
+        return
+    message = "The current transcript or meeting details changed. Confirm the displayed source."
+    cursor = connection.execute(
+        "UPDATE tasks SET status = 'interrupted', stage = 'interrupted', "
+        "error_code = 'source_confirmation_required', error_message = ?, "
+        "completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ? AND status = 'running'",
+        (message, task["id"]),
+    )
+    if cursor.rowcount != 1:
+        return
+    connection.execute(
+        "UPDATE processing_slot SET active_task_id = NULL, updated_at = CURRENT_TIMESTAMP "
+        "WHERE slot_id = 1 AND active_task_id = ?",
+        (task["id"],),
+    )
+    automatic_task_terminal_tx(
+        connection,
+        task,
+        "interrupted",
+        "source_confirmation_required",
+        message,
     )
 
 
@@ -986,6 +1121,15 @@ def automatic_task_terminal_tx(
         if state == "canceled"
         else ("interrupted" if state == "interrupted" else "failed")
     )
+    workflow = connection.execute(
+        "SELECT state FROM processing_workflows WHERE id = ?",
+        (task["processing_workflow_id"],),
+    ).fetchone()
+    source_confirmation = (
+        workflow is not None
+        and workflow["state"] == "needs_attention"
+        and error_code == "source_confirmation_required"
+    )
     connection.execute(
         "UPDATE processing_attempts SET state = ?, error_code = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (attempt_state, error_code, message, task["processing_attempt_id"]),
@@ -993,13 +1137,19 @@ def automatic_task_terminal_tx(
     connection.execute(
         "UPDATE processing_steps SET state = ?, waiting_reason = ?, last_error_code = ?, last_error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (
-            "canceled" if state == "canceled" else "failed",
-            None if state == "canceled" else error_code,
+            "needs_attention"
+            if source_confirmation
+            else ("canceled" if state == "canceled" else "failed"),
+            "source_confirmation_required"
+            if source_confirmation
+            else (None if state == "canceled" else error_code),
             error_code,
             message,
             task["processing_step_id"],
         ),
     )
+    if source_confirmation:
+        return
     if state == "canceled":
         connection.execute(
             "UPDATE processing_workflows SET state = 'canceled', epoch = epoch + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state NOT IN ('canceled', 'deleted')",
@@ -1265,6 +1415,40 @@ def apply_current_settings(
                 workflow["id"],
             ),
         )
+        notes_step = connection.execute(
+            "SELECT * FROM processing_steps WHERE workflow_id = ? AND kind = 'notes'",
+            (workflow["id"],),
+        ).fetchone()
+        notes_attempt = (
+            connection.execute(
+                "SELECT state FROM processing_attempts WHERE id = ?",
+                (notes_step["current_attempt_id"],),
+            ).fetchone()
+            if notes_step is not None and notes_step["current_attempt_id"]
+            else None
+        )
+        if (
+            notes_step is not None
+            and notes_step["source_snapshot_id"] is not None
+            and (notes_attempt is None or notes_attempt["state"] != "waiting")
+        ):
+            _insert_attempt(
+                connection,
+                step=notes_step,
+                workflow_epoch=new_epoch,
+                attempt_number=notes_step["attempt_number"] + 1,
+                request_id=f"auto:{workflow['id']}:notes:{new_epoch}",
+                request_hash=_hash(
+                    workflow["id"],
+                    "notes",
+                    new_epoch,
+                    notes_step["source_snapshot_id"],
+                    prefs["notes_provider"],
+                    prefs["notes_model"],
+                    prefs["notes_reasoning_effort"],
+                    prefs["notes_output_language"],
+                ),
+            )
     return processing_state(data_dir, meeting_id) or {}
 
 
@@ -1356,7 +1540,8 @@ def use_current_source(
         )
         connection.execute(
             "UPDATE processing_steps SET state = 'succeeded', waiting_reason = NULL, updated_at = CURRENT_TIMESTAMP "
-            "WHERE workflow_id = ? AND kind = 'transcription' AND state = 'needs_attention'",
+            "WHERE workflow_id = ? AND kind = 'transcription' "
+            "AND state IN ('waiting', 'needs_attention', 'failed')",
             (workflow["id"],),
         )
         connection.execute(
@@ -1413,6 +1598,7 @@ class AutomaticProcessingScheduler:
         self._thread: threading.Thread | None = None
         self._descriptor: int | None = None
         self._automatic_admissions_since_gui_grace = 0
+        self._gui_grace_pending = False
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -1473,13 +1659,32 @@ class AutomaticProcessingScheduler:
         if self._automatic_admissions_since_gui_grace < AUTOMATIC_ADMISSIONS_BEFORE_GUI_GRACE:
             return False
         self._automatic_admissions_since_gui_grace = 0
+        self._gui_grace_pending = True
+        return True
+
+    def _slot_is_free(self) -> bool:
+        with _connect(self.settings.data_dir) as connection:
+            slot = connection.execute(
+                "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
+            ).fetchone()
+        return slot is not None and slot["active_task_id"] is None
+
+    def _run_pending_gui_grace(self) -> bool:
+        if not self._gui_grace_pending:
+            return False
+        if not self._slot_is_free():
+            return True
+        self._gui_grace_pending = False
         self.sleep(GUI_GRACE_SECONDS)
         return True
 
     def reconcile_once(self) -> int:
         reconcile_ready_sources(self.settings.data_dir)
         self._requeue_failed_steps()
+        if self._run_pending_gui_grace():
+            return 0
         admitted = 0
+        grace_pending = False
         with _connect(self.settings.data_dir) as connection:
             rows = connection.execute(
                 "SELECT workflows.*, steps.id AS step_id, steps.state AS step_state, steps.waiting_reason, steps.current_attempt_id, steps.attempt_number, steps.source_snapshot_id, "
@@ -1542,7 +1747,10 @@ class AutomaticProcessingScheduler:
             if result is not None:
                 admitted += 1
                 if self._record_automatic_admission():
+                    grace_pending = True
                     break
+        if grace_pending:
+            return admitted
         admitted += self._admit_notes()
         return admitted
 

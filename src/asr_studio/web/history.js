@@ -68,6 +68,7 @@ import {
   initialState as processingInitialState,
   reduce as reduceProcessing,
   selectProcessing,
+  shouldRenderAutomaticStatus,
 } from "./processing-core.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -1051,7 +1052,7 @@ function renderMeetingProcessingStatus(task, generation, processing = store.getS
   );
 
   const automatic = selectProcessing(processing);
-  if (automatic.visible) {
+  if (automatic.visible && shouldRenderAutomaticStatus(automatic.workflow, task)) {
     const transcript = automatic.steps.find((step) => step.kind === "transcription");
     const notes = automatic.steps.find((step) => step.kind === "notes");
     setStatusItem("transcript", "Transcript", tr(transcript.value), transcript.state);

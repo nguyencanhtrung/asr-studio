@@ -75,6 +75,12 @@ function active(workflow) {
   return Boolean(workflow) && !TERMINAL.has(workflow.state);
 }
 
+export function shouldRenderAutomaticStatus(workflow, task) {
+  return Boolean(workflow)
+    && !TERMINAL.has(workflow.state)
+    && !["accepted", "running", "stopping"].includes(task?.status);
+}
+
 function actionMatches(state, action) {
   return Boolean(state.action)
     && state.meetingId === action.meta?.meetingId
