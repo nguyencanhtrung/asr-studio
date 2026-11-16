@@ -42,3 +42,5 @@ Polling runs only while an active workflow is visible. Navigation, hidden-page t
 When a meeting still has a manual task, a manual transcript generation, or manual Notes status/revisions, the existing history status strip remains authoritative for the transcript and Notes labels. A canceled automatic workflow remains visible as a cancellation warning only when none of those manual results exists; succeeded and deletion-terminal workflows do not take over the strip.
 
 All user-facing core text remains translation data. The UI is tested in Vietnamese and English, with light and dark themes, failed and successful actions, status updates, and focus recovery.
+
+Metadata-only confirmation keeps the processing panel in place while ASR is queued. Its success feedback survives polling for the same workflow epoch and clears when the epoch changes or the user navigates. This avoids replacing the focused control through an unnecessary meeting refresh before any transcript exists.

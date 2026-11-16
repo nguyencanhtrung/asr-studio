@@ -2543,7 +2543,9 @@ Current-source adoption also covers the pre-transcript metadata-only state with
 a paired null generation/source revision. It requires the current metadata and
 Notes-source revisions, starts a fresh viable ASR attempt against the original
 recording, and does not create a Notes snapshot until ASR publishes a
-generation. Existing transcript adoption remains Notes-only. The history status
+generation. Metadata-only confirmation keeps the panel mounted and retains its success
+feedback during polling for the same workflow epoch, preserving focus after
+the confirmation button is hidden. Existing transcript adoption remains Notes-only. The history status
 strip gives manual transcript tasks/generations and Notes status/revisions
 precedence; a canceled automatic warning is retained only when no manual result
 exists.
