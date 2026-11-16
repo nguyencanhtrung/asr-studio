@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Ghi âm · ASR Studio</title>
+    <link rel="icon" type="image/png" href="icons/icon-32.png">
+    <script src="i18n.js"></script>
+    <script src="theme.js"></script>
+    <link rel="stylesheet" href="asr-design.css">
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="popup-header">
+        <div class="brand" role="img" aria-label="ASR Studio">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 40 40" fill="none">
+              <path d="M8 18v4m6-10v16m6-20v24m7-22v6m0 8v6m-3-10h6" />
+            </svg>
+          </span>
+        </div>
+        <div class="header-actions">
+          <button class="icon-button language-toggle" type="button" data-lang-toggle aria-label="Switch to English">EN</button>
+          <button class="icon-button" type="button" data-theme-toggle aria-label="Đổi giao diện" title="Đổi giao diện">
+            <svg class="theme-icon theme-icon-moon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M16.25 12.15A6.65 6.65 0 0 1 7.85 3.75 6.7 6.7 0 1 0 16.25 12.15Z" />
+            </svg>
+            <svg class="theme-icon theme-icon-sun" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="3.25" />
+              <path d="M10 1.75v1.5M10 16.75v1.5M18.25 10h-1.5M3.25 10h-1.5M15.83 4.17l-1.06 1.06M5.23 14.77l-1.06 1.06M15.83 15.83l-1.06-1.06M5.23 5.23 4.17 4.17" />
+            </svg>
+          </button>
+          <button id="setup-open" class="icon-button" type="button" aria-label="Mở thiết lập" title="Mở thiết lập">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M15.94 7.9 18.04 8.37v3.26l-2.1.47-.25.61 1.14 1.82-2.3 2.3-1.82-1.14-.61.25-.47 2.1H8.37l-.47-2.1-.61-.25-1.82 1.14-2.3-2.3 1.14-1.82-.25-.61-2.1-.47V8.37l2.1-.47.25-.61-1.14-1.82 2.3-2.3 1.82 1.14.61-.25.47-2.1h3.26l.47 2.1.61.25 1.82-1.14 2.3 2.3-1.14 1.82z" />
+              <circle cx="10" cy="10" r="2.4" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="status-panel" aria-labelledby="popup-title">
+        <div class="status-heading">
+          <div>
+            <h1 id="popup-title">Ghi âm cuộc họp</h1>
+            <p id="status-detail" class="status-detail" aria-live="polite">Đang kiểm tra trạng thái…</p>
+          </div>
+          <span id="capture-state" class="state-badge">Đang tải</span>
+        </div>
+
+        <div class="connection-row">
+          <span id="connection-dot" class="status-dot" aria-hidden="true"></span>
+          <div class="connection-copy">
+            <span class="field-label">Server ASR đã ghép</span>
+            <strong id="server-url" class="server-url">Chưa ghép server</strong>
+            <span id="device-expiry" class="connection-meta"></span>
+          </div>
+        </div>
+      </section>
+
+      <p id="popup-message" class="message" aria-live="polite"></p>
+      <div id="popup-error" class="error" role="alert" hidden>
+        <p id="error-copy"></p>
+        <button id="setup-error-button" class="text-button" type="button" hidden>Mở thiết lập</button>
+      </div>
+
+      <section id="action-panel" class="action-panel" aria-labelledby="action-heading">
+        <div class="action-heading-row">
+          <h2 id="action-heading">Điều khiển</h2>
+          <span id="elapsed" class="elapsed" aria-label="Thời lượng ghi âm">00:00</span>
+        </div>
+        <button id="start-button" class="primary-button action-button" type="button">Bắt đầu ghi</button>
+        <button id="stop-button" class="danger-button action-button" type="button" hidden>Dừng và lưu</button>
+        <p class="action-help">Bạn có thể đóng cửa sổ này; ghi âm vẫn tiếp tục.</p>
+      </section>
+
+      <section id="sources-panel" class="sources-panel" aria-labelledby="sources-heading">
+        <div class="section-heading-row">
+          <h2 id="sources-heading">Nguồn ghi</h2>
+          <span id="levels-label" class="section-note" hidden>Mức âm</span>
+        </div>
+        <div class="source-list">
+          <div class="source-row">
+            <div class="source-copy">
+              <strong>Âm thanh tab</strong>
+              <span>Tab được chọn khi bắt đầu</span>
+              <meter id="tab-level" min="0" max="1" value="0" hidden aria-label="Mức âm tab">0</meter>
+            </div>
+            <button id="tab-gate" class="source-toggle" type="button" aria-pressed="true" disabled>Bật</button>
+          </div>
+          <div class="source-row">
+            <div class="source-copy">
+              <strong>Microphone</strong>
+              <span>Microphone đã chọn trong thiết lập</span>
+              <meter id="mic-level" min="0" max="1" value="0" hidden aria-label="Mức âm microphone">0</meter>
+            </div>
+            <button id="mic-gate" class="source-toggle" type="button" aria-pressed="true" disabled>Bật</button>
+          </div>
+        </div>
+        <p class="source-help">Chrome và tab nguồn phải còn mở để ghi âm tiếp tục.</p>
+      </section>
+
+      <section id="setup-hint" class="setup-hint" hidden aria-labelledby="setup-hint-heading">
+        <h2 id="setup-hint-heading">Thiết lập lần đầu</h2>
+        <ol>
+          <li>Cấp quyền microphone trên trang thiết lập.</li>
+          <li>Nhập URL server ASR và dán mã từ trang ghép nối.</li>
+          <li>Quay lại tab cuộc họp rồi bấm Bắt đầu ghi.</li>
+        </ol>
+        <button id="setup-hint-button" class="secondary-button" type="button">Mở thiết lập</button>
+      </section>
+
+      <p class="privacy-note">Audio chỉ được dọn sau receipt bền vững từ đúng backend.</p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

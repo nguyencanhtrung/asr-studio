@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="Thiết lập và xem trạng thái ghi âm ASR Studio.">
+    <title>Thiết lập ghi âm · ASR Studio</title>
+    <link rel="icon" type="image/png" href="icons/icon-32.png">
+    <script src="i18n.js"></script>
+    <script src="theme.js"></script>
+    <link rel="stylesheet" href="asr-design.css">
+    <link rel="stylesheet" href="control.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand-lockup">
+          <div class="brand" role="img" aria-label="ASR Studio">
+            <span class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 40 40" fill="none">
+                <path d="M8 18v4m6-10v16m6-20v24m7-22v6m0 8v6m-3-10h6" />
+              </svg>
+            </span>
+          </div>
+          <p class="page-subtitle">Thiết lập và trạng thái ghi âm</p>
+        </div>
+        <div class="page-actions">
+          <button class="icon-button language-toggle" type="button" data-lang-toggle aria-label="Switch to English">EN</button>
+          <button class="icon-button" type="button" data-theme-toggle aria-label="Đổi giao diện" title="Đổi giao diện">
+            <svg class="theme-icon theme-icon-moon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M16.25 12.15A6.65 6.65 0 0 1 7.85 3.75 6.7 6.7 0 1 0 16.25 12.15Z" />
+            </svg>
+            <svg class="theme-icon theme-icon-sun" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="3.25" />
+              <path d="M10 1.75v1.5M10 16.75v1.5M18.25 10h-1.5M3.25 10h-1.5M15.83 4.17l-1.06 1.06M5.23 14.77l-1.06 1.06M15.83 15.83l-1.06-1.06M5.23 5.23 4.17 4.17" />
+            </svg>
+          </button>
+          <button id="setup-toggle" class="secondary-button" type="button">Mở thiết lập</button>
+        </div>
+      </header>
+
+      <section class="connection-card" aria-live="polite" aria-labelledby="connection-heading">
+        <div class="connection-heading-row">
+          <div>
+            <h1 id="connection-heading">Ghi âm</h1>
+            <p class="connection-help">Thiết lập ở đây; bắt đầu ghi từ popup trên tab cuộc họp.</p>
+          </div>
+          <span id="capture-state" class="capture-state">Chưa sẵn sàng</span>
+        </div>
+        <div class="connection-line">
+          <span id="connection-dot" class="status-dot" aria-hidden="true"></span>
+          <div class="connection-copy">
+            <span class="field-label">Server ASR đã ghép</span>
+            <strong id="connection-label" class="server-url">Chưa ghép server</strong>
+            <span id="device-expiry" class="connection-meta"></span>
+          </div>
+        </div>
+      </section>
+
+      <p id="global-message" class="message" aria-live="polite"></p>
+      <p id="global-error" class="error" role="alert"></p>
+
+      <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="setup-heading">Thiết lập lần đầu</h2>
+          <p class="help">Chỉ trang này xin quyền microphone.</p>
+          </div>
+        </div>
+        <ol class="setup-steps">
+          <li>Cho phép microphone và chọn microphone muốn dùng.</li>
+          <li>Mở ASR Studio ở trang gốc, chọn Settings → Devices và tạo mã ghép; khi khôi phục audio, chọn Pair again cho thiết bị hiện có.</li>
+          <li>Nhập URL API ASR và dán mã từ trang ghép nối.</li>
+          <li>Quay lại tab cuộc họp, mở popup rồi bấm <strong>Bắt đầu ghi</strong>.</li>
+        </ol>
+        <div class="setup-grid">
+          <div class="field-group field-wide">
+            <label for="server-url">URL server ASR</label>
+            <input id="server-url" name="server-url" type="url" inputmode="url" autocomplete="off" placeholder="http://127.0.0.1:8877" spellcheck="false">
+            <small>Server từ xa dùng HTTPS; server trên máy này có thể dùng HTTP với localhost hoặc 127.0.0.1.</small>
+          </div>
+          <div class="field-group">
+            <label for="pair-code">Mã ghép</label>
+            <input id="pair-code" name="pair-code" type="text" inputmode="text" autocomplete="off" placeholder="Dán mã từ trang ghép nối" spellcheck="false">
+            <small>Mã chỉ dùng cho lần ghép này.</small>
+          </div>
+          <div class="field-group">
+            <label for="audio-device">Microphone</label>
+            <select id="audio-device" disabled>
+              <option value="">Cấp quyền để xem microphone</option>
+            </select>
+            <small id="mic-state">Chưa kiểm tra quyền microphone.</small>
+          </div>
+          <div class="setup-actions">
+            <button id="mic-button" class="secondary-button" type="button">Cấp quyền microphone</button>
+            <button id="pair-button" class="primary-button" type="button">Ghép với server</button>
+            <button id="web-root-button" class="secondary-button" type="button">Mở ASR Studio</button>
+          </div>
+        </div>
+        <p class="setup-next">Sau khi ghép hoặc Pair again, quay lại tab cuộc họp và dùng popup để bắt đầu. Đóng trang này không dừng ghi âm.</p>
+      </section>
+
+      <section class="panel capture-panel" aria-labelledby="capture-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="capture-heading">Trạng thái ghi âm</h2>
+            <p class="help">Đóng trang này không dừng ghi âm.</p>
+          </div>
+          <button id="stop-button" class="danger-button" type="button">Dừng và lưu</button>
+        </div>
+        <div class="source-list">
+          <article class="source-row">
+            <div class="source-copy">
+              <div class="source-heading"><strong>Âm thanh tab</strong><button id="tab-gate" class="gate-button" type="button">Bật</button></div>
+              <meter id="tab-meter" min="0" max="1" value="0">0</meter>
+              <p>Bật/tắt âm thanh này trong bản ghi.</p>
+              <button id="tab-monitor" class="text-button" type="button">Âm thanh tab đang phát</button>
+            </div>
+          </article>
+          <article class="source-row">
+            <div class="source-copy">
+              <div class="source-heading"><strong>Microphone</strong><button id="mic-gate" class="gate-button" type="button">Bật</button></div>
+              <meter id="mic-meter" min="0" max="1" value="0">0</meter>
+              <p>Microphone không phát qua loa.</p>
+            </div>
+          </article>
+        </div>
+        <p class="capture-footnote">Dừng sẽ chờ audio cuối cùng được lưu trước khi gửi. Đóng trang này không dừng ghi âm; Chrome và tab nguồn phải còn mở.</p>
+      </section>
+
+      <section class="panel sessions-panel" aria-labelledby="sessions-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="sessions-heading">Bản ghi đã lưu</h2>
+            <p class="help">Bản tạm chỉ được xóa khi server xác nhận lưu đủ audio.</p>
+          </div>
+          <button id="refresh-button" class="secondary-button" type="button">Tải lại</button>
+        </div>
+        <div id="sessions-list" class="sessions-list"></div>
+      </section>
+
+      <footer class="footer-note">
+        <span>Client ghi âm ASR Studio · kết quả tiếp tục trong web app</span>
+      </footer>
+    </main>
+    <script type="module" src="control.js"></script>
+  </body>
+</html>

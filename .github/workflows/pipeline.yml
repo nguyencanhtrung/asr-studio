@@ -61,7 +61,7 @@ jobs:
             sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
           fi
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg xvfb xauth libxtst6
           command -v ffmpeg
           command -v ffprobe
           ffmpeg -version | head -n 1
@@ -81,6 +81,25 @@ jobs:
           ASR_RUN_BROWSER_TESTS: "1"
           ASR_REQUIRE_MEDIA_TOOLS: "1"
         run: ./scripts/check.sh
+      - name: Test native Chrome extension
+        env:
+          ASR_RUN_EXTENSION_TESTS: "1"
+          ASR_EXTENSION_DISPOSABLE_XVFB: "1"
+        run: >-
+          timeout --kill-after=10s 180s xvfb-run -a -s '-screen 0 1280x1024x24'
+          uv run --no-sync pytest -q tests/test_browser_extension_capture.py
+      - name: Build internal Chrome extension bundle
+        run: >-
+          python3 scripts/bundle-extension.py
+          --output "${RUNNER_TEMP}/extension/asr-studio-extension.zip"
+          --source-commit "${GITHUB_SHA}"
+      - name: Upload internal Chrome extension bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: asr-studio-extension-${{ github.sha }}
+          path: ${{ runner.temp }}/extension/asr-studio-extension.zip*
+          if-no-files-found: error
+          retention-days: 30
 
   container:
     name: Build container (${{ matrix.platform }})

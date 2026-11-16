@@ -2607,3 +2607,77 @@ The automatic status panel sits before the compact status strip, preserving the
 header-to-tab adjacency on small screens. Existing model, pairing and mobile
 tab regressions cover these integration boundaries; the pairing selector check
 is scoped to its form because processing preferences add their own controls.
+
+## #220 — Bounded production extension client
+
+**Problem.** The reviewed client source lived beside a scratch server and a
+prototype operator surface. Copying that tree into an installed extension could
+reuse prototype credentials or IndexedDB audio and could send result navigation
+to an endpoint that did not own the recording.
+
+**Change.** Promote only the extension client into `extensions/chrome`. Keep the
+public key stable. The client checks the production protocol and API version in
+`extensions/chrome/protocol.js`, binds API traffic to the exact configured
+authority and backend identity, and stores the capability web URL as a separate
+click-only navigation root. HTTP accepts only literal loopback. Remote API
+traffic requires HTTPS. Meeting links must match the pinned web root and the
+`/meetings/<id>` path. The namespaced storage keys in `sw.js` and the database
+name in `db.js` prevent silent prototype-state adoption.
+
+Each API request also checks the current Chrome host permission for its bound
+endpoint. The native permission-revocation test showed that server CORS can permit
+fetch after Chrome revocation, so browser network behavior alone is insufficient.
+A missing grant leaves audio local and exposes a retry action that asks for the
+same endpoint permission before resuming with the original binding.
+
+HTTP 408 and 429 use the existing retryable upload path, retaining local audio
+until a verified receipt. Authentication, ownership and payload conflicts still
+require their existing recovery actions. The native temporary-response scenario
+in `tests/test_browser_extension_capture.py` checks automatic retry against the
+same server without duplicate meetings.
+
+The offscreen document remains the capture owner. Stop waits for the durable
+final audio barrier. Upload cleanup occurs only after the matching raw receipt,
+where `receipt.recording_id` is the server session ID. The client then stops
+receipt polling and does not poll transcript or notes processing. History stays
+newest first, interrupted recordings stay recoverable, and discard removes the
+local session and chunks.
+
+**Evidence and limits.** Independent contract tests are in
+`extensions/chrome/tests/`. Bundle reproducibility, checksum, provenance, and
+exclusion rules are checked by `tests/test_extension_bundle.py` and implemented
+by `scripts/bundle-extension.py`. The client README records installation,
+update timing, source separation, and the absence of physical-microphone or
+long-duration reliability claims. Native browser capture is checked in `tests/test_browser_extension_capture.py`
+against the production application API over loopback HTTP and a hostname-based
+HTTPS fixture. It closes the actual action popup and control page while the
+native offscreen recorder continues, then stops and checks raw receipt, local
+cleanup, absent processing polling, and both synthetic tone frequencies. The
+fixture uses its own profile, data directory, Xvfb display, and certificate;
+physical capture qualification remains follow-up work.
+
+**Trade-offs.** The bundle uses the existing no-build JavaScript client and
+standard-library Python packaging so the source bytes remain inspectable and no
+new dependency is introduced. A changed web origin cannot silently retarget a
+pending or historical recording. A user must pair the intended endpoint again.
+
+**Follow-ups.** [#218](https://github.com/nguyencanhtrung/asr-studio/issues/218)
+owns the backend ingest contract. [#219](https://github.com/nguyencanhtrung/asr-studio/issues/219)
+owns production E2E and processing integration. The quality job runs the native capture gate before creating an internal
+extension zip with checksum and source revision; the pinned artifact action makes
+it downloadable from the successful run. No store publication or deployment is
+performed. `tests/test_delivery_contract.py` checks this delivery ordering.
+Tag: architecture, privacy, design. Target: `extensions/chrome/`,
+`scripts/bundle-extension.py`, and the focused tests above.
+
+The native processing scenario in
+`tests/test_browser_extension_capture.py::test_native_capture_runs_transcript_and_notes_after_client_receipt`
+also waits for the client receipt before starting the actual task worker. It
+then exercises automatic transcription, the unconfigured-notes wait, explicit
+settings adoption, and publication into the existing meeting page.
+`tests/native_processing_helpers.py` supplies synthetic inference output and
+the external notes-provider response; task admission, slot ownership, immutable
+source checks, the notes runner's version guard, rendering and publication
+remain production code. This catches integration failures that a pre-rendered
+notes result would bypass. It is workflow evidence, not ASR accuracy or live
+provider qualification.
