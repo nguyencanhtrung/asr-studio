@@ -3,8 +3,8 @@
 Device management belongs to **Settings → Devices** in the existing ASR Studio web app. The extension API runs in the same application process and uses the application's persistent data and auth volumes. A separate prototype server is not part of this deployment.
 
 This delivery adds pairing and device access plus the bounded `asr-extension-v1` recording-session
-ingest API from [#218](https://github.com/nguyencanhtrung/asr-studio/issues/218). It does not ship
-the installable production client or automatic transcript/notes; those remain [#220](https://github.com/nguyencanhtrung/asr-studio/issues/220)
+ingest API from [#218](https://github.com/nguyencanhtrung/asr-studio/issues/218), together with the
+installable internal client and automatic transcript/Notes processing from [#220](https://github.com/nguyencanhtrung/asr-studio/issues/220)
 and [#219](https://github.com/nguyencanhtrung/asr-studio/issues/219). The earlier prototype bundle
 uses a different protocol and cannot pair with this API.
 
