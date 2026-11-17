@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from http.cookies import SimpleCookie
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from asr_studio.app import create_app
 from asr_studio.auth import AuthStore
 from asr_studio.config import Settings
 from asr_studio.routes import FONT_FILES, WEB_DIR
@@ -97,6 +100,168 @@ def test_public_gui_origin_requires_exact_https_origin_and_separate_callback(tmp
     loopback = Settings(tmp_path / "loop-data", tmp_path / "loop-auth")
     assert loopback.public_url == "http://127.0.0.1:8765"
     assert loopback.chatgpt_callback_url == "http://127.0.0.1:8765/auth/chatgpt/callback"
+
+
+def test_configured_gui_origins_are_normalized_bounded_and_host_selectable(tmp_path):
+    settings = Settings(
+        tmp_path / "data",
+        tmp_path / "auth",
+        public_url="HTTPS://Primary.example.test:443/",
+        web_origins=("https://Alias.example.test:443/", "http://localhost:80"),
+    )
+
+    assert settings.public_url == "https://primary.example.test"
+    assert settings.web_origins == ("https://alias.example.test", "http://localhost")
+    assert settings.web_server_origins == (
+        "https://primary.example.test",
+        "https://alias.example.test",
+        "http://localhost",
+    )
+    assert settings.web_origin_for_host("alias.example.test") == "https://alias.example.test"
+    assert settings.web_origin_for_host("localhost:80") == "http://localhost"
+    assert settings.web_origin_for_host("unconfigured.example.test") is None
+    assert settings.select_web_origin("HTTPS://ALIAS.example.test:443") == (
+        "https://alias.example.test"
+    )
+
+    for invalid in (
+        "http://remote.example.test",
+        "https://user:pass@alias.example.test",
+        "https://*.example.test",
+        "https://alias.example.test/path",
+        "https://alias.example.test?query=1",
+        "https://alias.example.test#fragment",
+        "https://alias.example.test:65536",
+        "https://alias.example.test\n",
+    ):
+        with pytest.raises(ValueError):
+            Settings(tmp_path / "invalid-data", tmp_path / "invalid-auth", web_origins=(invalid,))
+
+    with pytest.raises(ValueError, match="duplicate"):
+        Settings(
+            tmp_path / "duplicate-data",
+            tmp_path / "duplicate-auth",
+            public_url="https://primary.example.test",
+            web_origins=("https://PRIMARY.example.test:443",),
+        )
+    for primary, alias in (
+        ("http://localhost:8765", "https://localhost:8765"),
+        ("http://localhost:443", "https://localhost"),
+        ("http://localhost", "https://localhost:80"),
+    ):
+        with pytest.raises(ValueError, match="ambiguous"):
+            Settings(
+                tmp_path / "ambiguous-data",
+                tmp_path / "ambiguous-auth",
+                public_url=primary,
+                web_origins=(alias,),
+            )
+    with pytest.raises(ValueError, match="at most"):
+        Settings(
+            tmp_path / "bounded-data",
+            tmp_path / "bounded-auth",
+            web_origins=tuple(f"https://alias-{index}.example.test" for index in range(9)),
+        )
+
+
+def _cookie_value(set_cookie: str, name: str) -> str:
+    cookies = SimpleCookie()
+    cookies.load(set_cookie)
+    return cookies[name].value
+
+
+async def test_gui_aliases_bind_origin_checks_and_isolate_sessions(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="https://primary.example.test",
+        web_origins=("https://alias.example.test",),
+        extension_urls=("https://extension.example.test",),
+        chatgpt_callback_url="http://127.0.0.1:8765/auth/chatgpt/callback",
+    )
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as http,
+    ):
+        state = AuthStore(settings.auth_dir).load()
+        primary_login = await http.post(
+            "/api/access/session",
+            headers={"Origin": settings.public_url},
+            json={"token": state.token},
+        )
+        assert primary_login.status_code == 204
+        primary_set_cookie = primary_login.headers["set-cookie"]
+        assert "asr_studio_session=" in primary_set_cookie
+        assert "HttpOnly" in primary_set_cookie
+        assert "SameSite=strict" in primary_set_cookie
+        assert "Secure" in primary_set_cookie
+        assert "Domain" not in primary_set_cookie
+
+        assert (await http.get("/")).status_code == 200
+        alias_without_login = await http.get("/", headers={"Host": "alias.example.test"})
+        assert alias_without_login.status_code == 303
+
+        alias_login = await http.post(
+            "/api/access/session",
+            headers={"Host": "alias.example.test", "Origin": "https://alias.example.test"},
+            json={"token": state.token},
+        )
+        assert alias_login.status_code == 204
+        alias_set_cookie = alias_login.headers["set-cookie"]
+        alias_cookie = SimpleCookie()
+        alias_cookie.load(alias_set_cookie)
+        alias_names = [name for name in alias_cookie if name.startswith("asr_studio_session_")]
+        assert len(alias_names) == 1
+        assert "Secure" in alias_set_cookie
+        assert "HttpOnly" in alias_set_cookie
+        assert "SameSite=strict" in alias_set_cookie
+        assert "Domain" not in alias_set_cookie
+        alias_name = alias_names[0]
+
+        assert (await http.get("/", headers={"Host": "alias.example.test"})).status_code == 200
+        wrong_destination_origin = await http.post(
+            "/api/meetings",
+            headers={
+                "Host": "alias.example.test",
+                "Origin": settings.public_url,
+                "Sec-Fetch-Site": "same-origin",
+            },
+        )
+        assert wrong_destination_origin.status_code == 403
+
+        forwarded_alias = await http.post(
+            "/api/access/session",
+            headers={
+                "Origin": "https://alias.example.test",
+                "X-Forwarded-Host": "alias.example.test",
+            },
+            json={"token": state.token},
+        )
+        assert forwarded_alias.status_code == 403
+
+        primary_value = _cookie_value(primary_set_cookie, "asr_studio_session")
+        alias_value = alias_cookie[alias_name].value
+        renamed_v1 = await http.get(
+            "/",
+            headers={
+                "Host": "alias.example.test",
+                "Cookie": f"{alias_name}={primary_value}",
+            },
+        )
+        assert renamed_v1.status_code == 303
+        renamed_v2 = await http.get(
+            "/",
+            headers={"Cookie": f"asr_studio_session={alias_value}"},
+        )
+        assert renamed_v2.status_code == 303
+
+        assert (
+            await http.get("/access", headers={"Host": "extension.example.test"})
+        ).status_code == 400
+        assert (
+            await http.get("/access", headers={"Host": "unknown.example.test"})
+        ).status_code == 400
 
 
 async def test_invalid_token_and_invalid_request_never_echo_submitted_value(client):

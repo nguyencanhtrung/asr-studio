@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import fcntl
 import hashlib
 import hmac
@@ -155,29 +156,70 @@ def token_matches(candidate: str, expected: str) -> bool:
     return hmac.compare_digest(candidate_digest, expected_digest)
 
 
-def create_session_cookie(state: AuthState) -> str:
+def create_session_cookie(state: AuthState, origin: str | None = None) -> str:
+    """Create a legacy cookie or an origin-bound v2 cookie."""
+    return _create_session_cookie(state, origin)
+
+
+def _origin_binding(origin: str) -> str:
+    return hashlib.sha256(origin.encode("utf-8")).hexdigest()
+
+
+def session_cookie_name(origin: str, primary_origin: str) -> str:
+    """Return the host-only cookie name for one configured GUI origin."""
+    if origin == primary_origin:
+        return "asr_studio_session"
+    return f"asr_studio_session_{_origin_binding(origin)[:24]}"
+
+
+def _create_session_cookie(state: AuthState, origin: str | None) -> str:
     nonce = _b64url_encode(secrets.token_bytes(24))
-    payload = f"v1:{state.generation}:{nonce}".encode("ascii")
+    if origin is None:
+        payload = f"v1:{state.generation}:{nonce}".encode("ascii")
+    else:
+        payload = f"v2:{state.generation}:{_origin_binding(origin)}:{nonce}".encode("ascii")
     signing_key = _b64url_decode(state.signing_secret)
     signature = hmac.new(signing_key, payload, hashlib.sha256).digest()
     return f"{_b64url_encode(payload)}.{_b64url_encode(signature)}"
 
 
-def session_is_valid(cookie_value: str | None, state: AuthState) -> bool:
-    if not cookie_value or len(cookie_value) > 512 or cookie_value.count(".") != 1:
+def session_is_valid(
+    cookie_value: str | None,
+    state: AuthState,
+    origin: str | None = None,
+    *,
+    allow_legacy: bool | None = None,
+) -> bool:
+    if (
+        not isinstance(cookie_value, str)
+        or not cookie_value
+        or len(cookie_value) > 512
+        or cookie_value.count(".") != 1
+    ):
         return False
+    if allow_legacy is None:
+        allow_legacy = origin is None
     payload_part, signature_part = cookie_value.split(".", maxsplit=1)
     try:
         payload = _b64url_decode(payload_part)
         signature = _b64url_decode(signature_part)
         fields = payload.decode("ascii").split(":")
-        if len(fields) != 3 or fields[0] != "v1":
+        if len(fields) not in {3, 4} or fields[0] not in {"v1", "v2"}:
             return False
         generation = int(fields[1])
+        if fields[0] == "v1":
+            if len(fields) != 3 or not allow_legacy:
+                return False
+        elif (
+            len(fields) != 4
+            or origin is None
+            or not hmac.compare_digest(fields[2], _origin_binding(origin))
+        ):
+            return False
         expected_signature = hmac.new(
             _b64url_decode(state.signing_secret), payload, hashlib.sha256
         ).digest()
-    except (ValueError, UnicodeDecodeError):
+    except (binascii.Error, ValueError, UnicodeDecodeError):
         return False
     signature_valid = hmac.compare_digest(signature, expected_signature)
     return signature_valid and generation == state.generation

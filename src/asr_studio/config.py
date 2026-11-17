@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +13,9 @@ DEFAULT_PROVIDER_DIR = Path("/var/lib/asr-studio/provider")
 DEFAULT_INSTALL_DIR = Path("/var/lib/asr-studio/install")
 CHATGPT_CALLBACK_PATH = "/auth/chatgpt/callback"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+MAX_WEB_ORIGINS = 8
 MAX_EXTENSION_URLS = 8
-MAX_EXTENSION_URL_BYTES = 256
+MAX_ORIGIN_BYTES = 256
 DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024**3
 DEFAULT_MAX_RECORDING_SECONDS = 4 * 60 * 60
 DEFAULT_UPLOAD_CHUNK_BYTES = 64 * 1024**2
@@ -48,21 +50,38 @@ def _url_has_unsafe_text(raw_url: str) -> bool:
     )
 
 
-def _normalized_extension_url(raw_url: str) -> str:
+def _valid_hostname(hostname: str) -> bool:
+    if not hostname or hostname.endswith(".") or hostname.startswith(".") or ".." in hostname:
+        return False
+    if ":" in hostname:
+        try:
+            ipaddress.IPv6Address(hostname)
+        except ValueError:
+            return False
+        return True
+    labels = hostname.split(".")
+    return all(
+        label
+        and not label.startswith("-")
+        and not label.endswith("-")
+        and all(character.isalnum() or character == "-" for character in label)
+        for label in labels
+    )
+
+
+def _normalized_server_origin(raw_url: str, *, error_message: str) -> str:
     if (
         not isinstance(raw_url, str)
         or not raw_url
-        or len(raw_url.encode("utf-8")) > MAX_EXTENSION_URL_BYTES
+        or len(raw_url.encode("utf-8")) > MAX_ORIGIN_BYTES
         or _url_has_unsafe_text(raw_url)
     ):
-        raise ValueError("ASR_PUBLIC_URL and ASR_EXTENSION_URLS must be strict server origins")
+        raise ValueError(error_message)
     try:
         parsed = urlsplit(raw_url)
         hostname = parsed.hostname
     except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "ASR_PUBLIC_URL and ASR_EXTENSION_URLS must be strict server origins"
-        ) from exc
+        raise ValueError(error_message) from exc
     if (
         parsed.scheme.lower() not in {"http", "https"}
         or hostname is None
@@ -72,31 +91,48 @@ def _normalized_extension_url(raw_url: str) -> str:
         or parsed.query
         or parsed.fragment
         or "*" in parsed.netloc
+        or not _valid_hostname(hostname.lower())
     ):
-        raise ValueError("ASR_PUBLIC_URL and ASR_EXTENSION_URLS must be strict server origins")
+        raise ValueError(error_message)
     normalized_hostname = hostname.lower()
-    if (
-        normalized_hostname.endswith(".")
-        or normalized_hostname.startswith(".")
-        or ".." in normalized_hostname
-        or any(character.isspace() for character in normalized_hostname)
-    ):
-        raise ValueError("ASR_PUBLIC_URL and ASR_EXTENSION_URLS must be strict server origins")
     try:
         port = parsed.port
     except ValueError as exc:
-        raise ValueError("ASR extension origin has an invalid port") from exc
+        raise ValueError(error_message) from exc
     if port is not None and not 1 <= port <= 65535:
-        raise ValueError("ASR extension origin has an invalid port")
+        raise ValueError(error_message)
     loopback = normalized_hostname in LOOPBACK_HOSTS
     scheme = parsed.scheme.lower()
     if scheme == "http" and not loopback:
-        raise ValueError("ASR extension origins must use HTTPS except for loopback")
+        raise ValueError(error_message)
     authority = f"[{normalized_hostname}]" if ":" in normalized_hostname else normalized_hostname
     default_port = 443 if scheme == "https" else 80
     if port is not None and port != default_port:
         authority = f"{authority}:{port}"
     return f"{scheme}://{authority}"
+
+
+def _normalized_extension_url(raw_url: str) -> str:
+    return _normalized_server_origin(
+        raw_url,
+        error_message="ASR_PUBLIC_URL and ASR_EXTENSION_URLS must be strict server origins",
+    )
+
+
+def _normalized_web_url(raw_url: str) -> str:
+    return _normalized_server_origin(
+        raw_url,
+        error_message="ASR_PUBLIC_URL and ASR_WEB_ORIGINS must be strict GUI origins",
+    )
+
+
+def _origin_host_authority(origin: str) -> str:
+    parsed = urlsplit(origin)
+    hostname = (parsed.hostname or "").lower()
+    authority = f"[{hostname}]" if ":" in hostname else hostname
+    default_port = 443 if parsed.scheme == "https" else 80
+    port = parsed.port or default_port
+    return authority if port == default_port else f"{authority}:{port}"
 
 
 def _extension_authority(url: str) -> tuple[str, int]:
@@ -130,13 +166,23 @@ def _host_header_parts(host_header: str | None) -> tuple[str, int | None] | None
     ):
         return None
     normalized_hostname = hostname.lower()
-    if (
-        normalized_hostname.endswith(".")
-        or normalized_hostname.startswith(".")
-        or ".." in normalized_hostname
-    ):
+    if not _valid_hostname(normalized_hostname):
         return None
     return normalized_hostname, port
+
+
+def _host_matches_origin(host_header: str | None, origin: str) -> bool:
+    parts = _host_header_parts(host_header)
+    if parts is None:
+        return False
+    hostname, port = parts
+    parsed = urlsplit(origin)
+    expected_hostname = (parsed.hostname or "").lower()
+    default_port = 443 if parsed.scheme == "https" else 80
+    expected_port = parsed.port or default_port
+    if hostname != expected_hostname:
+        return False
+    return (port is None and expected_port == default_port) or port == expected_port
 
 
 def _bool_from_env(name: str, default: bool) -> bool:
@@ -172,42 +218,10 @@ def extension_finalize_body_bytes(max_chunks: int = EXTENSION_MAX_CHUNKS) -> int
 
 
 def _validate_public_url(raw_url: str) -> str:
-    if not isinstance(raw_url, str) or any(
-        ord(character) < 0x20 or ord(character) == 0x7F for character in raw_url
-    ):
-        raise ValueError(
-            "ASR_PUBLIC_URL must be a loopback http(s) origin or an HTTPS public origin"
-        )
-    try:
-        parsed = urlsplit(raw_url)
-        hostname = parsed.hostname
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "ASR_PUBLIC_URL must be a loopback http(s) origin or an HTTPS public origin"
-        ) from exc
-    loopback = hostname is not None and hostname.lower() in LOOPBACK_HOSTS
-    if (
-        parsed.scheme not in {"http", "https"}
-        or hostname is None
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-        or "*" in parsed.netloc
-        or any(character.isspace() for character in hostname)
-        or (not loopback and parsed.scheme != "https")
-    ):
-        raise ValueError(
-            "ASR_PUBLIC_URL must be a loopback http(s) origin or an HTTPS public origin"
-        )
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("ASR_PUBLIC_URL has an invalid port") from exc
-    if port is not None and not 1 <= port <= 65535:
-        raise ValueError("ASR_PUBLIC_URL has an invalid port")
-    return f"{parsed.scheme}://{parsed.netloc}"
+    return _normalized_server_origin(
+        raw_url,
+        error_message="ASR_PUBLIC_URL must be a loopback http(s) origin or an HTTPS public origin",
+    )
 
 
 def _validate_chatgpt_callback_url(raw_url: str) -> str:
@@ -252,6 +266,7 @@ class Settings:
     data_dir: Path
     auth_dir: Path
     public_url: str = DEFAULT_PUBLIC_URL
+    web_origins: tuple[str, ...] = ()
     cookie_secure: bool = False
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
     upload_chunk_bytes: int = DEFAULT_UPLOAD_CHUNK_BYTES
@@ -293,6 +308,33 @@ class Settings:
         object.__setattr__(self, "asr_qwen_model_path", Path(self.asr_qwen_model_path))
         object.__setattr__(self, "diarization_model_path", Path(self.diarization_model_path))
         object.__setattr__(self, "public_url", _validate_public_url(self.public_url))
+        web_origins = self.web_origins
+        if isinstance(web_origins, str):
+            web_origins = tuple(web_origins.split(",")) if web_origins else ()
+        if web_origins is None or not isinstance(web_origins, tuple):
+            raise ValueError("web_origins must be a tuple of GUI origins")
+        if len(web_origins) > MAX_WEB_ORIGINS:
+            raise ValueError(f"ASR_WEB_ORIGINS supports at most {MAX_WEB_ORIGINS} origins")
+        normalized_web_origins = tuple(_normalized_web_url(origin) for origin in web_origins)
+        web_origins_all = (self.public_url, *normalized_web_origins)
+        if len(set(web_origins_all)) != len(web_origins_all):
+            raise ValueError("ASR_WEB_ORIGINS contains a duplicate GUI origin")
+        effective_authorities: set[tuple[str, int]] = set()
+        bare_host_names: set[str] = set()
+        for origin in web_origins_all:
+            parsed = urlsplit(origin)
+            hostname = (parsed.hostname or "").lower()
+            default_port = 443 if parsed.scheme == "https" else 80
+            effective_port = parsed.port or default_port
+            effective_key = (hostname, effective_port)
+            if effective_key in effective_authorities:
+                raise ValueError("ASR_WEB_ORIGINS contains an ambiguous Host authority")
+            if effective_port == default_port and hostname in bare_host_names:
+                raise ValueError("ASR_WEB_ORIGINS contains an ambiguous bare Host authority")
+            effective_authorities.add(effective_key)
+            if effective_port == default_port:
+                bare_host_names.add(hostname)
+        object.__setattr__(self, "web_origins", normalized_web_origins)
         aliases = self.extension_urls
         if isinstance(aliases, str):
             aliases = tuple(aliases.split(",")) if aliases else ()
@@ -303,10 +345,10 @@ class Settings:
         normalized_default = _normalized_extension_url(self.public_url)
         normalized_aliases = tuple(_normalized_extension_url(alias) for alias in aliases)
         authorities = {_extension_authority(normalized_default)}
-        host_headers = {urlsplit(normalized_default).netloc}
+        host_headers = {_origin_host_authority(normalized_default)}
         for alias in normalized_aliases:
             authority = _extension_authority(alias)
-            host_header = urlsplit(alias).netloc
+            host_header = _origin_host_authority(alias)
             if authority in authorities or host_header in host_headers:
                 raise ValueError("ASR_EXTENSION_URLS contains an ambiguous endpoint authority")
             authorities.add(authority)
@@ -362,6 +404,11 @@ class Settings:
             provider_dir=Path(os.environ.get("ASR_PROVIDER_DIR", str(DEFAULT_PROVIDER_DIR))),
             install_dir=Path(os.environ.get("ASR_INSTALL_DIR", str(DEFAULT_INSTALL_DIR))),
             public_url=os.environ.get("ASR_PUBLIC_URL", DEFAULT_PUBLIC_URL),
+            web_origins=(
+                tuple(os.environ["ASR_WEB_ORIGINS"].split(","))
+                if os.environ.get("ASR_WEB_ORIGINS")
+                else ()
+            ),
             extension_urls=(
                 tuple(os.environ["ASR_EXTENSION_URLS"].split(","))
                 if os.environ.get("ASR_EXTENSION_URLS")
@@ -423,24 +470,39 @@ class Settings:
     def extension_server_urls(self) -> tuple[str, ...]:
         return (_normalized_extension_url(self.public_url), *self.extension_urls)
 
+    @property
+    def web_server_origins(self) -> tuple[str, ...]:
+        return (self.public_url, *self.web_origins)
+
+    def web_origin_for_host(self, host_header: str | None) -> str | None:
+        matches = [
+            origin
+            for origin in self.web_server_origins
+            if _host_matches_origin(host_header, origin)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def select_web_origin(self, requested_origin: str | None) -> str:
+        if requested_origin is None:
+            return self.public_url
+        normalized = _normalized_web_url(requested_origin)
+        if normalized not in self.web_server_origins:
+            raise ValueError("The requested GUI origin is not configured")
+        return normalized
+
+    def callback_host_matches(self, host_header: str | None) -> bool:
+        return bool(
+            self.chatgpt_callback_url
+            and _host_matches_origin(host_header, self.chatgpt_callback_url)
+        )
+
     def extension_endpoint_for_host(self, host_header: str | None) -> str | None:
-        parts = _host_header_parts(host_header)
-        if parts is None:
+        if _host_header_parts(host_header) is None:
             return None
-        hostname, port = parts
         matches: list[str] = []
         for endpoint in self.extension_server_urls:
-            expected_hostname, expected_port = _extension_authority(endpoint)
-            if hostname != expected_hostname:
-                continue
-            if port is None:
-                parsed = urlsplit(endpoint)
-                default_port = 443 if parsed.scheme == "https" else 80
-                if expected_port != default_port:
-                    continue
-            elif port != expected_port:
-                continue
-            matches.append(endpoint)
+            if _host_matches_origin(host_header, endpoint):
+                matches.append(endpoint)
         return matches[0] if len(matches) == 1 else None
 
     @property

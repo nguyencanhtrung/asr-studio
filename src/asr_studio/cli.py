@@ -70,8 +70,9 @@ _SAFE_TASK_STAGES = frozenset(
 _SAFE_TASK_ERROR_MESSAGES = {**DIARIZATION_ERROR_MESSAGES, **TASK_ERROR_MESSAGES}
 
 
-def access_link(state: AuthState, settings: Settings) -> str:
-    return f"{settings.access_url_prefix}{state.token}"
+def access_link(state: AuthState, settings: Settings, origin: str | None = None) -> str:
+    selected_origin = settings.public_url if origin is None else origin
+    return f"{selected_origin}/access#{state.token}"
 
 
 def print_qr_code(value: str) -> None:
@@ -82,15 +83,21 @@ def print_qr_code(value: str) -> None:
         print("".join("██" if cell else "  " for cell in row))
 
 
-def print_access_details(state: AuthState, settings: Settings, *, rotated: bool = False) -> None:
+def print_access_details(
+    state: AuthState,
+    settings: Settings,
+    *,
+    origin: str | None = None,
+    rotated: bool = False,
+) -> None:
     if rotated:
         print("Access token rotated. Previous links and sessions are invalid.")
         print()
     print("Local access link:")
-    print(access_link(state, settings))
+    print(access_link(state, settings, origin))
     print()
     print("Scan or save this QR code:")
-    print_qr_code(access_link(state, settings))
+    print_qr_code(access_link(state, settings, origin))
 
 
 def check_health(settings: Settings) -> int:
@@ -331,7 +338,13 @@ def _parser() -> argparse.ArgumentParser:
     version_parser.add_argument("--expect-schema", type=int)
     access_parser = commands.add_parser("access", help="manage the local access token")
     access_commands = access_parser.add_subparsers(dest="access_command", required=True)
-    access_commands.add_parser("show", help="print the current access link and QR code")
+    show_parser = access_commands.add_parser(
+        "show", help="print the current access link and QR code"
+    )
+    show_parser.add_argument(
+        "--origin",
+        help="select one configured GUI origin instead of the canonical origin",
+    )
     access_commands.add_parser("rotate", help="replace the token and invalidate old sessions")
     commands.add_parser("health", help="check the local app liveness endpoint")
     model_parser = commands.add_parser("model", help="validate local ASR model resources")
@@ -407,13 +420,21 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.command == "task":
         return diagnose_task(settings, arguments.task_id)
 
-    store = AuthStore(settings.auth_dir)
-    if arguments.access_command == "show":
-        print_access_details(store.ensure(), settings)
-        return 0
-    if arguments.access_command == "rotate":
-        print_access_details(store.rotate(), settings, rotated=True)
-        return 0
+    if arguments.command == "access":
+        selected_origin = settings.public_url
+        if arguments.access_command == "show":
+            try:
+                selected_origin = settings.select_web_origin(arguments.origin)
+            except ValueError:
+                print("Access origin is not a configured GUI origin.", file=sys.stderr)
+                return 2
+        store = AuthStore(settings.auth_dir)
+        if arguments.access_command == "show":
+            print_access_details(store.ensure(), settings, origin=selected_origin)
+            return 0
+        if arguments.access_command == "rotate":
+            print_access_details(store.rotate(), settings, origin=selected_origin, rotated=True)
+            return 0
     return 2
 
 
