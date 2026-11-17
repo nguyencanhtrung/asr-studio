@@ -2712,3 +2712,46 @@ source checks, the notes runner's version guard, rendering and publication
 remain production code. This catches integration failures that a pre-rendered
 notes result would bypass. It is workflow evidence, not ASR accuracy or live
 provider qualification.
+
+## [#232](https://github.com/nguyencanhtrung/asr-studio/issues/232) — Explicit GUI origins and origin-bound browser sessions
+
+**Problem.** The original Host guard compared every GUI request with only
+`ASR_PUBLIC_URL`. The existing wrong-Host regression observed the resulting
+`Invalid host` response for a loopback or alias request, even when the request
+could reach the backend through a local tunnel or proxy.
+
+**Change.** Keep `ASR_PUBLIC_URL` as the canonical origin and add bounded,
+normalized `ASR_WEB_ORIGINS` values for explicit GUI aliases. HTTP remains
+limited to literal loopback hosts. Remote origins require HTTPS. The app maps a
+preserved Host header to exactly one configured GUI origin and compares unsafe
+request Origin values with that selected destination. It does not trust
+forwarded headers, subnets or Tailscale identity headers. The ChatGPT callback
+keeps its separate exact-host GET exception.
+
+New logins issue signed v2 sessions bound to the normalized origin. Alias
+cookies use distinct host-only names, while the canonical cookie keeps the
+existing name. Legacy v1 sessions remain canonical-only. Secure, HttpOnly,
+SameSite and no-Domain behavior stays tied to the selected origin and the
+existing force-on override. Rotation still invalidates every session format
+without changing stored application data.
+
+`access show --origin` validates the selection before it reads authentication
+state or prints a token. GUI aliases do not become extension endpoints. Compose
+passes the new setting while its backend bind stays on loopback. Operating
+guidance covers TLS reverse proxies, LAN/VPN HTTPS and private Tailscale Serve.
+Remote plaintext must be redirected or rejected at the proxy before login UI
+traffic reaches the user. The docs do not require blanket HSTS because HTTP and
+HTTPS loopback aliases can coexist.
+
+**Evidence and limits.** Configuration, middleware, auth, CLI, Compose and
+behavioral regressions are covered in the focused Python tests. The rendered
+browser test covers fragment removal, cookie flags and cross-origin session
+isolation when the opt-in browser gate is enabled. Configuring GUI origins does
+not change network listeners, DNS, firewall rules or proxy routes. The proxy
+must still enforce remote HTTPS and preserve Host during rollout. Browser
+cookies remain hostname-scoped across ports; distinct names prevent collisions
+and signed origins prevent acceptance at another GUI origin.
+
+Tag: security, architecture, access. Target: `src/asr_studio/config.py`,
+`src/asr_studio/app.py`, `src/asr_studio/auth.py`, `src/asr_studio/routes.py`,
+`src/asr_studio/cli.py`, `compose.yaml`, `docs/web-access.md` and focused tests.

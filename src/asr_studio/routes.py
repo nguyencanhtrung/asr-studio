@@ -31,7 +31,12 @@ from asr_studio.asr_models import (
     selectable_models,
     write_default_model,
 )
-from asr_studio.auth import AuthStateError, create_session_cookie, token_matches
+from asr_studio.auth import (
+    AuthStateError,
+    create_session_cookie,
+    session_cookie_name,
+    token_matches,
+)
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
 from asr_studio.config import Settings
 from asr_studio.extension_ingest import ExtensionIngestError, retry_recording_session
@@ -1249,11 +1254,14 @@ def install_routes(
         if not token_matches(payload["token"], state.token):
             raise HTTPException(status_code=401, detail="Token không hợp lệ")
 
+        selected_origin = getattr(request.state, "web_origin", None)
+        if selected_origin is None:
+            raise HTTPException(status_code=400, detail="Invalid access origin")
         response.set_cookie(
-            key=SESSION_COOKIE,
-            value=create_session_cookie(state),
+            key=session_cookie_name(selected_origin, settings.public_url),
+            value=create_session_cookie(state, origin=selected_origin),
             httponly=True,
-            secure=settings.cookie_secure or urlsplit(settings.public_url).scheme == "https",
+            secure=settings.cookie_secure or urlsplit(selected_origin).scheme == "https",
             samesite="strict",
             path="/",
         )

@@ -24,6 +24,7 @@ def test_compose_separates_services_volumes_and_loopback_publish():
     assert "provider:/var/lib/asr-studio/provider" in notes["volumes"]
     assert all("provider:" not in mount for mount in worker["volumes"])
     assert app["environment"]["ASR_PROVIDER_DIR"] == "/var/lib/asr-studio/provider"
+    assert app["environment"]["ASR_WEB_ORIGINS"] == "${ASR_WEB_ORIGINS:-}"
     assert "ASR_PROVIDER_DIR" not in worker["environment"]
     assert notes["environment"]["ASR_PROVIDER_DIR"] == "/var/lib/asr-studio/provider"
     assert "--no-access-log" in app["command"]

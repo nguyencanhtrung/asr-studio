@@ -37,6 +37,26 @@ def test_token_comparison_and_cookie_have_no_time_expiry(tmp_path):
     assert session_is_valid(cookie, state)
 
 
+def test_origin_bound_sessions_reject_replay_and_keep_legacy_on_primary_only(tmp_path):
+    state = AuthStore(tmp_path / "auth").ensure()
+    primary = "https://primary.example.test"
+    alias = "https://alias.example.test"
+    legacy = create_session_cookie(state)
+    primary_cookie = create_session_cookie(state, origin=primary)
+    alias_cookie = create_session_cookie(state, origin=alias)
+
+    assert session_is_valid(legacy, state, primary, allow_legacy=True)
+    assert not session_is_valid(legacy, state, alias, allow_legacy=False)
+    assert session_is_valid(primary_cookie, state, primary, allow_legacy=True)
+    assert not session_is_valid(primary_cookie, state, alias, allow_legacy=False)
+    assert session_is_valid(alias_cookie, state, alias, allow_legacy=False)
+    assert not session_is_valid(alias_cookie, state, primary, allow_legacy=True)
+
+    rotated = AuthStore(tmp_path / "auth").rotate()
+    assert not session_is_valid(primary_cookie, rotated, primary, allow_legacy=True)
+    assert not session_is_valid(alias_cookie, rotated, alias, allow_legacy=False)
+
+
 def test_malformed_cookie_is_rejected(tmp_path):
     state = AuthStore(tmp_path / "auth").ensure()
 

@@ -21,7 +21,9 @@ the app checks the exact configured Host and Origin. For a browser on another ma
 Compose bind on loopback, terminate TLS at a reverse proxy, and set `ASR_PUBLIC_URL` to the exact
 public HTTPS origin (for example, `https://asr.example.test`). Proxy that origin to
 `127.0.0.1:8765` and preserve the public Host header; do not enable forwarded-header trust or expose
-the Compose port directly.
+the Compose port directly. The proxy must redirect or reject remote plaintext HTTP before serving
+the login UI. See [Web access and GUI origins](web-access.md) for loopback aliases, LAN/VPN HTTPS
+origins and private Tailscale Serve.
 
 ### Start modes
 
@@ -240,8 +242,9 @@ After checking the new deployment, remove the old volumes with
 | Setting                       | Purpose                                                                 |
 | ----------------------------- | ----------------------------------------------------------------------- |
 | `ASR_PORT`                  | Published port. The default link follows it.                            |
-| `ASR_PUBLIC_URL`            | Exact loopback HTTP/HTTPS origin, or exact public HTTPS origin only; no credentials, path, query, fragment or wildcard. |
-| `ASR_COOKIE_SECURE`         | Default `false` for HTTP. HTTPS `ASR_PUBLIC_URL` forces the access cookie to `Secure`. |
+| `ASR_PUBLIC_URL`            | Exact HTTP loopback or HTTPS origin; no credentials, path, query, fragment or wildcard. |
+| `ASR_WEB_ORIGINS`           | Optional comma-separated additional GUI origins, maximum 8. Remote origins require HTTPS; these values do not become extension endpoints. |
+| `ASR_COOKIE_SECURE`         | Default `false`. The selected HTTPS GUI origin forces its access cookie to `Secure`; `true` forces it for every GUI origin. |
 | `ASR_MAX_UPLOAD_BYTES`      | Upload limit. Default 4 GiB.                                            |
 | `ASR_UPLOAD_CHUNK_BYTES`    | Maximum browser upload request size. Default 64 MiB.                   |
 | `ASR_MAX_RECORDING_SECONDS` | Duration limit. Default 4 hours.                                        |
@@ -280,7 +283,12 @@ The link contains the token in the URL fragment (after `#`). The access page del
 fragment and sends the token in a JSON body to get a browser session.
 
 - Show the current link and QR: `docker compose exec -T app python -m asr_studio.cli access show`
+- Show a configured GUI alias link: `docker compose exec -T app python -m asr_studio.cli access show --origin https://asr.example.test`
 - Replace the token and revoke old links and sessions: `./scripts/rotate-token.sh`
+
+Each GUI origin has its own origin-bound, host-only session cookie. A session from one scheme, host
+or port cannot be replayed on another configured origin. Old legacy sessions remain usable only on
+the canonical origin. Rotation invalidates every session format and keeps application data.
 
 Token rotation changes only the auth state. `docker compose down` keeps the volumes.
 `docker compose down -v` deletes the data and auth volumes of the project.

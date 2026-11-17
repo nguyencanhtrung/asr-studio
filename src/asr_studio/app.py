@@ -16,7 +16,7 @@ from asr_studio.antigravity import (
     AntigravityProvider,
     OmpRpcAdapter,
 )
-from asr_studio.auth import AuthStateError, AuthStore, session_is_valid
+from asr_studio.auth import AuthStateError, AuthStore, session_cookie_name, session_is_valid
 from asr_studio.chatgpt import ChatGPTAdapter, ChatGPTHTTPAdapter, ChatGPTProvider
 from asr_studio.config import CHATGPT_CALLBACK_PATH, Settings
 from asr_studio.extension_auth import EXTENSION_ID, ExtensionAuthService
@@ -27,7 +27,7 @@ from asr_studio.notes import assert_provider_mutation_allowed
 from asr_studio.processing import AutomaticProcessingScheduler
 from asr_studio.processing_routes import install_processing_routes
 from asr_studio.recordings import recover_recordings
-from asr_studio.routes import SESSION_COOKIE, install_routes
+from asr_studio.routes import install_routes
 from asr_studio.storage import initialize
 
 PUBLIC_ROUTES = frozenset(
@@ -50,8 +50,24 @@ EXTENSION_ORIGIN = f"chrome-extension://{EXTENSION_ID}"
 
 
 def _normalized_origin(scheme: str, authority: str) -> tuple[str, str, int] | None:
-    parsed = urlsplit(f"{scheme}://{authority}")
-    if parsed.hostname is None or parsed.username or parsed.password:
+    if not isinstance(scheme, str) or not isinstance(authority, str):
+        return None
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in authority):
+        return None
+    try:
+        parsed = urlsplit(f"{scheme.lower()}://{authority}")
+    except ValueError:
+        return None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or "*" in parsed.netloc
+    ):
         return None
     try:
         port = parsed.port
@@ -68,21 +84,24 @@ def _normalized_origin(scheme: str, authority: str) -> tuple[str, str, int] | No
 
 def _host_is_expected(request: Request, settings: Settings) -> bool:
     host_header = request.headers.get("host", "")
-    actual = _normalized_origin(urlsplit(settings.public_url).scheme, host_header)
+    request.state.web_origin = None
     if request.method.upper() == "GET" and request.url.path == CHATGPT_CALLBACK_PATH:
-        if not settings.chatgpt_callback_url:
-            return False
-        callback = urlsplit(settings.chatgpt_callback_url)
-        callback_origin = _normalized_origin(callback.scheme, host_header)
-        expected_callback_origin = _normalized_origin(callback.scheme, callback.netloc)
-        return callback_origin is not None and callback_origin == expected_callback_origin
-    return actual == settings.origin
-
-
-def _origin_is_expected(origin: str | None, settings: Settings) -> bool:
-    if origin is None:
+        return settings.callback_host_matches(host_header)
+    selected_origin = settings.web_origin_for_host(host_header)
+    if selected_origin is None:
         return False
-    parsed = urlsplit(origin)
+    request.state.web_origin = selected_origin
+    return True
+
+
+def _origin_is_expected(origin: str | None, expected_origin: str | None) -> bool:
+    if origin is None or expected_origin is None:
+        return False
+    try:
+        parsed = urlsplit(origin)
+        expected = urlsplit(expected_origin)
+    except ValueError:
+        return False
     if (
         parsed.scheme not in {"http", "https"}
         or parsed.hostname is None
@@ -93,7 +112,9 @@ def _origin_is_expected(origin: str | None, settings: Settings) -> bool:
         or parsed.fragment
     ):
         return False
-    return _normalized_origin(parsed.scheme, parsed.netloc) == settings.origin
+    return _normalized_origin(parsed.scheme, parsed.netloc) == _normalized_origin(
+        expected.scheme, expected.netloc
+    )
 
 
 def _is_extension_v1_path(path: str) -> bool:
@@ -287,11 +308,12 @@ def create_app(
         elif not _host_is_expected(request, runtime_settings):
             return _with_security_headers(PlainTextResponse("Invalid host", status_code=400))
 
+        selected_origin = getattr(request.state, "web_origin", None)
         is_public = (method, path) in PUBLIC_ROUTES or (
             method in {"GET", "HEAD"} and path.startswith("/assets/fonts/")
         )
         if not is_extension and method in UNSAFE_METHODS:
-            if not _origin_is_expected(request.headers.get("origin"), runtime_settings):
+            if not _origin_is_expected(request.headers.get("origin"), selected_origin):
                 return _with_security_headers(
                     JSONResponse({"detail": "Same-origin request required"}, status_code=403)
                 )
@@ -307,8 +329,18 @@ def create_app(
                 return _with_security_headers(
                     JSONResponse({"detail": "Authentication unavailable"}, status_code=503)
                 )
-            cookie_value = request.cookies.get(SESSION_COOKIE)
-            if not session_is_valid(cookie_value, state):
+            if selected_origin is None:
+                return _with_security_headers(
+                    JSONResponse({"detail": "Authentication required"}, status_code=401)
+                )
+            cookie_name = session_cookie_name(selected_origin, runtime_settings.public_url)
+            cookie_value = request.cookies.get(cookie_name)
+            if not session_is_valid(
+                cookie_value,
+                state,
+                selected_origin,
+                allow_legacy=selected_origin == runtime_settings.public_url,
+            ):
                 if method in {"GET", "HEAD"} and not path.startswith("/api/"):
                     return _with_security_headers(RedirectResponse("/access", status_code=303))
                 return _with_security_headers(

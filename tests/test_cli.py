@@ -74,6 +74,27 @@ def test_legacy_version_flag_keeps_its_output(capsys):
     assert f"asr-studio {__version__}" in capsys.readouterr().out
 
 
+def test_access_show_origin_validates_before_reading_auth_state(tmp_path, monkeypatch, capsys):
+    auth_dir = tmp_path / "auth"
+    monkeypatch.setenv("ASR_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ASR_AUTH_DIR", str(auth_dir))
+    monkeypatch.setenv("ASR_PUBLIC_URL", "https://primary.example.test")
+    monkeypatch.setenv("ASR_WEB_ORIGINS", "https://alias.example.test")
+
+    assert main(["access", "show", "--origin", "https://extension.example.test"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "configured GUI origin" in captured.err
+    assert not auth_dir.exists()
+
+    assert main(["access", "show", "--origin", "https://ALIAS.example.test:443"]) == 0
+    output = capsys.readouterr().out
+    assert "https://alias.example.test/access#" in output
+
+    assert main(["access", "show"]) == 0
+    assert "https://primary.example.test/access#" in capsys.readouterr().out
+
+
 def _prepared_model(path):
     path.mkdir()
     (path / "model.bin").write_bytes(b"model")
