@@ -61,7 +61,8 @@ discard safe even when cancellation cannot reach the server.
 
 **Follow-ups.** The single-run live Stop-to-receipt measurement is complete.
 Long-duration (multi-hour) and physical-device qualification remain separate
-acceptance work.
+acceptance work. Issue
+[#234](https://github.com/nguyencanhtrung/asr-studio/issues/234).
 
 Tag: performance, architecture. Targets: `extensions/chrome/offscreen.js`,
 `extensions/chrome/sw.js`, `extensions/chrome/upload-core.js`, and the extension
