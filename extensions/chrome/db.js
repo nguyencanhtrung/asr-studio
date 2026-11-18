@@ -123,10 +123,15 @@ export async function createCaptureSession({ clientRecordingId, endpoint, title,
     },
     upload: {
       state: "waiting_for_stop",
+      createAttempted: false,
       serverSessionId: null,
       serverEpoch: null,
       nextSequence: 0,
       nextOffset: 0,
+      retryAt: null,
+      cancelRetryAt: null,
+      cancelError: null,
+      cancelSettled: false,
       finalizeId: null,
       finalizePayload: null,
       finalizeSubmitted: false,
@@ -325,7 +330,7 @@ export function isActiveCapture(session) {
 }
 
 export function isUploadable(session) {
-  return Boolean(session && session.capture?.captureComplete && !session.upload?.cleaned);
+  return Boolean(session && session.capture?.createPayload && !session.capture?.interrupted && !session.upload?.cleaned);
 }
 
 export async function getActiveCapture() {

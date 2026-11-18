@@ -32,6 +32,21 @@ import {
   purgeDiscardedCaptures
 } from "./db.js";
 import { pairingGuard, uploadStateForError } from "./recovery-core.js";
+import {
+  classifyUploadFailure,
+  decideDiscard,
+  decideUpload,
+  isCancelRetryableError,
+  isCancelSettledError,
+  isUploadActionable,
+  UPLOAD_RETRY_BACKOFF_MS
+} from "./upload-core.js";
+import {
+  runBoundedDiscardCancel,
+  runCreateWithAttempt,
+  runLockedUploadPass,
+  runReconcileCreateThenCancel
+} from "./upload-runner.js";
 
 const STORAGE_NAMESPACE = "asr-extension-production-v1";
 const TRUSTED_CONTEXTS = `${STORAGE_NAMESPACE}:trusted-contexts`;
@@ -41,6 +56,7 @@ const MIC_SETUP = `${STORAGE_NAMESPACE}:mic-setup`;
 const DEVICE_ID = `${STORAGE_NAMESPACE}:device-id`;
 const UPLOAD_ALARM_PREFIX = `${STORAGE_NAMESPACE}:upload:`;
 const POLL_ALARM_PREFIX = `${STORAGE_NAMESPACE}:receipt:`;
+const DISCARD_CANCEL_TIMEOUT_MS = 5000;
 
 const sessionTokens = new Map();
 const uploadLocks = new Map();
@@ -209,6 +225,7 @@ async function fetchJson(serverUrl, relativePath, init = {}, timeoutMs = 15000) 
       const [code, message] = publicErrorForRemote(response.status);
       const error = makeError(code, message);
       error.status = response.status;
+      error.remoteCode = body?.error?.code;
       throw error;
     }
     return { status: response.status, body };
@@ -220,12 +237,12 @@ async function fetchJson(serverUrl, relativePath, init = {}, timeoutMs = 15000) 
   }
 }
 
-async function requestJson(serverUrl, relativePath, method, payload, extraHeaders = {}) {
+async function requestJson(serverUrl, relativePath, method, payload, extraHeaders = {}, timeoutMs = 15000) {
   return fetchJson(serverUrl, relativePath, {
     method,
     headers: { "Content-Type": "application/json", ...extraHeaders },
     body: payload === undefined ? undefined : JSON.stringify(payload)
-  });
+  }, timeoutMs);
 }
 
 function contextPublic(context) {
@@ -321,12 +338,26 @@ async function clearPairing() {
   return { paired: false };
 }
 
-async function ensureSessionToken(context) {
+function remainingTimeout(deadlineAt, fallbackMs) {
+  if (deadlineAt === null) return fallbackMs;
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) throw makeError("timeout", "The backend request timed out.");
+  return remaining;
+}
+
+async function ensureSessionToken(context, timeoutMs = 15000, deadlineAt = null) {
   const key = contextKey(context.binding);
   const cached = sessionTokens.get(key);
   if (cached && cached.expiresAt > Date.now() + 30000) return cached.token;
   if (!context.deviceToken) throw makeError("pair_required", "Pair the extension with ASR Studio first.");
-  const response = await requestJson(context.binding.serverUrl, "api/extension/v1/session", "POST", {}, { Authorization: `Bearer ${context.deviceToken}` });
+  const response = await requestJson(
+    context.binding.serverUrl,
+    "api/extension/v1/session",
+    "POST",
+    {},
+    { Authorization: `Bearer ${context.deviceToken}` },
+    remainingTimeout(deadlineAt, timeoutMs)
+  );
   const payload = response.body;
   if (!payload || typeof payload.session_token !== "string" || !payload.session_token || payload.backend_id !== context.binding.backendId) {
     throw makeError("protocol_mismatch", "The session response is invalid.");
@@ -337,16 +368,21 @@ async function ensureSessionToken(context) {
   return payload.session_token;
 }
 
-async function authorizedRequest(context, relativePath, init = {}, allowRenew = true) {
-  const token = await ensureSessionToken(context);
+async function authorizedRequest(context, relativePath, init = {}, allowRenew = true, timeoutMs = 15000, deadlineAt = null) {
+  const token = await ensureSessionToken(context, timeoutMs, deadlineAt);
   const headers = new Headers(init.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   try {
-    return await fetchJson(context.binding.serverUrl, relativePath, { ...init, headers });
+    return await fetchJson(
+      context.binding.serverUrl,
+      relativePath,
+      { ...init, headers },
+      remainingTimeout(deadlineAt, timeoutMs)
+    );
   } catch (error) {
     if (allowRenew && error.status === 401) {
       sessionTokens.delete(contextKey(context.binding));
-      return authorizedRequest(context, relativePath, init, false);
+      return authorizedRequest(context, relativePath, init, false, timeoutMs, deadlineAt);
     }
     throw error;
   }
@@ -622,8 +658,18 @@ function pollAlarmName(sessionId) {
   return `${POLL_ALARM_PREFIX}${sessionId}`;
 }
 
-async function scheduleUpload(sessionId, delay = 5000) {
+async function scheduleUpload(sessionId, delay = UPLOAD_RETRY_BACKOFF_MS) {
   await chrome.alarms.create(uploadAlarmName(sessionId), { when: Date.now() + delay });
+}
+
+async function ensureUploadWake(sessionId, decision) {
+  if (decision?.action !== "wait" || !Number.isFinite(decision.retryAt)) return;
+  const alarmName = uploadAlarmName(sessionId);
+  const now = Date.now();
+  const existing = await chrome.alarms.get(alarmName);
+  if (!existing || !Number.isFinite(existing.scheduledTime) || existing.scheduledTime <= now || existing.scheduledTime > decision.retryAt) {
+    await scheduleUpload(sessionId, Math.max(0, decision.retryAt - now));
+  }
 }
 
 async function schedulePoll(sessionId, delay = 1500) {
@@ -645,22 +691,80 @@ async function sessionContext(session) {
   return current;
 }
 
-async function createRemoteSession(session, context) {
+async function cancelRemoteSession(session, context, options = {}) {
+  if (!session.upload.serverSessionId || session.upload.cancelSettled) return session;
+  const {
+    allowRenew = true,
+    canCommit = () => true,
+    deadlineAt = null,
+    persist = true,
+    timeoutMs = 15000
+  } = options;
+  try {
+    const response = await authorizedRequest(context, `api/extension/v1/recording-sessions/${encodeURIComponent(session.upload.serverSessionId)}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ epoch: session.upload.serverEpoch })
+    }, allowRenew, timeoutMs, deadlineAt);
+    const remote = validateBackendIdentity(response.body, session.endpoint);
+    if (remote.id !== session.upload.serverSessionId || remote.epoch !== session.upload.serverEpoch) {
+      throw makeError("protocol_mismatch", "The server cancellation response is invalid.");
+    }
+    if (remote.state !== "canceled") {
+      throw makeError("protocol_mismatch", "The server did not confirm cancellation.");
+    }
+  } catch (error) {
+    if (!isCancelSettledError(error)) throw error;
+  }
+  if (!persist || !canCommit() || (deadlineAt !== null && Date.now() >= deadlineAt)) return session;
+  return patchSession(session.clientRecordingId, "upload", {
+    state: "canceled",
+    cancelSettled: true,
+    retryAt: null,
+    cancelRetryAt: null,
+    cancelError: null,
+    error: null
+  });
+}
+
+async function createRemoteSession(session, context, options = {}) {
   if (session.upload.serverSessionId) return session;
   if (!session.capture.createPayload) throw makeError("capture_metadata_missing", "The capture request payload was not persisted.");
-  const response = await authorizedRequest(context, "api/extension/v1/recording-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(session.capture.createPayload)
-  });
-  const remote = validateSessionResponse(response.body, session.endpoint);
-  return patchSession(session.clientRecordingId, "upload", {
-    state: "receiving",
-    serverSessionId: remote.id,
-    serverEpoch: remote.epoch,
-    nextSequence: remote.next_sequence || 0,
-    nextOffset: remote.next_offset || 0,
-    error: null
+  const {
+    allowRenew = true,
+    canCommit = () => true,
+    deadlineAt = null,
+    persist = true,
+    timeoutMs = 15000
+  } = options;
+  return runCreateWithAttempt({
+    session,
+    persistAttempt: (current) => current.upload.createAttempted
+      ? current
+      : patchSession(current.clientRecordingId, "upload", { createAttempted: true }),
+    postCreate: (current) => authorizedRequest(context, "api/extension/v1/recording-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(current.capture.createPayload)
+    }, allowRenew, timeoutMs, deadlineAt),
+    persistResult: (current, response) => {
+      const remote = validateSessionResponse(response.body, current.endpoint);
+      const uploadPatch = {
+        state: "receiving",
+        serverSessionId: remote.id,
+        serverEpoch: remote.epoch,
+        nextSequence: remote.next_sequence || 0,
+        nextOffset: remote.next_offset || 0,
+        retryAt: null,
+        cancelRetryAt: null,
+        cancelError: null,
+        cancelSettled: false,
+        error: null
+      };
+      const resolved = { ...current, upload: { ...current.upload, ...uploadPatch } };
+      if (!persist || !canCommit() || (deadlineAt !== null && Date.now() >= deadlineAt)) return resolved;
+      return patchSession(current.clientRecordingId, "upload", uploadPatch);
+    }
   });
 }
 
@@ -686,6 +790,7 @@ async function uploadChunks(session, context) {
       state: "receiving",
       nextSequence: ack.next_sequence,
       nextOffset: ack.next_offset,
+      retryAt: null,
       error: null
     });
     await broadcastStatus();
@@ -722,6 +827,7 @@ async function prepareFinalize(session) {
     finalizeId,
     finalizePayload: payload,
     manifestHash,
+    retryAt: null,
     error: null
   });
 }
@@ -737,6 +843,7 @@ async function submitFinalize(session, context) {
   return patchSession(session.clientRecordingId, "upload", {
     state: "finalizing",
     finalizeSubmitted: true,
+    retryAt: null,
     error: null
   });
 }
@@ -773,6 +880,7 @@ async function pollRemoteStatus(session, context) {
   const failed = remote.state === "failed" || remote.state === "canceled";
   const updated = await patchSession(session.clientRecordingId, "upload", {
     state: failed ? "server_failed" : "awaiting_receipt", meetingUrl,
+    retryAt: null,
     error: failed ? { code: "server_failed", message: "The backend did not confirm a complete archive. Local audio is retained." } : null
   });
   if (!failed) await schedulePoll(session.clientRecordingId, 1500);
@@ -780,46 +888,101 @@ async function pollRemoteStatus(session, context) {
   return updated;
 }
 
-async function uploadSession(sessionId) {
-  if (uploadLocks.has(sessionId)) return uploadLocks.get(sessionId);
-  const operation = (async () => {
-    let session = await getSession(sessionId);
-    if (!session || session.upload.cleaned || !isUploadable(session)) return session;
-    try {
-      const context = await sessionContext(session);
-      session = await createRemoteSession(session, context);
-      session = await uploadChunks(session, context);
-      session = await prepareFinalize(session);
-      session = await submitFinalize(session, context);
-      return await pollRemoteStatus(session, context);
-    } catch (error) {
-      const state = uploadStateForError(error, isRetryable(error));
+async function uploadSession(sessionId, source = "recovery") {
+  return runLockedUploadPass({
+    sessionId,
+    source,
+    locks: uploadLocks,
+    getSession,
+    startUpload: (id, nextSource) => uploadSession(id, nextSource),
+    onWait: (decision) => ensureUploadWake(sessionId, decision),
+    now: () => Date.now(),
+    operation: async () => {
+      let session = await getSession(sessionId);
+      if (!session || session.upload.cleaned) return { session, recheck: false };
+      let failedOperation = null;
       try {
-        session = await patchSession(sessionId, "upload", {
-          state,
-          error: safeError(error)
-        });
-        if (state === "retryable") await scheduleUpload(sessionId);
-        await broadcastStatus();
-      } catch {
-        // Preserve the original upload failure.
+        while (true) {
+          const decision = decideUpload(session, Date.now(), { source });
+          if (decision.action === "idle") return { session, recheck: false };
+          if (decision.action === "wait") {
+            failedOperation = "wait";
+            await ensureUploadWake(sessionId, decision);
+            return { session, recheck: true };
+          }
+
+          failedOperation = decision.action;
+          const context = await sessionContext(session);
+          if (decision.action === "cancel") {
+            session = await cancelRemoteSession(session, context);
+            await broadcastStatus();
+            return { session, recheck: false };
+          }
+          if (decision.action === "create_session") {
+            session = await createRemoteSession(session, context);
+            continue;
+          }
+          if (decision.action === "reconcile_session") {
+            session = await runReconcileCreateThenCancel({
+              session,
+              create: (current) => createRemoteSession(current, context),
+              cancel: (resolved) => {
+                failedOperation = "cancel";
+                return cancelRemoteSession(resolved, context);
+              }
+            });
+            await broadcastStatus();
+            return { session, recheck: false };
+          }
+          if (decision.action === "upload_chunks") {
+            await uploadChunks(session, context);
+            // Stop may have completed while the streaming pass held the lock. Re-read
+            // captureComplete before deciding whether finalize is now allowed.
+            session = await getSession(sessionId);
+            continue;
+          }
+          if (decision.action === "finalize") {
+            session = await prepareFinalize(await getSession(sessionId));
+            session = await submitFinalize(session, context);
+            continue;
+          }
+          if (decision.action === "poll_receipt") return { session: await pollRemoteStatus(session, context), recheck: false };
+          return { session, recheck: false };
+        }
+      } catch (error) {
+        try {
+          session = await getSession(sessionId);
+          const retryable = isRetryable(error);
+          const failure = classifyUploadFailure(session, failedOperation, {
+            retryable,
+            cancelRetryable: isCancelRetryableError(error),
+            uploadState: uploadStateForError(error, retryable)
+          }, Date.now());
+          session = await patchSession(sessionId, "upload", {
+            ...failure.patch,
+            cancelError: failure.recordCancelError ? safeError(error) : null,
+            error: safeError(error)
+          });
+          if (failure.alarmDelay !== null) await scheduleUpload(sessionId, failure.alarmDelay);
+          await broadcastStatus();
+          return { session, recheck: failure.recheck };
+        } catch {
+          // Preserve the original upload failure.
+        }
+        return { session, recheck: false };
       }
-      return session;
     }
-  })();
-  uploadLocks.set(sessionId, operation);
-  try {
-    return await operation;
-  } finally {
-    uploadLocks.delete(sessionId);
-  }
+  });
 }
 
 async function resumeUploads() {
   const sessions = await listSessions();
   for (const session of sessions) {
-    if (isUploadable(session) && session.upload.state !== "receipt_mismatch") {
-      await uploadSession(session.clientRecordingId);
+    const decision = decideUpload(session, Date.now(), { source: "recovery" });
+    if (decision.action === "wait") {
+      await ensureUploadWake(session.clientRecordingId, decision);
+    } else if ((isUploadable(session) || ["cancel", "reconcile_session"].includes(decision.action)) && isUploadActionable(decision)) {
+      await uploadSession(session.clientRecordingId, "recovery");
     }
   }
 }
@@ -827,7 +990,7 @@ async function resumeUploads() {
 async function stopCapture() {
   await ensureOffscreen();
   const response = await sendOffscreen({ type: "STOP_CAPTURE" });
-  if (response?.status?.captureComplete) void resumeUploads();
+  if (response?.status?.captureComplete) void resumeUploads().catch(() => {});
   await broadcastStatus(response?.status || null);
   return response;
 }
@@ -857,11 +1020,61 @@ async function openResult(sessionId) {
 async function discardCapture(sessionId) {
   const active = await getActiveCapture();
   if (active?.clientRecordingId === sessionId) throw makeError("capture_busy", "Stop the active capture before discarding local audio.");
-  await discardLocalCapture(sessionId);
+  const session = await getSession(sessionId);
+  const decision = decideDiscard(session);
+  if (["cancel_once_then_discard", "reconcile_then_cancel_once_then_discard"].includes(decision.action)) {
+    await runBoundedDiscardCancel({
+      timeoutMs: DISCARD_CANCEL_TIMEOUT_MS,
+      cancel: async ({ deadlineAt, isActive }) => {
+        const context = await sessionContext(session);
+        if (decision.action === "reconcile_then_cancel_once_then_discard") {
+          return runReconcileCreateThenCancel({
+            session,
+            create: (current) => createRemoteSession(current, context, {
+              allowRenew: false,
+              canCommit: isActive,
+              deadlineAt,
+              persist: false
+            }),
+            cancel: (resolved) => cancelRemoteSession(resolved, context, {
+              allowRenew: false,
+              canCommit: isActive,
+              deadlineAt,
+              persist: false
+            })
+          });
+        }
+        return cancelRemoteSession(session, context, {
+          allowRenew: false,
+          canCommit: isActive,
+          deadlineAt,
+          persist: false
+        });
+      },
+      discard: () => discardLocalCapture(sessionId)
+    });
+  } else {
+    await discardLocalCapture(sessionId);
+  }
   await chrome.alarms.clear(`${UPLOAD_ALARM_PREFIX}${sessionId}`);
   await chrome.alarms.clear(`${POLL_ALARM_PREFIX}${sessionId}`);
   await broadcastStatus();
   return { ok: true };
+}
+
+async function processCaptureStatus(status) {
+  await broadcastStatus(status || null);
+  const sessionId = status?.sessionId;
+  if (!sessionId) return;
+  const session = await getSession(sessionId);
+  if (!session) return;
+  const decision = decideUpload(session, Date.now(), { source: "status" });
+  if (decision.action === "wait") {
+    await ensureUploadWake(sessionId, decision);
+  } else if (isUploadActionable(decision)) {
+    await uploadSession(sessionId, "status");
+    await broadcastStatus();
+  }
 }
 
 async function messageFromUi(message) {
@@ -894,7 +1107,7 @@ async function messageFromUi(message) {
     case "SET_TAB_MONITOR":
       return setTabMonitor(message.enabled);
     case "RETRY_UPLOAD":
-      return { ok: true, status: publicSession(await uploadSession(message.sessionId)) };
+      return { ok: true, status: publicSession(await uploadSession(message.sessionId, "manual")) };
     case "OPEN_RESULT":
       return openResult(message.sessionId);
     case "DISCARD_CAPTURE":
@@ -916,7 +1129,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target !== "worker") return false;
   if (senderIsOffscreen(sender)) {
     if (message?.type === "CAPTURE_STATUS") {
-      void broadcastStatus(message.status || null);
+      void processCaptureStatus(message.status || null).catch(() => {});
       sendResponse({ ok: true });
       return false;
     }

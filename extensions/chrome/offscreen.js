@@ -11,6 +11,8 @@ import {
 } from "./capture-core.js";
 import { MIME_TYPE, makeError } from "./protocol.js";
 
+export const MEDIA_RECORDER_TIMESLICE_MS = 5000;
+
 const runtime = {
   sessionId: null,
   starting: false,
@@ -391,7 +393,7 @@ async function startCapture(message) {
     recorder.addEventListener("error", (event) => {
       void markInterrupted(event.error || makeError("recorder_error", "The media recorder reported an error."), sessionId, generation);
     });
-    recorder.start(1000);
+    recorder.start(MEDIA_RECORDER_TIMESLICE_MS);
     runtime.starting = false;
     runtime.meterTimer = setInterval(() => void refreshMeters(), 250);
     await sendStatus(initialized);

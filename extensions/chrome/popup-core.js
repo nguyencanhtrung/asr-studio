@@ -106,7 +106,14 @@ export function capturePresentation(snapshot) {
     return { label: "Sẵn sàng", detail: "Tab hiện tại sẽ là nguồn ghi.", state: "ready" };
   }
   if (capture.status === "starting") return { label: "Đang khởi động", detail: "Đang nối tab và microphone…", state: "recording" };
-  if (capture.status === "recording") return { label: "Đang ghi âm", detail: "Bạn có thể đóng popup; ghi âm vẫn tiếp tục.", state: "recording" };
+  if (capture.status === "recording") {
+    const streaming = session?.upload?.state === "receiving";
+    return {
+      label: "Đang ghi âm",
+      detail: streaming ? "Đang gửi audio trong khi ghi; bạn có thể đóng popup." : "Bạn có thể đóng popup; ghi âm vẫn tiếp tục.",
+      state: "recording"
+    };
+  }
   if (capture.status === "stopping") return { label: "Đang lưu…", detail: "Đang lưu phần audio cuối cùng.", state: "recording" };
   if (capture.status === "interrupted") return { label: "Bị gián đoạn", detail: "Audio đã giữ lại nhưng chưa hoàn tất.", state: "warning" };
   if (capture.status === "complete") {

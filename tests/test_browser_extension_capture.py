@@ -39,6 +39,10 @@ pytestmark = pytest.mark.browser
 ROOT = Path(__file__).parents[1]
 
 
+class RequestLog(list):
+    fail_create_responses = False
+
+
 def _approve_host_permission():
     assert os.environ.get("ASR_EXTENSION_DISPOSABLE_XVFB") == "1"
     x11 = ctypes.CDLL("libX11.so.6")
@@ -106,7 +110,7 @@ def capture_server(tmp_path, request):
     tls = request.param == "https"
     url = f"https://asr-native.test:{port}" if tls else f"http://127.0.0.1:{port}"
     failure = getattr(request.node, "callspec", None)
-    quota = 32768 if failure and failure.params.get("failure") == "quota" else 512 * 1024**2
+    quota = 128 * 1024 if failure and failure.params.get("failure") == "quota" else 512 * 1024**2
     settings = Settings(
         data_dir=tmp_path / "data",
         auth_dir=tmp_path / "auth",
@@ -117,7 +121,7 @@ def capture_server(tmp_path, request):
     if request.node.name.startswith("test_native_capture_runs_transcript_and_notes"):
         settings = processing_settings(settings, tmp_path, adapter)
     app = create_app(settings, chatgpt_adapter=adapter)
-    requests = []
+    requests = RequestLog()
     transient_status = failure.params.get("transient_status") if failure else None
     activation_status = failure.params.get("activation_status") if failure else None
     activation_after = failure.params.get("activation_after", 0) if failure else 0
@@ -141,7 +145,14 @@ def capture_server(tmp_path, request):
         ):
             transient_remaining -= 1
             return JSONResponse({"error": {"code": "temporary"}}, status_code=transient_status)
-        return await call_next(request)
+        response = await call_next(request)
+        if (
+            requests.fail_create_responses
+            and request.method == "POST"
+            and request.url.path == "/api/extension/v1/recording-sessions"
+        ):
+            return JSONResponse({"error": {"code": "temporary"}}, status_code=503)
+        return response
 
     ssl = {}
     if tls:
@@ -406,9 +417,14 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     popup.close()
     control.close()
     # No control page remains; the native offscreen owner continues persisting audio.
-    tab.wait_for_timeout(3500)
+    tab.wait_for_timeout(7500)
     popup = NativePopup(context, tab)
     popup.wait_text("#capture-state", "Recording")
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        server_row = db.execute("SELECT next_sequence FROM extension_recording_sessions").fetchone()
+        assert server_row and server_row[0] > 0, server_row
+    requests_before_stop = list(requests)
+    assert any(method == "PUT" and "/chunks/" in path for method, path in requests_before_stop)
     popup.click("#stop-button")
     popup.close()
     control = context.new_page()
@@ -425,6 +441,10 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     session = status["sessions"][0]
     assert session["capture"]["captureComplete"]
     assert session["upload"]["receipt"]["recording_id"] == session["summary"]["recordingId"]
+    assert (
+        sum(method == "PUT" and "/chunks/" in path for method, path in requests)
+        == session["capture"]["chunkCount"]
+    )
     chunks = control.evaluate("""async () => {
         const db = await new Promise((resolve,reject) => {
             const req=indexedDB.open('asr-extension-production-v1');
@@ -575,7 +595,7 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
             method == "POST" and path == "/api/extension/v1/recording-sessions"
             for method, path in requests
         )
-        == create_requests_before_repair + 1
+        == create_requests_before_repair
     )
     assert len(_status(control)["sessions"]) == 2
 
@@ -604,7 +624,8 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     assert not session["upload"]["cleaned"] and session["upload"]["receipt"] is None
     if failure == "quota":
         assert session["capture"]["interrupted"] and not session["capture"]["captureComplete"]
-        assert not any("/recording-sessions" in path for _method, path in requests)
+        assert any(path == "/api/extension/v1/recording-sessions" for _method, path in requests)
+        assert any(path.endswith("/cancel") for _method, path in requests)
         record_id = operator.evaluate(
             "async () => (await (await fetch('/api/extension/devices')).json()).devices[0].id"
         )
@@ -621,7 +642,7 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     else:
         assert session["capture"]["captureComplete"] and session["upload"]["error"]
         assert session["upload"]["error"]["code"] == "host_permission"
-        assert not any("/recording-sessions" in path for _method, path in requests)
+        assert any(path == "/api/extension/v1/recording-sessions" for _method, path in requests)
         retry = control.locator('[data-action="retry"]')
         retry.focus()
         control.keyboard.press("Enter")
@@ -641,6 +662,105 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     expect(control.locator(".session-row")).to_have_count(0)
 
 
+def test_native_uncertain_create_is_canceled_after_capture_interruption(
+    capture_server, paired_capture
+):
+    settings, url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    requests.fail_create_responses = True
+
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
+
+    session = None
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        session = sessions[0] if sessions else None
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            server_row = db.execute(
+                "SELECT client_recording_id, state FROM extension_recording_sessions"
+            ).fetchone()
+        if session and session["capture"]["chunkCount"] > 0 and server_row:
+            break
+        control.wait_for_timeout(150)
+    assert session and session["capture"]["chunkCount"] > 0, session
+    assert server_row == (session["id"], "receiving"), server_row
+    assert session["upload"]["receipt"] is None
+    assert any(
+        method == "POST" and path == "/api/extension/v1/recording-sessions"
+        for method, path in requests
+    )
+
+    cdp = context.browser.new_browser_cdp_session()
+    try:
+        targets = cdp.send("Target.getTargets")["targetInfos"]
+        offscreen = next(
+            (
+                item
+                for item in targets
+                if item["url"] == f"chrome-extension://{EXTENSION_ID}/offscreen.html"
+            ),
+            None,
+        )
+        assert offscreen, targets
+        cdp.send("Target.closeTarget", {"targetId": offscreen["targetId"]})
+        requests.fail_create_responses = False
+        targets = cdp.send("Target.getTargets")["targetInfos"]
+        service_worker = next(
+            (item for item in targets if item["type"] == "service_worker"),
+            None,
+        )
+        if service_worker:
+            cdp.send("Target.closeTarget", {"targetId": service_worker["targetId"]})
+    finally:
+        cdp.detach()
+
+    control.reload()
+    recovered = None
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        recovered = next((item for item in sessions if item["id"] == session["id"]), None)
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            server_rows = db.execute(
+                "SELECT client_recording_id, state FROM extension_recording_sessions"
+            ).fetchall()
+        if recovered and server_rows == [(session["id"], "canceled")]:
+            break
+        control.wait_for_timeout(200)
+
+    assert recovered and recovered["capture"]["interrupted"], recovered
+    assert recovered["capture"]["chunkCount"] > 0
+    assert recovered["capture"]["totalBytes"] > 0
+    assert not recovered["upload"]["cleaned"] and recovered["upload"]["receipt"] is None
+    assert server_rows == [(session["id"], "canceled")]
+    local_chunks = control.evaluate("""async () => {
+        const db = await new Promise((resolve, reject) => {
+            const req = indexedDB.open('asr-extension-production-v1');
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        return new Promise((resolve, reject) => {
+            const req = db.transaction('chunks').objectStore('chunks').count();
+            req.onsuccess = () => { db.close(); resolve(req.result); };
+            req.onerror = () => { db.close(); reject(req.error); };
+        });
+    }""")
+    assert local_chunks == recovered["capture"]["chunkCount"]
+    assert (
+        sum(
+            method == "POST" and path == "/api/extension/v1/recording-sessions"
+            for method, path in requests
+        )
+        >= 2
+    )
+    assert any(path.endswith("/cancel") for _method, path in requests)
+    assert not any(path.endswith("/finalize") for _method, path in requests)
+
+
 @pytest.mark.parametrize("transient_status", [408, 429])
 def test_native_temporary_http_failure_retries_retained_audio(
     capture_server, paired_capture, transient_status
@@ -652,13 +772,20 @@ def test_native_temporary_http_failure_retries_retained_audio(
     popup.wait_text("#capture-state", "Recording")
     popup.close()
     tab.wait_for_timeout(1500)
-    control.locator("#stop-button").click()
     deadline = time.monotonic() + 15
     session = None
     while time.monotonic() < deadline:
         sessions = _status(control)["sessions"]
         session = sessions[0] if sessions else None
         if session and session["upload"]["error"]:
+            break
+        control.wait_for_timeout(100)
+    assert session and session["capture"]["status"] in {"recording", "stopping"}, session
+    control.locator("#stop-button").click()
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        session = _status(control)["sessions"][0]
+        if session["upload"]["error"] and session["capture"]["captureComplete"]:
             break
         control.wait_for_timeout(100)
     assert session and session["upload"]["state"] == "retryable", session
