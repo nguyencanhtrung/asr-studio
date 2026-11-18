@@ -189,7 +189,8 @@ function uploadText(upload, capture) {
   if (upload?.state === "retryable") return t("sẽ thử lại");
   if (upload?.state === "needs_reconnect" || upload?.state === "auth_required") return t("cần kết nối lại");
   if (upload?.state === "server_failed" || upload?.state === "receipt_mismatch") return t("lỗi xác nhận");
-  return upload?.state === "receiving" ? t("đang gửi") : t("chưa gửi");
+  if (upload?.state === "receiving") return capture?.status === "recording" ? t("đang gửi trong khi ghi") : t("đang gửi");
+  return t("chưa gửi");
 }
 
 function renderSessionRow(session) {

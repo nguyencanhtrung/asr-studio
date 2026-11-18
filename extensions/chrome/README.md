@@ -47,9 +47,12 @@ adopt prototype buffers.
    code for that recovery.
 3. Return to the meeting tab and start from the popup. The popup and control page
    can close while the offscreen capture and upload continue.
-4. Stop from the popup or control page. The client waits for the final local
-   persistence barrier, uploads the retained chunks, and cleans local chunks
-   only after a matching durable raw receipt from the same backend.
+4. Audio chunks upload while recording. Stop from the popup or control page; the
+   client waits for the final local persistence barrier, sends only the tail
+   chunks, and cleans local chunks only after a matching durable raw receipt from
+   the same backend. The recorder's 5-second timeslice bounds an interruption's
+   unsaved tail to at most one slice.
+If a create response is lost after the server commits, recovery replays the idempotent create and cancels the interrupted session while retaining local audio.
 
 The selected API URL is the authority for capabilities, pairing, session,
 chunk, finalize, and receipt requests. HTTP is limited to literal loopback.

@@ -53,3 +53,16 @@ test("receipt presentation uses the current API and web binding", () => {
     "Sẵn sàng"
   );
 });
+
+test("recording presentation names live upload in both active UI states", () => {
+  const capture = { sessionId: "live", startedAt: 100, status: "recording" };
+  const live = {
+    id: "live",
+    endpoint: { serverUrl: "https://asr.example.test", webUrl: "https://asr.example.test", backendId: "backend-a" },
+    capture,
+    upload: { state: "receiving", cleaned: false, receipt: null }
+  };
+  const presentation = capturePresentation(status("epoch-a", 1, [live], capture));
+  assert.equal(presentation.label, "Đang ghi âm");
+  assert.match(presentation.detail, /Đang gửi audio/);
+});

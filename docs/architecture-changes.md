@@ -26,6 +26,47 @@ altering assignments. Full app/ASR/notes acceptance and representative real-meet
 separate from these memory measurements. Issue [#97](https://github.com/nguyencanhtrung/asr-studio/issues/97).
 Tag: performance, operations. Target: `docs/release/diarization-memory.md`, README hardware guidance.
 
+## Extension upload while recording
+
+**Problem and measured cause.** The client previously retained every chunk until Stop,
+then sent chunks sequentially. The server's durable chunk path has a near-fixed cost:
+57.5 ms for 16 kB chunks across 600 PUTs, 58.8 ms for 160 kB across 60 PUTs, and
+61.8 ms for 960 kB across 10 PUTs; the same 57.6 MB projection was 207 s, 21 s,
+and 4 s respectively. Source: the [extension upload timing report](release/extension-upload-timing.md)
+(in-process ASGI, NVMe, sequential PUTs).
+
+**Design change.** The client now uses one named 5,000 ms MediaRecorder timeslice,
+creates the server session as soon as capture metadata is durable, and streams
+persisted chunks while capture is recording or stopping. A Stop race re-reads the
+durable capture state before finalize; upload failures leave capture running and
+use a retry backoff. Interrupted captures cancel an existing server session while
+retaining local bytes; local discard makes one bounded best-effort cancellation.
+If a create response is lost after the server commits, interrupted recovery replays the idempotent create and cancels that same session before retaining the local bytes.
+The wire contract and server implementation are unchanged.
+
+**Before and after.** In the live single-run comparison, both recordings were
+about 600 s under the loopback Chromium configuration documented in the [extension
+upload timing report](release/extension-upload-timing.md). Before, the recording
+was 601.1 s with 590 chunks, 0 chunks on the server before Stop, and 45.68 s from
+Stop to receipt. After, the recording was 600.8 s with 120 chunks, 119 chunks on
+the server before Stop, and 1.86 s from Stop to receipt. Actual slice sizes and
+counts depend on the MediaRecorder stream.
+
+**Trade-offs and rejected options.** A 5-second timeslice bounds the unsaved
+interruption tail but can lose more recent audio than a shorter slice. Reducing
+server fsync/commit cost per chunk was rejected because it weakens the durable-ACK
+contract. A canceled server session keeps its staged chunks until the operator
+deletes it; this preserves the server-side pending library entry and makes local
+discard safe even when cancellation cannot reach the server.
+
+**Follow-ups.** The single-run live Stop-to-receipt measurement is complete.
+Long-duration (multi-hour) and physical-device qualification remain separate
+acceptance work.
+
+Tag: performance, architecture. Targets: `extensions/chrome/offscreen.js`,
+`extensions/chrome/sw.js`, `extensions/chrome/upload-core.js`, and the extension
+capture documentation, and [the timing report](release/extension-upload-timing.md).
+
 ## Documentation policy
 
 The [release process](release/process.md) defines checks and evidence reuse for new releases.
