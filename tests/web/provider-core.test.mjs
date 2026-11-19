@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createRunner, createStore } from "../../src/asr_studio/web/store.js";
-import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, initialState, reduce, selectAsr, selectLauncher, selectView } from "../../src/asr_studio/web/provider-core.js";
+import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, SETTINGS_TOP_LEVELS, initialState, reduce, selectAsr, selectLauncher, selectProviderOverview, selectView, settingsParent } from "../../src/asr_studio/web/provider-core.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const reply = (status, body) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
@@ -126,12 +126,13 @@ async function loaded(env, { list = LIST, open = true } = {}) {
 
 // ---- settings sections ----
 
-test("the settings dialog opens at AI provider, or at the section a language change left", () => {
+test("the settings dialog opens at the overview, provider sub-item, or saved section", () => {
   const opened = (state, action) => reduce(state, { type: "provider/dialog-opened", ...action });
   const selected = reduce(initialState, { type: "provider/settings-section-selected", section: "about" }).state;
   assert.equal(selected.launcher.section, "about");
   assert.equal(opened(selected, { launcher: null }).state.launcher.section, "ai");
-  assert.equal(opened(selected, { launcher: "chatgpt" }).state.launcher.section, "ai");
+  assert.equal(opened(selected, { launcher: "chatgpt" }).state.launcher.section, "openai");
+  assert.equal(opened(selected, { launcher: "antigravity" }).state.launcher.section, "antigravity");
 
   const reopened = opened(initialState, { launcher: null, section: "theme" });
   assert.equal(reopened.state.launcher.section, "theme");
@@ -140,13 +141,40 @@ test("the settings dialog opens at AI provider, or at the section a language cha
   assert.equal(opened(initialState, { launcher: null }).effects.some((effect) => effect.key === SETTINGS_SECTION_KEY), false);
 });
 
-test("choosing a section drops a pending scroll to the Google part; the scroll keeps the section", () => {
-  const pending = reduce(initialState, { type: "provider/dialog-opened", launcher: "antigravity" }).state;
-  assert.equal(pending.launcher.scroll, true);
-  const moved = reduce(pending, { type: "provider/settings-section-selected", section: "asr" }).state;
-  assert.deepEqual(moved.launcher, { section: "asr", scroll: false });
-  const handled = reduce(pending, { type: "provider/scroll-handled" }).state;
-  assert.deepEqual(handled.launcher, { section: "ai", scroll: false });
+test("settings ids share one namespace, skip Local AI, and use five phone tabs", () => {
+  const google = reduce(initialState, { type: "provider/dialog-opened", launcher: "antigravity" }).state;
+  assert.deepEqual(google.launcher, { section: "antigravity" });
+  assert.equal(Object.hasOwn(google.launcher, "scroll"), false);
+  assert.deepEqual(SETTINGS_TOP_LEVELS, ["ai", "asr", "devices", "theme", "about"]);
+  assert.deepEqual(SETTINGS_SECTIONS, ["ai", "openai", "antigravity", "local", "processing", "asr", "devices", "theme", "about"]);
+  assert.ok(SETTINGS_SECTIONS.includes("local"));
+  assert.equal(settingsParent("processing"), "ai");
+  assert.equal(reduce(initialState, { type: "provider/settings-section-selected", section: "local" }).state.launcher.section, "ai");
+  assert.equal(reduce(initialState, { type: "provider/settings-section-selected", section: "processing" }).state.launcher.section, "processing");
+});
+
+test("the provider overview is read-only and summarizes status and selected model", () => {
+  const state = {
+    ...initialState,
+    chatgpt: {
+      ...initialState.chatgpt,
+      statusText: "Đã kết nối",
+      savedModel: "m1",
+      selectedModel: "draft-model",
+      models: [
+        { id: "m1", display_name: "Saved model" },
+        { id: "draft-model", display_name: "Draft model" },
+      ],
+    },
+    antigravity: { ...initialState.antigravity, savedModel: "g1", models: [{ id: "g1", display_name: "G1" }] },
+  };
+  const rows = selectProviderOverview(state);
+  assert.deepEqual(rows.map((row) => row.id), ["openai", "antigravity", "local", "processing"]);
+  assert.equal(rows[0].model, "Saved model");
+  assert.equal(rows[1].name, "Google Antigravity");
+  assert.equal(rows[2].disabled, true);
+  assert.equal(rows[2].status.text, "Sắp hỗ trợ");
+  assert.equal(rows[3].disabled, false);
 });
 
 // ---- load ----
@@ -156,7 +184,6 @@ test("opening the dialog loads status, preferences and catalog for both provider
   env.store.dispatch({ type: "provider/dialog-opened", launcher: "antigravity" });
   assert.equal(own(env, CHATGPT).badge.state, "loading");
   assert.equal(own(env, CHATGPT).launcher.status, "loading");
-  assert.equal(env.state().launcher.scroll, true);
   assert.equal(own(env, ANTIGRAVITY).badge.state, "loading"); // Google keeps its markup until the answer
   await loaded(env, { list: LIST, open: false });
   const chatgpt = own(env, CHATGPT);
@@ -938,10 +965,10 @@ test("restore for one provider leaves the other one alone", () => {
 
 // ---- shared pieces ----
 
-test("the Google button scroll waits for both status reads, then is handled once", async () => {
+test("provider launchers select a direct settings page without a scroll effect", async () => {
   const env = setup();
   env.store.dispatch({ type: "provider/dialog-opened", launcher: "antigravity" });
-  assert.equal(env.state().launcher.scroll, true);
+  assert.deepEqual(env.state().launcher, { section: "antigravity" });
   assert.equal(own(env, CHATGPT).loading && own(env, ANTIGRAVITY).loading, true);
   await env.answer(env.is("GET", "/api/providers"), 200, LIST);
   await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
@@ -950,10 +977,8 @@ test("the Google button scroll waits for both status reads, then is handled once
   await env.answer(env.is("GET", "/api/providers"), 200, LIST);
   await env.answer(env.is("GET", "/antigravity/models"), 200, MODELS.antigravity);
   assert.equal(own(env, CHATGPT).loading || own(env, ANTIGRAVITY).loading, false);
-  env.store.dispatch({ type: "provider/scroll-handled" });
-  assert.equal(env.state().launcher.scroll, false);
   env.store.dispatch({ type: "provider/dialog-opened", launcher: "chatgpt" });
-  assert.equal(env.state().launcher.scroll, false);
+  assert.deepEqual(env.state().launcher, { section: "openai" });
 });
 
 test("provider actions are namespaced and other features' actions leave the state alone", () => {

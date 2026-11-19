@@ -33,7 +33,7 @@ const EFFORT_LABELS = {
   xhigh: t("Rất cao (xhigh)"),
   max: t("Tối đa (max)"),
 };
-const DEFAULT_EFFORT_LABEL = t("Mặc định của mô hình");
+const DEFAULT_EFFORT_LABEL = t("Mặc định của model");
 
 // Request errors every provider shares (the old connectionRequest table).
 const REQUEST_ERRORS = {
@@ -68,9 +68,9 @@ const REQUEST_ERRORS = {
   refresh_token_expired: t("Quyền đăng nhập ChatGPT đã hết hạn. Hãy kết nối lại tài khoản."),
   refresh_token_invalidated: t("Quyền đăng nhập ChatGPT đã hết hạn. Hãy kết nối lại tài khoản."),
   refresh_token_reused: t("Quyền đăng nhập ChatGPT đã hết hạn. Hãy kết nối lại tài khoản."),
-  model_not_available: t("Mô hình đã chọn không khả dụng với tài khoản ChatGPT này. Hãy chọn mô hình khác."),
-  model_unavailable: t("Mô hình đã chọn không khả dụng với tài khoản ChatGPT này. Hãy chọn mô hình khác."),
-  invalid_reasoning_effort: t("Mức suy luận này không được mô hình đã chọn hỗ trợ."),
+  model_not_available: t("Model đã chọn không khả dụng với tài khoản ChatGPT này. Hãy chọn model khác."),
+  model_unavailable: t("Model đã chọn không khả dụng với tài khoản ChatGPT này. Hãy chọn model khác."),
+  invalid_reasoning_effort: t("Mức suy luận này không được model đã chọn hỗ trợ."),
 };
 
 function defaultError(code, status, provider) {
@@ -195,17 +195,17 @@ export const CHATGPT = {
     loginExpired: t("Phiên đăng nhập đã hết hạn. Hãy bắt đầu lại để kết nối ChatGPT."),
     loginFailed: t("Đăng nhập ChatGPT chưa hoàn tất."),
     loginFailedError: t("Không thể hoàn tất đăng nhập ChatGPT."),
-    choose: t("Chọn mô hình"),
-    noModels: t("Chưa có mô hình khả dụng"),
+    choose: t("Chọn model"),
+    noModels: t("Chưa có model khả dụng"),
     unavailableOption: t("{model} — không khả dụng với tài khoản này"),
-    connectToLoad: t("Kết nối ChatGPT để tải mô hình"),
-    unavailableSaved: t("Mô hình đã lưu “{model}” hiện không khả dụng. Hãy chọn mô hình khác để thay đổi lựa chọn."),
-    chooseToSave: t("Chọn mô hình rồi lưu để dùng cho ghi chú cuộc họp."),
+    connectToLoad: t("Kết nối ChatGPT để tải model"),
+    unavailableSaved: t("Model đã lưu “{model}” hiện không khả dụng. Hãy chọn model khác để thay đổi lựa chọn."),
+    chooseToSave: t("Chọn model rồi lưu để dùng cho notes."),
     unsavedModel: t("Lựa chọn mới chưa được lưu."),
     unsavedEffort: t("Mức suy luận mới chưa được lưu."),
-    saving: t("Đang lưu mô hình…"),
-    saved: t("Đã lưu {model} · effort {effort} cho ghi chú cuộc họp."),
-    saveFailed: t("Chưa lưu được mô hình. Lựa chọn đã lưu trước đó vẫn được giữ nguyên."),
+    saving: t("Đang lưu model…"),
+    saved: t("Đã lưu {model} · effort {effort} cho notes."),
+    saveFailed: t("Chưa lưu được model. Lựa chọn đã lưu trước đó vẫn được giữ nguyên."),
     verifying: t("Đang chạy một yêu cầu kiểm tra tổng hợp…"),
     verified: t("Đã xác minh {model} · effort {effort} lúc {time}."),
     verifyFailed: t("Không xác minh được kết nối. Yêu cầu không được tự động gửi lại."),
@@ -224,6 +224,7 @@ export const CHATGPT = {
 export const ANTIGRAVITY = {
   id: "antigravity",
   launcherName: "Google",
+  overviewName: "Google Antigravity",
   endpoints: {
     providers: "/api/providers",
     preferences: null,
@@ -293,8 +294,8 @@ export const ANTIGRAVITY = {
     otherError: t("Không hoàn tất được thao tác Antigravity."),
     loginConnected: t("Đã kết nối Google Antigravity qua OMP."),
     loginCancelled: t("Đã hủy đăng nhập Antigravity."),
-    choose: t("Chọn mô hình Antigravity"),
-    noModels: t("Không có mô hình Antigravity khả dụng"),
+    choose: t("Chọn model Antigravity"),
+    noModels: t("Không có model Antigravity khả dụng"),
     unavailableOption: t("{model} — không còn khả dụng"),
     unavailableSaved: t("Model đã lưu không còn trong catalog. Hãy chọn model khác."),
     connectToLoad: t("Kết nối Antigravity để tải model"),
@@ -361,7 +362,7 @@ function initial(d) {
   };
 }
 
-export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { scroll: false, section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null, installer: { available: false, models_writable: false }, open: false, notice: null }, devices: extensionDevicesInitialState, processingPreferences: processingPreferencesInitialState };
+export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null, installer: { available: false, models_writable: false }, open: false, notice: null }, devices: extensionDevicesInitialState, processingPreferences: processingPreferencesInitialState };
 
 const done = (state, effects = []) => ({ state, effects });
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1186,22 +1187,31 @@ function onFailure(d, s, meta, error) {
   }
 }
 
-// The sections of the settings dialog, and the session key a language change leaves so the reloaded page
-// reopens at its section. i18n.js writes that key: it is a plain script and cannot import this module.
-export const SETTINGS_SECTIONS = ["ai", "asr", "devices", "theme", "about"];
+// The settings ids are one namespace for the top-level tabs and the AI Provider sub-items. i18n.js
+// writes the session key directly because it is a plain script and cannot import this module.
+export const SETTINGS_SECTIONS = ["ai", "openai", "antigravity", "local", "processing", "asr", "devices", "theme", "about"];
+export const SETTINGS_TOP_LEVELS = ["ai", "asr", "devices", "theme", "about"];
+export const SETTINGS_AI_SUB_ITEMS = ["openai", "antigravity", "local", "processing"];
 export const SETTINGS_SECTION_KEY = "asr-studio:settings-section";
 
-// The launcher slice: the page-load status read, the one-shot scroll to the Google section, and the open section.
+export const providerSettingsSection = (provider) => provider === CHATGPT.id ? "openai" : provider === ANTIGRAVITY.id ? "antigravity" : "ai";
+export const settingsParent = (section) => SETTINGS_AI_SUB_ITEMS.includes(section) ? "ai" : section;
+
+// The launcher slice: the page-load status read and the open settings item.
 function reduceLauncher(state, action) {
   if (action.type === "provider/header-requested") {
     return { state, effects: [{ type: "fetch", key: "provider/header", url: CHATGPT.endpoints.providers, init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" }, ok: "provider/response", error: "provider/request-failed", meta: { op: "header" } }] };
   }
   if (action.type === "provider/dialog-opened") {
     const reopened = action.section ? [{ type: "storage", key: SETTINGS_SECTION_KEY, area: "session", op: "remove" }] : [];
-    return done({ section: action.section ?? "ai", scroll: action.launcher === "antigravity" }, reopened);
+    const requested = action.section === "local" ? "ai" : action.section;
+    const section = SETTINGS_SECTIONS.includes(requested) ? requested : providerSettingsSection(action.launcher);
+    return done({ section }, reopened);
   }
-  if (action.type === "provider/settings-section-selected") return done({ section: action.section, scroll: false });
-  if (action.type === "provider/scroll-handled") return done({ ...state, scroll: false });
+  if (action.type === "provider/settings-section-selected") {
+    if (!SETTINGS_SECTIONS.includes(action.section) || action.section === "local") return done(state);
+    return done({ section: action.section });
+  }
   return done(state);
 }
 
@@ -1337,6 +1347,29 @@ export function selectLauncher(d, s) {
     ariaLabel: t("Kết nối {name}: {state}", { name: d.launcherName, state: [spoken, account] }),
     title: [d.launcherName, ": ", label],
   };
+}
+
+const overviewProvider = (d, s, section) => {
+  const status = s.statusText || s.badge.text || d.copy.loading;
+  const selected = s.savedModel;
+  return {
+    id: section,
+    name: d.overviewName || d.launcherName,
+    status,
+    model: selected ? modelName(s, selected) : t("Chưa chọn model"),
+    disabled: false,
+  };
+};
+
+// The overview is read-only: it summarizes the two provider slices and exposes navigation only.
+// Provider controls remain on their own sub-item pages.
+export function selectProviderOverview(state) {
+  return [
+    overviewProvider(CHATGPT, state.chatgpt, "openai"),
+    overviewProvider(ANTIGRAVITY, state.antigravity, "antigravity"),
+    { id: "local", name: "Local AI", status: t("Sắp hỗ trợ"), model: null, disabled: true },
+    { id: "processing", name: t("Xử lý tự động"), status: t("Chọn rõ model chép lời, ngôn ngữ và công thức notes cho các bản ghi mới từ extension."), model: null, disabled: false },
+  ];
 }
 
 // What the settings dialog shows for the ASR catalog: the three models with their real readiness, and the default.

@@ -642,22 +642,28 @@ retry. The app also continues pending deletions at startup.
 The sidebar has two status buttons: **OpenAI** (ChatGPT) and **Google** (Antigravity).
 Each shows **Connected**, **Not connected**, **Sign in again** or **Unavailable**, and opens the
 **Settings** dialog at that provider. The **Settings** gear next to the GitHub link (on a phone,
-the last button in the top bar) opens the same dialog at **AI provider**. It has four sections,
-listed on the left and as a row on a phone:
+the last button in the top bar) opens the same dialog at **AI Provider**. The desktop list contains
+the read-only **AI Provider** overview and its sub-items **OpenAI**, **Google Antigravity**, disabled
+**Local AI** (**Coming later**) and **Automatic processing**, followed by **ASR Model**, **Devices**,
+**Theme** and **About**. On phones only the top-level items remain in the row; provider and
+processing pages have a back link.
 
-- **AI provider:** sign in, model, effort, check and disconnect for each provider.
+- **AI Provider:** sign in, model, **Reasoning effort**, synthetic check and disconnect for each provider.
+- **Automatic processing:** choose the transcription model, transcript language, notes provider and notes output language.
 - **ASR Model:** see [Check the ASR models](#check-the-asr-models).
-- **Theme:** the language and display mode (system, light or dark) for this browser. Changing the
-  language reloads the page and returns to this section.
-- **About:** what the software does, its version, and the developer's name and website.
+- **Devices:** create extension pairing codes, choose their expiry, inspect the server endpoint and revoke paired devices.
+- **Theme:** choose the language and display mode (system, light or dark) for this browser. The selected value is always the value in use. Changing the language reloads the page and returns to this section.
+- **About:** read the software description, real version, source, developer's name and website.
+
+Each provider page always includes an **Account** disclosure. It is closed when connected and steady, open while disconnected or while sign-in, an error, confirmation or focus requires it, and its account rows appear only when account data exists. Its marker rotates over 150 ms; the existing reduced-motion override removes that transition.
 
 Press **Esc** to close it; focus
 returns to the button that opened it.
 
 1. Open **OpenAI** and select **Continue with ChatGPT**.
-2. Select a model from your account list and save it.
-3. Optional: select `reasoning.effort` and save it with the model.
-4. Select **Run check with synthetic data**. This sends one small request without meeting data.
+2. Select a model in **Model for notes** and select **Save**.
+3. Optional: choose **Reasoning effort** and select **Save** again.
+4. Select **Check with synthetic data**. This sends one small request without meeting data.
    It can use ChatGPT quota. It does not retry.
 
 | Model                        | Effort values                                          |
@@ -719,15 +725,15 @@ tests do not prove entitlement or quota.
 1. Open **Google** and select **Connect Google Antigravity**.
 2. Open the sign-in URL from OMP. If the provider asks, paste the code or redirect URL. The
    sign-in expires after 10 minutes. You can cancel it.
-3. Select a model from the catalog and a **Thinking level**, then save.
+3. Select a model from the catalog and a **Reasoning effort**, then save.
 4. Run the synthetic check. The catalog does not prove inference access or quota.
 
-| Thinking level | Effect                                                            |
-| -------------- | ----------------------------------------------------------------- |
-| High (default) | More complete, slower (about 7–10 minutes for a 1-hour meeting). |
-| Medium         | Faster, can miss action items.                                    |
+| Reasoning effort | Effect                                                            |
+| ---------------- | ----------------------------------------------------------------- |
+| High (default)   | More complete, slower (about 7–10 minutes for a 1-hour meeting). |
+| Medium           | Faster, can miss action items.                                    |
 
-Each notes task fixes the thinking level when the app accepts it.
+Each notes task fixes the reasoning effort when the app accepts it.
 
 The image pins OMP `18.5.0` with checksums for `amd64` and `arm64`. The runner uses its own home,
 agent store, XDG directories and working directory in the `provider` volume. It does not read

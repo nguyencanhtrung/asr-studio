@@ -11,6 +11,7 @@ from seeding import seed_meeting
 from test_browser_connections import (
     MockProviderApi,
     browser_runtime,  # noqa: F401  (fixture)
+    open_account_details,
     open_connection_dialog,
     signed_in_page,
 )
@@ -105,7 +106,12 @@ def _screens(live, page, meeting_id):
     page.locator(".connection-launchers button").first.click()
     expect(page.locator("dialog[open]")).to_be_visible()
     yield "connections dialog"
-    for section in ("ASR Model", "Theme", "About"):
+    settings_sections = (
+        ("ASR Model", "Giao diện", "Giới thiệu")
+        if page.locator("html").get_attribute("lang") == "vi"
+        else ("ASR Model", "Theme", "About")
+    )
+    for section in settings_sections:
         page.get_by_role("tab", name=section).click()
         expect(page.get_by_role("heading", name=section, level=3)).to_be_visible()
         yield f"settings {section}"
@@ -168,6 +174,79 @@ def test_reading_prose_is_16px_and_the_markdown_editor_15px(live, signed_in):
 
 
 @pytest.mark.browser
+def test_settings_uses_the_intentional_type_roles(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    page.goto(f"{live.url}/")
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="OpenAI").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+    page.locator("#extension-device-code-button").click()
+    expect(page.locator("#extension-device-code-output")).to_be_visible()
+    typography = page.evaluate(
+        """() => {
+          const style = selector => {
+            const element = document.querySelector(selector);
+            if (!element) return {missing: selector};
+            const value = getComputedStyle(element);
+            return {
+              family: value.fontFamily,
+              size: value.fontSize,
+              weight: value.fontWeight,
+              color: value.color,
+              spacing: value.letterSpacing,
+            };
+          };
+          return {
+            title: style("#connections-title"),
+            group: style("#settings-panel-devices > h3"),
+            section: style("#connection-section-title"),
+            subsection: style("#connection-verification-title"),
+            label: style("label[for='connection-model']"),
+            fieldLabels: {
+              openai: style("label[for='connection-model']"),
+              processing: style("label[for='automatic-preferences-asr-choice']"),
+              asr: style("label[for='asr-default-select']"),
+              deviceExpiry: style("label[for='extension-device-lifetime']"),
+              pairingCode: style("#extension-device-code-output label"),
+              archive: style("#extension-device-show-revoked + span"),
+              theme: style("#settings-panel-theme legend"),
+            },
+            intro: style("#settings-provider-overview > p"),
+            badge: style("#connection-state-badge"),
+            weights: [...document.querySelectorAll("#connections-dialog *")]
+              .map(element => getComputedStyle(element).fontWeight),
+            headings: [...document.querySelectorAll(
+              "#connections-dialog h3, #connections-dialog h4, "
+              + "#connections-dialog h5, #connections-dialog h6"
+            )]
+              .map(element => getComputedStyle(element).letterSpacing),
+          };
+        }"""
+    )
+    assert "Newsreader" in typography["title"]["family"]
+    assert typography["title"]["size"] == "24px"
+    assert typography["title"]["weight"] == "500"
+    assert float(typography["title"]["spacing"].removesuffix("px")) >= -0.36
+    for role in ("group", "section", "subsection"):
+        assert "Inter Variable" in typography[role]["family"], role
+        assert typography[role]["weight"] == "600", role
+        assert typography[role]["spacing"] in {"normal", "0px"}, role
+    assert typography["label"]["weight"] == "600"
+    reference = typography["fieldLabels"]["openai"]
+    assert reference["size"] == "13px"
+    assert reference["weight"] == "600"
+    for role, label in typography["fieldLabels"].items():
+        assert label["size"] == reference["size"], role
+        assert label["weight"] == reference["weight"], role
+        assert label["color"] == reference["color"], role
+    assert typography["intro"]["size"] == "14px"
+    assert "Inter Variable" in typography["badge"]["family"]
+    assert typography["badge"]["weight"] == "600"
+    assert set(typography["weights"]) <= {"400", "500", "600", "700"}
+    assert set(typography["headings"]) <= {"normal", "0px"}
+
+
+@pytest.mark.browser
 def test_the_conflict_reload_button_is_a_control_size(live, browser_context):
     """State-only: it exists only after a save meets another client's edit (a real 409)."""
     context, page = browser_context
@@ -221,9 +300,10 @@ def test_the_chatgpt_usage_link_is_a_control_size(browser_runtime, width):  # no
         browser, live, api=api, viewport={"width": width, "height": 900}
     )
     open_connection_dialog(page)
-    link = page.locator(".connection-usage-link")
-    link.scroll_into_view_if_needed()
+    open_account_details(page)
+    link = page.get_by_role("link", name="Xem mức sử dụng ChatGPT")
     expect(link).to_be_visible()
+    link.scroll_into_view_if_needed()
     assert link.evaluate("e => parseFloat(getComputedStyle(e).fontSize)") >= 14
     assert page.evaluate("document.documentElement.scrollWidth - innerWidth") <= 0
     context.close()
