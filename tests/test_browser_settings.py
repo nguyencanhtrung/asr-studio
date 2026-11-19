@@ -67,7 +67,7 @@ def overflow(page):
     return page.evaluate("document.documentElement.scrollWidth - innerWidth")
 
 
-SECTIONS = ["AI provider", "ASR Model", "Thiết bị", "Theme", "About"]
+SECTIONS = ["AI Provider", "ASR Model", "Thiết bị", "Giao diện", "Giới thiệu"]
 
 
 def open_section(page, name, gear="Cài đặt"):
@@ -154,7 +154,9 @@ def test_settings_edits_follow_the_sidebar_and_notes_panel_without_reload(live, 
     expect(page.locator("#launcher-chatgpt")).to_have_attribute("data-state", "connected")
 
     page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
     expect(page.locator("#connection-status")).to_have_text("Đã kết nối")
+    expect(page.locator("#connection-status")).to_be_hidden()
     page.locator("#connection-model").select_option("gpt-6-luna")
     page.locator("#connection-effort").select_option("low")
     page.locator("#connection-model-save").click()
@@ -174,6 +176,7 @@ def test_settings_runs_login_model_effort_verify_and_disconnect(browser_runtime)
     launcher = page.locator("#launcher-chatgpt")
 
     page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
     page.get_by_role("button", name="Continue with ChatGPT").click()
     expect(page.locator("#connection-status")).to_have_text("Đã kết nối", timeout=8000)
     expect(launcher).to_have_attribute("data-state", "connected")
@@ -190,6 +193,7 @@ def test_settings_runs_login_model_effort_verify_and_disconnect(browser_runtime)
         "Đã xác minh GPT 6 Luna"
     )
 
+    page.locator("#connection-account-details > summary").click()
     page.get_by_role("button", name="Ngắt kết nối").click()
     page.get_by_role("button", name="Ngắt kết nối", exact=True).click()
     expect(page.locator("#connection-status")).to_have_text("Chưa kết nối")
@@ -227,14 +231,18 @@ def test_a_busy_provider_keeps_its_message_and_the_running_task_keeps_its_model(
     page.goto(f"{live.url}/")
 
     page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("button", name=re.compile(r"^Google Antigravity:")).click()
     # The provider in use shows the existing message and cannot be changed from here.
     reason = page.locator("#antigravity-mutation-reason")
     expect(reason).to_contain_text("đang được một tác vụ notes khác sử dụng")
     expect(page.locator("#antigravity-model")).to_be_disabled()
     expect(page.locator("#antigravity-model-save")).to_be_disabled()
+    page.locator("#antigravity-account-details > summary").click()
     expect(page.locator("#antigravity-disconnect")).to_be_disabled()
 
     # The other provider is free; changing it leaves the running task as it was accepted.
+    page.get_by_role("tab", name="AI Provider").click()
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
     page.locator("#connection-model").select_option("gpt-6-luna")
     page.locator("#connection-model-save").click()
     expect(page.locator("#connection-model-status")).to_contain_text("Đã lưu GPT 6 Luna")
@@ -427,18 +435,45 @@ def test_sections_sit_left_of_the_content_and_each_shows_alone(live, signed_in, 
     mock_providers(page, live)
     page.goto(f"{live.url}/")
     page.get_by_role("button", name="Cài đặt").click()
-    tabs = page.locator("#settings-tabs [role=tab]")
-    assert [tab.inner_text() for tab in tabs.all()] == SECTIONS
+    tabs = page.locator("#settings-tabs [role=tab]:visible")
+    assert [re.sub(r"\s+", " ", tab.inner_text()).strip() for tab in tabs.all()] == [
+        "AI Provider",
+        "OpenAI",
+        "Google Antigravity",
+        "Local AI Sắp hỗ trợ",
+        "Xử lý tự động",
+        "ASR Model",
+        "Thiết bị",
+        "Giao diện",
+        "Giới thiệu",
+    ]
     shell = page.locator(".connections-shell")
     size = shell.bounding_box()
     body = page.locator(".connections-body")
-    for name in SECTIONS:
+    headings = {
+        "AI Provider": ("AI Provider", 3),
+        "OpenAI": ("OpenAI", 4),
+        "Google Antigravity": ("Google Antigravity", 4),
+        "Xử lý tự động": ("Xử lý tự động", 3),
+        "ASR Model": ("ASR Model", 3),
+        "Thiết bị": ("Thiết bị", 3),
+        "Giao diện": ("Giao diện", 3),
+        "Giới thiệu": ("Giới thiệu", 3),
+    }
+    local = page.get_by_role("tab", name="Local AI Sắp hỗ trợ")
+    expect(local).to_have_attribute("aria-disabled", "true")
+    expect(local).to_be_disabled()
+    if width > 680:
+        page.get_by_role("tab", name="OpenAI").click()
+        expect(page.locator("#settings-page-openai")).to_be_visible()
+        expect(page.get_by_role("link", name="← AI Provider")).to_be_hidden()
+    for name, (heading, level) in headings.items():
         tab = page.get_by_role("tab", name=name)
         tab.click()
         expect(tab).to_have_attribute("aria-selected", "true")
         panels = page.locator("[role=tabpanel]:visible")
         expect(panels).to_have_count(1)
-        expect(panels.get_by_role("heading", name=name, level=3)).to_be_visible()
+        expect(panels.get_by_role("heading", name=heading, level=level)).to_be_visible()
         assert shell.bounding_box() == size, name  # moving between sections never resizes it
         tab_box, content = tab.bounding_box(), body.bounding_box()
         assert tab_box["x"] + tab_box["width"] <= content["x"] + 0.5, name
@@ -446,7 +481,7 @@ def test_sections_sit_left_of_the_content_and_each_shows_alone(live, signed_in, 
         assert overflow(page) <= 0, name
 
     # Only the content column scrolls.
-    page.get_by_role("tab", name="AI provider").click()
+    page.get_by_role("tab", name="ASR Model").click()
     assert body.evaluate("element => element.scrollHeight > element.clientHeight")
     assert shell.evaluate("element => element.scrollHeight <= element.clientHeight")
 
@@ -455,16 +490,19 @@ def test_sections_move_with_the_keyboard_and_tab_goes_into_the_content(live, sig
     _context, page = signed_in(viewport={"width": 1280, "height": 800})
     page.goto(f"{live.url}/")
     page.get_by_role("button", name="Cài đặt").click()
-    page.get_by_role("tab", name="AI provider").focus()
+    page.get_by_role("tab", name="AI Provider").focus()
     for key, name in (
+        ("ArrowDown", "OpenAI"),
+        ("ArrowDown", "Google Antigravity"),
+        ("ArrowDown", "Xử lý tự động"),
         ("ArrowDown", "ASR Model"),
         ("ArrowRight", "Thiết bị"),
-        ("End", "About"),
-        ("ArrowDown", "AI provider"),
-        ("ArrowUp", "About"),
-        ("Home", "AI provider"),
-        ("ArrowLeft", "About"),
-        ("ArrowUp", "Theme"),
+        ("End", "Giới thiệu"),
+        ("ArrowDown", "AI Provider"),
+        ("ArrowUp", "Giới thiệu"),
+        ("Home", "AI Provider"),
+        ("ArrowLeft", "Giới thiệu"),
+        ("ArrowUp", "Giao diện"),
     ):
         page.keyboard.press(key)
         tab = page.get_by_role("tab", name=name)
@@ -484,8 +522,7 @@ def test_tab_reaches_a_section_that_holds_no_control(live, signed_in):
     page.route(f"{live.url}/api/asr-models", lambda route: route.fulfill(json={"asr_models": []}))
     page.goto(f"{live.url}/")
     page.get_by_role("button", name="Cài đặt").click()
-    page.get_by_role("tab", name="AI provider").focus()
-    page.keyboard.press("ArrowDown")
+    page.get_by_role("tab", name="ASR Model").click()
     expect(page.locator("#asr-status")).to_contain_text("Máy chủ không trả về model nào")
     page.keyboard.press("Tab")
     expect(page.locator("#settings-panel-asr")).to_be_focused()
@@ -498,9 +535,9 @@ def test_in_forced_colors_only_the_selected_section_draws_a_border(live, signed_
     page.goto(f"{live.url}/")
     page.get_by_role("button", name="Cài đặt").click()
     color = "element => getComputedStyle(element).borderTopColor"
-    selected = page.get_by_role("tab", name="AI provider").evaluate(color)
+    selected = page.get_by_role("tab", name="AI Provider").evaluate(color)
     canvas = page.locator(".connections-shell").evaluate("e => getComputedStyle(e).backgroundColor")
-    for name in ("ASR Model", "Thiết bị", "Theme", "About"):
+    for name in ("ASR Model", "Thiết bị", "Giao diện", "Giới thiệu"):
         assert page.get_by_role("tab", name=name).evaluate(color) == canvas, name
     assert selected != canvas
 
@@ -508,20 +545,26 @@ def test_in_forced_colors_only_the_selected_section_draws_a_border(live, signed_
 def test_a_disconnected_provider_hides_what_only_an_account_can_use(live, signed_in):
     _context, page = signed_in(viewport={"width": 1280, "height": 800})
     page.goto(f"{live.url}/")
-    page.get_by_role("button", name="Cài đặt").click()
+    page.locator("#launcher-chatgpt").click()
     expect(page.locator("#connection-state-badge")).to_have_text("Chưa kết nối")
     expect(page.locator("#antigravity-badge")).to_have_text("Chưa kết nối")
-    expect(page.get_by_role("heading", name="ChatGPT", level=4)).to_be_visible()
-    for hidden in (
-        "#connection-ledger",
-        "#antigravity-ledger",
-        "#connection-verification-section",
-        "#antigravity-verification-section",
-    ):
-        expect(page.locator(hidden)).to_be_hidden()
+    expect(page.get_by_role("heading", name="OpenAI", level=4)).to_be_visible()
+    expect(page.locator("#connection-account-details")).to_have_attribute("open", "")
+    expect(page.locator("#connection-ledger")).to_be_hidden()
+    # The native disclosure marker hangs left of the content edge; the summary draws its own.
+    summary = page.locator("#connection-account-details > summary")
+    assert summary.evaluate("e => getComputedStyle(e).listStyleType") == "none"
+    expect(page.locator("#connection-verification-section")).to_be_hidden()
     expect(page.locator("#connection-sign-in")).to_be_visible()
+    page.keyboard.press("Escape")
+    page.locator("#launcher-antigravity").click()
+    expect(page.locator("#antigravity-account-details")).to_have_attribute("open", "")
+    expect(page.locator("#antigravity-ledger")).to_be_hidden()
+    expect(page.locator("#antigravity-verification-section")).to_be_hidden()
     expect(page.locator("#antigravity-sign-in")).to_be_visible()
     # A disconnect whose remote revocation is unconfirmed sends the user to this page.
+    page.keyboard.press("Escape")
+    page.locator("#launcher-chatgpt").click()
     expect(page.locator(".connection-usage-link")).to_be_visible()
 
 
@@ -530,23 +573,160 @@ def test_the_open_section_has_focus_so_arrows_work_at_once(live, signed_in):
     page.goto(f"{live.url}/")
     page.get_by_role("button", name="Cài đặt").focus()
     page.keyboard.press("Enter")
-    expect(page.get_by_role("tab", name="AI provider")).to_be_focused()
+    expect(page.get_by_role("tab", name="AI Provider")).to_be_focused()
     page.keyboard.press("ArrowDown")
-    expect(page.get_by_role("tab", name="ASR Model")).to_be_focused()
+    expect(page.get_by_role("tab", name="OpenAI")).to_be_focused()
     orientation = page.locator("#settings-tabs")
     expect(orientation).to_have_attribute("aria-orientation", "vertical")
     page.set_viewport_size({"width": 390, "height": 700})
     expect(orientation).to_have_attribute("aria-orientation", "horizontal")
 
 
+def test_settings_breakpoint_change_reconciles_tabs_selection_and_arrows(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 800})
+    page.goto(f"{live.url}/")
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="OpenAI").click()
+    expect(page.get_by_role("tab", name="OpenAI")).to_have_attribute("aria-selected", "true")
+
+    page.set_viewport_size({"width": 390, "height": 700})
+    expect(page.locator("#settings-tabs")).to_have_attribute("aria-orientation", "horizontal")
+    page.wait_for_timeout(100)
+    visible = page.locator("#settings-tabs [role=tab]:visible")
+    assert [re.sub(r"\s+", " ", tab.inner_text()).strip() for tab in visible.all()] == [
+        "AI Provider",
+        "ASR Model",
+        "Thiết bị",
+        "Giao diện",
+        "Giới thiệu",
+    ]
+    ai = page.get_by_role("tab", name="AI Provider")
+    expect(ai).to_have_attribute("aria-selected", "true")
+    expect(ai).to_have_attribute("tabindex", "0")
+    expect(ai).to_have_attribute("aria-controls", "settings-panel-ai")
+    expect(page.locator("#settings-panel-ai")).to_have_attribute(
+        "aria-labelledby", "settings-tab-ai"
+    )
+    ai.focus()
+    page.keyboard.press("ArrowRight")
+    expect(page.get_by_role("tab", name="ASR Model")).to_be_focused()
+    expect(page.get_by_role("tab", name="ASR Model")).to_have_attribute("aria-selected", "true")
+
+    page.set_viewport_size({"width": 1280, "height": 800})
+    expect(page.locator("#settings-tabs")).to_have_attribute("aria-orientation", "vertical")
+    page.wait_for_timeout(100)
+    visible = page.locator("#settings-tabs [role=tab]:visible")
+    assert [re.sub(r"\s+", " ", tab.inner_text()).strip() for tab in visible.all()] == [
+        "AI Provider",
+        "OpenAI",
+        "Google Antigravity",
+        "Local AI Sắp hỗ trợ",
+        "Xử lý tự động",
+        "ASR Model",
+        "Thiết bị",
+        "Giao diện",
+        "Giới thiệu",
+    ]
+    asr = page.get_by_role("tab", name="ASR Model")
+    expect(asr).to_have_attribute("aria-selected", "true")
+    expect(asr).to_have_attribute("aria-controls", "settings-panel-asr")
+    expect(page.locator("#settings-panel-asr")).to_have_attribute(
+        "aria-labelledby", "settings-tab-asr"
+    )
+    asr.focus()
+    page.keyboard.press("ArrowLeft")
+    expect(page.get_by_role("tab", name="Xử lý tự động")).to_be_focused()
+    expect(page.get_by_role("tab", name="Xử lý tự động")).to_have_attribute("aria-selected", "true")
+
+
+def test_settings_breakpoint_reconciles_focus_for_layout_only_controls(live, signed_in):
+    _context, page = signed_in(viewport={"width": 390, "height": 700})
+    page.goto(f"{live.url}/")
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="AI Provider").click()
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
+
+    back_link = page.get_by_role("link", name="← AI Provider")
+    expect(back_link).to_be_visible()
+    back_link.focus()
+    expect(back_link).to_be_focused()
+    page.set_viewport_size({"width": 1280, "height": 700})
+    expect(page.get_by_role("tab", name="OpenAI")).to_be_focused()
+
+    openai_tab = page.get_by_role("tab", name="OpenAI")
+    openai_tab.focus()
+    page.set_viewport_size({"width": 390, "height": 700})
+    expect(page.get_by_role("tab", name="AI Provider")).to_be_focused()
+
+    sign_in = page.locator("#connection-sign-in")
+    sign_in.focus()
+    expect(sign_in).to_be_focused()
+    page.set_viewport_size({"width": 1280, "height": 700})
+    expect(sign_in).to_be_focused()
+
+
+def test_provider_overview_keeps_focused_destination_during_status_read(browser_runtime):
+    live, browser = browser_runtime
+    context, page, api = signed_in_page(browser, live, viewport={"width": 1280, "height": 800})
+    held = []
+
+    def hold_first_provider_read(route):
+        if held or route.request.method != "GET":
+            route.fallback()
+        else:
+            held.append(route)
+
+    page.context.route(f"{live.url}/api/providers", hold_first_provider_read)
+    page.get_by_role("button", name="Cài đặt").click()
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(20)
+    assert held, "the dialog never started a provider status read"
+
+    destination = page.get_by_role("button", name=re.compile(r"^OpenAI:"))
+    destination.focus()
+    expect(destination).to_be_focused()
+    api.preferences = {
+        "provider": "chatgpt",
+        "models": {"chatgpt": "gpt-6.1-sol"},
+        "reasoning_effort": "high",
+    }
+    held[0].fulfill(
+        json={
+            "providers": [
+                {
+                    "id": "chatgpt",
+                    "status": "connected",
+                    "account": {"label": "Tài khoản kiểm thử"},
+                    "connection_version": 2,
+                    "verification": None,
+                },
+                {
+                    "id": "antigravity",
+                    "status": "disconnected",
+                    "account": None,
+                    "connection_version": 0,
+                    "verification": None,
+                },
+            ]
+        }
+    )
+    expect(destination).to_contain_text("Đã kết nối", timeout=5000)
+    expect(destination).to_be_focused()
+    expect(destination).to_have_attribute("aria-label", re.compile("Đã kết nối"))
+    context.close()
+
+
 def test_selected_choices_differ_by_more_than_colour_and_columns_are_even(live, signed_in):
     _context, page = signed_in(viewport={"width": 1280, "height": 800})
     page.emulate_media(reduced_motion="reduce")  # reads final colours, not a 150ms transition
     page.goto(f"{live.url}/")
-    open_section(page, "Theme")
+    open_section(page, "Giao diện")
     border = "e => getComputedStyle(e).borderTopColor"
     weight = "e => getComputedStyle(e).fontWeight"
-    selected, plain = page.get_by_role("tab", name="Theme"), page.get_by_role("tab", name="About")
+    selected = page.get_by_role("tab", name="Giao diện")
+    plain = page.get_by_role("tab", name="Giới thiệu")
     page.wait_for_timeout(50)  # even a reduced transition settles only on the next frame
     assert selected.evaluate(border) != plain.evaluate(border)
     assert int(selected.evaluate(weight)) >= int(plain.evaluate(weight)) + 200
@@ -562,32 +742,37 @@ def test_selected_choices_differ_by_more_than_colour_and_columns_are_even(live, 
     assert other.evaluate(ring) == "solid"
 
 
-def test_each_opener_lands_on_ai_provider_and_a_new_section_starts_at_its_top(live, signed_in):
+def test_each_opener_lands_on_its_provider_page_and_a_new_section_starts_at_its_top(
+    live, signed_in
+):
     _context, page = signed_in(viewport={"width": 1280, "height": 700})
     page.goto(f"{live.url}/")
     gear = page.get_by_role("button", name="Cài đặt")
-    ai = page.get_by_role("tab", name="AI provider")
+    ai = page.get_by_role("tab", name="AI Provider")
     body = page.locator(".connections-body")
 
-    open_section(page, "About")
+    open_section(page, "Giới thiệu")
     page.keyboard.press("Escape")
     gear.click()
     expect(ai).to_have_attribute("aria-selected", "true")
     body.evaluate("element => { element.scrollTop = element.scrollHeight; }")
     page.get_by_role("tab", name="ASR Model").click()
     assert body.evaluate("element => element.scrollTop") == 0
-    page.get_by_role("tab", name="About").click()
+    page.get_by_role("tab", name="Giới thiệu").click()
     page.keyboard.press("Escape")
 
-    # From another section, Google still lands on its own part of AI provider.
+    # From another section, Google lands on its own provider sub-item.
     page.locator("#launcher-antigravity").click()
-    expect(ai).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_role("tab", name="Google Antigravity")).to_have_attribute(
+        "aria-selected", "true"
+    )
     expect(page.locator("#antigravity-title")).to_be_focused()
     expect(page.locator("#antigravity-title")).to_be_in_viewport()
     page.keyboard.press("Escape")
     expect(page.locator("#launcher-antigravity")).to_be_focused()
     page.locator("#launcher-chatgpt").click()
-    expect(ai).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_role("tab", name="OpenAI")).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#connection-section-title")).to_be_focused()
     assert body.evaluate("element => element.scrollTop") == 0
 
 
@@ -603,7 +788,7 @@ def test_display_mode_shows_what_is_in_use_and_follows_every_other_way_of_changi
     light = page.get_by_role("radio", name="Sáng")
     dark = page.get_by_role("radio", name="Tối")
 
-    open_section(page, "Theme")
+    open_section(page, "Giao diện")
     expect(system).to_be_checked()
     expect(root).to_have_attribute("data-theme", "light")
 
@@ -618,7 +803,7 @@ def test_display_mode_shows_what_is_in_use_and_follows_every_other_way_of_changi
     # The sidebar toggle changes it from outside the dialog.
     page.locator(".sidebar-masthead [data-theme-toggle]").click()
     expect(root).to_have_attribute("data-theme", "light")
-    open_section(page, "Theme")
+    open_section(page, "Giao diện")
     expect(light).to_be_checked()
 
     # Back to the system default: nothing stored, and it follows the OS again.
@@ -631,7 +816,7 @@ def test_display_mode_shows_what_is_in_use_and_follows_every_other_way_of_changi
     # Another tab of the same browser.
     other = context.new_page()
     other.goto(f"{live.url}/")
-    open_section(other, "Theme")
+    open_section(other, "Giao diện")
     other.get_by_role("radio", name="Sáng").check()
     expect(light).to_be_checked()
     expect(root).to_have_attribute("data-theme", "light")
@@ -643,7 +828,7 @@ def test_language_choice_reloads_into_settings_at_theme_once(live, signed_in):
     page.goto(f"{live.url}/")
     dialog = page.locator("#connections-dialog")
     root = page.locator("html")
-    open_section(page, "Theme")
+    open_section(page, "Giao diện")
     expect(page.get_by_role("radio", name="Tiếng Việt")).to_be_checked()
 
     with page.expect_navigation():
@@ -670,7 +855,7 @@ def test_language_choice_reloads_into_settings_at_theme_once(live, signed_in):
         page.locator(".sidebar-masthead [data-lang-toggle]").click()
     expect(root).to_have_attribute("lang", "vi")
     expect(dialog).to_be_hidden()
-    open_section(page, "Theme")
+    open_section(page, "Giao diện")
     expect(page.get_by_role("radio", name="Tiếng Việt")).to_be_checked()
 
 
@@ -684,7 +869,7 @@ def test_language_choice_keeps_the_page_language_when_it_cannot_be_stored(live, 
         "};"
     )
     page.goto(f"{live.url}/")
-    open_section(page, "Theme")
+    open_section(page, "Giao diện")
     page.evaluate("window.notReloaded = true")
     page.get_by_role("radio", name="English").click()
     expect(page.get_by_role("radio", name="Tiếng Việt")).to_be_checked()
@@ -703,7 +888,7 @@ def test_language_still_applies_when_the_return_to_settings_cannot_be_stored(liv
         "};"
     )
     page.goto(f"{live.url}/")
-    open_section(page, "Theme")
+    open_section(page, "Giao diện")
     with page.expect_navigation():
         page.get_by_role("radio", name="English").click()  # check() would wait on the closed dialog
     expect(page.locator("html")).to_have_attribute("lang", "en")
@@ -713,9 +898,11 @@ def test_language_still_applies_when_the_return_to_settings_cannot_be_stored(liv
 def test_about_names_the_software_its_real_version_and_the_developer(live, signed_in):
     context, page = signed_in(viewport={"width": 1280, "height": 800})
     page.goto(f"{live.url}/")
-    open_section(page, "About")
+    open_section(page, "Giới thiệu")
     panel = page.locator("#settings-panel-about")
-    expect(panel).to_contain_text("ASR Studio chép lời và ghi chú cuộc họp")
+    expect(panel).to_contain_text("ASR Studio chép lời và tạo notes riêng tư")
+    assert "Mô hình" not in panel.text_content()
+    assert "ghi chú cuộc họp" not in panel.text_content()
     expect(panel).to_contain_text("Nguyễn Cảnh Trung")
     expect(page.locator("#settings-version")).to_have_text(__version__)
     link = panel.get_by_role("link", name="bibo.id.vn")
@@ -730,6 +917,111 @@ def test_about_names_the_software_its_real_version_and_the_developer(live, signe
     expect(page.locator("#connections-dialog")).to_be_visible()
 
 
+def test_provider_settings_use_model_and_notes_copy(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 800})
+    page.goto(f"{live.url}/")
+    page.get_by_role("button", name="Cài đặt").click()
+
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
+    model_section = page.locator("#connection-model-section")
+    assert model_section.get_attribute("aria-label") == "Model notes"
+    expect(page.locator("#connection-model-section label[for='connection-model']")).to_have_text(
+        "Model dùng cho notes"
+    )
+    # One label per field: no heading repeats it.
+    expect(model_section.get_by_role("heading", include_hidden=True)).to_have_count(0)
+    # The default provider is disconnected. Wait for that settled state before checking its
+    # placeholder instead of observing the transient DOM loading option.
+    expect(page.locator("#connection-state-badge")).to_have_text("Chưa kết nối")
+    expect(page.locator("#connection-model")).to_contain_text("Kết nối ChatGPT để tải model")
+    expect(page.locator("#connection-effort")).to_contain_text("Mặc định của model")
+    expect(page.locator("#connection-model-section label[for='connection-effort']")).to_have_text(
+        "Mức suy luận"
+    )
+
+    page.get_by_role("tab", name="AI Provider").click()
+    page.get_by_role("button", name=re.compile(r"^Google Antigravity:")).click()
+    model_section = page.locator("#antigravity-model-section")
+    assert model_section.get_attribute("aria-label") == "Model notes"
+    expect(model_section.get_by_role("heading", include_hidden=True)).to_have_count(0)
+    expect(page.locator("#antigravity-model-section label[for='antigravity-model']")).to_have_text(
+        "Model dùng cho notes"
+    )
+    expect(page.locator("#antigravity-model-section label[for='antigravity-effort']")).to_have_text(
+        "Mức suy luận"
+    )
+    assert "Mô hình" not in page.locator("#settings-page-openai").text_content()
+    assert "ghi chú cuộc họp" not in page.locator("#settings-page-openai").text_content()
+
+
+def test_settings_heading_levels_and_provider_titles_use_the_two_sans_roles(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 800})
+    page.goto(f"{live.url}/")
+    page.get_by_role("button", name="Cài đặt").click()
+
+    page.get_by_role("tab", name="Thiết bị").click()
+    page_title = page.get_by_role("heading", name="Thiết bị", level=3)
+    group_titles = page.locator("#settings-panel-devices").get_by_role("heading", level=4)
+    assert page_title.evaluate(
+        "e => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]"
+    ) == [
+        "18px",
+        "600",
+    ]
+    assert {
+        tuple(values)
+        for values in group_titles.evaluate_all(
+            "items => items.map("
+            "e => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight])"
+        )
+    } == {("15px", "600")}
+
+    title_top = page_title.evaluate("e => e.getBoundingClientRect().top")
+    page.get_by_role("tab", name="AI Provider").click()
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
+    provider_title = page.locator("#connection-section-title")
+    # The provider title starts where every other section's title starts: no rule above it.
+    assert abs(provider_title.evaluate("e => e.getBoundingClientRect().top") - title_top) <= 4
+    assert provider_title.evaluate(
+        "e => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]"
+    ) == [
+        "18px",
+        "600",
+    ]
+
+
+def test_automatic_processing_provider_status_is_not_repeated(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 800})
+    page.goto(f"{live.url}/")
+    open_section(page, "Xử lý tự động")
+    sentence = (
+        "Không chọn provider notes. Transcript có thể hoàn tất; notes sẽ chờ đến khi "
+        "bạn chọn provider."
+    )
+    expect(page.locator("#automatic-preferences-provider-help")).to_have_text(sentence)
+    expect(page.locator("#automatic-preferences-notice")).to_have_text("")
+    assert page.locator("#automatic-preferences-form").inner_text().count(sentence) == 1
+
+
+def test_provider_overview_secondary_lines_share_one_line_height(live, signed_in):
+    _context, page = signed_in(viewport={"width": 390, "height": 640})
+    page.goto(f"{live.url}/")
+    open_section(page, "AI Provider")
+    processing = page.get_by_text(
+        "Chọn rõ model chép lời, ngôn ngữ và công thức notes cho các bản ghi mới từ extension.",
+        exact=True,
+    )
+    model = page.locator("#provider-overview-list").get_by_text("Chưa chọn model", exact=True).first
+    expect(processing).to_be_visible()
+    expect(model).to_be_visible()
+    line_box_height = """element => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return range.getClientRects()[0].height;
+    }"""
+    assert abs(processing.evaluate(line_box_height) - model.evaluate(line_box_height)) <= 0.5
+
+
 @pytest.mark.parametrize("width", [390, 360, 320], ids=str)
 def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_worker, width):
     _context, page = signed_in(viewport={"width": width, "height": 640})
@@ -739,12 +1031,33 @@ def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_work
     shell = page.locator(".connections-shell").bounding_box()
     body = page.locator(".connections-body")
 
+    visible_tabs = page.locator("#settings-tabs [role=tab]:visible")
+    assert [re.sub(r"\s+", " ", tab.inner_text()).strip() for tab in visible_tabs.all()] == [
+        "AI Provider",
+        "ASR Model",
+        "Thiết bị",
+        "Giao diện",
+        "Giới thiệu",
+    ]
+    expect(page.locator("#settings-tab-local")).to_be_hidden()
+    page.get_by_role("tab", name="AI Provider").click()
+    expect(page.locator("#provider-overview-list").get_by_role("button")).to_have_count(3)
+    expect(page.locator("#provider-overview-list [aria-disabled=true]")).to_have_count(1)
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
+    expect(page.get_by_role("tab", name="AI Provider")).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#settings-page-openai")).to_be_visible()
+    expect(page.get_by_role("link", name="← AI Provider")).to_be_visible()
+    expect(page.locator("#connection-section-title")).to_be_focused()
+    assert overflow(page) <= 0
+    page.get_by_role("link", name="← AI Provider").click()
+    expect(page.locator("#settings-provider-overview")).to_be_visible()
+
     # Both sections are longer than the column here, so a kept scroll would really show.
     page.get_by_role("tab", name="ASR Model").click()
     expect(asr_rows(page)).to_have_count(4)
     body.evaluate("element => { element.scrollTop = element.scrollHeight; }")
     assert body.evaluate("element => element.scrollTop") > 0
-    page.get_by_role("tab", name="AI provider").click()
+    page.get_by_role("tab", name="AI Provider").click()
     assert body.evaluate("element => element.scrollTop") == 0
 
     for name in SECTIONS:
@@ -766,14 +1079,14 @@ def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_work
     )
     area, button = command.bounding_box(), copy.bounding_box()
     assert area["y"] + area["height"] <= button["y"], (area, button)
-    assert copy.evaluate("e => getComputedStyle(e).fontWeight") == "680"
+    assert copy.evaluate("e => getComputedStyle(e).fontWeight") == "600"
 
     # Tidy rows: one row when all five fit, otherwise two pairs and a full-width final tab.
     rows = {}
-    for tab in page.locator("#settings-tabs [role=tab]").all():
+    for tab in page.locator("#settings-tabs [role=tab]:visible").all():
         rows.setdefault(round(tab.bounding_box()["y"]), []).append(tab)
     assert sorted(len(row) for row in rows.values()) == ([5] if width > 360 else [1, 2, 2]), rows
-    page.get_by_role("tab", name="Theme").click()
+    page.get_by_role("tab", name="Giao diện").click()
     for radio in page.locator("#settings-panel-theme label").all():
         label = radio.bounding_box()
         assert label["x"] + label["width"] <= shell["x"] + shell["width"]

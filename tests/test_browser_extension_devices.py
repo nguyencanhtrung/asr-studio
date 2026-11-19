@@ -148,7 +148,7 @@ def test_delayed_create_failure_respects_section_focus_movement(browser_runtime)
     assert held_routes
     expect(create).to_be_disabled()
 
-    theme = page.get_by_role("tab", name="Theme")
+    theme = page.get_by_role("tab", name="Giao diện")
     theme.click()
     expect(theme).to_be_focused()
     held_routes[0].fulfill(
@@ -370,7 +370,7 @@ def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(
 
     # Switch through the real Settings language control, then keep the same pending record
     # visible and keyboard-addressable in English. No endpoint selector is needed or rendered.
-    page.get_by_role("tab", name="Theme").click()
+    page.get_by_role("tab", name="Giao diện").click()
     with page.expect_navigation():
         page.get_by_role("radio", name="English").check()
     page.get_by_role("tab", name="Devices").click()
@@ -385,6 +385,8 @@ def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(
     )
     assert "[object Object]" not in repair_en.get_attribute("aria-label")
     page.locator("#settings-panel-devices").focus()
+    # The intro link to Automatic processing is the first tab stop in the panel.
+    page.keyboard.press("Tab")
     page.keyboard.press("Tab")
     page.keyboard.press("Tab")
     page.keyboard.press("Tab")

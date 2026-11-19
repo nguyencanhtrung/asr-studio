@@ -550,6 +550,15 @@ def open_connection_dialog(page, launcher="#launcher-chatgpt"):
     expect(page.locator("#connections-dialog")).to_be_visible()
 
 
+def open_account_details(page, provider="chatgpt"):
+    details = page.locator(
+        "#connection-account-details" if provider == "chatgpt" else "#antigravity-account-details"
+    )
+    if not details.get_attribute("open"):
+        details.locator("summary").click()
+    expect(details).to_have_attribute("open", "")
+
+
 def assert_landed_on_antigravity(page):
     """The heading sits near the top of the dialog body and holds focus."""
     # The section divider and kicker above the heading take about 56px; stuck mid-dialog is 400px+.
@@ -602,6 +611,7 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
     expect(page.get_by_role("button", name="Hủy đăng nhập")).to_be_visible()
     expect(page.locator("#connection-status")).to_have_text("Đã kết nối", timeout=8000)
     expect(page.locator("#connection-account")).to_have_text("Tài khoản kiểm thử")
+    expect(page.locator("#connection-account-details")).not_to_have_attribute("open", "")
     expect(page.locator("#launcher-chatgpt")).to_have_attribute("data-state", "connected")
     expect(page.locator("#launcher-antigravity")).to_have_attribute("data-state", "disconnected")
     authorization_urls = page.evaluate("window.__openedAuthorizationUrls")
@@ -653,6 +663,7 @@ def test_chatgpt_login_model_verification_and_disconnect(browser_runtime):
     )
     assert not any("/responses" in path for _, path, _ in api.calls)
 
+    open_account_details(page)
     page.get_by_role("button", name="Ngắt kết nối").click()
     expect(page.locator("#connection-disconnect-confirm")).to_be_visible()
     expect(page.locator("#connection-disconnect-confirm")).to_contain_text(
@@ -713,6 +724,7 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
     assert api.callback_urls == [pasted]
     assert pasted not in (page.evaluate("sessionStorage.getItem('asr.chatgpt.pendingLogin')") or "")
 
+    open_account_details(page)
     page.locator("#connection-registration-trigger").click()
     expect(page.locator("#connection-registration-confirm")).to_be_visible()
     page.locator("#connection-registration-name").fill("My ASR Studio")
@@ -827,7 +839,9 @@ def test_google_button_opens_dialog_at_antigravity_and_tracks_its_status(browser
     expect(page.locator("#antigravity-model")).to_have_value("gemini-3-pro-high")
     assert_landed_on_antigravity(page)
     expect(page.locator("#antigravity-status")).to_have_text("Đã kết nối")
+    expect(page.locator("#antigravity-account-details")).not_to_have_attribute("open", "")
 
+    open_account_details(page, "antigravity")
     page.locator("#antigravity-disconnect").click()
     expect(page.locator("#antigravity-disconnect-confirm")).to_be_visible()
     expect(page.locator("#antigravity-disconnect-confirm-button")).to_have_text("Ngắt kết nối")
@@ -886,6 +900,7 @@ def test_google_button_lands_on_antigravity_when_chatgpt_sections_render_above(b
     expect(page.locator("#connection-model")).to_have_value("gpt-6.1-sol")
     expect(page.locator("#antigravity-model")).to_have_value("gemini-3-pro-high")
     assert_landed_on_antigravity(page)
+    open_account_details(page, "antigravity")
     page.keyboard.press("Tab")
     expect(page.locator("#antigravity-disconnect")).to_be_focused()
     page.keyboard.press("Escape")
@@ -918,9 +933,13 @@ def test_slow_page_load_status_cannot_overwrite_state_read_through_the_dialog(br
 
     # The user opens the dialog and disconnects both providers while that read is pending.
     open_connection_dialog(page, "#launcher-antigravity")
+    open_account_details(page, "antigravity")
     page.locator("#antigravity-disconnect").click()
     page.locator("#antigravity-disconnect-confirm-button").click()
     expect(google).to_have_attribute("data-state", "disconnected")
+    page.get_by_role("tab", name="AI Provider").click()
+    page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
+    open_account_details(page)
     page.get_by_role("button", name="Ngắt kết nối").click()
     page.get_by_role("button", name="Ngắt kết nối", exact=True).click()
     expect(openai).to_have_attribute("data-state", "disconnected")
@@ -991,7 +1010,7 @@ def test_google_button_shows_an_error_when_its_status_cannot_be_read(browser_run
 def test_antigravity_login_catalog_verification_and_disconnect(browser_runtime):
     live, browser = browser_runtime
     context, page, api = signed_in_page(browser, live)
-    open_connection_dialog(page)
+    open_connection_dialog(page, "#launcher-antigravity")
 
     expect(page.get_by_role("heading", name="Google Antigravity")).to_be_visible()
     page.get_by_role("button", name="Kết nối Google Antigravity").click()
@@ -1027,11 +1046,68 @@ def test_antigravity_login_catalog_verification_and_disconnect(browser_runtime):
         {"model": "gemini-3-pro-high"},
     ) in api.calls
 
+    open_account_details(page, "antigravity")
     page.locator("#antigravity-disconnect").click()
     expect(page.locator("#antigravity-disconnect-confirm")).to_be_visible()
     page.locator("#antigravity-disconnect-confirm-button").click()
     expect(page.locator("#antigravity-status")).to_have_text("Chưa kết nối")
     expect(page.locator("#antigravity-message")).to_contain_text("vô hiệu hóa credential OMP")
+    context.close()
+
+
+@pytest.mark.parametrize("provider", ["chatgpt", "antigravity"])
+def test_saved_verification_summary_is_rendered_for_each_provider(browser_runtime, provider):
+    live, browser = browser_runtime
+    api = MockProviderApi()
+    launcher = "#launcher-chatgpt" if provider == "chatgpt" else "#launcher-antigravity"
+    row = {
+        "chatgpt": "#connection-verification-row",
+        "antigravity": "#antigravity-verification-row",
+    }[provider]
+    summary = (
+        "#connection-verification-summary"
+        if provider == "chatgpt"
+        else "#antigravity-verification-summary"
+    )
+    verify_path = f"/api/providers/{'chatgpt' if provider == 'chatgpt' else 'antigravity'}/verify"
+    if provider == "chatgpt":
+        api.status = "connected"
+        api.preferences = {
+            "provider": "chatgpt",
+            "models": {"chatgpt": "gpt-6-luna"},
+            "reasoning_effort": "default",
+        }
+        api.verification = {
+            "model": "gpt-6-luna",
+            "reasoning_effort": "default",
+            "verified_at": "2026-10-18T04:30:00Z",
+        }
+        expected_model = "gpt-6-luna"
+    else:
+        api.antigravity_status = "connected"
+        api.antigravity_selected_model = "gemini-3-pro-high"
+        api.antigravity_verification = {
+            "model": "gemini-3-pro-high",
+            "verified_at": "2026-10-18T04:30:00Z",
+            "output": {"ok": True},
+        }
+        expected_model = "gemini-3-pro-high"
+
+    context, page, _ = signed_in_page(browser, live, api=api)
+    open_connection_dialog(page, launcher)
+    expect(page.locator(row)).to_be_visible()
+    expect(page.locator(summary)).to_contain_text(expected_model)
+    assert "2026" in page.locator(summary).inner_text()
+    assert not any(path == verify_path for _, path, _ in api.calls)
+
+    if provider == "chatgpt":
+        api.verification = None
+    else:
+        api.antigravity_verification = None
+    page.locator("#connections-close").click()
+    page.reload(wait_until="domcontentloaded")
+    open_connection_dialog(page, launcher)
+    expect(page.locator(row)).to_be_hidden()
     context.close()
 
 
@@ -1074,7 +1150,7 @@ def test_antigravity_reconnect_error_refreshes_status_and_hides_stale_controls(
     api.antigravity_failure_code = error_code
     if operation == "models":
         api.antigravity_failure_operation = operation
-    open_connection_dialog(page)
+    open_connection_dialog(page, "#launcher-antigravity")
 
     if operation == "verify":
         expect(page.locator("#antigravity-status")).to_have_text("Đã kết nối")
@@ -1109,7 +1185,7 @@ def test_restored_antigravity_login_missing_on_server_expires_locally(browser_ru
         ["antigravity-session", future],
     )
     page.reload(wait_until="domcontentloaded")
-    open_connection_dialog(page)
+    open_connection_dialog(page, "#launcher-antigravity")
 
     expect(page.get_by_role("button", name="Kết nối Google Antigravity")).to_be_visible()
     assert page.evaluate("sessionStorage.getItem('asr.antigravity.pendingLogin')") is None
@@ -1123,7 +1199,7 @@ def test_missing_antigravity_login_can_be_cancelled_without_sticking(browser_run
     live, browser = browser_runtime
     context, page, api = signed_in_page(browser, live)
     api.antigravity_polls = ["pending"] * 10
-    open_connection_dialog(page)
+    open_connection_dialog(page, "#launcher-antigravity")
     page.get_by_role("button", name="Kết nối Google Antigravity").click()
     expect(page.locator("#antigravity-cancel")).to_be_visible()
 
@@ -1157,7 +1233,7 @@ def test_expired_restored_antigravity_login_is_discarded_without_polling(browser
     )
     api.calls.clear()
     page.reload(wait_until="domcontentloaded")
-    open_connection_dialog(page)
+    open_connection_dialog(page, "#launcher-antigravity")
 
     expect(page.get_by_role("button", name="Kết nối Google Antigravity")).to_be_visible()
     assert page.evaluate("sessionStorage.getItem('asr.antigravity.pendingLogin')") is None

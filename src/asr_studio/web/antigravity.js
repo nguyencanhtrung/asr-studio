@@ -10,6 +10,7 @@ const els = {
   account: document.querySelector("#antigravity-account"),
   verificationRow: document.querySelector("#antigravity-verification-row"),
   verificationSummary: document.querySelector("#antigravity-verification-summary"),
+  accountDetails: document.querySelector("#antigravity-account-details"),
   message: document.querySelector("#antigravity-message"),
   error: document.querySelector("#antigravity-error"),
   errorMessage: document.querySelector("#antigravity-error-message"),

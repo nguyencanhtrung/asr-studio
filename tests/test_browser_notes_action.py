@@ -16,7 +16,7 @@ from playwright.sync_api import expect
 from test_browser_history import assert_focus_ring, show_a_past_generation, speaker_chip
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
-from test_browser_meeting_tabs import expect_tab, fragment, wait_for
+from test_browser_meeting_tabs import expect_tab, fragment
 from test_browser_notes import _seed_saved_notes
 from test_browser_notes_provider import (
     ANTIGRAVITY_MODEL,
@@ -302,10 +302,13 @@ def test_an_unconnected_provider_replaces_the_action_with_connecting(
     expect(dialog).to_be_visible()
     body = page.locator(".connections-body")
     if provider == "antigravity":
-        # Landed on the Google Antigravity section, as its header button does: focus on its
-        # heading, and the dialog scrolled down to it once its data has loaded.
+        # The action selects the Google Antigravity sub-item directly; no one-shot scroll is
+        # needed. The selected page is visible and its title receives focus.
+        expect(page.get_by_role("tab", name="Google Antigravity")).to_have_attribute(
+            "aria-selected", "true"
+        )
+        expect(page.locator("#settings-page-antigravity")).to_be_visible()
         expect(page.locator("#antigravity-title")).to_be_focused()
-        wait_for(page, lambda: body.evaluate("element => element.scrollTop") > 0)
         expect(page.locator("#antigravity-title")).to_be_in_viewport()
     else:
         # The ChatGPT section is the top of the dialog.

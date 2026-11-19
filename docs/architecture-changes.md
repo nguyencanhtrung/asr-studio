@@ -2797,3 +2797,19 @@ and signed origins prevent acceptance at another GUI origin.
 Tag: security, architecture, access. Target: `src/asr_studio/config.py`,
 `src/asr_studio/app.py`, `src/asr_studio/auth.py`, `src/asr_studio/routes.py`,
 `src/asr_studio/cli.py`, `compose.yaml`, `docs/web-access.md` and focused tests.
+
+## Settings dialog regrouping and density pass
+
+**Problem.** In the base revision, the single AI provider panel held both providers. At 1440 × 900 with both providers connected, it was 1,775px tall in a 649px viewport and showed 13 controls. The model select sat below account administration. The dialog used serif headings at 24px, 20px, 18px and 16px, with a dead `font-variation-settings: "opsz" 64`. Field labels used four styles, the dialog used seven font weights, and labels mixed Vietnamese and English.
+
+**Cause.** The base revision placed both provider forms in one scrolling content column below a five-item navigation list. Account administration came before the model select. The dialog therefore combined provider state, account controls and model controls in one long AI provider panel. Its heading and field-label rules used the mixed serif/sans sizes, four label styles, seven weights and unused `opsz` setting recorded above.
+
+**Change.** Keep the three notes-model stores and existing API/data contracts, but regroup the pages: a read-only **AI Provider** overview links to **OpenAI**, **Google Antigravity**, disabled **Local AI**, and **Automatic processing**; **ASR Model**, **Devices**, **Theme** and **About** remain top-level pages. Desktop keeps sub-items in the vertical list; phones keep only top-level items in the row and add a back link. Provider pages use an always-present account disclosure, closed when connected and steady and open while disconnected or while sign-in, an error, confirmation or focus requires it; account rows render only when account data exists. They have no visible duplicate model heading, one automatic-processing status line, and two sans heading roles: 18px page title and 15px group title, both 600. The serif role remains only on the dialog title.
+
+**Measured result.** At 1440 × 900 in the light fixture with both providers connected, the base single AI provider panel holding both providers measured `light-desktop.ai_panel_scroll.scrollHeight = 1775` with `clientHeight = 649`. The final OpenAI page measured `light-desktop.ai_panel_scroll.scrollHeight = 693` with `clientHeight = 649`. At 390 × 844 in the light fixture with both providers connected, the base panel measured `light-mobile.ai_panel_scroll.scrollHeight = 1984` with `clientHeight = 691`; the final OpenAI page measured `light-mobile.ai_panel_scroll.scrollHeight = 799` with `clientHeight = 691`. The final dialog-title probe is `light-desktop.fonts["dialog title h2"].css.size = 24px`, weight 500, normal variation and -0.36px tracking. The final page-title probe is `light-desktop.fonts["group title h3"].css.size = 18px` and weight 600. The 15px/600 group-title rule is asserted by `tests/test_browser_settings.py::test_settings_heading_levels_and_provider_titles_use_the_two_sans_roles`.
+
+**Trade-offs and rejected options.** The pages were regrouped, not merged, so each provider keeps its state and form boundary. **Continue with ChatGPT** remains the provider phrase. A provider form stays off the overview so the overview remains read-only. Provider sub-items were rejected on the phone row because they do not fit 320px. **Local AI** is a disabled sub-item rather than a page because it has no available behavior.
+
+**Follow-ups.** Future provider pages should use the same overview-row and heading-role contracts. No new dependency or color token was added. The disclosure marker has one 150 ms rotation, covered by the existing reduced-motion override.
+
+Tag: design, frontend. Target: `DESIGN.md` and `docs/frontend-design.md`.

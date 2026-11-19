@@ -79,17 +79,25 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
     assert page.evaluate("document.documentElement.dataset.theme") == "dark"
 
     page.locator("#settings-open").click()
-    page.get_by_role("tab", name="Thiết bị").click()
-    expect(page.locator("#automatic-preferences-version")).to_have_text("v1")
+    page.get_by_role("tab", name="Xử lý tự động").click()
+    title = page.locator("#automatic-preferences-title")
+    version = page.locator("#automatic-preferences-version")
+    expect(title).to_be_visible()
+    expect(version).to_have_text("v1")
+    expect(version).to_be_visible()
+    title_box, version_box = title.bounding_box(), version.bounding_box()
+    assert title_box["y"] < version_box["y"] + version_box["height"]
+    assert version_box["y"] < title_box["y"] + title_box["height"]
+    assert version_box["x"] >= title_box["x"] + title_box["width"]
     expect(page.locator("#automatic-preferences-provider")).to_have_value("")
     expect(page.locator("#automatic-preferences-provider-help")).to_contain_text("Transcript")
     expect(page.locator("#automatic-preferences-save")).to_be_disabled()
     assert page.locator("#automatic-preferences-asr-choice option").count() >= 1
 
-    page.get_by_role("tab", name="Theme").click()
+    page.get_by_role("tab", name="Giao diện").click()
     with page.expect_navigation():
         page.get_by_role("radio", name="English").check()
-    page.get_by_role("tab", name="Devices").click()
+    page.get_by_role("tab", name="Automatic processing").click()
     expect(page.locator("#automatic-preferences-provider-help")).to_contain_text("The transcript")
     expect(page.locator("#automatic-preferences-save")).to_be_disabled()
     context.close()
@@ -209,7 +217,9 @@ def test_preference_save_failure_then_success_preserves_focus_and_status(
         page.evaluate("lang => localStorage.setItem('asr-studio:lang',lang)", language)
         page.reload()
         page.locator("#settings-open").click()
-        page.get_by_role("tab", name="Thiết bị" if language == "vi" else "Devices").click()
+        page.get_by_role(
+            "tab", name="Xử lý tự động" if language == "vi" else "Automatic processing"
+        ).click()
         expect(page.locator("#automatic-preferences-asr-language")).to_have_value("vi")
         form = page.locator("#automatic-preferences-form")
         expect(form).to_have_attribute("aria-busy", "false")

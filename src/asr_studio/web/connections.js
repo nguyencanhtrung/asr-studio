@@ -5,7 +5,7 @@ import { asrSettings, providerChoice } from "./channel.js";
 import { selectDevices } from "./extension-devices-core.js";
 import { createRunner, createStore } from "./store.js";
 import { setAttr, setProp, tr } from "./shell.js";
-import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, initialState, reduce, selectAsr, selectLauncher, selectView } from "./provider-core.js";
+import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, SETTINGS_TOP_LEVELS, initialState, reduce, selectAsr, selectLauncher, selectProviderOverview, selectView, settingsParent } from "./provider-core.js";
 import { selectPreferences } from "./processing-preferences-core.js";
 
 const launcherElements = {
@@ -16,6 +16,15 @@ const launcherElements = {
 const settingsButton = document.querySelector("#settings-open");
 const settingsBody = document.querySelector(".connections-body");
 const settingsTabs = document.querySelector("#settings-tabs");
+const phoneLayout = window.matchMedia("(max-width: 680px)");
+const overviewEls = {
+  panel: document.querySelector("#settings-provider-overview"),
+  list: document.querySelector("#provider-overview-list"),
+};
+const providerPages = {
+  openai: document.querySelector("#settings-page-openai"),
+  antigravity: document.querySelector("#settings-page-antigravity"),
+};
 const asrEls = {
   status: document.querySelector("#asr-status"),
   defaultText: document.querySelector("#asr-default"),
@@ -70,6 +79,7 @@ const els = {
   close: document.querySelector("#connections-close"),
   badge: document.querySelector("#connection-state-badge"),
   ledger: document.querySelector("#connection-ledger"),
+  accountDetails: document.querySelector("#connection-account-details"),
   verificationSection: document.querySelector("#connection-verification-section"),
   status: document.querySelector("#connection-status"),
   account: document.querySelector("#connection-account"),
@@ -132,9 +142,14 @@ export function renderSection(section, d, s) {
   const view = selectView(d, s);
   setAttr(section.badge, "data-state", s.badge.state);
   setProp(section.badge, "textContent", tr(s.badge.text));
-  setProp(section.ledger, "hidden", s.badge.state === "disconnected"); // the badge already says it all
-  if (s.statusText) setProp(section.status, "textContent", tr(s.statusText));
+  if (s.statusText) {
+    setProp(section.status, "textContent", tr(s.statusText));
+    setProp(section.status, "hidden", tr(s.statusText) === tr(s.badge.text));
+  } else {
+    setProp(section.status, "hidden", true);
+  }
   if (view.account !== null) setProp(section.account, "textContent", tr(view.account));
+  if (section.ledger) setProp(section.ledger, "hidden", !s.info?.account?.label);
   setProp(section.verificationRow, "hidden", !s.summary);
   if (s.summary) setProp(section.verificationSummary, "textContent", tr(s.summary));
   else if (d.copy.noVerification) setProp(section.verificationSummary, "textContent", tr(d.copy.noVerification));
@@ -194,6 +209,12 @@ export function renderSection(section, d, s) {
     setProp(section.registrationConfirmButton, "disabled", view.registrationDisabled);
     setProp(section.registrationConfirmButton, "textContent", tr(view.registrationSubmitting && s.pending.recreate ? view.registrationSubmitting : view.registrationLabel));
   }
+  if (section.accountDetails) {
+    const focusInside = section.accountDetails.contains(document.activeElement);
+    const shouldOpen = s.info?.status !== "connected" || Boolean(s.login || s.error || s.confirming || s.recreateConfirming || focusInside);
+    if (shouldOpen) section.accountDetails.open = true;
+    else if (s.info?.status === "connected") section.accountDetails.open = false;
+  }
   return view;
 }
 
@@ -204,6 +225,68 @@ function renderLauncher(d, s) {
   setAttr(button, "data-state", launcher.status);
   setAttr(button, "aria-label", tr(launcher.ariaLabel));
   setProp(button, "title", tr(launcher.title));
+}
+
+function overviewRow(row) {
+  const item = document.createElement("li");
+  item.className = "provider-overview-item";
+  item.dataset.settingsOverview = row.id;
+  if (row.disabled) item.setAttribute("aria-disabled", "true");
+
+  const content = row.disabled ? document.createElement("div") : document.createElement("button");
+  content.className = "provider-overview-row";
+  if (!row.disabled) {
+    content.type = "button";
+    content.dataset.settingsTab = row.id;
+    content.setAttribute("aria-label", `${tr(row.name)}: ${tr(row.status)}${row.model ? `, ${tr(row.model)}` : ""}`);
+  }
+  const name = document.createElement("strong");
+  name.textContent = tr(row.name);
+  const status = document.createElement("span");
+  status.className = "provider-overview-secondary provider-overview-status";
+  status.textContent = tr(row.status);
+  content.append(name, status);
+  if (row.model) {
+    const model = document.createElement("span");
+    model.className = "provider-overview-secondary provider-overview-model";
+    model.textContent = tr(row.model);
+    content.append(model);
+  }
+  if (!row.disabled) {
+    const arrow = document.createElement("span");
+    arrow.className = "provider-overview-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "›";
+    content.append(arrow);
+  }
+  item.append(content);
+  return item;
+}
+
+function renderOverview(state) {
+  const rows = selectProviderOverview(state);
+  if (!overviewEls.list.children.length) overviewEls.list.replaceChildren(...rows.map(overviewRow));
+  for (const row of rows) {
+    const item = overviewEls.list.querySelector(`[data-settings-overview="${row.id}"]`);
+    if (!item) continue;
+    const content = item.querySelector(".provider-overview-row");
+    const name = content.querySelector("strong");
+    const status = content.querySelector(".provider-overview-status");
+    setProp(name, "textContent", tr(row.name));
+    setProp(status, "textContent", tr(row.status));
+    if (row.model) {
+      let model = content.querySelector(".provider-overview-model");
+      if (!model) {
+        model = document.createElement("span");
+        model.className = "provider-overview-secondary provider-overview-model";
+        content.append(model);
+      }
+      setProp(model, "textContent", tr(row.model));
+    } else {
+      content.querySelector(".provider-overview-model")?.remove();
+    }
+    if (!row.disabled) content.setAttribute("aria-label", `${tr(row.name)}: ${tr(row.status)}${row.model ? `, ${tr(row.model)}` : ""}`);
+  }
 }
 
 // One row per model. The list is rebuilt only when what it shows changed, so a focused button survives.
@@ -539,7 +622,7 @@ function renderProcessingPreferences(state, rootState) {
   setProp(processingPreferenceEls.save, "disabled", !view.canSave);
   setProp(processingPreferenceEls.save, "textContent", view.saving ? t("Đang lưu cài đặt…") : t("Lưu cài đặt xử lý"));
   setAttr(processingPreferenceEls.form, "aria-busy", view.saving || view.loading ? "true" : "false");
-  setProp(processingPreferenceEls.notice, "textContent", view.notice ? tr(view.notice) : view.message ? tr(view.message) : "");
+  setProp(processingPreferenceEls.notice, "textContent", view.notice ? tr(view.notice) : "");
   setProp(processingPreferenceEls.error, "hidden", !view.error);
   setProp(processingPreferenceEls.error, "textContent", view.error ? tr(view.error.text) : "");
   if (!view.saving && form.dataset.focusMutation) {
@@ -682,16 +765,37 @@ function asrCommand(row) {
 }
 
 function renderSettingsSection(section) {
+  const current = SETTINGS_SECTIONS.includes(section) && section !== "local" ? section : "ai";
+  const mobile = phoneLayout.matches;
+  const selectedTab = mobile ? settingsParent(current) : current;
+  const activePanel = current === "processing"
+    ? "settings-panel-processing"
+    : settingsParent(current) === "ai"
+      ? "settings-panel-ai"
+      : `settings-panel-${current}`;
+  const visibleTabs = mobile ? SETTINGS_TOP_LEVELS : SETTINGS_SECTIONS;
   for (const tab of settingsTabs.querySelectorAll("[data-settings-tab]")) {
-    const selected = tab.dataset.settingsTab === section;
+    const id = tab.dataset.settingsTab;
+    const visible = visibleTabs.includes(id);
+    const selected = visible && id === selectedTab;
+    setProp(tab, "hidden", !visible);
+    setAttr(tab, "aria-hidden", String(!visible));
     setAttr(tab, "aria-selected", String(selected));
     setProp(tab, "tabIndex", selected ? 0 : -1);
-    setProp(document.getElementById(tab.getAttribute("aria-controls")), "hidden", !selected);
+    const controls = selected && mobile ? activePanel : id === "processing" ? "settings-panel-processing" : settingsParent(id) === "ai" ? "settings-panel-ai" : `settings-panel-${id}`;
+    setAttr(tab, "aria-controls", controls);
   }
+  for (const panel of settingsBody.querySelectorAll(":scope > .settings-panel")) setProp(panel, "hidden", panel.id !== activePanel);
+  const activePanelElement = document.getElementById(activePanel);
+  if (activePanelElement) setAttr(activePanelElement, "aria-labelledby", `settings-tab-${selectedTab}`);
+  setProp(overviewEls.panel, "hidden", current !== "ai");
+  setProp(providerPages.openai, "hidden", current !== "openai");
+  setProp(providerPages.antigravity, "hidden", current !== "antigravity");
 }
 
 function render(state) {
   renderSettingsSection(state.launcher.section);
+  renderOverview(state);
   renderAsr(state.asr);
   renderDevices(state.devices);
   renderProcessingPreferences(state.processingPreferences, state);
@@ -717,11 +821,6 @@ function render(state) {
     }[s.ui];
     if (focus) focus.focus();
     dispatch({ type: "provider/ui-handled", provider: CHATGPT.id });
-  }
-  // The Google button opens the dialog at its section once both status reads have settled.
-  if (state.launcher.scroll && !s.loading && !state.antigravity.loading) {
-    document.querySelector("#antigravity-section").scrollIntoView({ block: "start" });
-    dispatch({ type: "provider/scroll-handled" });
   }
 }
 
@@ -774,32 +873,70 @@ export function readStored(key) {
   }
 }
 
-// The gear opens the dialog at its first section; a provider button opens it at that provider.
+// The gear opens the overview; a provider button opens that provider's sub-item.
+function focusSettingsDestination(section) {
+  const heading = section === "openai"
+    ? document.querySelector("#connection-section-title")
+    : section === "antigravity"
+      ? document.querySelector("#antigravity-title")
+      : section === "processing"
+        ? document.querySelector("#automatic-preferences-title")
+        : null;
+  if (heading) {
+    heading.focus({ preventScroll: true });
+    return;
+  }
+  settingsTabs.querySelector('[aria-selected="true"]')?.focus();
+}
+
 function openDialog(launcher, section) {
   if (!els.dialog.open) els.dialog.showModal();
   dispatch({ type: "provider/dialog-opened", launcher, section });
   settingsBody.scrollTop = 0; // a closed dialog keeps its scroll
-  // Focus starts on the open section, so the arrow keys work at once; the Google button starts at its heading.
-  if (launcher === ANTIGRAVITY.id) document.querySelector("#antigravity-title").focus({ preventScroll: true });
-  else settingsTabs.querySelector('[aria-selected="true"]').focus();
+  const active = store.getState().launcher.section;
+  focusSettingsDestination(active);
 }
 settingsButton.addEventListener("click", () => openDialog(null));
 for (const provider of [CHATGPT.id, ANTIGRAVITY.id]) {
   launcherElements[provider].addEventListener("click", () => openDialog(provider));
 }
 
-function selectSection(section) {
+function selectSection(section, focus = false) {
   dispatch({ type: "provider/settings-section-selected", section });
   settingsBody.scrollTop = 0;
+  if (focus) focusSettingsDestination(store.getState().launcher.section);
 }
 settingsTabs.addEventListener("click", (event) => {
   const tab = event.target.closest("[data-settings-tab]");
   if (tab) selectSection(tab.dataset.settingsTab);
 });
+settingsBody.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-settings-tab]");
+  if (!target || target.closest("#settings-tabs")) return;
+  if (target.getAttribute("aria-disabled") === "true" || target.disabled) return;
+  if (target.tagName === "A") event.preventDefault();
+  selectSection(target.dataset.settingsTab, true);
+});
 // A column beside the content, a row on a phone: say which, as the CSS breakpoint does.
-const phoneLayout = window.matchMedia("(max-width: 680px)");
 const announceOrientation = () => settingsTabs.setAttribute("aria-orientation", phoneLayout.matches ? "horizontal" : "vertical");
-phoneLayout.addEventListener("change", announceOrientation);
+const lastSettingsFocus = (() => {
+  let element = null;
+  els.dialog.addEventListener("focusin", (event) => { element = event.target; });
+  els.dialog.addEventListener("close", () => { element = null; });
+  return () => element;
+})();
+phoneLayout.addEventListener("change", () => {
+  const activeElement = document.activeElement;
+  const focusedElement = els.dialog.contains(activeElement)
+    ? activeElement
+    : activeElement === document.body ? lastSettingsFocus() : null;
+  renderSettingsSection(store.getState().launcher.section);
+  announceOrientation();
+  const focusIsRendered = focusedElement?.isConnected
+    && focusedElement.getClientRects().length > 0
+    && getComputedStyle(focusedElement).visibility !== "hidden";
+  if (focusedElement && !focusIsRendered) settingsTabs.querySelector('[role="tab"][aria-selected="true"]')?.focus();
+});
 announceOrientation();
 
 // Arrow keys, Home and End move between the sections and choose the one they land on, as the meeting tabs do.
@@ -807,15 +944,17 @@ announceOrientation();
 settingsTabs.addEventListener("keydown", (event) => {
   const tab = event.target.closest("[data-settings-tab]");
   if (!tab || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-  const index = SETTINGS_SECTIONS.indexOf(tab.dataset.settingsTab);
-  const last = SETTINGS_SECTIONS.length - 1;
+  const sections = (phoneLayout.matches ? SETTINGS_TOP_LEVELS : SETTINGS_SECTIONS).filter((id) => id !== "local");
+  const index = sections.indexOf(tab.dataset.settingsTab);
+  if (index < 0) return;
+  const last = sections.length - 1;
   const previous = index === 0 ? last : index - 1;
   const next = index === last ? 0 : index + 1;
   const target = { ArrowUp: previous, ArrowLeft: previous, ArrowDown: next, ArrowRight: next, Home: 0, End: last }[event.key];
   if (target === undefined) return;
   event.preventDefault();
-  selectSection(SETTINGS_SECTIONS[target]);
-  document.getElementById(`settings-tab-${SETTINGS_SECTIONS[target]}`).focus();
+  selectSection(sections[target]);
+  document.getElementById(`settings-tab-${sections[target]}`).focus();
 });
 
 els.close.addEventListener("click", () => els.dialog.close());
@@ -896,5 +1035,5 @@ const reopenAt = readStored(SETTINGS_SECTION_KEY);
 if (SETTINGS_SECTIONS.includes(reopenAt)) {
   settingsButton.focus(); // closing the dialog returns focus to what had it when it opened
   openDialog(null, reopenAt);
-  els.dialog.querySelector("[data-lang-choice]:checked")?.focus();
+  if (reopenAt === "theme") els.dialog.querySelector("[data-lang-choice]:checked")?.focus();
 }
