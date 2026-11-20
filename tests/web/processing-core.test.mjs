@@ -301,3 +301,26 @@ test("source adoption rejects a mixed null generation/source pair before posting
   assert.equal(read.state.error.code, "source_changed");
   assert.equal(read.effects.some((item) => item.type === "fetch" && item.key === "processing/action"), false);
 });
+
+test("an interrupted recording waits for an explicit transcription start", () => {
+  const held = workflow({
+    state: "needs_attention",
+    current_source: { generation_id: null, source_version: null, metadata_version: 1, notes_source_version: 1 },
+    steps: [
+      { id: "transcription", kind: "transcription", state: "needs_attention", waiting_reason: "interrupted_recording", source_snapshot_id: null, recipe_version: 1 },
+      { id: "notes", kind: "notes", state: "needs_attention", waiting_reason: "interrupted_recording", source_snapshot_id: null, recipe_version: 1 },
+    ],
+    actions: { cancel: true, retry_notes: false, apply_current_settings: true, use_current_source: true },
+  });
+  const result = reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: held } },
+  });
+  const view = selectProcessing(result.state);
+  assert.equal(view.actions.useSource, true);
+  assert.equal(view.sourceActionLabel.text, "Chép lời phần đã ghi");
+  assert.equal(view.message.text, "Bản ghi bị gián đoạn nên chưa tự chép lời. Bấm Chép lời phần đã ghi để bắt đầu.");
+  assert.equal(view.steps[0].state, "problem");
+  assert.match(view.steps[0].reason.text, /gián đoạn/);
+});

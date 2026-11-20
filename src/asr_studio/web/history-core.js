@@ -159,13 +159,20 @@ export function recordingInfo(meeting) {
     ? errorValue.code
     : meeting && typeof meeting.recording_error_code === "string" ? meeting.recording_error_code : "";
   const errorCode = errorCodeValue || "";
+  // A saved prefix of an interrupted extension capture keeps a durable label.
+  const interruptedValue = detail && Object.hasOwn(detail, "interrupted")
+    ? detail.interrupted && typeof detail.interrupted.code === "string" ? detail.interrupted.code : null
+    : meeting && typeof meeting.recording_interruption_code === "string" ? meeting.recording_interruption_code : null;
+  const interrupted = source === "extension" && interruptedValue !== null;
   const ready = state === "ready" && source !== "unknown" && (source !== "extension" || durationSeconds !== null);
   const playable = ready && (source !== "extension" || typeof audioUrl === "string" && audioUrl.trim() !== "");
   const statusLabel = ready
-    ? RECORDING_STATE_LABELS.ready
+    ? interrupted ? t("Đã lưu · bị gián đoạn") : RECORDING_STATE_LABELS.ready
     : RECORDING_STATE_LABELS[state] || t("Chưa sẵn sàng");
   let statusMessage;
-  if (ready) {
+  if (ready && interrupted) {
+    statusMessage = t("Bản ghi bị gián đoạn: chỉ có phần đã ghi trước khi ghi âm dừng.");
+  } else if (ready) {
     statusMessage = t("Bản ghi đã lưu.");
   } else if (state === "receiving") {
     statusMessage = t("Bản ghi đang được nhận. Trình phát và chép lời sẽ mở khi bản ghi sẵn sàng.");
@@ -188,8 +195,10 @@ export function recordingInfo(meeting) {
     state,
     statusLabel,
     statusMessage,
-    statusState: ready ? "done" : RECORDING_PENDING_STATES.has(state) ? "active" : state === "failed" || state === "canceled" ? "problem" : "warning",
+    statusState: ready ? interrupted ? "warning" : "done" : RECORDING_PENDING_STATES.has(state) ? "active" : state === "failed" || state === "canceled" ? "problem" : "warning",
     errorCode,
+    interrupted,
+    interruptionCode: interrupted ? interruptedValue : null,
     durationSeconds,
     audioUrl: typeof audioUrl === "string" && audioUrl.trim() ? audioUrl : null,
     ready,

@@ -26,6 +26,32 @@ altering assignments. Full app/ASR/notes acceptance and representative real-meet
 separate from these memory measurements. Issue [#97](https://github.com/nguyencanhtrung/asr-studio/issues/97).
 Tag: performance, operations. Target: `docs/release/diarization-memory.md`, README hardware guidance.
 
+## #239 — Keep interrupted extension captures recoverable
+
+**Problem.** A source that ended during capture (for example a closed meeting tab) marked the
+capture interrupted and the client then canceled the server session automatically. Staged chunks
+and local audio survived, but finalize required `capture_complete: true` and rejected canceled
+sessions, so the recorded part could not reach the library. One observed 69-minute capture ended
+this way.
+
+**Design change.** Interruption no longer cancels. The server session stays `receiving`, and
+persisted chunks keep uploading. The user chooses **Save recorded part** or **Cancel server
+session**. Save finalizes the persisted prefix with `capture_complete: false` and an
+`interruption_code` from a fixed set; the server applies the same manifest, chunk-digest and
+archive-hash checks, stores `capture_interruption_code` (migration v20), and labels the recording
+`interrupted`. The ready handoff creates the workflow in `needs_attention` with waiting reason
+`interrupted_recording`; transcript and Notes start only after explicit source adoption. Cancel keeps
+the earlier cancel semantics. A complete finalize payload and its hash are unchanged, so earlier
+clients keep working; an incomplete finalize without a known code is still rejected.
+
+**Trade-offs.** An interrupted session left without a choice holds staging quota until the user
+saves, cancels or deletes it; no TTL is added. The extension shows the recorded duration as chunk
+count × 5 s, an estimate. Existing canceled sessions are not migrated. Issue
+[#239](https://github.com/nguyencanhtrung/asr-studio/issues/239).
+
+Tag: architecture, reliability. Targets: `src/asr_studio/extension_ingest.py`,
+`src/asr_studio/processing.py`, `extensions/chrome/upload-core.js`, `extensions/chrome/sw.js`.
+
 ## Extension upload while recording
 
 **Problem and measured cause.** The client previously retained every chunk until Stop,
@@ -42,7 +68,8 @@ durable capture state before finalize; upload failures leave capture running and
 use a retry backoff. Interrupted captures cancel an existing server session while
 retaining local bytes; local discard makes one bounded best-effort cancellation.
 If a create response is lost after the server commits, interrupted recovery replays the idempotent create and cancels that same session before retaining the local bytes.
-The wire contract and server implementation are unchanged.
+The wire contract and server implementation are unchanged. #239 later replaced the
+automatic interruption cancel with an explicit Save/Cancel choice (see below).
 
 **Before and after.** In the live single-run comparison, both recordings were
 about 600 s under the loopback Chromium configuration documented in the [extension

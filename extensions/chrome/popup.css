@@ -457,3 +457,8 @@ button:disabled,
 [hidden] {
   display: none !important;
 }
+
+.recovery-actions {
+  display: grid;
+  gap: 8px;
+}

@@ -1,4 +1,5 @@
-import { capturePresentation, initialState, isActiveCapture, isPending, reduce } from "./popup-core.js";
+import { capturePresentation, initialState, isActiveCapture, isPending, pendingRecovery, reduce } from "./popup-core.js";
+import { recordedDurationLabel } from "./capture-core.js";
 
 let state = initialState;
 let requestSequence = 0;
@@ -27,6 +28,11 @@ const elements = {
   setupHintButton: $("setup-hint-button"),
   setupOpen: $("setup-open"),
   actionPanel: $("action-panel"),
+  recoveryPanel: $("recovery-panel"),
+  recoveryDuration: $("recovery-duration"),
+  recoveryReason: $("recovery-reason"),
+  savePartialButton: $("save-partial-button"),
+  cancelRemoteButton: $("cancel-remote-button"),
   sourcesPanel: $("sources-panel")
 };
 
@@ -74,13 +80,25 @@ function localizedError(error) {
     binding_locked: t("Mã ghép thuộc server hoặc thiết bị khác. Mở Settings → Devices và dùng Pair again cho đúng thiết bị; audio vẫn được giữ lại."),
     pair_locked: t("Không thể ghép lại khi đang ghi. Hãy dừng bản ghi trước; audio đã lưu vẫn được giữ lại."),
     url_locked: t("Không thể đổi server khi còn audio đang chờ xử lý."),
-    backend_error: t("Server không nhận yêu cầu này.")
+    backend_error: t("Server không nhận yêu cầu này."),
+    source_ended: t("Nguồn âm thanh đã dừng. Bản ghi được giữ lại."),
+    source_inactive: t("Nguồn âm thanh không còn hoạt động. Bản ghi được giữ lại."),
+    write_backlog: t("Âm thanh đến quá nhanh. Bản ghi được giữ lại."),
+    capture_incomplete: t("Bản ghi chưa lưu đủ audio. Bản ghi được giữ lại."),
+    recorder_error: t("Trình ghi âm của Chrome báo lỗi. Bản ghi được giữ lại."),
+    owner_restarted: t("Tiện ích đã khởi động lại khi đang ghi. Bản ghi được giữ lại."),
+    unknown: t("Ghi âm dừng ngoài dự kiến. Bản ghi được giữ lại."),
+    nothing_to_save: t("Bản ghi này chưa có audio để lưu."),
+    already_canceled: t("Bản ghi đã được hủy trên server."),
+    already_saving: t("Phần đã ghi đang được lưu; không thể hủy nữa."),
+    already_saved: t("Server đã lưu bản ghi này.")
   };
   return known[code] || t("Không thực hiện được yêu cầu. Hãy thử lại.");
 }
 
 function localizedMessage(message) {
   if (!message) return "";
+  if (message.startsWith("Saved recorded part.")) return t("Server đã lưu phần đã ghi; hãy bắt đầu chép lời trong ASR Studio.");
   if (message.startsWith("Uploaded.")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
   if (message.startsWith("The server has the complete audio")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
   return "";
@@ -192,6 +210,16 @@ function render() {
   setText(elements.stopButton, stopping ? t("Đang lưu…") : t("Dừng và lưu"));
   setText(elements.elapsed, active ? formatElapsed(capture.startedAt) : "00:00");
 
+  const recovery = active ? null : pendingRecovery(snapshot);
+  elements.recoveryPanel.hidden = !recovery;
+  if (recovery) {
+    setText(elements.recoveryDuration, recordedDurationLabel(recovery.capture.chunkCount));
+    setText(elements.recoveryReason, localizedError({ code: recovery.capture.interruptionCode || "unknown" }));
+    const choosing = isPending(state, "save-partial") || isPending(state, "cancel-remote");
+    elements.savePartialButton.disabled = choosing;
+    elements.cancelRemoteButton.disabled = choosing;
+  }
+
   renderSourceButton(elements.tabGate, "tab", capture);
   renderSourceButton(elements.micGate, "microphone", capture);
   renderLevels(capture);
@@ -225,6 +253,15 @@ function toggleGate(source) {
 
 elements.startButton.addEventListener("click", () => void sendRequest("start", { type: "START_CAPTURE" }, loadStatus));
 elements.stopButton.addEventListener("click", () => void sendRequest("stop", { type: "STOP_CAPTURE" }, loadStatus));
+elements.savePartialButton.addEventListener("click", () => {
+  const recovery = pendingRecovery(state.status);
+  if (recovery) void sendRequest("save-partial", { type: "SAVE_INTERRUPTED", sessionId: recovery.id }, loadStatus);
+});
+elements.cancelRemoteButton.addEventListener("click", () => {
+  const recovery = pendingRecovery(state.status);
+  // Cancel keeps local audio and server staging, so the popup asks no confirmation.
+  if (recovery) void sendRequest("cancel-remote", { type: "CANCEL_INTERRUPTED", sessionId: recovery.id }, loadStatus);
+});
 elements.tabGate.addEventListener("click", () => toggleGate("tab"));
 elements.micGate.addEventListener("click", () => toggleGate("microphone"));
 elements.setupOpen.addEventListener("click", openSetup);

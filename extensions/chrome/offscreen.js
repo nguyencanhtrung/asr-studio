@@ -7,11 +7,13 @@ import {
 import {
   CAPTURE_STATES,
   canMarkComplete,
+  interruptionCodeFor,
+  MEDIA_RECORDER_TIMESLICE_MS,
   isUnexpectedTrackEnd
 } from "./capture-core.js";
 import { MIME_TYPE, makeError } from "./protocol.js";
 
-export const MEDIA_RECORDER_TIMESLICE_MS = 5000;
+export { MEDIA_RECORDER_TIMESLICE_MS };
 
 const runtime = {
   sessionId: null,
@@ -228,6 +230,7 @@ async function markInterrupted(error, sessionId = runtime.sessionId, generation 
       status: CAPTURE_STATES.INTERRUPTED,
       interrupted: true,
       captureComplete: false,
+      interruptionCode: interruptionCodeFor(error),
       persistenceError: message
     });
     runtime.latestSession = session;
@@ -498,6 +501,7 @@ async function recoverOnLoad() {
       status: CAPTURE_STATES.INTERRUPTED,
       interrupted: true,
       captureComplete: false,
+      interruptionCode: "owner_restarted",
       persistenceError: "The offscreen capture owner restarted before Stop completed."
     });
   }

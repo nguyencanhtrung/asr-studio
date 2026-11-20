@@ -39,6 +39,8 @@ AUTOMATIC_ADMISSIONS_BEFORE_GUI_GRACE = 2
 GUI_GRACE_SECONDS = 1.0
 RETRY_BASE_SECONDS = 1.0
 _ACTIVE = ("accepted", "running", "stopping")
+# Waiting reasons that hold a step until the operator confirms its source.
+ATTENTION_REASONS = frozenset({"source_confirmation_required", "interrupted_recording"})
 _ASR_WAITING = {"worker_offline", "model_unavailable", "diarization_model_unavailable", "slot_busy"}
 _NOTES_WAITING = {
     "provider_unconfigured",
@@ -288,7 +290,8 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
     """Create one workflow and its waiting steps in the ready-publication transaction."""
     row = connection.execute(
         "SELECT sessions.id AS session_id, sessions.state, sessions.language_hint AS session_language, "
-        "sessions.language_hint_omitted, recordings.id AS recording_id, recordings.meeting_id, "
+        "sessions.language_hint_omitted, sessions.finalize_capture_complete, "
+        "recordings.id AS recording_id, recordings.meeting_id, "
         "meetings.current_generation_id, meetings.deletion_requested_at, meetings.language_hint, "
         "meetings.metadata_version, meetings.notes_source_version, "
         "current_generation.source_version AS current_source_version, "
@@ -312,13 +315,16 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
         prefs["asr_language"] if row["language_hint_omitted"] else row["session_language"]
     )
     workflow_id = _new_id()
-    state = (
-        "needs_attention"
-        if row["current_generation_id"] is not None
+    # A saved interrupted prefix waits for an explicit start; it is never
+    # processed automatically as if it were the complete meeting.
+    interrupted = row["finalize_capture_complete"] == 0
+    source_changed = (
+        row["current_generation_id"] is not None
         or row["metadata_version"] != 1
         or row["notes_source_version"] != 1
-        else "waiting"
     )
+    state = "needs_attention" if interrupted or source_changed else "waiting"
+    attention_reason = "source_confirmation_required" if source_changed else "interrupted_recording"
     connection.execute(
         "INSERT INTO processing_workflows(id, meeting_id, recording_id, extension_session_id, state, ready_sequence, "
         "asr_choice, asr_language, notes_provider, notes_model, notes_reasoning_effort, notes_output_language, "
@@ -341,7 +347,7 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
     )
     for kind in ("transcription", "notes"):
         step_id = _new_id()
-        waiting_reason = "source_confirmation_required" if state == "needs_attention" else None
+        waiting_reason = attention_reason if state == "needs_attention" else None
         step_state = "needs_attention" if state == "needs_attention" else "waiting"
         connection.execute(
             "INSERT INTO processing_steps(id, workflow_id, kind, state, waiting_reason, "
@@ -1799,7 +1805,7 @@ class AutomaticProcessingScheduler:
         for row in rows:
             if admitted >= MAX_STEPS:
                 break
-            if row["waiting_reason"] == "source_confirmation_required":
+            if row["waiting_reason"] in ATTENTION_REASONS:
                 continue
             try:
                 from asr_studio.runtime import read_runtime_profile

@@ -109,6 +109,11 @@ const { t, UI_LOCALE } = (() => {
   // Keyed by the exact Vietnamese text a caller passes to t(); tests/test_i18n.py keeps it complete.
   function englishTable() {
     return {
+      "Đã lưu · bị gián đoạn": "Saved · interrupted",
+      "Bản ghi bị gián đoạn: chỉ có phần đã ghi trước khi ghi âm dừng.": "Interrupted recording: only the part recorded before capture stopped is available.",
+      "Bản ghi bị gián đoạn. Xử lý tự động chỉ chạy khi bạn xác nhận chép lời phần đã ghi.": "Interrupted recording. Automatic processing runs only after you confirm transcription of the recorded part.",
+      "Bản ghi bị gián đoạn nên chưa tự chép lời. Bấm Chép lời phần đã ghi để bắt đầu.": "This recording was interrupted, so it was not transcribed automatically. Select Transcribe recorded part to start.",
+      "Chép lời phần đã ghi": "Transcribe recorded part",
       " (có bản nháp chưa lưu)": " (has an unsaved draft)",
       " (liên kết nguồn không hợp lệ)": " (invalid source link)",
       " Chưa xác nhận được việc dọn upload dở; lần thử lại sẽ bắt đầu bằng một upload mới.": " Cleanup of the partial upload is not confirmed; the next try starts with a new upload.",

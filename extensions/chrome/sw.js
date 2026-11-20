@@ -25,16 +25,18 @@ import {
   getActiveCapture,
   hasPendingLocalAudio,
   isActiveCapture,
-  isUploadable,
   listChunkMetadata,
   listSessions,
   patchSession,
   purgeDiscardedCaptures
 } from "./db.js";
 import { pairingGuard, uploadStateForError } from "./recovery-core.js";
+import { interruptionCodeFor } from "./capture-core.js";
 import {
+  awaitsRecoveryChoice,
   classifyUploadFailure,
   decideDiscard,
+  decideRecoveryChoice,
   decideUpload,
   isCancelRetryableError,
   isCancelSettledError,
@@ -442,6 +444,7 @@ function publicSession(session) {
       status: session.capture.status,
       captureComplete: Boolean(session.capture.captureComplete),
       interrupted: Boolean(session.capture.interrupted),
+      interruptionCode: session.capture.interrupted ? interruptionCodeFor({ code: session.capture.interruptionCode }) : null,
       chunkCount: session.capture.chunkCount,
       totalBytes: session.capture.totalBytes,
       error: session.capture.persistenceError || "",
@@ -451,6 +454,9 @@ function publicSession(session) {
     upload: {
       state: session.upload.state,
       nextSequence: session.upload.nextSequence,
+      recoveryChoice: session.upload.recoveryChoice || null,
+      awaitingChoice: awaitsRecoveryChoice(session),
+      cancelSettled: Boolean(session.upload.cancelSettled),
       receipt: session.upload.receipt ? { ...session.upload.receipt } : null,
       meetingUrl,
       cleaned: Boolean(session.upload.cleaned),
@@ -467,7 +473,8 @@ async function updateActionBadge(status) {
     const hasActiveCapture = Boolean(capture && ["starting", "recording", "stopping"].includes(capture.status));
     const hasPendingUpload = (status?.sessions || []).some((session) => {
       const uploadState = session.upload?.state;
-      return session.capture?.captureComplete && !session.upload?.cleaned && uploadState !== "discarded";
+      const sending = session.capture?.captureComplete || session.upload?.recoveryChoice === "save";
+      return sending && !session.upload?.cleaned && uploadState !== "discarded";
     });
     const text = hasActiveCapture ? "REC" : hasPendingUpload ? "UP" : "";
     await chrome.action.setBadgeText({ text });
@@ -812,15 +819,20 @@ async function prepareFinalize(session) {
   }
   const manifestHash = await sha256Hex(new TextEncoder().encode(manifest.text));
   const finalizeId = crypto.randomUUID();
+  const partial = Boolean(session.capture.interrupted);
+  if (partial && session.upload.recoveryChoice !== "save") {
+    throw makeError("capture_incomplete", "An interrupted capture is finalized only after Save recorded part.");
+  }
   const payload = {
     finalize_id: finalizeId,
     capture_epoch: session.capture.captureEpoch,
     epoch: session.upload.serverEpoch,
-    capture_complete: true,
+    capture_complete: !partial,
     total_bytes: manifest.totalBytes,
     chunk_count: manifest.chunkCount,
     manifest_hash: manifestHash,
-    chunks: metas
+    chunks: metas,
+    ...(partial ? { interruption_code: interruptionCodeFor({ code: session.capture.interruptionCode }) } : {})
   };
   return patchSession(session.clientRecordingId, "upload", {
     state: "finalize_pending",
@@ -874,7 +886,9 @@ async function pollRemoteStatus(session, context) {
       chrome.alarms.clear(uploadAlarmName(session.clientRecordingId)),
       chrome.alarms.clear(pollAlarmName(session.clientRecordingId))
     ]);
-    await broadcastStatus(null, "Uploaded. The server has the complete audio; processing continues in ASR Studio.");
+    await broadcastStatus(null, session.capture.interrupted
+      ? "Saved recorded part. Start transcription for the interrupted recording in ASR Studio."
+      : "Uploaded. The server has the complete audio; processing continues in ASR Studio.");
     return cleaned;
   }
   const failed = remote.state === "failed" || remote.state === "canceled";
@@ -981,7 +995,7 @@ async function resumeUploads() {
     const decision = decideUpload(session, Date.now(), { source: "recovery" });
     if (decision.action === "wait") {
       await ensureUploadWake(session.clientRecordingId, decision);
-    } else if ((isUploadable(session) || ["cancel", "reconcile_session"].includes(decision.action)) && isUploadActionable(decision)) {
+    } else if (isUploadActionable(decision)) {
       await uploadSession(session.clientRecordingId, "recovery");
     }
   }
@@ -1062,6 +1076,24 @@ async function discardCapture(sessionId) {
   return { ok: true };
 }
 
+// Save uploads the persisted prefix and finalizes it as interrupted; Cancel keeps
+// the earlier semantics: cancel the server session and retain local audio.
+async function chooseRecovery(sessionId, choice) {
+  const session = await getSession(sessionId);
+  const decision = decideRecoveryChoice(session, choice);
+  if (!decision.ok) throw makeError(decision.code, "This recording cannot take that action now.");
+  await patchSession(sessionId, "upload", {
+    recoveryChoice: choice,
+    retryAt: null,
+    cancelRetryAt: null,
+    cancelError: null,
+    error: null
+  });
+  const updated = await uploadSession(sessionId, "manual");
+  await broadcastStatus();
+  return { ok: true, status: updated ? publicSession(updated) : null };
+}
+
 async function processCaptureStatus(status) {
   await broadcastStatus(status || null);
   const sessionId = status?.sessionId;
@@ -1112,6 +1144,10 @@ async function messageFromUi(message) {
       return openResult(message.sessionId);
     case "DISCARD_CAPTURE":
       return discardCapture(message.sessionId);
+    case "SAVE_INTERRUPTED":
+      return chooseRecovery(message.sessionId, "save");
+    case "CANCEL_INTERRUPTED":
+      return chooseRecovery(message.sessionId, "cancel");
     default:
       throw makeError("unknown_message", "The control message is not supported.");
   }
@@ -1160,7 +1196,7 @@ async function reconcileCaptureOwner() {
     if (reply?.ok && reply.status?.sessionId === session.clientRecordingId &&
         ["starting", "recording", "stopping"].includes(reply.status.status)) continue;
     await patchSession(session.clientRecordingId, "capture", {
-      status: "interrupted", captureComplete: false, interrupted: true,
+      status: "interrupted", captureComplete: false, interrupted: true, interruptionCode: "owner_restarted",
       persistenceError: "The capture owner ended before a clean Stop. Retained audio was not finalized."
     });
   }

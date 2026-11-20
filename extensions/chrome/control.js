@@ -1,5 +1,6 @@
 import { initialState, isPending, reduce, visibleSessions } from "./control-core.js";
 import { MIME_TYPE, normalizeServerUrl, permissionPattern } from "./protocol.js";
+import { recordedDurationLabel } from "./capture-core.js";
 
 let state = initialState;
 let requestSequence = 0;
@@ -97,6 +98,14 @@ function localizedError(error) {
     source_inactive: t("Nguồn âm thanh không còn hoạt động. Bản ghi được giữ lại."),
     write_backlog: t("Âm thanh đến quá nhanh. Bản ghi được giữ lại."),
     capture_incomplete: t("Bản ghi chưa lưu đủ audio. Bản ghi được giữ lại."),
+    recorder_error: t("Trình ghi âm của Chrome báo lỗi. Bản ghi được giữ lại."),
+    owner_restarted: t("Tiện ích đã khởi động lại khi đang ghi. Bản ghi được giữ lại."),
+    unknown: t("Ghi âm dừng ngoài dự kiến. Bản ghi được giữ lại."),
+    nothing_to_save: t("Bản ghi này chưa có audio để lưu."),
+    already_canceled: t("Bản ghi đã được hủy trên server."),
+    already_saving: t("Phần đã ghi đang được lưu; không thể hủy nữa."),
+    already_saved: t("Server đã lưu bản ghi này."),
+    not_interrupted: t("Bản ghi này không bị gián đoạn."),
     capture_missing: t("Không tìm thấy bản ghi trên máy."),
     local_chunk_missing: t("Thiếu một phần audio trên máy. Bản ghi được giữ lại."),
     server_failed: t("Server chưa xác nhận lưu đủ audio. Bản ghi được giữ lại."),
@@ -118,6 +127,7 @@ function localizedError(error) {
 
 function localizedMessage(message) {
   if (!message) return "";
+  if (message.startsWith("Saved recorded part.")) return t("Server đã lưu phần đã ghi; hãy bắt đầu chép lời trong ASR Studio.");
   if (message.startsWith("Uploaded.")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
   if (message.startsWith("The server has the complete audio")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
   return t(message);
@@ -182,7 +192,8 @@ function statusText(capture) {
 
 function uploadText(upload, capture) {
   if (upload?.cleaned && upload.receipt) return t("đã nhận đủ");
-  if (capture?.status === "interrupted") return t("giữ trên máy");
+  if (capture?.status === "interrupted" && upload?.awaitingChoice) return t("chờ bạn chọn");
+  if (capture?.status === "interrupted" && upload?.recoveryChoice !== "save") return t("giữ trên máy");
   if (upload?.state === "waiting_for_stop") return t("chờ dừng ghi");
   if (upload?.state === "failed") return t("gửi thất bại");
   if (upload?.state === "finalizing" || upload?.state === "finalize_pending") return t("chờ xác nhận");
@@ -203,7 +214,11 @@ function renderSessionRow(session) {
   const copy = document.createElement("div");
   const title = document.createElement("p");
   title.className = "session-title";
-  title.textContent = session.capture.status === "interrupted" ? t("Bản ghi bị gián đoạn được giữ lại") : t("Bản ghi cục bộ");
+  const interrupted = session.capture.status === "interrupted";
+  const saving = interrupted && session.upload.recoveryChoice === "save";
+  title.textContent = session.upload.awaitingChoice
+    ? t("Bản ghi bị gián đoạn: lưu hay hủy?")
+    : saving ? t("Đang lưu phần đã ghi") : interrupted ? t("Bản ghi bị gián đoạn được giữ lại") : t("Bản ghi cục bộ");
   const meta = document.createElement("p");
   meta.className = "session-meta";
   meta.textContent = t("{status} · {size} · {chunks} · {upload}", {
@@ -218,8 +233,18 @@ function renderSessionRow(session) {
     recordedAt.textContent = new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(session.capture.startedAt));
   }
   copy.append(title, recordedAt, meta);
+  if (interrupted && !session.upload.cleaned) {
+    const reason = document.createElement("p");
+    reason.className = "session-meta";
+    reason.dataset.role = "interruption";
+    reason.textContent = t("{reason} Đã ghi khoảng {duration}.", {
+      reason: localizedError({ code: session.capture.interruptionCode || "unknown" }),
+      duration: recordedDurationLabel(session.capture.chunkCount)
+    });
+    copy.append(reason);
+  }
   if (session.upload.cleaned && session.upload.receipt) {
-    title.textContent = t("Đã lưu đủ audio trên server");
+    title.textContent = interrupted ? t("Đã lưu phần đã ghi trên server") : t("Đã lưu đủ audio trên server");
     const done = document.createElement("p");
     done.textContent = t("Có thể đóng tiện ích; kết quả tiếp tục được xử lý trong ASR Studio.");
     copy.append(done);
@@ -230,7 +255,12 @@ function renderSessionRow(session) {
     error.textContent = localizedError(session.upload.error);
     copy.append(error);
   }
-  if (session.capture.error && !session.upload.cleaned) {
+  if (session.upload.awaitingChoice) {
+    const hint = document.createElement("p");
+    hint.className = "session-meta";
+    hint.textContent = t("Lưu phần đã ghi để chép lời trong ASR Studio, hoặc hủy phiên trên server. Audio vẫn được giữ trên máy.");
+    copy.append(hint);
+  } else if (session.capture.error && !session.upload.cleaned && !saving) {
     const error = document.createElement("p");
     error.className = "session-meta";
     error.textContent = t("Âm thanh vẫn được giữ trên máy. Hãy thử lại hoặc bỏ bản ghi.");
@@ -239,7 +269,27 @@ function renderSessionRow(session) {
 
   const actions = document.createElement("div");
   actions.className = "session-actions";
-  if (!session.upload.cleaned && session.capture.captureComplete) {
+  if (session.upload.awaitingChoice) {
+    const save = document.createElement("button");
+    save.type = "button";
+    save.dataset.action = "save-partial";
+    save.className = "primary-button";
+    save.textContent = t("Lưu phần đã ghi");
+    save.addEventListener("click", () => sendRequest("save-partial", { type: "SAVE_INTERRUPTED", sessionId: session.id }, loadStatus));
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.dataset.action = "cancel-remote";
+    cancel.className = "quiet-button";
+    cancel.textContent = t("Hủy phiên trên server");
+    cancel.addEventListener("click", () => {
+      if (window.confirm(t("Hủy phiên ghi trên server? Phần đã ghi sẽ không vào ASR Studio; audio vẫn giữ trên máy cho đến khi bạn bỏ."))) {
+        sendRequest("cancel-remote", { type: "CANCEL_INTERRUPTED", sessionId: session.id }, loadStatus);
+      }
+    });
+    save.disabled = cancel.disabled = isPending(state, "save-partial") || isPending(state, "cancel-remote");
+    actions.append(save, cancel);
+  }
+  if (!session.upload.cleaned && (session.capture.captureComplete || saving)) {
     const retry = document.createElement("button");
     retry.type = "button";
     retry.dataset.action = "retry";

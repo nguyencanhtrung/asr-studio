@@ -185,6 +185,42 @@ test("extension recording state is visible without authorizing playback or work"
   assert.equal(ready.durationSeconds, 12);
 });
 
+test("a saved interrupted prefix stays playable but labeled as interrupted", () => {
+  const detail = recordingInfo(meeting("interrupted", {
+    recording: {
+      source: "extension",
+      state: "ready",
+      duration_seconds: 4173,
+      audio_url: "/api/meetings/interrupted/audio",
+      interrupted: { code: "source_ended" },
+    },
+  }));
+  assert.equal(detail.ready, true);
+  assert.equal(detail.playable, true);
+  assert.equal(detail.interrupted, true);
+  assert.equal(detail.interruptionCode, "source_ended");
+  assert.equal(detail.statusState, "warning");
+  assert.equal(text(detail.statusLabel), "Đã lưu · bị gián đoạn");
+  assert.equal(text(detail.statusMessage), "Bản ghi bị gián đoạn: chỉ có phần đã ghi trước khi ghi âm dừng.");
+
+  const listRow = recordingInfo({
+    ...meeting("row"),
+    recording_source: "extension",
+    recording_state: "ready",
+    duration_seconds: 30,
+    recording_interruption_code: "owner_restarted",
+  });
+  assert.equal(listRow.interrupted, true);
+  assert.equal(text(listRow.statusLabel), "Đã lưu · bị gián đoạn");
+
+  const complete = recordingInfo(meeting("complete", {
+    recording: { source: "extension", state: "ready", duration_seconds: 12, audio_url: "/a", interrupted: null },
+  }));
+  assert.equal(complete.interrupted, false);
+  assert.equal(complete.statusState, "done");
+  assert.equal(text(complete.statusLabel), "Đã lưu");
+});
+
 test("the meeting id comes from the address path", () => {
   assert.equal(meetingIdFromPathname("/meetings/abc"), "abc");
   assert.equal(meetingIdFromPathname("/meetings/abc/"), "abc");

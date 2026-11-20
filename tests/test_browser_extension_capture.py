@@ -625,7 +625,9 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     if failure == "quota":
         assert session["capture"]["interrupted"] and not session["capture"]["captureComplete"]
         assert any(path == "/api/extension/v1/recording-sessions" for _method, path in requests)
-        assert any(path.endswith("/cancel") for _method, path in requests)
+        # An interruption waits for the user's Save/Cancel choice; it never auto-cancels.
+        assert session["upload"]["awaitingChoice"]
+        assert not any(path.endswith("/cancel") for _method, path in requests)
         record_id = operator.evaluate(
             "async () => (await (await fetch('/api/extension/devices')).json()).devices[0].id"
         )
@@ -662,7 +664,7 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
     expect(control.locator(".session-row")).to_have_count(0)
 
 
-def test_native_uncertain_create_is_canceled_after_capture_interruption(
+def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
     capture_server, paired_capture
 ):
     settings, url, requests, _tls = capture_server
@@ -724,6 +726,23 @@ def test_native_uncertain_create_is_canceled_after_capture_interruption(
     while time.monotonic() < deadline:
         sessions = _status(control)["sessions"]
         recovered = next((item for item in sessions if item["id"] == session["id"]), None)
+        if recovered and recovered["upload"]["awaitingChoice"]:
+            break
+        control.wait_for_timeout(200)
+    assert recovered and recovered["upload"]["awaitingChoice"], recovered
+    assert recovered["capture"]["interruptionCode"] == "owner_restarted"
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute(
+            "SELECT client_recording_id, state FROM extension_recording_sessions"
+        ).fetchall() == [(session["id"], "receiving")]
+    assert not any(path.endswith("/cancel") for _method, path in requests)
+
+    control.once("dialog", lambda dialog: dialog.accept())
+    control.locator('[data-action="cancel-remote"]').click()
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        recovered = next((item for item in sessions if item["id"] == session["id"]), None)
         with sqlite3.connect(database_path(settings.data_dir)) as db:
             server_rows = db.execute(
                 "SELECT client_recording_id, state FROM extension_recording_sessions"
@@ -759,6 +778,145 @@ def test_native_uncertain_create_is_canceled_after_capture_interruption(
     )
     assert any(path.endswith("/cancel") for _method, path in requests)
     assert not any(path.endswith("/finalize") for _method, path in requests)
+
+
+def _record_then_close_source_tab(settings, context, control, tab):
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            row = db.execute("SELECT next_sequence FROM extension_recording_sessions").fetchone()
+        if row and row[0] >= 2:
+            break
+        control.wait_for_timeout(200)
+    assert row and row[0] >= 2, row
+    # Closing the meeting tab ends the tab audio track before any Stop.
+    tab.close()
+    session = None
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        session = sessions[0] if sessions else None
+        if session and session["upload"]["awaitingChoice"]:
+            break
+        control.wait_for_timeout(200)
+    assert session and session["upload"]["awaitingChoice"], session
+    assert session["capture"]["interrupted"] and not session["capture"]["captureComplete"]
+    assert session["capture"]["interruptionCode"] in {"source_ended", "source_inactive"}
+    return session
+
+
+def test_native_source_end_then_save_creates_labeled_meeting(
+    capture_server, paired_capture, tmp_path
+):
+    settings, _url, requests, _tls = capture_server
+    context, _worker, operator, control, tab = paired_capture
+    session = _record_then_close_source_tab(settings, context, control, tab)
+    labels = {"en": "Save recorded part", "vi": "Lưu phần đã ghi"}
+    for language in ("vi", "en"):
+        for theme in ("light", "dark"):
+            control.evaluate(
+                """([lang, theme]) => {
+                localStorage.setItem('asr-extension-production-v1:lang',lang);
+                localStorage.setItem('asr-extension-production-v1:theme',theme);
+            }""",
+                [language, theme],
+            )
+            control.reload()
+            expect(control.locator("html")).to_have_attribute("lang", language)
+            expect(control.locator("html")).to_have_attribute("data-theme", theme)
+            save = control.locator('[data-action="save-partial"]')
+            expect(save).to_have_text(labels[language])
+            save.focus()
+            expect(save).to_be_focused()
+            control.screenshot(path=str(tmp_path / f"interrupted-{language}-{theme}.png"))
+    popup = NativePopup(context, control)
+    popup.wait_text("#save-partial-button", "Save recorded part")
+    assert popup.evaluate("document.querySelector('#recovery-panel').hidden") is False
+    assert popup.evaluate("document.documentElement.scrollWidth") <= 400
+    popup.screenshot(tmp_path / "popup-interrupted.png")
+    popup.close()
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT state FROM extension_recording_sessions").fetchone() == (
+            "receiving",
+        )
+    assert not any(path.endswith("/cancel") for _method, path in requests)
+    expect(control.locator('[data-action="save-partial"]')).to_be_visible()
+    expect(control.locator('[data-role="interruption"]')).to_contain_text("recorded")
+
+    control.locator('[data-action="save-partial"]').click()
+    saved = None
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        saved = next(
+            (item for item in _status(control)["sessions"] if item["id"] == session["id"]), None
+        )
+        if saved and saved["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(200)
+    assert saved and saved["upload"]["cleaned"] and saved["upload"]["receipt"], saved
+    assert saved["upload"]["receipt"]["chunk_count"] == session["capture"]["chunkCount"]
+    # The receipt follows the raw archive; media normalization finishes afterwards.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            row = db.execute(
+                "SELECT state, finalize_capture_complete, capture_interruption_code "
+                "FROM extension_recording_sessions"
+            ).fetchone()
+            workflow = db.execute("SELECT state FROM processing_workflows").fetchone()
+        if row[0] in {"ready", "failed"}:
+            break
+        control.wait_for_timeout(200)
+    assert row == ("ready", 0, session["capture"]["interruptionCode"]), row
+    assert workflow == ("needs_attention",)
+    meetings = operator.evaluate(
+        "async () => (await (await fetch('/api/meetings')).json()).meetings"
+    )
+    assert meetings[0]["recording_interruption_code"] == session["capture"]["interruptionCode"]
+    detail = operator.evaluate(
+        "async id => (await (await fetch('/api/meetings/' + id)).json())", meetings[0]["id"]
+    )
+    assert detail["recording"]["interrupted"] == {"code": session["capture"]["interruptionCode"]}
+    assert detail["processing"]["actions"]["use_current_source"] is True
+    finalize = [path for method, path in requests if path.endswith("/finalize")]
+    assert len(finalize) == 1
+    operator.goto(f"{_url}/meetings/{meetings[0]['id']}")
+    expect(operator.locator("#recording-status")).to_contain_text("gián đoạn", timeout=20000)
+    start = operator.locator("#automatic-processing-use-source")
+    expect(start).to_be_visible()
+    expect(start).to_have_text("Chép lời phần đã ghi")
+
+
+def test_native_source_end_then_cancel_keeps_local_audio(capture_server, paired_capture):
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    session = _record_then_close_source_tab(settings, context, control, tab)
+    control.once("dialog", lambda dialog: dialog.accept())
+    control.locator('[data-action="cancel-remote"]').click()
+    canceled = None
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        canceled = next(
+            (item for item in _status(control)["sessions"] if item["id"] == session["id"]), None
+        )
+        if canceled and canceled["upload"]["cancelSettled"]:
+            break
+        control.wait_for_timeout(200)
+    assert canceled and canceled["upload"]["cancelSettled"], canceled
+    assert not canceled["upload"]["awaitingChoice"] and not canceled["upload"]["cleaned"]
+    assert canceled["capture"]["chunkCount"] == session["capture"]["chunkCount"]
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT state FROM extension_recording_sessions").fetchone() == (
+            "canceled",
+        )
+        assert db.execute("SELECT count(*) FROM processing_workflows").fetchone() == (0,)
+    assert any(path.endswith("/cancel") for _method, path in requests)
+    assert not any(path.endswith("/finalize") for _method, path in requests)
+    expect(control.locator('[data-action="save-partial"]')).to_have_count(0)
 
 
 @pytest.mark.parametrize("transient_status", [408, 429])
