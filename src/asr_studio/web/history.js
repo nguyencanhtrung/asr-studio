@@ -469,7 +469,9 @@ function meetingLink(meeting, className) {
   link.dataset.meetingLink = meeting.id;
   link.title = meeting.title;
   const sourceState = info.source === "extension"
-    ? t("{source} · {status}", { source: tr(info.sourceLabel), status: tr(info.statusLabel) })
+    ? info.interruptionCause
+      ? t("{source} · {status} · {cause}", { source: tr(info.sourceLabel), status: tr(info.statusLabel), cause: tr(info.interruptionCause) })
+      : t("{source} · {status}", { source: tr(info.sourceLabel), status: tr(info.statusLabel) })
     : "";
   link.setAttribute("aria-label", sourceState ? `${meeting.title} · ${sourceState}` : meeting.title);
   const title = document.createElement("span");

@@ -41,6 +41,7 @@ ROOT = Path(__file__).parents[1]
 
 class RequestLog(list):
     fail_create_responses = False
+    cancel_not_found = False
 
 
 def _approve_host_permission():
@@ -145,6 +146,9 @@ def capture_server(tmp_path, request):
         ):
             transient_remaining -= 1
             return JSONResponse({"error": {"code": "temporary"}}, status_code=transient_status)
+        if requests.cancel_not_found and request.url.path.endswith("/cancel"):
+            # The server hides a session from another device's owner behind this 404.
+            return JSONResponse({"error": {"code": "recording_not_found"}}, status_code=404)
         response = await call_next(request)
         if (
             requests.fail_create_responses
@@ -844,6 +848,12 @@ def test_native_source_end_then_save_creates_labeled_meeting(
             "receiving",
         )
     assert not any(path.endswith("/cancel") for _method, path in requests)
+    # The server recorded the interruption before the user chose; Save depends on it.
+    assert any(path.endswith("/interrupt") for _method, path in requests)
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute(
+            "SELECT capture_interruption_code FROM extension_recording_sessions"
+        ).fetchone() == (session["capture"]["interruptionCode"],)
     expect(control.locator('[data-action="save-partial"]')).to_be_visible()
     expect(control.locator('[data-role="interruption"]')).to_contain_text("recorded")
 
@@ -891,6 +901,93 @@ def test_native_source_end_then_save_creates_labeled_meeting(
     expect(start).to_have_text("Chép lời phần đã ghi")
 
 
+def test_native_stop_overlapping_source_end_keeps_the_reason_and_save_reaches_ready(
+    capture_server, paired_capture
+):
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    session = _record_then_close_source_tab(settings, context, control, tab)
+    reason = session["capture"]["interruptionCode"]
+    # Stop's late write used to turn the interrupted row back into `stopping`.
+    control.evaluate(
+        """async () => {
+        const db = await new Promise((resolve, reject) => {
+            const req = indexedDB.open('asr-extension-production-v1');
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction('sessions', 'readwrite');
+            const store = tx.objectStore('sessions');
+            const req = store.getAll();
+            req.onsuccess = () => {
+                for (const row of req.result) store.put({
+                    ...row, capture: { ...row.capture, status: 'stopping' }
+                });
+            };
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+    }"""
+    )
+    # A status read reconciles the row with no capture owner; the reason must survive.
+    reconciled = None
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        reconciled = _status(control)["sessions"][0]
+        if reconciled["capture"]["status"] == "interrupted":
+            break
+        control.wait_for_timeout(200)
+    assert reconciled["capture"]["status"] == "interrupted", reconciled["capture"]
+    assert reconciled["capture"]["interruptionCode"] == reason
+    control.locator('[data-action="save-partial"]').click()
+    deadline = time.monotonic() + 60
+    row = None
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            row = db.execute(
+                "SELECT state, capture_interruption_code FROM extension_recording_sessions"
+            ).fetchone()
+        if row[0] in {"ready", "failed"}:
+            break
+        control.wait_for_timeout(200)
+    assert row == ("ready", reason), row
+    assert len([path for _method, path in requests if path.endswith("/finalize")]) == 1
+
+
+@pytest.mark.parametrize("activation_status,activation_after", [(503, 1)])
+def test_native_popup_keeps_recovery_after_failed_same_server_repair(
+    capture_server, paired_capture, activation_status, activation_after
+):
+    settings, url, _requests, _tls = capture_server
+    context, _worker, operator, control, tab = paired_capture
+    assert (activation_status, activation_after) == (503, 1)
+    _record_then_close_source_tab(settings, context, control, tab)
+    devices = operator.evaluate(
+        "async () => (await (await fetch('/api/extension/devices')).json()).devices"
+    )
+    code = _pair_again_code(operator, devices[0]["id"])
+    control.locator("#setup-toggle").click()
+    control.locator("#pair-code").fill(code)
+    control.locator("#pair-button").click()
+    expect(control.locator("#global-error")).to_have_text(
+        "The server is temporarily unavailable.", timeout=20000
+    )
+    connection = _status(control)["connection"]
+    assert not connection.get("paired") and not connection.get("backendId")
+    page = context.new_page()
+    page.goto(url + "?popup-after-failed-repair=1")
+    popup = NativePopup(context, page)
+    popup.wait_text("#save-partial-button", "Save recorded part")
+    assert popup.evaluate("document.querySelector('#recovery-panel').hidden") is False
+    assert popup.evaluate("document.querySelector('#recovery-duration').textContent").strip()
+    assert popup.evaluate("document.querySelector('#recovery-reason').textContent").strip()
+    assert popup.evaluate("document.querySelector('#save-partial-button').disabled") is False
+    assert popup.evaluate("document.querySelector('#cancel-remote-button').disabled") is False
+    popup.close()
+
+
 def test_native_source_end_then_cancel_keeps_local_audio(capture_server, paired_capture):
     settings, _url, requests, _tls = capture_server
     context, _worker, _operator, control, tab = paired_capture
@@ -917,6 +1014,214 @@ def test_native_source_end_then_cancel_keeps_local_audio(capture_server, paired_
     assert any(path.endswith("/cancel") for _method, path in requests)
     assert not any(path.endswith("/finalize") for _method, path in requests)
     expect(control.locator('[data-action="save-partial"]')).to_have_count(0)
+
+
+def test_native_stale_cancel_cannot_override_a_committed_save(capture_server, paired_capture):
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    session = _record_then_close_source_tab(settings, context, control, tab)
+    # Two stale views choose in the same instant: the first choice wins, the other is refused.
+    results = control.evaluate(
+        """async id => {
+            const send = type => chrome.runtime.sendMessage({target:'worker', type, sessionId:id});
+            const save = send('SAVE_INTERRUPTED');
+            const cancel = send('CANCEL_INTERRUPTED');
+            return Promise.all([save, cancel]);
+        }""",
+        session["id"],
+    )
+    assert results[0]["ok"] is True, results
+    assert results[1]["ok"] is False and results[1]["error"]["code"] == "already_saving", results
+    saved = None
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        saved = next(
+            (item for item in _status(control)["sessions"] if item["id"] == session["id"]), None
+        )
+        if saved and saved["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(200)
+    assert saved and saved["upload"]["receipt"] and not saved["upload"]["cancelSettled"], saved
+    assert not any(path.endswith("/cancel") for _method, path in requests)
+    assert sum(path.endswith("/finalize") for _method, path in requests) == 1
+
+
+def _interrupt_before_first_chunk(settings, context, control, tab):
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
+    deadline = time.monotonic() + 20
+    row = None
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            row = db.execute(
+                "SELECT state, next_sequence FROM extension_recording_sessions"
+            ).fetchone()
+        if row:
+            break
+        control.wait_for_timeout(50)
+    # The first chunk arrives one timeslice (5 s) after start; close the source before it.
+    assert row == ("receiving", 0), row
+    tab.close()
+    session = None
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        session = sessions[0] if sessions else None
+        if session and session["capture"]["interrupted"]:
+            break
+        control.wait_for_timeout(200)
+    assert session and session["capture"]["interrupted"], session
+    assert session["capture"]["chunkCount"] == 0
+    assert session["upload"]["awaitingChoice"] is True, session
+    return session
+
+
+def test_native_interruption_before_the_first_chunk_still_offers_cancel(
+    capture_server, paired_capture
+):
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    _interrupt_before_first_chunk(settings, context, control, tab)
+    control.reload()
+    expect(control.locator('[data-role="interruption"]')).to_contain_text("00:00")
+    expect(control.locator('[data-action="save-partial"]')).to_be_disabled()
+    cancel = control.locator('[data-action="cancel-remote"]')
+    expect(cancel).to_be_enabled()
+    control.once("dialog", lambda dialog: dialog.accept())
+    cancel.click()
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            state = db.execute("SELECT state FROM extension_recording_sessions").fetchone()
+        if state == ("canceled",):
+            break
+        control.wait_for_timeout(200)
+    assert state == ("canceled",), state
+
+
+def test_native_server_url_is_locked_while_an_empty_interrupted_session_awaits_cancel(
+    capture_server, paired_capture
+):
+    settings, url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    session = _interrupt_before_first_chunk(settings, context, control, tab)
+    other = "http://127.0.0.1:9" if url.startswith("https") else "https://asr-other.test"
+    refused = control.evaluate(
+        """async serverUrl => chrome.runtime.sendMessage(
+            {target:'worker', type:'SET_SERVER_URL', serverUrl})""",
+        other,
+    )
+    assert refused["ok"] is False and refused["error"]["code"] == "url_locked", refused
+    # The original context survives, so Cancel still reaches the receiving server session.
+    control.reload()
+    control.once("dialog", lambda dialog: dialog.accept())
+    control.locator('[data-action="cancel-remote"]').click()
+    deadline = time.monotonic() + 30
+    state = None
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            state = db.execute("SELECT state FROM extension_recording_sessions").fetchone()
+        if state == ("canceled",):
+            break
+        control.wait_for_timeout(200)
+    assert state == ("canceled",), (state, session)
+    assert any(path.endswith("/cancel") for _method, path in requests)
+
+
+def test_native_cancel_404_stays_unresolved_until_the_original_device_returns(
+    capture_server, paired_capture
+):
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    session = _interrupt_before_first_chunk(settings, context, control, tab)
+    requests.cancel_not_found = True
+    control.reload()
+    control.once("dialog", lambda dialog: dialog.accept())
+    control.locator('[data-action="cancel-remote"]').click()
+    deadline = time.monotonic() + 30
+    row = None
+    while time.monotonic() < deadline:
+        row = next(
+            (item for item in _status(control)["sessions"] if item["id"] == session["id"]), None
+        )
+        if row and row["upload"]["error"]:
+            break
+        control.wait_for_timeout(200)
+    assert row and row["upload"]["error"]["code"] == "not_found", row
+    assert not row["upload"]["cancelSettled"], row
+    expect(control.locator(".session-row")).to_contain_text("Pair again")
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT state FROM extension_recording_sessions").fetchone() == (
+            "receiving",
+        )
+    # Restoring the original device lets the same Cancel go through.
+    requests.cancel_not_found = False
+    retried = control.evaluate(
+        """async id => chrome.runtime.sendMessage(
+            {target:'worker', type:'RETRY_UPLOAD', sessionId:id})""",
+        session["id"],
+    )
+    assert retried["ok"] is True, retried
+    deadline = time.monotonic() + 30
+    state = None
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path(settings.data_dir)) as db:
+            state = db.execute("SELECT state FROM extension_recording_sessions").fetchone()
+        if state == ("canceled",):
+            break
+        control.wait_for_timeout(200)
+    assert state == ("canceled",), state
+
+
+def test_native_offscreen_loss_with_a_live_worker_is_reported_as_interrupted(
+    capture_server, paired_capture
+):
+    settings, _url, _requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
+    deadline = time.monotonic() + 30
+    chunks = 0
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        chunks = sessions[0]["capture"]["chunkCount"] if sessions else 0
+        if chunks > 0:
+            break
+        control.wait_for_timeout(200)
+    assert chunks > 0
+    cdp = context.browser.new_browser_cdp_session()
+    try:
+        targets = cdp.send("Target.getTargets")["targetInfos"]
+        offscreen = next(
+            item
+            for item in targets
+            if item["url"] == f"chrome-extension://{EXTENSION_ID}/offscreen.html"
+        )
+        # Only the offscreen owner closes; the service worker keeps running.
+        cdp.send("Target.closeTarget", {"targetId": offscreen["targetId"]})
+    finally:
+        cdp.detach()
+    status = None
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        status = _status(control)
+        if status["capture"] and status["capture"]["status"] == "interrupted":
+            break
+        control.wait_for_timeout(200)
+    assert status["capture"]["status"] == "interrupted", status["capture"]
+    # Closing the owner may end its tracks first; the first committed reason wins.
+    assert status["capture"]["interruptionCode"] in {"owner_restarted", "source_ended"}
+    session = status["sessions"][0]
+    assert session["upload"]["awaitingChoice"] is True, session
+    # The same worker can start a new capture; the lost owner no longer blocks Start.
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
 
 
 @pytest.mark.parametrize("transient_status", [408, 429])

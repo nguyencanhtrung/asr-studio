@@ -94,6 +94,7 @@ CAPTURE_INTERRUPTION_CODES = frozenset(
         "recorder_error",
         "capture_incomplete",
         "owner_restarted",
+        "local_quota",
         "unknown",
     }
 )
@@ -1367,14 +1368,25 @@ def _validate_finalize_payload(
             raise ExtensionIngestError(
                 400, "invalid_request", "A complete capture has no interruption code."
             )
+        if row["capture_interruption_code"] is not None:
+            raise ExtensionIngestError(
+                409, "capture_incomplete", "An interrupted capture cannot be finalized as complete."
+            )
     elif capture_complete is False:
-        # An interrupted prefix is saved only on an explicit client choice that
-        # names why capture ended; it is never inferred from missing Stop.
-        if interruption_code not in CAPTURE_INTERRUPTION_CODES:
+        # An interrupted prefix is saved only after the session recorded the same
+        # interruption; a request alone never turns a receiving session into one.
+        if "interruption_code" in payload and not isinstance(interruption_code, str):
+            raise ExtensionIngestError(
+                400, "invalid_request", "The interruption code must be a string."
+            )
+        if (
+            interruption_code not in CAPTURE_INTERRUPTION_CODES
+            or row["capture_interruption_code"] != interruption_code
+        ):
             raise ExtensionIngestError(
                 409,
                 "capture_incomplete",
-                "An incomplete capture is saved only with a known interruption code.",
+                "An incomplete capture is saved only after its interruption was recorded.",
             )
     else:
         raise ExtensionIngestError(400, "invalid_request", "capture_complete must be a boolean.")
@@ -1525,6 +1537,55 @@ def finalize_recording_session(
             connection.commit()
     if enqueue is not None:
         enqueue(session_id)
+    return get_recording_session(
+        data_dir,
+        identity=identity,
+        session_id=session_id,
+        backend_id=backend_id,
+        settings=settings,
+    )
+
+
+def record_recording_interruption(
+    data_dir: Path,
+    *,
+    identity: ExtensionSessionIdentity,
+    session_id: str,
+    epoch: object,
+    interruption_code: object,
+    backend_id: str,
+    settings: Settings,
+) -> dict[str, object]:
+    """Record why the owned capture ended; idempotent for the same code."""
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
+        raise ExtensionIngestError(400, "invalid_epoch", "The writer epoch is invalid.")
+    if not isinstance(interruption_code, str) or interruption_code not in (
+        CAPTURE_INTERRUPTION_CODES
+    ):
+        raise ExtensionIngestError(400, "invalid_request", "The interruption code is invalid.")
+    with _connect(data_dir) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = _owned_session(connection, identity, session_id)
+        if row["epoch"] != epoch:
+            raise ExtensionIngestError(
+                409, "writer_epoch_conflict", "The recording writer epoch changed."
+            )
+        stored = row["capture_interruption_code"]
+        if stored is not None and stored != interruption_code:
+            raise ExtensionIngestError(
+                409, "interruption_conflict", "A different interruption was already recorded."
+            )
+        if stored is None:
+            if row["state"] != "receiving":
+                raise ExtensionIngestError(
+                    409, "too_late", "The recording is no longer receiving chunks."
+                )
+            connection.execute(
+                "UPDATE extension_recording_sessions SET capture_interruption_code = ?, "
+                "updated_at = ? WHERE id = ? AND state = 'receiving'",
+                (interruption_code, _now_text(), session_id),
+            )
+            connection.commit()
     return get_recording_session(
         data_dir,
         identity=identity,

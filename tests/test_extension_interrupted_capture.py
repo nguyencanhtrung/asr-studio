@@ -59,6 +59,20 @@ async def _session_with_chunk(client: AsyncClient, auth: dict[str, str]) -> dict
     return session
 
 
+async def _interrupt(
+    client: AsyncClient,
+    auth: dict[str, str],
+    session_id: str,
+    code: object = "source_ended",
+    epoch: object = 1,
+):
+    return await client.post(
+        f"/api/extension/v1/recording-sessions/{session_id}/interrupt",
+        headers=auth,
+        json={"epoch": epoch, "interruption_code": code},
+    )
+
+
 async def _wait_ready(client: AsyncClient, auth: dict[str, str], session_id: str) -> dict:
     status = None
     for _ in range(300):
@@ -74,6 +88,7 @@ async def _wait_ready(client: AsyncClient, auth: dict[str, str], session_id: str
 async def test_saved_prefix_is_labeled_and_waits_for_explicit_start(ingest_client):
     client, auth = ingest_client
     session = await _session_with_chunk(client, auth)
+    assert (await _interrupt(client, auth, session["id"])).status_code == 200
     finalized = await client.post(
         f"/api/extension/v1/recording-sessions/{session['id']}/finalize",
         headers=auth,
@@ -138,6 +153,19 @@ async def test_complete_capture_is_unlabeled_and_starts_automatically(ingest_cli
     [
         ({"capture_complete": False}, 409, "capture_incomplete"),
         ({"capture_complete": False, "interruption_code": "made_up"}, 409, "capture_incomplete"),
+        # A recognized code is not enough: the session never recorded an interruption.
+        (
+            {"capture_complete": False, "interruption_code": "source_ended"},
+            409,
+            "capture_incomplete",
+        ),
+        (
+            {"capture_complete": False, "interruption_code": ["source_ended"]},
+            400,
+            "invalid_request",
+        ),
+        ({"capture_complete": False, "interruption_code": {"a": 1}}, 400, "invalid_request"),
+        ({"capture_complete": False, "interruption_code": None}, 400, "invalid_request"),
         ({"capture_complete": True, "interruption_code": "source_ended"}, 400, "invalid_request"),
         ({"capture_complete": 0, "interruption_code": "source_ended"}, 400, "invalid_request"),
     ],
@@ -164,6 +192,7 @@ async def test_incomplete_finalize_requires_known_interruption(
 async def test_saved_prefix_is_verified_like_a_complete_finalize(ingest_client):
     client, auth = ingest_client
     session = await _session_with_chunk(client, auth)
+    assert (await _interrupt(client, auth, session["id"])).status_code == 200
     tampered = _interrupted_manifest()
     tampered["manifest_hash"] = hashlib.sha256(b"other").hexdigest()
     response = await client.post(
@@ -187,4 +216,106 @@ async def test_saved_prefix_is_verified_like_a_complete_finalize(ingest_client):
         json=_interrupted_manifest("recorder_error"),
     )
     assert other_reason.status_code == 409
-    assert other_reason.json()["error"]["code"] == "finalize_conflict"
+    assert other_reason.json()["error"]["code"] == "capture_incomplete"
+
+
+async def test_interruption_is_recorded_once_for_the_owned_session(ingest_client):
+    client, auth = ingest_client
+    session = await _session_with_chunk(client, auth)
+    first = await _interrupt(client, auth, session["id"], "source_ended")
+    assert first.status_code == 200, first.text
+    again = await _interrupt(client, auth, session["id"], "source_ended")
+    assert again.status_code == 200, again.text
+    other = await _interrupt(client, auth, session["id"], "recorder_error")
+    assert other.status_code == 409
+    assert other.json()["error"]["code"] == "interruption_conflict"
+    # The recorded reason, not the finalize body, decides the saved label.
+    mismatched = await client.post(
+        f"/api/extension/v1/recording-sessions/{session['id']}/finalize",
+        headers=auth,
+        json=_interrupted_manifest("recorder_error"),
+    )
+    assert mismatched.status_code == 409
+    assert mismatched.json()["error"]["code"] == "capture_incomplete"
+    # A complete finalize cannot reuse a session that recorded an interruption.
+    complete = await client.post(
+        f"/api/extension/v1/recording-sessions/{session['id']}/finalize",
+        headers=auth,
+        json=_manifest(CONTENT, epoch=1),
+    )
+    assert complete.status_code == 409
+    assert complete.json()["error"]["code"] == "capture_incomplete"
+
+
+@pytest.mark.parametrize(
+    ("code", "epoch", "status", "error"),
+    [
+        ("made_up", 1, 400, "invalid_request"),
+        (["source_ended"], 1, 400, "invalid_request"),
+        ({"a": 1}, 1, 400, "invalid_request"),
+        ("source_ended", 2, 409, "writer_epoch_conflict"),
+        ("source_ended", True, 400, "invalid_epoch"),
+    ],
+)
+async def test_interruption_rejects_invalid_input_without_changing_the_session(
+    ingest_client, code, epoch, status, error
+):
+    client, auth = ingest_client
+    session = await _session_with_chunk(client, auth)
+    response = await _interrupt(client, auth, session["id"], code, epoch)
+    assert response.status_code == status, response.text
+    assert response.json()["error"]["code"] == error
+    finalized = await client.post(
+        f"/api/extension/v1/recording-sessions/{session['id']}/finalize",
+        headers=auth,
+        json=_interrupted_manifest(),
+    )
+    assert finalized.status_code == 409
+
+
+async def test_interruption_is_refused_after_finalize(ingest_client):
+    client, auth = ingest_client
+    session = await _session_with_chunk(client, auth)
+    done = await client.post(
+        f"/api/extension/v1/recording-sessions/{session['id']}/finalize",
+        headers=auth,
+        json=_manifest(CONTENT, epoch=1),
+    )
+    assert done.status_code == 202, done.text
+    late = await _interrupt(client, auth, session["id"])
+    assert late.status_code == 409
+    assert late.json()["error"]["code"] == "too_late"
+
+
+def test_extension_and_server_accept_the_same_interruption_codes():
+    import re
+
+    from asr_studio.extension_ingest import CAPTURE_INTERRUPTION_CODES
+
+    source = (Path(__file__).parent.parent / "extensions/chrome/capture-core.js").read_text()
+    block = re.search(r"INTERRUPTION_CODES = Object\.freeze\(\[(.*?)\]\)", source, re.S)
+    assert block, "capture-core.js no longer lists INTERRUPTION_CODES"
+    assert set(re.findall(r'"(\w+)"', block.group(1))) == CAPTURE_INTERRUPTION_CODES
+
+
+async def test_edited_meeting_details_do_not_hide_the_interrupted_start(ingest_client):
+    client, auth = ingest_client
+    session = await _session_with_chunk(client, auth)
+    meeting_id = session["meeting_url"].rsplit("/", 1)[-1]
+    renamed = await client.patch(
+        f"/api/meetings/{meeting_id}", json={"expected_metadata_version": 1, "title": "Edited"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert (await _interrupt(client, auth, session["id"])).status_code == 200
+    finalized = await client.post(
+        f"/api/extension/v1/recording-sessions/{session['id']}/finalize",
+        headers=auth,
+        json=_interrupted_manifest(),
+    )
+    assert finalized.status_code == 202, finalized.text
+    await _wait_ready(client, auth, session["id"])
+
+    processing = (await client.get(f"/api/meetings/{meeting_id}")).json()["processing"]
+    assert processing["state"] == "needs_attention"
+    reasons = {step["kind"]: step["waiting_reason"] for step in processing["steps"]}
+    assert reasons == {"transcription": "interrupted_recording", "notes": "interrupted_recording"}

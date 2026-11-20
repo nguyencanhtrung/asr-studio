@@ -498,7 +498,7 @@ export function selectProcessing(state) {
       useSource: workflow.actions.use_current_source === true,
     },
     message: interruptedStart
-      ? t("Bản ghi bị gián đoạn nên chưa tự chép lời. Bấm Chép lời phần đã ghi để bắt đầu.")
+      ? t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.")
       : overallText(workflow),
     source,
     sourceActionLabel: interruptedStart

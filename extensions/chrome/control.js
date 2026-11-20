@@ -1,4 +1,5 @@
-import { initialState, isPending, reduce, visibleSessions } from "./control-core.js";
+import { initialState, isPending, reduce, sessionsRenderKey, visibleSessions } from "./control-core.js";
+import { canRetryUpload } from "./upload-core.js";
 import { MIME_TYPE, normalizeServerUrl, permissionPattern } from "./protocol.js";
 import { recordedDurationLabel } from "./capture-core.js";
 
@@ -100,10 +101,12 @@ function localizedError(error) {
     capture_incomplete: t("Bản ghi chưa lưu đủ audio. Bản ghi được giữ lại."),
     recorder_error: t("Trình ghi âm của Chrome báo lỗi. Bản ghi được giữ lại."),
     owner_restarted: t("Tiện ích đã khởi động lại khi đang ghi. Bản ghi được giữ lại."),
+    local_quota: t("Đã đạt giới hạn lưu audio trên máy. Bản ghi được giữ lại."),
     unknown: t("Ghi âm dừng ngoài dự kiến. Bản ghi được giữ lại."),
     nothing_to_save: t("Bản ghi này chưa có audio để lưu."),
     already_canceled: t("Bản ghi đã được hủy trên server."),
     already_saving: t("Phần đã ghi đang được lưu; không thể hủy nữa."),
+    already_canceling: t("Phiên đang được hủy; không thể lưu phần đã ghi nữa."),
     already_saved: t("Server đã lưu bản ghi này."),
     not_interrupted: t("Bản ghi này không bị gián đoạn."),
     capture_missing: t("Không tìm thấy bản ghi trên máy."),
@@ -191,7 +194,7 @@ function statusText(capture) {
 }
 
 function uploadText(upload, capture) {
-  if (upload?.cleaned && upload.receipt) return t("đã nhận đủ");
+  if (upload?.cleaned && upload.receipt) return capture?.status === "interrupted" ? t("đã nhận phần đã ghi") : t("đã nhận đủ");
   if (capture?.status === "interrupted" && upload?.awaitingChoice) return t("chờ bạn chọn");
   if (capture?.status === "interrupted" && upload?.recoveryChoice !== "save") return t("giữ trên máy");
   if (upload?.state === "waiting_for_stop") return t("chờ dừng ghi");
@@ -246,7 +249,9 @@ function renderSessionRow(session) {
   if (session.upload.cleaned && session.upload.receipt) {
     title.textContent = interrupted ? t("Đã lưu phần đã ghi trên server") : t("Đã lưu đủ audio trên server");
     const done = document.createElement("p");
-    done.textContent = t("Có thể đóng tiện ích; kết quả tiếp tục được xử lý trong ASR Studio.");
+    done.textContent = interrupted
+      ? t("Có thể đóng tiện ích; hãy bắt đầu chép lời cho bản ghi bị gián đoạn trong ASR Studio.")
+      : t("Có thể đóng tiện ích; kết quả tiếp tục được xử lý trong ASR Studio.");
     copy.append(done);
   }
   if (session.upload.error) {
@@ -258,7 +263,9 @@ function renderSessionRow(session) {
   if (session.upload.awaitingChoice) {
     const hint = document.createElement("p");
     hint.className = "session-meta";
-    hint.textContent = t("Lưu phần đã ghi để chép lời trong ASR Studio, hoặc hủy phiên trên server. Audio vẫn được giữ trên máy.");
+    hint.textContent = session.capture.chunkCount > 0
+      ? t("Lưu phần đã ghi để chép lời trong ASR Studio, hoặc hủy phiên trên server. Audio vẫn được giữ trên máy.")
+      : localizedError({ code: "nothing_to_save" });
     copy.append(hint);
   } else if (session.capture.error && !session.upload.cleaned && !saving) {
     const error = document.createElement("p");
@@ -286,10 +293,11 @@ function renderSessionRow(session) {
         sendRequest("cancel-remote", { type: "CANCEL_INTERRUPTED", sessionId: session.id }, loadStatus);
       }
     });
-    save.disabled = cancel.disabled = isPending(state, "save-partial") || isPending(state, "cancel-remote");
+    cancel.disabled = isPending(state, "save-partial") || isPending(state, "cancel-remote");
+    save.disabled = cancel.disabled || !(session.capture.chunkCount > 0);
     actions.append(save, cancel);
   }
-  if (!session.upload.cleaned && (session.capture.captureComplete || saving)) {
+  if (canRetryUpload(session)) {
     const retry = document.createElement("button");
     retry.type = "button";
     retry.dataset.action = "retry";
@@ -362,14 +370,14 @@ function render() {
   elements.micGate.setAttribute("aria-pressed", String(gates.microphone));
   elements.tabMonitor.textContent = capture?.tabMonitor === false ? t("Bật âm thanh tab đang phát") : t("Tắt âm thanh tab đang phát");
 
-  const sessions = visibleSessions(state.sessions);
-  const sessionsKey = JSON.stringify(sessions);
+  const sessionsKey = sessionsRenderKey(state);
   if (sessionsKey !== renderedSessions) {
     renderedSessions = sessionsKey;
     const focused = document.activeElement;
     const focusSession = focused?.closest(".session-row")?.dataset.sessionId;
     const focusAction = focused?.dataset.action;
     const focusIndex = [...elements.sessionsList.children].findIndex((item) => item.dataset.sessionId === focusSession);
+    const sessions = visibleSessions(state.sessions);
     elements.sessionsList.replaceChildren();
     if (!sessions.length) {
       const empty = document.createElement("p");

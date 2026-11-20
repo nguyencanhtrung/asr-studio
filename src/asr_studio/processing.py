@@ -324,7 +324,9 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
         or row["notes_source_version"] != 1
     )
     state = "needs_attention" if interrupted or source_changed else "waiting"
-    attention_reason = "source_confirmation_required" if source_changed else "interrupted_recording"
+    # The explicit start of an interrupted prefix also validates the displayed source, so the
+    # interruption is the reason shown even when the meeting details changed before Save.
+    attention_reason = "interrupted_recording" if interrupted else "source_confirmation_required"
     connection.execute(
         "INSERT INTO processing_workflows(id, meeting_id, recording_id, extension_session_id, state, ready_sequence, "
         "asr_choice, asr_language, notes_provider, notes_model, notes_reasoning_effort, notes_output_language, "

@@ -122,6 +122,9 @@ export function capturePresentation(snapshot) {
       if (session.upload.error) return { label: "Chưa lưu xong", detail: "Audio vẫn được giữ. Mở thiết lập để xem lỗi và gửi lại.", state: "warning" };
       return { label: "Đang lưu", detail: "Đang gửi phần đã ghi lên server.", state: "uploading" };
     }
+    if (session?.upload?.recoveryChoice === "cancel" && !session.upload.cancelSettled && session.upload.error) {
+      return { label: "Chưa hủy xong", detail: "Mở thiết lập để cấp quyền và thử hủy lại. Audio vẫn được giữ.", state: "warning" };
+    }
     return { label: "Bị gián đoạn", detail: "Audio đã giữ lại nhưng chưa hoàn tất.", state: "warning" };
   }
   if (capture.status === "complete") {
@@ -133,10 +136,11 @@ export function capturePresentation(snapshot) {
 }
 
 // The newest interrupted capture for the current server that still needs Save or Cancel.
+// An unpaired connection (failed re-pair) has no backendId yet; the server URL alone scopes it.
 export function pendingRecovery(snapshot) {
   const current = snapshot?.connection;
   return (snapshot?.sessions || [])
     .filter((item) => item.upload?.awaitingChoice && item.endpoint?.serverUrl === current?.serverUrl &&
-      item.endpoint?.backendId === current?.backendId)
+      (!current?.backendId || item.endpoint?.backendId === current.backendId))
     .sort((a, b) => (b.capture?.startedAt || 0) - (a.capture?.startedAt || 0))[0] || null;
 }

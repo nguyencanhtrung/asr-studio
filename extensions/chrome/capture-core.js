@@ -27,6 +27,25 @@ export function isUnexpectedTrackEnd(capture, intentionalStop) {
   return Boolean(capture && capture.status === CAPTURE_STATES.RECORDING && !intentionalStop);
 }
 
+// A committed interruption or completion is final for recorder transitions, so Stop
+// never overwrites a source loss that landed between its read and its write.
+export function stoppingPatch(capture) {
+  if (!capture || capture.interrupted || [CAPTURE_STATES.COMPLETE, CAPTURE_STATES.INTERRUPTED].includes(capture.status)) return null;
+  return { status: CAPTURE_STATES.STOPPING };
+}
+
+// Owner loss ends an active capture but keeps the reason already recorded for it.
+export function ownerLostPatch(capture, message) {
+  const kept = Boolean(capture?.interrupted && capture.interruptionCode);
+  return {
+    status: CAPTURE_STATES.INTERRUPTED,
+    captureComplete: false,
+    interrupted: true,
+    interruptionCode: kept ? capture.interruptionCode : "owner_restarted",
+    persistenceError: kept ? capture.persistenceError : message
+  };
+}
+
 export function canMarkComplete(capture) {
   return Boolean(capture && capture.status === CAPTURE_STATES.STOPPING && !capture.interrupted && capture.totalBytes > 0 && !capture.persistenceError);
 }
@@ -46,10 +65,17 @@ export const INTERRUPTION_CODES = Object.freeze([
   "recorder_error",
   "capture_incomplete",
   "owner_restarted",
+  "local_quota",
   "unknown"
 ]);
 
 export function interruptionCodeFor(error) {
   const code = typeof error?.code === "string" ? error.code : "";
   return INTERRUPTION_CODES.includes(code) ? code : "unknown";
+}
+
+// A recorder error event carries a DOMException whose `code` is a legacy number,
+// so it would read as an unknown reason. Report it as a recorder error instead.
+export function recorderFailure(error) {
+  return { code: "recorder_error", message: error?.message || "The media recorder reported an error." };
 }

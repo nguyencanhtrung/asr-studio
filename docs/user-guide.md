@@ -533,10 +533,12 @@ cannot recreate the meeting. Repeating an acknowledged chunk or finalize request
 not create another meeting or append bytes twice.
 
 If capture stops before Stop, for example because the meeting tab closed, the extension marks the
-recording interrupted and keeps the server session open. Choose **Save recorded part** in the
-extension popup or control page to keep the audio recorded so far, or **Cancel server session** to
-drop it from the library (local audio stays until discarded). A saved part is labeled
-**Saved · interrupted** in history and on the meeting page. It is not transcribed automatically:
+recording interrupted and keeps the server session open. The extension shows the cause and an
+estimated recorded duration (about 5 s per saved chunk, not a measured length). Choose **Save recorded part** in the
+extension popup or control page to keep the audio recorded so far, or **Cancel server session**
+so it never becomes a playable recording (the meeting row stays with a canceled state, and local
+audio stays until discarded). The first choice is final. A saved part is labeled
+**Saved · interrupted** with its cause in history and on the meeting page. It is not transcribed automatically:
 select **Transcribe recorded part** in the processing panel to start transcript and Notes.
 
 The default operational guards are finite: 8 MiB per chunk, 65,536 chunks per manifest, a 4 GiB

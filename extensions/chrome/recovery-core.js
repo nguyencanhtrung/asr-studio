@@ -33,3 +33,12 @@ export function uploadStateForError(error, retryable) {
   if (error?.code === "receipt_mismatch" || error?.code === "invalid_result_url") return "receipt_mismatch";
   return retryable ? "retryable" : "failed";
 }
+
+// Decides whether a capture row that looks active lost its offscreen owner.
+// An owner that cannot answer is undecided, not lost, so a slow page never ends a capture.
+export function isCaptureOwnerLost(session, hasOwner, reply) {
+  if (!hasOwner) return true;
+  if (!reply || reply.ok !== true) return false;
+  const status = reply.status;
+  return !(status?.sessionId === session?.clientRecordingId && ACTIVE_CAPTURE_STATES.has(status.status));
+}

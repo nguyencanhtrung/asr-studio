@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { visibleSessions } from "../control-core.js";
-import { capturePresentation, initialState, reduce } from "../popup-core.js";
+import { initialState as controlState, reduce as controlReduce, sessionsRenderKey, visibleSessions } from "../control-core.js";
+import { capturePresentation, initialState, pendingRecovery, reduce } from "../popup-core.js";
 
 const status = (epoch, sequence, sessions = [], capture = null, webUrl = "https://asr.example.test") => ({
   statusEpoch: epoch,
@@ -65,4 +65,42 @@ test("recording presentation names live upload in both active UI states", () => 
   const presentation = capturePresentation(status("epoch-a", 1, [live], capture));
   assert.equal(presentation.label, "Đang ghi âm");
   assert.match(presentation.detail, /Đang gửi audio/);
+});
+
+test("a pending request rebuilds the control rows so competing choices stay disabled", () => {
+  const row = { id: "a", capture: { startedAt: 1 }, upload: { state: "receiving" } };
+  const idle = controlReduce(controlState, { type: "status-received", status: status("epoch-a", 1, [row]) });
+  const pending = controlReduce(idle, { type: "request-started", kind: "save-partial", requestId: "save-partial:1" });
+  assert.notEqual(sessionsRenderKey(idle), sessionsRenderKey(pending));
+  const finished = controlReduce(pending, { type: "request-finished", kind: "save-partial", requestId: "save-partial:1" });
+  assert.equal(sessionsRenderKey(finished), sessionsRenderKey(idle));
+});
+
+test("a failed Cancel points to the retry instead of the interrupted choice", () => {
+  const failed = {
+    id: "a",
+    endpoint: { serverUrl: "https://asr.example.test", webUrl: "https://asr.example.test", backendId: "backend-a" },
+    capture: { sessionId: "a", status: "interrupted", chunkCount: 0, startedAt: 1 },
+    upload: { recoveryChoice: "cancel", awaitingChoice: false, cancelSettled: false, cleaned: false, error: { code: "host_permission" } }
+  };
+  const snapshot = status("epoch-a", 1, [failed], failed.capture);
+  assert.equal(capturePresentation(snapshot).label, "Chưa hủy xong");
+  failed.upload.error = null;
+  assert.equal(capturePresentation(snapshot).label, "Bị gián đoạn");
+});
+
+test("the popup keeps a pending recovery visible after a failed same-server re-pair", () => {
+  const pending = {
+    id: "a",
+    endpoint: { serverUrl: "https://asr.example.test", webUrl: "https://asr.example.test", backendId: "backend-a" },
+    capture: { sessionId: "a", status: "interrupted", chunkCount: 3, startedAt: 1 },
+    upload: { awaitingChoice: true }
+  };
+  const snapshot = status("epoch-a", 1, [pending], pending.capture);
+  snapshot.connection = { paired: false, serverUrl: "https://asr.example.test" };
+  assert.equal(pendingRecovery(snapshot)?.id, "a");
+  snapshot.connection = { paired: false, serverUrl: "https://other.example.test" };
+  assert.equal(pendingRecovery(snapshot), null);
+  snapshot.connection = { paired: true, serverUrl: "https://asr.example.test", backendId: "backend-b" };
+  assert.equal(pendingRecovery(snapshot), null);
 });

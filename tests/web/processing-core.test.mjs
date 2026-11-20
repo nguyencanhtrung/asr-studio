@@ -320,7 +320,7 @@ test("an interrupted recording waits for an explicit transcription start", () =>
   const view = selectProcessing(result.state);
   assert.equal(view.actions.useSource, true);
   assert.equal(view.sourceActionLabel.text, "Chép lời phần đã ghi");
-  assert.equal(view.message.text, "Bản ghi bị gián đoạn nên chưa tự chép lời. Bấm Chép lời phần đã ghi để bắt đầu.");
+  assert.equal(view.message.text, "Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.");
   assert.equal(view.steps[0].state, "problem");
   assert.match(view.steps[0].reason.text, /gián đoạn/);
 });

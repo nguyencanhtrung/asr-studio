@@ -87,10 +87,12 @@ function localizedError(error) {
     capture_incomplete: t("Bản ghi chưa lưu đủ audio. Bản ghi được giữ lại."),
     recorder_error: t("Trình ghi âm của Chrome báo lỗi. Bản ghi được giữ lại."),
     owner_restarted: t("Tiện ích đã khởi động lại khi đang ghi. Bản ghi được giữ lại."),
+    local_quota: t("Đã đạt giới hạn lưu audio trên máy. Bản ghi được giữ lại."),
     unknown: t("Ghi âm dừng ngoài dự kiến. Bản ghi được giữ lại."),
     nothing_to_save: t("Bản ghi này chưa có audio để lưu."),
     already_canceled: t("Bản ghi đã được hủy trên server."),
     already_saving: t("Phần đã ghi đang được lưu; không thể hủy nữa."),
+    already_canceling: t("Phiên đang được hủy; không thể lưu phần đã ghi nữa."),
     already_saved: t("Server đã lưu bản ghi này.")
   };
   return known[code] || t("Không thực hiện được yêu cầu. Hãy thử lại.");
@@ -213,10 +215,11 @@ function render() {
   const recovery = active ? null : pendingRecovery(snapshot);
   elements.recoveryPanel.hidden = !recovery;
   if (recovery) {
-    setText(elements.recoveryDuration, recordedDurationLabel(recovery.capture.chunkCount));
-    setText(elements.recoveryReason, localizedError({ code: recovery.capture.interruptionCode || "unknown" }));
+    setText(elements.recoveryDuration, t("Khoảng {duration}", { duration: recordedDurationLabel(recovery.capture.chunkCount) }));
+    const reason = localizedError({ code: recovery.capture.interruptionCode || "unknown" });
+    setText(elements.recoveryReason, recovery.capture.chunkCount > 0 ? reason : `${reason} ${localizedError({ code: "nothing_to_save" })}`);
     const choosing = isPending(state, "save-partial") || isPending(state, "cancel-remote");
-    elements.savePartialButton.disabled = choosing;
+    elements.savePartialButton.disabled = choosing || !(recovery.capture.chunkCount > 0);
     elements.cancelRemoteButton.disabled = choosing;
   }
 

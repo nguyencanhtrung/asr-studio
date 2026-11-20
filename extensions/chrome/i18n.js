@@ -14,6 +14,12 @@ const { t, getLocale, onLanguageChange } = (() => {
   const attributes = [];
   const originalTitle = document.title;
   const EN = {
+    "Chưa hủy xong": "Not canceled yet",
+    "Mở thiết lập để cấp quyền và thử hủy lại. Audio vẫn được giữ.": "Open setup to grant access and retry the cancel. Audio is retained.",
+    "Đã đạt giới hạn lưu audio trên máy. Bản ghi được giữ lại.": "The local audio limit was reached. The recording is retained.",
+    "Phiên đang được hủy; không thể lưu phần đã ghi nữa.": "The session is being canceled; the recorded part can no longer be saved.",
+    "đã nhận phần đã ghi": "recorded part received",
+    "Có thể đóng tiện ích; hãy bắt đầu chép lời cho bản ghi bị gián đoạn trong ASR Studio.": "You can close the extension; start transcription for the interrupted recording in ASR Studio.",
     "Bản ghi bị gián đoạn": "Interrupted recording",
     "Bản ghi bị gián đoạn: lưu hay hủy?": "Interrupted recording: save or cancel?",
     "Bản ghi này chưa có audio để lưu.": "This recording has no audio to save yet.",
@@ -30,7 +36,8 @@ const { t, getLocale, onLanguageChange } = (() => {
     "Server đã lưu bản ghi này.": "The server has saved this recording.",
     "Server đã lưu phần ghi trước khi gián đoạn.": "The server saved the audio recorded before the interruption.",
     "Server đã lưu phần đã ghi; hãy bắt đầu chép lời trong ASR Studio.": "The server saved the recorded part; start transcription in ASR Studio.",
-    "Thời lượng đã ghi": "Recorded duration",
+    "Thời lượng đã ghi (ước tính)": "Recorded duration (estimate)",
+    "Khoảng {duration}": "About {duration}",
     "Tiện ích đã khởi động lại khi đang ghi. Bản ghi được giữ lại.": "The extension restarted while recording. The recording is retained.",
     "Trình ghi âm của Chrome báo lỗi. Bản ghi được giữ lại.": "Chrome's recorder reported an error. The recording is retained.",
     "chờ bạn chọn": "waiting for your choice",

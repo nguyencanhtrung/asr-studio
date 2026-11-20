@@ -94,3 +94,8 @@ export function visibleSessions(sessions) {
     .slice()
     .sort((a, b) => (b.capture?.startedAt || 0) - (a.capture?.startedAt || 0) || a.id.localeCompare(b.id));
 }
+
+// Row buttons depend on pending requests as well as on session data, so both key the rebuild.
+export function sessionsRenderKey(state) {
+  return JSON.stringify([visibleSessions(state.sessions), Object.values(state.pending).sort()]);
+}
