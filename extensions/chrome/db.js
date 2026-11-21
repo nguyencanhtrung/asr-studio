@@ -170,6 +170,40 @@ export async function patchSession(clientRecordingId, section, patch) {
   });
 }
 
+// Reads and writes in one transaction. `build` returns the patch for the current
+// row, or null to leave it unchanged; `applied` tells which happened.
+export async function patchSessionWith(clientRecordingId, section, build) {
+  return runTransaction([SESSION_STORE], "readwrite", async ({ sessions }) => {
+    const current = await requestResult(sessions.get(clientRecordingId));
+    if (!current) throw new Error(`Unknown capture session ${clientRecordingId}.`);
+    const patch = build(current);
+    if (!patch) return { applied: false, session: current };
+    const next = mergeSession(current, section, patch);
+    await requestResult(sessions.put(next));
+    return { applied: true, session: next };
+  });
+}
+
+// Commits the first recovery choice in one transaction. `decide` is the pure
+// validator; a second, different choice reads the committed one and is refused.
+export async function commitRecoveryChoice(clientRecordingId, choice, decide) {
+  return runTransaction([SESSION_STORE], "readwrite", async ({ sessions }) => {
+    const current = await requestResult(sessions.get(clientRecordingId));
+    if (!current) return { ok: false, code: "capture_missing", session: null };
+    const decision = decide(current, choice);
+    if (!decision.ok) return { ok: false, code: decision.code, session: current };
+    const next = mergeSession(current, "upload", {
+      recoveryChoice: choice,
+      retryAt: null,
+      cancelRetryAt: null,
+      cancelError: null,
+      error: null
+    });
+    await requestResult(sessions.put(next));
+    return { ok: true, session: next };
+  });
+}
+
 export async function appendCaptureChunk(clientRecordingId, chunk) {
   return runTransaction([SESSION_STORE, CHUNK_STORE], "readwrite", async ({ sessions, chunks }) => {
     const current = await requestResult(sessions.get(clientRecordingId));

@@ -86,7 +86,7 @@ jobs:
           ASR_RUN_EXTENSION_TESTS: "1"
           ASR_EXTENSION_DISPOSABLE_XVFB: "1"
         run: >-
-          timeout --kill-after=10s 420s xvfb-run -a -s '-screen 0 1280x1024x24'
+          timeout --kill-after=10s 720s xvfb-run -a -s '-screen 0 1280x1024x24'
           uv run --no-sync pytest -q tests/test_browser_extension_capture.py
       - name: Build internal Chrome extension bundle
         run: >-

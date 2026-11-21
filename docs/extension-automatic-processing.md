@@ -29,6 +29,8 @@ The UI reads the current workflow and preference/source versions immediately bef
 
 When no current transcript generation exists, current-source adoption is the explicit confirmation of the meeting metadata and Notes-source revisions. It starts a fresh ASR attempt against the original recording, resets the waiting transcription and Notes steps, and creates no Notes snapshot until ASR publishes a real transcript. Existing-transcript adoption keeps the established Notes-only behavior and does not rerun ASR.
 
+A saved prefix of an interrupted capture (`capture_complete: false`) creates its workflow in `needs_attention` with waiting reason `interrupted_recording`. The scheduler skips it until the operator adopts the current source; the UI labels that action **Transcribe recorded part**. The recording keeps `recording.interrupted = {code}` after processing starts.
+
 Automatic ASR records the transcript generation, transcript source, notes-source, and meeting-metadata revisions observed at handoff. It checks those revisions again before admission and publication; a change pauses the workflow for an explicit source choice. After the bounded automatic-admission budget is reached, the scheduler waits for a free processing slot and gives the GUI grace window before admitting another automatic task.
 
 ## Frontend state boundary

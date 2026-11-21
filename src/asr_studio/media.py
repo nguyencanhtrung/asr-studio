@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import shutil
 import signal
@@ -440,6 +441,18 @@ def _probe_extension_webm(
     return format_name.lower(), codec_name, stream_index, duration
 
 
+# The demuxer's only complaint about a WebM stream that stopped without its final
+# flush. A saved prefix of an interrupted capture always ends this way.
+_TRUNCATED_TAIL = re.compile(
+    rb"\[matroska,webm @ 0x[0-9a-f]+\] File ended prematurely(?: at pos\. \d+ \(0x[0-9a-f]+\))?"
+)
+
+
+def _without_truncated_tail(stderr: bytes) -> bytes:
+    lines = stderr.splitlines()
+    return b"\n".join(line for line in lines if not _TRUNCATED_TAIL.fullmatch(line.strip()))
+
+
 def normalize_extension_media(
     source_path: Path,
     output_path: Path,
@@ -449,8 +462,14 @@ def normalize_extension_media(
     timeout_seconds: int,
     should_cancel: Callable[[], bool] | None = None,
     remux_prefix: str = ".extension-remux-",
+    truncated_tail_ok: bool = False,
 ) -> MediaProbe:
-    """Validate bounded WebM/Opus and normalize it without altering the raw archive."""
+    """Validate bounded WebM/Opus and normalize it without altering the raw archive.
+
+    ``truncated_tail_ok`` accepts only the demuxer's end-of-stream warning during
+    remux, for a prefix saved from an interrupted capture. The remuxed file is
+    still probed and decoded strictly.
+    """
     if timeout_seconds < 1 or max_output_bytes < 1:
         raise ValueError("extension media limits must be positive")
     deadline = time.monotonic() + timeout_seconds
@@ -515,7 +534,10 @@ def normalize_extension_media(
                     raise MediaProcessingError("media_output_limit")
             except OSError as exc:
                 raise MediaProcessingError("invalid_media") from exc
-            if remux_result.returncode != 0 or remux_result.stderr:
+            remux_errors = remux_result.stderr
+            if truncated_tail_ok:
+                remux_errors = _without_truncated_tail(remux_errors)
+            if remux_result.returncode != 0 or remux_errors:
                 raise MediaProcessingError("invalid_media")
             normalized_source = remux_path
             _, _, _, duration = _probe_extension_webm(

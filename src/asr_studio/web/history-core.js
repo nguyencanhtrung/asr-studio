@@ -139,6 +139,18 @@ const asPositiveSeconds = (value) => {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 };
 
+// Why a saved prefix stopped, keyed by the code the server stores. An unlisted code reads as unknown.
+const INTERRUPTION_CAUSES = {
+  source_ended: t("nguồn âm thanh đã dừng"),
+  source_inactive: t("nguồn âm thanh không còn hoạt động"),
+  write_backlog: t("âm thanh đến quá nhanh để lưu kịp"),
+  recorder_error: t("trình ghi âm của Chrome báo lỗi"),
+  capture_incomplete: t("chưa lưu đủ audio"),
+  owner_restarted: t("tiện ích đã khởi động lại khi đang ghi"),
+  local_quota: t("đã đạt giới hạn lưu audio trên máy"),
+  unknown: t("ghi âm dừng ngoài dự kiến"),
+};
+
 // List rows and meeting details carry the recording fields at different levels. This is the one place where
 // the page normalizes both shapes, with legacy manual uploads defaulting to their old ready behavior.
 export function recordingInfo(meeting) {
@@ -159,13 +171,21 @@ export function recordingInfo(meeting) {
     ? errorValue.code
     : meeting && typeof meeting.recording_error_code === "string" ? meeting.recording_error_code : "";
   const errorCode = errorCodeValue || "";
+  // A saved prefix of an interrupted extension capture keeps a durable label.
+  const interruptedValue = detail && Object.hasOwn(detail, "interrupted")
+    ? detail.interrupted && typeof detail.interrupted.code === "string" ? detail.interrupted.code : null
+    : meeting && typeof meeting.recording_interruption_code === "string" ? meeting.recording_interruption_code : null;
+  const interrupted = source === "extension" && interruptedValue !== null;
+  const interruptionCause = interrupted ? INTERRUPTION_CAUSES[interruptedValue] || INTERRUPTION_CAUSES.unknown : null;
   const ready = state === "ready" && source !== "unknown" && (source !== "extension" || durationSeconds !== null);
   const playable = ready && (source !== "extension" || typeof audioUrl === "string" && audioUrl.trim() !== "");
   const statusLabel = ready
-    ? RECORDING_STATE_LABELS.ready
+    ? interrupted ? t("Đã lưu · bị gián đoạn") : RECORDING_STATE_LABELS.ready
     : RECORDING_STATE_LABELS[state] || t("Chưa sẵn sàng");
   let statusMessage;
-  if (ready) {
+  if (ready && interrupted) {
+    statusMessage = t("Bản ghi bị gián đoạn ({cause}): chỉ có phần đã ghi trước khi ghi âm dừng.", { cause: interruptionCause });
+  } else if (ready) {
     statusMessage = t("Bản ghi đã lưu.");
   } else if (state === "receiving") {
     statusMessage = t("Bản ghi đang được nhận. Trình phát và chép lời sẽ mở khi bản ghi sẵn sàng.");
@@ -188,8 +208,11 @@ export function recordingInfo(meeting) {
     state,
     statusLabel,
     statusMessage,
-    statusState: ready ? "done" : RECORDING_PENDING_STATES.has(state) ? "active" : state === "failed" || state === "canceled" ? "problem" : "warning",
+    statusState: ready ? interrupted ? "warning" : "done" : RECORDING_PENDING_STATES.has(state) ? "active" : state === "failed" || state === "canceled" ? "problem" : "warning",
     errorCode,
+    interrupted,
+    interruptionCode: interrupted ? interruptedValue : null,
+    interruptionCause,
     durationSeconds,
     audioUrl: typeof audioUrl === "string" && audioUrl.trim() ? audioUrl : null,
     ready,

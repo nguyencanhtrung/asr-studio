@@ -18,6 +18,7 @@ import {
 } from "./protocol.js";
 import {
   cleanupReceipt,
+  commitRecoveryChoice,
   createCaptureSession,
   discardLocalCapture,
   getChunk,
@@ -25,17 +26,22 @@ import {
   getActiveCapture,
   hasPendingLocalAudio,
   isActiveCapture,
-  isUploadable,
   listChunkMetadata,
   listSessions,
   patchSession,
+  patchSessionWith,
   purgeDiscardedCaptures
 } from "./db.js";
-import { pairingGuard, uploadStateForError } from "./recovery-core.js";
+import { isCaptureOwnerLost, pairingGuard, uploadStateForError } from "./recovery-core.js";
+import { interruptionCodeFor, ownerLostPatch } from "./capture-core.js";
 import {
+  awaitsRecoveryChoice,
+  cancelTooLateOutcome,
   classifyUploadFailure,
   decideDiscard,
+  decideRecoveryChoice,
   decideUpload,
+  holdsRemoteSession,
   isCancelRetryableError,
   isCancelSettledError,
   isUploadActionable,
@@ -252,7 +258,7 @@ function contextPublic(context) {
 
 async function pendingAudioSessions() {
   const sessions = await listSessions();
-  return sessions.filter((session) => isActiveCapture(session) || hasPendingLocalAudio(session));
+  return sessions.filter((session) => isActiveCapture(session) || hasPendingLocalAudio(session) || holdsRemoteSession(session));
 }
 
 async function pendingAudioExists() {
@@ -442,6 +448,7 @@ function publicSession(session) {
       status: session.capture.status,
       captureComplete: Boolean(session.capture.captureComplete),
       interrupted: Boolean(session.capture.interrupted),
+      interruptionCode: session.capture.interrupted ? interruptionCodeFor({ code: session.capture.interruptionCode }) : null,
       chunkCount: session.capture.chunkCount,
       totalBytes: session.capture.totalBytes,
       error: session.capture.persistenceError || "",
@@ -451,6 +458,9 @@ function publicSession(session) {
     upload: {
       state: session.upload.state,
       nextSequence: session.upload.nextSequence,
+      recoveryChoice: session.upload.recoveryChoice || null,
+      awaitingChoice: awaitsRecoveryChoice(session),
+      cancelSettled: Boolean(session.upload.cancelSettled),
       receipt: session.upload.receipt ? { ...session.upload.receipt } : null,
       meetingUrl,
       cleaned: Boolean(session.upload.cleaned),
@@ -467,7 +477,8 @@ async function updateActionBadge(status) {
     const hasActiveCapture = Boolean(capture && ["starting", "recording", "stopping"].includes(capture.status));
     const hasPendingUpload = (status?.sessions || []).some((session) => {
       const uploadState = session.upload?.state;
-      return session.capture?.captureComplete && !session.upload?.cleaned && uploadState !== "discarded";
+      const sending = session.capture?.captureComplete || session.upload?.recoveryChoice === "save";
+      return sending && !session.upload?.cleaned && uploadState !== "discarded";
     });
     const text = hasActiveCapture ? "REC" : hasPendingUpload ? "UP" : "";
     await chrome.action.setBadgeText({ text });
@@ -595,6 +606,7 @@ async function startFromTab(tabId, source = "action") {
         error: { code: "setup_required", message: "Hoàn tất thiết lập microphone và server trước khi ghi." }
       };
     }
+    await reconcileCaptureOwner({ duringStart: true }).catch(() => {});
     const existing = await getActiveCapture();
     if (existing) throw makeError("capture_busy", "Đã có một bản ghi đang chạy.");
     await ensureOffscreen();
@@ -714,7 +726,15 @@ async function cancelRemoteSession(session, context, options = {}) {
       throw makeError("protocol_mismatch", "The server did not confirm cancellation.");
     }
   } catch (error) {
-    if (!isCancelSettledError(error)) throw error;
+    if (!isCancelSettledError(error, { explicit: persist })) throw error;
+    // A too_late answer can mean the server already saved the recording. Ask before
+    // recording a cancel. Discard persists nothing and drops local audio either way.
+    if (persist && error?.remoteCode === "too_late") {
+      const remote = await authorizedRequest(context, `api/extension/v1/recording-sessions/${encodeURIComponent(session.upload.serverSessionId)}`);
+      if (cancelTooLateOutcome(remote.body) === "saved_remotely") {
+        throw makeError("already_saved", "The server already saved this recording; it was not canceled.");
+      }
+    }
   }
   if (!persist || !canCommit() || (deadlineAt !== null && Date.now() >= deadlineAt)) return session;
   return patchSession(session.clientRecordingId, "upload", {
@@ -768,6 +788,22 @@ async function createRemoteSession(session, context, options = {}) {
   });
 }
 
+async function recordInterruption(session, context) {
+  const response = await authorizedRequest(context, `api/extension/v1/recording-sessions/${encodeURIComponent(session.upload.serverSessionId)}/interrupt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      epoch: session.upload.serverEpoch,
+      interruption_code: interruptionCodeFor({ code: session.capture.interruptionCode })
+    })
+  });
+  const remote = validateBackendIdentity(response.body, session.endpoint);
+  if (remote.id !== session.upload.serverSessionId || remote.epoch !== session.upload.serverEpoch) {
+    throw makeError("protocol_mismatch", "The server interruption response is invalid.");
+  }
+  return patchSession(session.clientRecordingId, "upload", { interruptionRecorded: true, retryAt: null, error: null });
+}
+
 async function uploadChunks(session, context) {
   let current = session;
   while (current.upload.nextSequence < current.capture.chunkCount) {
@@ -812,15 +848,20 @@ async function prepareFinalize(session) {
   }
   const manifestHash = await sha256Hex(new TextEncoder().encode(manifest.text));
   const finalizeId = crypto.randomUUID();
+  const partial = Boolean(session.capture.interrupted);
+  if (partial && session.upload.recoveryChoice !== "save") {
+    throw makeError("capture_incomplete", "An interrupted capture is finalized only after Save recorded part.");
+  }
   const payload = {
     finalize_id: finalizeId,
     capture_epoch: session.capture.captureEpoch,
     epoch: session.upload.serverEpoch,
-    capture_complete: true,
+    capture_complete: !partial,
     total_bytes: manifest.totalBytes,
     chunk_count: manifest.chunkCount,
     manifest_hash: manifestHash,
-    chunks: metas
+    chunks: metas,
+    ...(partial ? { interruption_code: interruptionCodeFor({ code: session.capture.interruptionCode }) } : {})
   };
   return patchSession(session.clientRecordingId, "upload", {
     state: "finalize_pending",
@@ -874,7 +915,9 @@ async function pollRemoteStatus(session, context) {
       chrome.alarms.clear(uploadAlarmName(session.clientRecordingId)),
       chrome.alarms.clear(pollAlarmName(session.clientRecordingId))
     ]);
-    await broadcastStatus(null, "Uploaded. The server has the complete audio; processing continues in ASR Studio.");
+    await broadcastStatus(null, session.capture.interrupted
+      ? "Saved recorded part. Start transcription for the interrupted recording in ASR Studio."
+      : "Uploaded. The server has the complete audio; processing continues in ASR Studio.");
     return cleaned;
   }
   const failed = remote.state === "failed" || remote.state === "canceled";
@@ -934,6 +977,10 @@ async function uploadSession(sessionId, source = "recovery") {
             await broadcastStatus();
             return { session, recheck: false };
           }
+          if (decision.action === "record_interruption") {
+            session = await recordInterruption(session, context);
+            continue;
+          }
           if (decision.action === "upload_chunks") {
             await uploadChunks(session, context);
             // Stop may have completed while the streaming pass held the lock. Re-read
@@ -981,7 +1028,7 @@ async function resumeUploads() {
     const decision = decideUpload(session, Date.now(), { source: "recovery" });
     if (decision.action === "wait") {
       await ensureUploadWake(session.clientRecordingId, decision);
-    } else if ((isUploadable(session) || ["cancel", "reconcile_session"].includes(decision.action)) && isUploadActionable(decision)) {
+    } else if (isUploadActionable(decision)) {
       await uploadSession(session.clientRecordingId, "recovery");
     }
   }
@@ -1062,6 +1109,18 @@ async function discardCapture(sessionId) {
   return { ok: true };
 }
 
+// Save uploads the persisted prefix and finalizes it as interrupted; Cancel keeps
+// the earlier semantics: cancel the server session and retain local audio.
+// The first choice commits atomically in IndexedDB; the other one is refused, so a
+// stale view cannot cancel a save in flight or save a canceled session.
+async function chooseRecovery(sessionId, choice) {
+  const committed = await commitRecoveryChoice(sessionId, choice, decideRecoveryChoice);
+  if (!committed.ok) throw makeError(committed.code, "This recording cannot take that action now.");
+  const updated = await uploadSession(sessionId, "manual");
+  await broadcastStatus();
+  return { ok: true, status: updated ? publicSession(updated) : null };
+}
+
 async function processCaptureStatus(status) {
   await broadcastStatus(status || null);
   const sessionId = status?.sessionId;
@@ -1081,6 +1140,7 @@ async function messageFromUi(message) {
   await recoveryReady;
   switch (message?.type) {
     case "GET_STATUS":
+      await reconcileCaptureOwner().catch(() => {});
       return { ok: true, status: await publicStatus() };
     case "START_CAPTURE":
       return startFromActiveTab("popup");
@@ -1112,6 +1172,10 @@ async function messageFromUi(message) {
       return openResult(message.sessionId);
     case "DISCARD_CAPTURE":
       return discardCapture(message.sessionId);
+    case "SAVE_INTERRUPTED":
+      return chooseRecovery(message.sessionId, "save");
+    case "CANCEL_INTERRUPTED":
+      return chooseRecovery(message.sessionId, "cancel");
     default:
       throw makeError("unknown_message", "The control message is not supported.");
   }
@@ -1151,18 +1215,32 @@ if (chrome.runtime.id !== EXTENSION_ID) {
 }
 
 // Browser/owner restart is an interruption, never continuation of a new encoder.
-async function reconcileCaptureOwner() {
+// Runs at startup, on status reads and before a new start, so an offscreen page lost
+// while the worker stays alive is detected too. During start the new row has no owner yet.
+async function reconcileCaptureOwner({ duringStart = false } = {}) {
+  if (startLock && !duringStart) return;
   const active = (await listSessions()).filter(isActiveCapture);
   if (!active.length) return;
   const hasOwner = await chrome.offscreen.hasDocument();
-  const reply = hasOwner ? await sendOffscreen({ type: "OFFSCREEN_STATUS" }) : null;
+  let reply = null;
+  if (hasOwner) {
+    try { reply = await sendOffscreen({ type: "OFFSCREEN_STATUS" }); } catch { return; }
+  }
+  let changed = false;
   for (const session of active) {
-    if (reply?.ok && reply.status?.sessionId === session.clientRecordingId &&
-        ["starting", "recording", "stopping"].includes(reply.status.status)) continue;
-    await patchSession(session.clientRecordingId, "capture", {
-      status: "interrupted", captureComplete: false, interrupted: true,
-      persistenceError: "The capture owner ended before a clean Stop. Retained audio was not finalized."
-    });
+    if (!isCaptureOwnerLost(session, hasOwner, reply)) continue;
+    // The owner may have finished between the read and the answer; the write re-checks the row
+    // and keeps a reason already recorded for it.
+    const { applied } = await patchSessionWith(session.clientRecordingId, "capture", (current) => (
+      isActiveCapture(current)
+        ? ownerLostPatch(current.capture, "The capture owner ended before a clean Stop. Retained audio was not finalized.")
+        : null
+    ));
+    changed ||= applied;
+  }
+  if (changed) {
+    await broadcastStatus();
+    void resumeUploads().catch(() => {});
   }
 }
 const recoveryReady = requireTrustedStorage().then(purgeDiscardedCaptures).then(reconcileCaptureOwner);

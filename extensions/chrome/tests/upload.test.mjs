@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { interruptionCodeFor, ownerLostPatch, recorderFailure, stoppingPatch } from "../capture-core.js";
 import {
+  awaitsRecoveryChoice,
+  canRetryUpload,
   CANCEL_RETRY_BACKOFF_MS,
+  cancelTooLateOutcome,
   classifyUploadFailure,
   decideDiscard,
+  decideRecoveryChoice,
   decideUpload,
   isCancelRetryableError,
+  holdsRemoteSession,
   isCancelSettledError,
   UPLOAD_RETRY_BACKOFF_MS
 } from "../upload-core.js";
@@ -112,7 +118,7 @@ test("retryable upload failure waits for a backoff instead of retrying on status
 test("upload failure on an interrupted session records no cancel error and rechecks", () => {
   const interrupted = session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { cancelRetryAt: null, cancelError: null, cancelSettled: false }
+    upload: { recoveryChoice: "cancel", cancelRetryAt: null, cancelError: null, cancelSettled: false }
   });
   assert.deepEqual(classifyUploadFailure(interrupted, "upload_chunks", {
     retryable: false,
@@ -129,7 +135,7 @@ test("upload failure on an interrupted session records no cancel error and reche
 test("retryable cancellation records cancel error and schedules cancel retry", () => {
   const interrupted = session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { cancelRetryAt: null, cancelError: null, cancelSettled: false }
+    upload: { recoveryChoice: "cancel", cancelRetryAt: null, cancelError: null, cancelSettled: false }
   });
   assert.deepEqual(classifyUploadFailure(interrupted, "cancel", {
     retryable: true,
@@ -150,7 +156,7 @@ test("retryable cancellation records cancel error and schedules cancel retry", (
 test("non-retryable cancellation records cancel error without an alarm", () => {
   const interrupted = session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { cancelRetryAt: null, cancelError: null, cancelSettled: false }
+    upload: { recoveryChoice: "cancel", cancelRetryAt: null, cancelError: null, cancelSettled: false }
   });
   assert.deepEqual(classifyUploadFailure(interrupted, "cancel", {
     retryable: false,
@@ -223,10 +229,10 @@ test("status chatter does not retry non-retryable upload states, but recovery do
   }
 });
 
-test("an interrupted capture with a server session chooses cancellation and keeps local bytes", () => {
+test("Cancel on an interrupted capture with a server session cancels and keeps local bytes", () => {
   const interrupted = session({
     capture: { status: "interrupted", interrupted: true, captureComplete: false },
-    upload: { cancelRetryAt: null }
+    upload: { recoveryChoice: "cancel", cancelRetryAt: null }
   });
   assert.deepEqual(decideUpload(interrupted, NOW), {
     action: "cancel",
@@ -235,18 +241,22 @@ test("an interrupted capture with a server session chooses cancellation and keep
   });
   assert.equal(decideUpload(session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { cancelRetryAt: 20_000 }
+    upload: { recoveryChoice: "cancel", cancelRetryAt: 20_000 }
   }), 19_999).action, "wait");
   assert.ok(CANCEL_RETRY_BACKOFF_MS >= 5000);
   assert.equal(isCancelSettledError({ status: 404 }), true);
   assert.equal(isCancelSettledError({ status: 409, remoteCode: "too_late" }), true);
+  // Explicit Cancel: a 404 may be another device's owner, so it is not settled.
+  assert.equal(isCancelSettledError({ status: 404, remoteCode: "recording_not_found" }, { explicit: true }), false);
+  assert.equal(isCancelSettledError({ status: 404 }, { explicit: true }), false);
+  assert.equal(isCancelSettledError({ status: 409, remoteCode: "already_canceled" }, { explicit: true }), true);
   assert.equal(isCancelSettledError({ status: 409, remoteCode: "writer_epoch_conflict" }), false);
 });
 
-test("an uncertain interrupted create reconciles by source, honors backoff, and cancels once identified", () => {
+test("Cancel on an uncertain interrupted create reconciles by source, honors backoff, and cancels once identified", () => {
   const uncertain = session({
     capture: { status: "interrupted", interrupted: true, captureComplete: false },
-    upload: { createAttempted: true, serverSessionId: null, retryAt: null, cancelSettled: false }
+    upload: { recoveryChoice: "cancel", createAttempted: true, serverSessionId: null, retryAt: null, cancelSettled: false }
   });
   for (const source of ["status", "recovery", "manual"]) {
     assert.deepEqual(decideUpload(uncertain, NOW, { source }), { action: "reconcile_session" });
@@ -254,7 +264,7 @@ test("an uncertain interrupted create reconciles by source, honors backoff, and 
 
   const waiting = session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { createAttempted: true, serverSessionId: null, retryAt: NOW + 1000 }
+    upload: { recoveryChoice: "cancel", createAttempted: true, serverSessionId: null, retryAt: NOW + 1000 }
   });
   assert.deepEqual(decideUpload(waiting, NOW, { source: "recovery" }), {
     action: "wait",
@@ -264,7 +274,7 @@ test("an uncertain interrupted create reconciles by source, honors backoff, and 
 
   const unmarked = session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { createAttempted: false, serverSessionId: null }
+    upload: { recoveryChoice: "cancel", createAttempted: false, serverSessionId: null }
   });
   assert.deepEqual(decideUpload(unmarked, NOW), {
     action: "idle",
@@ -273,7 +283,7 @@ test("an uncertain interrupted create reconciles by source, honors backoff, and 
 
   const identified = session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { createAttempted: true, serverSessionId: "server-1", serverEpoch: 1 }
+    upload: { recoveryChoice: "cancel", createAttempted: true, serverSessionId: "server-1", serverEpoch: 1 }
   });
   assert.deepEqual(decideUpload(identified, NOW), {
     action: "cancel",
@@ -285,7 +295,7 @@ test("an uncertain interrupted create reconciles by source, honors backoff, and 
 test("reconcile create failures schedule retryable wakeups and suppress non-retryable status retries", () => {
   const uncertain = session({
     capture: { status: "interrupted", interrupted: true },
-    upload: { createAttempted: true, serverSessionId: null, retryAt: null }
+    upload: { recoveryChoice: "cancel", createAttempted: true, serverSessionId: null, retryAt: null }
   });
   assert.deepEqual(classifyUploadFailure(uncertain, "reconcile_session", {
     retryable: true,
@@ -325,7 +335,7 @@ test("non-retryable cancellation stops status retries but leaves recovery and di
 
   const failed = session({
     capture: { status: "interrupted", interrupted: true, captureComplete: false },
-    upload: { cancelRetryAt: null, cancelError: { code: "auth_expired" }, cancelSettled: false }
+    upload: { recoveryChoice: "cancel", cancelRetryAt: null, cancelError: { code: "auth_expired" }, cancelSettled: false }
   });
   assert.equal(decideUpload(failed, NOW, { source: "status" }).action, "idle");
   assert.equal(decideUpload(failed, NOW, { source: "recovery" }).action, "cancel");
@@ -512,7 +522,7 @@ test("a recovery joiner rechecks completion after a deferred PUT fails non-retry
   assert.deepEqual(starts, [{ sessionId: "client-1", source: "recovery" }]);
 });
 
-test("a status joiner rechecks an interruption after a deferred PUT failure snapshot", async () => {
+test("a status joiner does not cancel an interruption after a deferred PUT failure snapshot", async () => {
   const put = deferred();
   const putStarted = deferred();
   const failureClassified = deferred();
@@ -584,12 +594,13 @@ test("a status joiner rechecks an interruption after a deferred PUT failure snap
   releaseOwner.resolve();
   await Promise.all([owner, joiner]);
 
-  assert.deepEqual(followUpDecision, {
-    action: "cancel",
-    serverSessionId: "server-1",
-    epoch: 1
-  });
-  assert.deepEqual(starts, [{ sessionId: "client-1", source: "status" }]);
+  // An interruption never cancels by itself; the failed chunk waits for recovery
+  // or an explicit Save/Cancel choice.
+  assert.equal(followUpDecision, undefined);
+  assert.deepEqual(starts, []);
+  assert.equal(decideUpload(current, NOW, { source: "recovery" }).action, "record_interruption");
+  current = { ...current, upload: { ...current.upload, interruptionRecorded: true } };
+  assert.equal(decideUpload(current, NOW, { source: "recovery" }).action, "upload_chunks");
 });
 
 test("several status joiners do not retry a non-retryable healthy failure", async () => {
@@ -751,4 +762,176 @@ test("a joiner rechecks durable state with its own source when the joined pass r
   assert.deepEqual(await joiner, { sessionId: "client-1", source: "recovery" });
   assert.deepEqual(starts, [{ sessionId: "client-1", source: "recovery" }]);
   assert.equal(locks.size, 0);
+});
+
+const interrupted = (upload = {}, capture = {}) => session({
+  capture: { status: "interrupted", interrupted: true, captureComplete: false, ...capture },
+  upload
+});
+
+test("an interrupted capture without a choice keeps the server session open and only delivers persisted chunks", () => {
+  for (const source of ["status", "recovery", "manual"]) {
+    assert.deepEqual(decideUpload(interrupted({ interruptionRecorded: true }), NOW, { source }), {
+      action: "upload_chunks",
+      fromSequence: 2,
+      throughSequence: 3
+    });
+    assert.deepEqual(decideUpload(interrupted({ nextSequence: 3, interruptionRecorded: true }), NOW, { source }), {
+      action: "idle",
+      reason: "interrupted_choice_required"
+    });
+    assert.deepEqual(decideUpload(interrupted({ serverSessionId: null, createAttempted: true }), NOW, { source }), {
+      action: "idle",
+      reason: "interrupted_choice_required"
+    });
+  }
+  assert.equal(awaitsRecoveryChoice(interrupted()), true);
+});
+
+test("an interrupted capture records the interruption on the server before any chunk or finalize", () => {
+  for (const choice of [undefined, "save"]) {
+    assert.deepEqual(decideUpload(interrupted({ recoveryChoice: choice }), NOW), {
+      action: "record_interruption",
+      serverSessionId: "server-1",
+      epoch: 1
+    });
+  }
+  // An empty prefix has nothing to save, so it records nothing; a complete capture never does.
+  assert.equal(decideUpload(interrupted({}, { chunkCount: 0 }), NOW).action, "idle");
+  assert.equal(decideUpload(session({ capture: { captureComplete: true, status: "complete" } }), NOW).action, "upload_chunks");
+  // Recording happens before the finalize that depends on it.
+  assert.equal(decideUpload(interrupted({ recoveryChoice: "save", nextSequence: 3 }), NOW).action, "record_interruption");
+  assert.equal(decideUpload(interrupted({ recoveryChoice: "save", nextSequence: 3, interruptionRecorded: true }), NOW).action, "finalize");
+});
+
+test("Save finalizes the interrupted prefix without waiting for Stop", () => {
+  const recorded = { interruptionRecorded: true };
+  assert.equal(decideUpload(interrupted({ recoveryChoice: "save", ...recorded }), NOW).action, "upload_chunks");
+  assert.equal(decideUpload(interrupted({ recoveryChoice: "save", nextSequence: 3, ...recorded }), NOW).action, "finalize");
+  assert.equal(decideUpload(interrupted({ recoveryChoice: "save", nextSequence: 3, finalizeSubmitted: true, ...recorded }), NOW).action, "poll_receipt");
+  assert.deepEqual(decideUpload(interrupted({ recoveryChoice: "save", serverSessionId: null, createAttempted: true }), NOW), {
+    action: "create_session"
+  });
+  assert.equal(decideUpload(interrupted({ recoveryChoice: "save", nextSequence: 3, retryAt: NOW + 1, ...recorded }), NOW).action, "wait");
+  assert.deepEqual(decideUpload(interrupted({ recoveryChoice: "save" }, { chunkCount: 0 }), NOW), {
+    action: "idle",
+    reason: "nothing_to_save"
+  });
+  assert.equal(awaitsRecoveryChoice(interrupted({ recoveryChoice: "save" })), false);
+});
+
+test("Save upload failures retry as uploads, not as cancellations", () => {
+  const failure = classifyUploadFailure(interrupted({ recoveryChoice: "save" }), "finalize", {
+    retryable: true,
+    cancelRetryable: true,
+    uploadState: "retryable"
+  }, NOW);
+  assert.deepEqual(failure, {
+    patch: { state: "retryable", retryAt: NOW + UPLOAD_RETRY_BACKOFF_MS, cancelRetryAt: null },
+    recordCancelError: false,
+    alarmDelay: UPLOAD_RETRY_BACKOFF_MS,
+    recheck: false
+  });
+});
+
+test("recovery choices are validated against the retained capture", () => {
+  assert.deepEqual(decideRecoveryChoice(interrupted(), "save"), { ok: true });
+  assert.deepEqual(decideRecoveryChoice(interrupted(), "cancel"), { ok: true });
+  // The first committed choice wins: repeating it is allowed, the other one is refused.
+  assert.deepEqual(decideRecoveryChoice(interrupted({ recoveryChoice: "cancel" }), "cancel"), { ok: true });
+  assert.deepEqual(decideRecoveryChoice(interrupted({ recoveryChoice: "save" }), "save"), { ok: true });
+  assert.deepEqual(decideRecoveryChoice(interrupted({ recoveryChoice: "cancel" }), "save"), { ok: false, code: "already_canceling" });
+  assert.deepEqual(decideRecoveryChoice(interrupted(), "delete"), { ok: false, code: "invalid_choice" });
+  assert.deepEqual(decideRecoveryChoice(session(), "save"), { ok: false, code: "not_interrupted" });
+  assert.deepEqual(decideRecoveryChoice(interrupted({ cancelSettled: true }), "save"), { ok: false, code: "already_canceled" });
+  assert.deepEqual(decideRecoveryChoice(interrupted({ cleaned: true }), "cancel"), { ok: false, code: "already_saved" });
+  assert.deepEqual(decideRecoveryChoice(interrupted({}, { chunkCount: 0 }), "save"), { ok: false, code: "nothing_to_save" });
+  // Cancel never overrides a committed Save, before or after the finalize is sent.
+  for (const finalizeSubmitted of [false, true]) {
+    assert.deepEqual(decideRecoveryChoice(interrupted({ recoveryChoice: "save", finalizeSubmitted }), "cancel"), {
+      ok: false,
+      code: "already_saving"
+    });
+  }
+  assert.equal(awaitsRecoveryChoice(interrupted({ cancelSettled: true })), false);
+  assert.equal(awaitsRecoveryChoice(interrupted({ recoveryChoice: "cancel" })), false);
+});
+
+test("an empty interrupted capture still waits for a choice that can only cancel", () => {
+  const empty = (upload = {}) => interrupted(upload, { chunkCount: 0 });
+  // A known or uncertain server session keeps Cancel available; Save is refused.
+  assert.equal(awaitsRecoveryChoice(empty()), true);
+  assert.equal(awaitsRecoveryChoice(empty({ serverSessionId: null, createAttempted: true })), true);
+  assert.deepEqual(decideRecoveryChoice(empty(), "cancel"), { ok: true });
+  assert.deepEqual(decideRecoveryChoice(empty(), "save"), { ok: false, code: "nothing_to_save" });
+  // With nothing on the server and nothing recorded there is no choice to make.
+  assert.equal(awaitsRecoveryChoice(empty({ serverSessionId: null, createAttempted: false })), false);
+  // The chosen Cancel is sent for an empty prefix.
+  assert.equal(decideUpload(empty({ recoveryChoice: "cancel" }), NOW).action, "cancel");
+});
+
+test("Retry stays available for a chosen Cancel that has not settled", () => {
+  const view = (capture, upload) => ({ capture, upload });
+  const waiting = { status: "interrupted", interrupted: true, captureComplete: false };
+  assert.equal(canRetryUpload(view(waiting, { recoveryChoice: "cancel", cancelSettled: false, cleaned: false })), true);
+  assert.equal(canRetryUpload(view(waiting, { recoveryChoice: "cancel", cancelSettled: true, cleaned: false })), false);
+  assert.equal(canRetryUpload(view(waiting, { recoveryChoice: "save", cleaned: false })), true);
+  assert.equal(canRetryUpload(view(waiting, { recoveryChoice: null, cleaned: false })), false);
+  assert.equal(canRetryUpload(view({ status: "complete", captureComplete: true }, { cleaned: false })), true);
+  assert.equal(canRetryUpload(view({ status: "complete", captureComplete: true }, { cleaned: true })), false);
+});
+
+test("a too_late cancel settles only when the server session is canceled", () => {
+  assert.equal(cancelTooLateOutcome({ state: "canceled" }), "settled");
+  for (const state of ["finalizing", "archived", "ready"]) {
+    assert.equal(cancelTooLateOutcome({ state }), "saved_remotely");
+  }
+  assert.equal(cancelTooLateOutcome(null), "saved_remotely");
+});
+
+test("interruption codes are limited to the server-accepted set", () => {
+  assert.equal(interruptionCodeFor({ code: "source_ended" }), "source_ended");
+  assert.equal(interruptionCodeFor({ code: "owner_restarted" }), "owner_restarted");
+  assert.equal(interruptionCodeFor({ code: "local_quota" }), "local_quota");
+  assert.equal(interruptionCodeFor({ code: "quota_exceeded" }), "unknown");
+  // A recorder error event carries a DOMException with a numeric legacy code.
+  assert.equal(interruptionCodeFor(new DOMException("boom", "EncodingError")), "unknown");
+  assert.equal(interruptionCodeFor(recorderFailure(new DOMException("boom", "EncodingError"))), "recorder_error");
+  assert.equal(interruptionCodeFor(recorderFailure(undefined)), "recorder_error");
+  assert.equal(interruptionCodeFor(new DOMException("boom", "NotSupportedError")), "unknown");
+  assert.equal(interruptionCodeFor(null), "unknown");
+});
+
+test("an interrupted capture holds its server context until Cancel settles, even with zero bytes", () => {
+  const interrupted = (upload) => session({ capture: { status: "interrupted", interrupted: true, chunkCount: 0 }, upload });
+  assert.equal(holdsRemoteSession(interrupted({ serverSessionId: "rec-1" })), true);
+  assert.equal(holdsRemoteSession(interrupted({ serverSessionId: null, createAttempted: true })), true);
+  assert.equal(holdsRemoteSession(interrupted({ serverSessionId: "rec-1", recoveryChoice: "cancel" })), true);
+  assert.equal(holdsRemoteSession(interrupted({ serverSessionId: "rec-1", cancelSettled: true })), false);
+  assert.equal(holdsRemoteSession(interrupted({ serverSessionId: "rec-1", receipt: { id: "r" }, cleaned: true })), false);
+  assert.equal(holdsRemoteSession(interrupted({ serverSessionId: null, createAttempted: false })), false);
+  assert.equal(holdsRemoteSession(session({ capture: { status: "complete", chunkCount: 0 }, upload: { serverSessionId: "rec-1" } })), false);
+});
+
+test("Stop never overwrites a source loss committed between its read and its write", () => {
+  assert.deepEqual(stoppingPatch({ status: "recording", interrupted: false }), { status: "stopping" });
+  // The write transaction sees the row the source-end write already changed.
+  const lost = { status: "interrupted", interrupted: true, interruptionCode: "source_ended" };
+  assert.equal(stoppingPatch(lost), null);
+  assert.equal(stoppingPatch({ ...lost, status: "recording" }), null);
+  assert.equal(stoppingPatch({ status: "complete", interrupted: false }), null);
+});
+
+test("owner loss keeps the interruption reason that is already recorded", () => {
+  const kept = ownerLostPatch(
+    { status: "stopping", interrupted: true, interruptionCode: "source_ended", persistenceError: "tab closed" },
+    "owner gone"
+  );
+  assert.equal(kept.interruptionCode, "source_ended");
+  assert.equal(kept.persistenceError, "tab closed");
+  assert.equal(kept.status, "interrupted");
+  assert.equal(kept.interrupted, true);
+  const fresh = ownerLostPatch({ status: "recording", interrupted: false }, "owner gone");
+  assert.equal(fresh.interruptionCode, "owner_restarted");
+  assert.equal(fresh.persistenceError, "owner gone");
 });

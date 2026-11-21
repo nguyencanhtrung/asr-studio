@@ -2,16 +2,22 @@ import {
   appendCaptureChunk,
   getActiveCapture,
   getSession,
-  patchSession
+  patchSession,
+  patchSessionWith
 } from "./db.js";
 import {
   CAPTURE_STATES,
   canMarkComplete,
+  interruptionCodeFor,
+  MEDIA_RECORDER_TIMESLICE_MS,
+  ownerLostPatch,
+  recorderFailure,
+  stoppingPatch,
   isUnexpectedTrackEnd
 } from "./capture-core.js";
 import { MIME_TYPE, makeError } from "./protocol.js";
 
-export const MEDIA_RECORDER_TIMESLICE_MS = 5000;
+export { MEDIA_RECORDER_TIMESLICE_MS };
 
 const runtime = {
   sessionId: null,
@@ -228,6 +234,7 @@ async function markInterrupted(error, sessionId = runtime.sessionId, generation 
       status: CAPTURE_STATES.INTERRUPTED,
       interrupted: true,
       captureComplete: false,
+      interruptionCode: interruptionCodeFor(error),
       persistenceError: message
     });
     runtime.latestSession = session;
@@ -391,7 +398,7 @@ async function startCapture(message) {
       if (event.data?.size) void enqueueBlob(event.data, sessionId, generation);
     });
     recorder.addEventListener("error", (event) => {
-      void markInterrupted(event.error || makeError("recorder_error", "The media recorder reported an error."), sessionId, generation);
+      void markInterrupted(recorderFailure(event.error), sessionId, generation);
     });
     recorder.start(MEDIA_RECORDER_TIMESLICE_MS);
     runtime.starting = false;
@@ -442,7 +449,16 @@ async function stopCapture() {
       return { ok: true, status: captureStatus(session) };
     }
     runtime.intentionalStop = true;
-    runtime.latestSession = await patchSession(sessionId, "capture", { status: CAPTURE_STATES.STOPPING });
+    const stopping = await patchSessionWith(sessionId, "capture", (current) => stoppingPatch(current.capture));
+    if (!stopping.applied) {
+      // A source loss committed between the read above and this write; keep it.
+      if (owns(sessionId, generation)) {
+        await teardownGraph();
+        resetRuntime(generation);
+      }
+      return { ok: true, status: captureStatus(stopping.session) };
+    }
+    runtime.latestSession = stopping.session;
     await sendStatus(runtime.latestSession);
     await waitForRecorderStop(runtime.recorder);
     await runtime.writeChain;
@@ -494,12 +510,17 @@ async function setTabMonitor(enabled) {
 async function recoverOnLoad() {
   const active = await getActiveCapture();
   if (active && [CAPTURE_STATES.RECORDING, CAPTURE_STATES.STOPPING].includes(active.capture.status)) {
-    await patchSession(active.clientRecordingId, "capture", {
-      status: CAPTURE_STATES.INTERRUPTED,
-      interrupted: true,
-      captureComplete: false,
-      persistenceError: "The offscreen capture owner restarted before Stop completed."
-    });
+    const { session: interrupted } = await patchSessionWith(active.clientRecordingId, "capture", (current) => (
+      [CAPTURE_STATES.RECORDING, CAPTURE_STATES.STOPPING].includes(current.capture.status)
+        ? ownerLostPatch(current.capture, "The offscreen capture owner restarted before Stop completed.")
+        : null
+    ));
+    // Open views and the upload decision must learn about the new state now.
+    try {
+      await chrome.runtime.sendMessage({ target: "worker", type: "CAPTURE_STATUS", status: captureStatus(interrupted) });
+    } catch {
+      // The worker may be asleep; its next status read reconciles from IndexedDB.
+    }
   }
 }
 
