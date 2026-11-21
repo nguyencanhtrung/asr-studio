@@ -44,8 +44,38 @@ class RequestLog(list):
     cancel_not_found = False
 
 
-def _approve_host_permission():
+def _approve_host_permission(page, server_url: str) -> None:
+    """Accept Chrome's host-permission prompt, retrying presses that reached the page."""
     assert os.environ.get("ASR_EXTENSION_DISPOSABLE_XVFB") == "1"
+    # A press sent before the prompt opens reaches the page; Tab then Return can activate a
+    # page button and dismiss the prompt. The page swallows such presses and they are resent.
+    page.evaluate("""() => {
+        window.__promptKeys = 0;
+        window.__swallowKey = (event) => {
+            window.__promptKeys += 1;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        };
+        addEventListener('keydown', window.__swallowKey, true);
+    }""")
+    granted = "origin => chrome.permissions.contains({origins: [origin + '/*']})"
+    try:
+        for _ in range(10):
+            time.sleep(1)
+            seen = page.evaluate("window.__promptKeys")
+            _press_tab_return()
+            if page.evaluate("window.__promptKeys") == seen:
+                break
+        for _ in range(50):
+            if page.evaluate(granted, server_url):
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"host permission for {server_url} was not granted")
+    finally:
+        page.evaluate("removeEventListener('keydown', window.__swallowKey, true)")
+
+
+def _press_tab_return() -> None:
     x11 = ctypes.CDLL("libX11.so.6")
     xtst = ctypes.CDLL("libXtst.so.6")
     x11.XOpenDisplay.restype = ctypes.c_void_p
@@ -374,8 +404,7 @@ def paired_capture(capture_server, capture_client, tmp_path, request):
             control.locator("#server-url").fill(url)
             control.locator("#pair-code").fill(code)
             control.locator("#pair-button").click()
-            control.wait_for_timeout(500)
-            _approve_host_permission()
+            _approve_host_permission(control, url)
             callspec = getattr(request.node, "callspec", None)
             if (
                 callspec
@@ -652,8 +681,7 @@ def test_native_failures_retain_audio(capture_server, paired_capture, failure):
         retry = control.locator('[data-action="retry"]')
         retry.focus()
         control.keyboard.press("Enter")
-        control.wait_for_timeout(500)
-        _approve_host_permission()
+        _approve_host_permission(control, url)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             restored = _status(control)["sessions"][0]
