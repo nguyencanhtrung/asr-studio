@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ASR Studio Capture",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "__MSG_extensionDescription__",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuH52+JhRClW0IV4LqjNqwcH8PI1gIDZ81VAu7YEvyJai8W7VgXwMppXoIkcDyb5/c3yk436i5WEh+t88P5UnhIKcbVgzWpuHxb5T4YbA536A0YXlUb7l0TGn0D6eAbIN/slV2DsLAPMH3OiE6pA905+kZYcD+WaIF+Yaahb8I5kFRZbuhn9Fxwm0OORmzvRF6Z/sAfoIVHaCceHW+OgHva1yghK+F6tU7Z+tmI3acR30/MqDeyLjtez9ZfvN8sLnNT49KrYt95PXkCoDb2AZH3ler30SkQO7yeaP95jKuhZnwtRKL8OICtJ6dEsXvwxI0YSV8m7iemPyR52/+YxOywIDAQAB",
   "permissions": [
