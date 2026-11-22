@@ -104,6 +104,10 @@ directory, reopen the same profile and select **Reload** at
 the extension clears its local state. Roll back at the same path only if the
 previous version supports the current storage schema.
 
+If the popup or control page reports an incompatible API, restore a compatible
+server and extension combination. The extension retains pending audio and
+retries it when the original server speaks the expected API again.
+
 No claim is made here about physical microphone quality or long-duration
 reliability. Synthetic capture tests and focused Node checks do not replace
 those checks. The native browser gate uses a disposable Chromium profile, a synthetic tab tone

@@ -212,9 +212,9 @@ function render() {
   setText(elements.deviceExpiry, connection?.paired ? formatDeviceExpiry(connection.deviceExpiresAt) : "");
   setText(elements.message, localizedMessage(state.message));
 
-  const visibleError = Boolean(state.error);
-  elements.error.hidden = !visibleError;
-  setText(elements.errorCopy, localizedError(state.error));
+  const error = snapshot?.compatibilityError || state.error;
+  elements.error.hidden = !error;
+  setText(elements.errorCopy, localizedError(error));
   elements.setupErrorButton.hidden = !state.setupRequired;
 
   elements.startButton.hidden = active;

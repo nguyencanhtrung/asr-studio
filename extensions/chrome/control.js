@@ -395,7 +395,7 @@ function render() {
     }
   }
   setText(elements.globalMessage, localizedMessage(state.message));
-  setText(elements.globalError, state.error ? localizedError(state.error) : "");
+  setText(elements.globalError, localizedError(state.compatibilityError || state.error));
 }
 
 async function checkMicrophone() {

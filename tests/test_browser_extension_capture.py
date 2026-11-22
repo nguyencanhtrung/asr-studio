@@ -42,6 +42,7 @@ ROOT = Path(__file__).parents[1]
 class RequestLog(list):
     fail_create_responses = False
     cancel_not_found = False
+    reject_recording_requests = False
 
 
 def _approve_host_permission(page, server_url: str) -> None:
@@ -176,6 +177,10 @@ def capture_server(tmp_path, request):
         ):
             transient_remaining -= 1
             return JSONResponse({"error": {"code": "temporary"}}, status_code=transient_status)
+        if requests.reject_recording_requests and request.url.path.startswith(
+            "/api/extension/v1/recording-sessions"
+        ):
+            return JSONResponse({"error": {"code": "conflict"}}, status_code=409)
         if requests.cancel_not_found and request.url.path.endswith("/cancel"):
             # The server hides a session from another device's owner behind this 404.
             return JSONResponse({"error": {"code": "recording_not_found"}}, status_code=404)
@@ -1293,6 +1298,64 @@ def test_native_temporary_http_failure_retries_retained_audio(
     assert sum(method == "PUT" and "/chunks/" in path for method, path in requests) >= 2
     with sqlite3.connect(database_path(settings.data_dir)) as db:
         assert db.execute("SELECT count(*) FROM meetings").fetchone()[0] == 1
+
+
+def test_paired_extension_retains_and_retries_audio_after_server_api_change(
+    capture_server, paired_capture, monkeypatch
+):
+    from asr_studio import extension_routes
+
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    connection = _status(control)["connection"]
+    assert connection["paired"]
+    version = extension_routes.EXTENSION_API_VERSION
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version + 1)
+    requests.reject_recording_requests = True
+
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    # Pairing already minted a token, so the rejected request must trigger a fresh probe.
+    warning = "Incompatible API. Check the extension and server versions."
+    popup.wait_text("#error-copy", warning)
+    assert popup.evaluate("!document.querySelector('#error-copy').parentElement.hidden")
+    tab.wait_for_timeout(1500)
+    popup.click("#stop-button")
+    popup.close()
+
+    expect(control.locator("#global-error")).to_have_text(warning)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        status = _status(control)
+        session = status["sessions"][0]
+        if session["capture"]["captureComplete"] and session["upload"]["error"]:
+            break
+        control.wait_for_timeout(100)
+    assert status["connection"] == connection
+    assert session["capture"]["captureComplete"] and session["capture"]["chunkCount"] > 0
+    assert session["upload"]["state"] == "retryable"
+    assert session["upload"]["error"]["code"] == "api_version_mismatch"
+    assert not session["upload"]["cleaned"] and not session["upload"]["receipt"]
+    assert sum(path.endswith("/capabilities") for _method, path in requests) >= 2
+    assert ("POST", "/api/extension/v1/recording-sessions") in requests
+    assert not any(path.endswith("/finalize") for _method, path in requests)
+
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version)
+    requests.reject_recording_requests = False
+    expect(control.locator("#global-error")).to_have_text("", timeout=20000)
+    deadline = time.monotonic() + 35
+    while time.monotonic() < deadline:
+        status = _status(control)
+        session = status["sessions"][0]
+        if session["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(100)
+    assert session["upload"]["cleaned"] and session["upload"]["receipt"]["recording_id"]
+    assert status["connection"] == connection
+    assert sum(path.endswith("/finalize") for _method, path in requests) == 1
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT count(*) FROM recordings").fetchone()[0] == 1
 
 
 def test_native_capture_runs_transcript_and_notes_after_client_receipt(

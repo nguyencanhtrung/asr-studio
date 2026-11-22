@@ -22,7 +22,7 @@ export function cancelTooLateOutcome(remote) {
 }
 
 export function isCancelRetryableError(error) {
-  return ["network_error", "timeout", "backend_unavailable"].includes(error?.code) || error?.status >= 500;
+  return ["network_error", "timeout", "backend_unavailable", "api_version_mismatch"].includes(error?.code) || error?.status >= 500;
 }
 
 export function classifyUploadFailure(session, failedOperation, errorFacts = {}, now) {
