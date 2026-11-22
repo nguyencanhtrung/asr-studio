@@ -422,6 +422,7 @@ const WAITING_REASONS = {
   account_changed: t("Tài khoản provider đã thay đổi. Hãy xác nhận lại cài đặt."),
   recipe_changed: t("Công thức notes đã thay đổi. Hãy xác nhận lại rồi thử lại."),
   source_confirmation_required: t("Cần xác nhận nguồn dữ liệu đang hiển thị."),
+  interrupted_recording: t("Bản ghi bị gián đoạn. Xử lý tự động chỉ chạy khi bạn xác nhận chép lời phần đã ghi."),
   transcript_required: t("Đang chờ transcript trước khi tạo notes."),
   canceled_by_operator: t("Đã hủy bởi người dùng."),
 };
@@ -467,6 +468,8 @@ export function selectProcessing(state) {
   const action = state.action;
   const intent = action?.intended;
   const source = sourceText(workflow.current_source);
+  const interruptedStart = workflow.state === "needs_attention" &&
+    stepOf(workflow, "transcription")?.waiting_reason === "interrupted_recording";
   const intended = action?.kind === "apply_current_settings" && intent?.asr
     ? t("Áp dụng ASR {choice} · {language}; notes {provider} · {model} · {effort} · {output}.", {
       choice: intent.asr.choice,
@@ -494,11 +497,15 @@ export function selectProcessing(state) {
       applySettings: workflow.actions.apply_current_settings === true,
       useSource: workflow.actions.use_current_source === true,
     },
-    message: overallText(workflow),
+    message: interruptedStart
+      ? t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.")
+      : overallText(workflow),
     source,
-    sourceActionLabel: workflow.current_source?.generation_id === null && workflow.current_source?.source_version === null
-      ? t("Xác nhận thông tin cuộc họp")
-      : t("Dùng nguồn đang hiển thị"),
+    sourceActionLabel: interruptedStart
+      ? t("Chép lời phần đã ghi")
+      : workflow.current_source?.generation_id === null && workflow.current_source?.source_version === null
+        ? t("Xác nhận thông tin cuộc họp")
+        : t("Dùng nguồn đang hiển thị"),
     error: state.error,
     notice: state.notice,
     action,

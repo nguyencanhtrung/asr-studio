@@ -84,6 +84,22 @@ _WORKER_HEARTBEAT_INTERVAL_SECONDS = 5.0
 LOGGER = logging.getLogger(__name__)
 
 
+# Why a capture ended before a clean Stop. The extension sends one of these
+# when the user saves the recorded prefix; "unknown" covers older local state.
+CAPTURE_INTERRUPTION_CODES = frozenset(
+    {
+        "source_ended",
+        "source_inactive",
+        "write_backlog",
+        "recorder_error",
+        "capture_incomplete",
+        "owner_restarted",
+        "local_quota",
+        "unknown",
+    }
+)
+
+
 class ExtensionIngestError(RuntimeError):
     """An API-safe failure in session creation, ingest, or publication."""
 
@@ -1329,7 +1345,10 @@ def _validate_finalize_payload(
         "manifest_hash",
         "chunks",
     }
-    if not isinstance(payload, dict) or set(payload) != required:
+    if not isinstance(payload, dict) or set(payload) not in (
+        required,
+        required | {"interruption_code"},
+    ):
         raise ExtensionIngestError(400, "invalid_request", "The finalize fields are invalid.")
     finalize_id = _safe_text(payload["finalize_id"], name="finalize_id", max_bytes=128)
     if payload["capture_epoch"] != row["capture_epoch"]:
@@ -1342,10 +1361,35 @@ def _validate_finalize_payload(
         raise ExtensionIngestError(
             409, "writer_epoch_conflict", "The recording writer epoch changed."
         )
-    if payload["capture_complete"] is not True:
-        raise ExtensionIngestError(
-            409, "capture_incomplete", "Only a complete capture can be finalized."
-        )
+    capture_complete = payload["capture_complete"]
+    interruption_code = payload.get("interruption_code")
+    if capture_complete is True:
+        if "interruption_code" in payload:
+            raise ExtensionIngestError(
+                400, "invalid_request", "A complete capture has no interruption code."
+            )
+        if row["capture_interruption_code"] is not None:
+            raise ExtensionIngestError(
+                409, "capture_incomplete", "An interrupted capture cannot be finalized as complete."
+            )
+    elif capture_complete is False:
+        # An interrupted prefix is saved only after the session recorded the same
+        # interruption; a request alone never turns a receiving session into one.
+        if "interruption_code" in payload and not isinstance(interruption_code, str):
+            raise ExtensionIngestError(
+                400, "invalid_request", "The interruption code must be a string."
+            )
+        if (
+            interruption_code not in CAPTURE_INTERRUPTION_CODES
+            or row["capture_interruption_code"] != interruption_code
+        ):
+            raise ExtensionIngestError(
+                409,
+                "capture_incomplete",
+                "An incomplete capture is saved only after its interruption was recorded.",
+            )
+    else:
+        raise ExtensionIngestError(400, "invalid_request", "capture_complete must be a boolean.")
     total_bytes = payload["total_bytes"]
     chunk_count = payload["chunk_count"]
     if (
@@ -1408,12 +1452,14 @@ def _validate_finalize_payload(
         "finalize_id": finalize_id,
         "capture_epoch": row["capture_epoch"],
         "epoch": row["epoch"],
-        "capture_complete": True,
+        "capture_complete": capture_complete,
         "total_bytes": total_bytes,
         "chunk_count": chunk_count,
         "manifest_hash": manifest_hash,
         "chunks": normalized_chunks,
     }
+    if capture_complete is False:
+        normalized["interruption_code"] = interruption_code
     payload_hash = hashlib.sha256(_canonical_json(normalized)).hexdigest()
     return normalized, payload_hash, manifest_hash
 
@@ -1471,7 +1517,8 @@ def finalize_recording_session(
             connection.execute(
                 "UPDATE extension_recording_sessions SET finalize_id = ?, "
                 "finalize_payload_hash = ?, finalize_total_bytes = ?, "
-                "finalize_chunk_count = ?, finalize_capture_complete = 1, "
+                "finalize_chunk_count = ?, finalize_capture_complete = ?, "
+                "capture_interruption_code = ?, "
                 "manifest_hash = ?, state = 'finalizing', error_code = NULL, "
                 "error_message = NULL, "
                 "updated_at = ? WHERE id = ? AND state = 'receiving'",
@@ -1480,6 +1527,8 @@ def finalize_recording_session(
                     payload_hash,
                     normalized["total_bytes"],
                     normalized["chunk_count"],
+                    1 if normalized["capture_complete"] else 0,
+                    normalized.get("interruption_code"),
                     manifest_hash,
                     _now_text(),
                     session_id,
@@ -1488,6 +1537,55 @@ def finalize_recording_session(
             connection.commit()
     if enqueue is not None:
         enqueue(session_id)
+    return get_recording_session(
+        data_dir,
+        identity=identity,
+        session_id=session_id,
+        backend_id=backend_id,
+        settings=settings,
+    )
+
+
+def record_recording_interruption(
+    data_dir: Path,
+    *,
+    identity: ExtensionSessionIdentity,
+    session_id: str,
+    epoch: object,
+    interruption_code: object,
+    backend_id: str,
+    settings: Settings,
+) -> dict[str, object]:
+    """Record why the owned capture ended; idempotent for the same code."""
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
+        raise ExtensionIngestError(400, "invalid_epoch", "The writer epoch is invalid.")
+    if not isinstance(interruption_code, str) or interruption_code not in (
+        CAPTURE_INTERRUPTION_CODES
+    ):
+        raise ExtensionIngestError(400, "invalid_request", "The interruption code is invalid.")
+    with _connect(data_dir) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = _owned_session(connection, identity, session_id)
+        if row["epoch"] != epoch:
+            raise ExtensionIngestError(
+                409, "writer_epoch_conflict", "The recording writer epoch changed."
+            )
+        stored = row["capture_interruption_code"]
+        if stored is not None and stored != interruption_code:
+            raise ExtensionIngestError(
+                409, "interruption_conflict", "A different interruption was already recorded."
+            )
+        if stored is None:
+            if row["state"] != "receiving":
+                raise ExtensionIngestError(
+                    409, "too_late", "The recording is no longer receiving chunks."
+                )
+            connection.execute(
+                "UPDATE extension_recording_sessions SET capture_interruption_code = ?, "
+                "updated_at = ? WHERE id = ? AND state = 'receiving'",
+                (interruption_code, _now_text(), session_id),
+            )
+            connection.commit()
     return get_recording_session(
         data_dir,
         identity=identity,
@@ -1969,6 +2067,7 @@ def _process_media_session(
                 timeout_seconds=limits["media_wall_seconds"],
                 should_cancel=lambda: _session_should_cancel(data_dir, session_id, stop_event),
                 remux_prefix=f".{session_id}-",
+                truncated_tail_ok=row["finalize_capture_complete"] == 0,
             )
             with Path(temporary_name).open("rb") as output:
                 os.fsync(output.fileno())

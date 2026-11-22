@@ -289,7 +289,7 @@ export function canonicalManifest(metas) {
 }
 
 export function validateReceipt(receipt, session, manifestHash) {
-  if (!receipt || !/^[0-9a-f]{64}$/.test(receipt.archive_sha256 || "") || !session.capture.captureComplete || receipt.recording_id !== session.upload.serverSessionId || receipt.backend_id !== session.endpoint.backendId || receipt.epoch !== session.upload.serverEpoch || receipt.chunk_count !== session.capture.chunkCount || receipt.total_bytes !== session.capture.totalBytes || receipt.manifest_hash !== manifestHash) {
+  if (!receipt || !/^[0-9a-f]{64}$/.test(receipt.archive_sha256 || "") || !(session.capture.captureComplete || (session.capture.interrupted && session.upload.recoveryChoice === "save")) || receipt.recording_id !== session.upload.serverSessionId || receipt.backend_id !== session.endpoint.backendId || receipt.epoch !== session.upload.serverEpoch || receipt.chunk_count !== session.capture.chunkCount || receipt.total_bytes !== session.capture.totalBytes || receipt.manifest_hash !== manifestHash) {
     throw makeError("receipt_mismatch", "The server receipt does not match the retained local capture.");
   }
   return receipt;

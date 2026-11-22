@@ -52,7 +52,21 @@ adopt prototype buffers.
    chunks, and cleans local chunks only after a matching durable raw receipt from
    the same backend. The recorder's 5-second timeslice bounds an interruption's
    unsaved tail to at most one slice.
-If a create response is lost after the server commits, recovery replays the idempotent create and cancels the interrupted session while retaining local audio.
+5. If capture stops before Stop (meeting tab closed, source ended, recorder or
+   storage failure, extension restart), the recording becomes **interrupted**.
+   The server session stays open and persisted chunks keep uploading. The popup
+   and control page show the reason and an estimated recorded duration (chunk count × 5 s) and offer **Save
+   recorded part** or **Cancel server session**. Save finalizes the persisted
+   prefix with `capture_complete: false` and an `interruption_code`; the meeting
+   is labeled interrupted and waits for an explicit transcription start. Cancel
+   cancels the server session and keeps local audio until **Discard local audio**.
+   The first choice is final. The client first records the interruption on the
+   server (`POST .../interrupt`), and the server accepts a partial finalize only
+   for a session that recorded the same code. If a cancel fails (for example
+   after Chrome host access was removed), **Retry upload** grants access and
+   resends it.
+
+If a create response is lost after the server commits, Save replays the idempotent create and uploads the prefix; Cancel replays it and cancels that same session while retaining local audio.
 
 The selected API URL is the authority for capabilities, pairing, session,
 chunk, finalize, and receipt requests. HTTP is limited to literal loopback.
@@ -65,7 +79,7 @@ If Chrome server access is removed, audio stays local. **Retry upload** asks for
 access to that recording's original server before resuming. If the server token
 expires or is revoked, use **Pair again** for the existing device in **Settings →
 Devices**; same-binding retained uploads resume without repointing the recording.
-An interrupted recording remains in local history and does not block that repair.
+An interrupted recording remains in local history, keeps its Save/Cancel choice, and does not block that repair.
 If a wrong new-device code causes a 404, the audio remains local; pair the
 existing device and retry. The client never silently discards or rebinds it to a
 different endpoint.

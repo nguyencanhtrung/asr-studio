@@ -469,7 +469,9 @@ function meetingLink(meeting, className) {
   link.dataset.meetingLink = meeting.id;
   link.title = meeting.title;
   const sourceState = info.source === "extension"
-    ? t("{source} · {status}", { source: tr(info.sourceLabel), status: tr(info.statusLabel) })
+    ? info.interruptionCause
+      ? t("{source} · {status} · {cause}", { source: tr(info.sourceLabel), status: tr(info.statusLabel), cause: tr(info.interruptionCause) })
+      : t("{source} · {status}", { source: tr(info.sourceLabel), status: tr(info.statusLabel) })
     : "";
   link.setAttribute("aria-label", sourceState ? `${meeting.title} · ${sourceState}` : meeting.title);
   const title = document.createElement("span");
@@ -926,7 +928,8 @@ function renderRecordingStatus(meeting, state = nav()) {
     : checking
       ? t("Đang kiểm tra trạng thái bản ghi…")
       : retryError || refreshError || info.statusMessage;
-  status.hidden = info.ready && !busy && !retryError && !refreshError;
+  // An interrupted saved prefix keeps its label visible next to the player.
+  status.hidden = info.ready && !info.interrupted && !busy && !retryError && !refreshError;
   status.dataset.state = busy ? "active" : retryError || refreshError ? "problem" : info.statusState;
   status.setAttribute("aria-busy", busy ? "true" : "false");
   $("#recording-status-message").textContent = tr(message);

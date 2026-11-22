@@ -39,6 +39,7 @@ from asr_studio.extension_ingest import (
     extension_limits,
     finalize_recording_session,
     get_recording_session,
+    record_recording_interruption,
 )
 
 _JSON_BODY_BYTES = 4 * 1024
@@ -526,6 +527,33 @@ def install_extension_routes(
                 enqueue=enqueue,
             )
             return JSONResponse(summary, status_code=202)
+        except ExtensionAuthError as error:
+            return _error(error)
+        except ExtensionIngestError as error:
+            return _ingest_error(error)
+        except Exception:
+            return _internal_error()
+
+    @app.post("/api/extension/v1/recording-sessions/{session_id}/interrupt", response_model=None)
+    async def interrupt_recording_ingest_session(
+        request: Request, session_id: str
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            payload = await _bounded_json(request, max_bytes=1024)
+            if not isinstance(payload, dict) or set(payload) != {"epoch", "interruption_code"}:
+                raise ExtensionAuthError("invalid_request", "The JSON fields are invalid.", 400)
+            identity, _ = await _authorize_ingest(request, settings, extension_auth)
+            backend_id = await run_in_threadpool(extension_auth.backend_id)
+            return await run_in_threadpool(
+                record_recording_interruption,
+                settings.data_dir,
+                identity=identity,
+                session_id=session_id,
+                epoch=payload["epoch"],
+                interruption_code=payload["interruption_code"],
+                backend_id=backend_id,
+                settings=settings,
+            )
         except ExtensionAuthError as error:
             return _error(error)
         except ExtensionIngestError as error:

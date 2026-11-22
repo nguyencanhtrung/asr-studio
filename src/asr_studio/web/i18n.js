@@ -109,6 +109,20 @@ const { t, UI_LOCALE } = (() => {
   // Keyed by the exact Vietnamese text a caller passes to t(); tests/test_i18n.py keeps it complete.
   function englishTable() {
     return {
+      "Đã lưu · bị gián đoạn": "Saved · interrupted",
+      "Bản ghi bị gián đoạn ({cause}): chỉ có phần đã ghi trước khi ghi âm dừng.": "Interrupted recording ({cause}): only the part recorded before capture stopped is available.",
+      "{source} · {status} · {cause}": "{source} · {status} · {cause}",
+      "nguồn âm thanh đã dừng": "the audio source ended",
+      "nguồn âm thanh không còn hoạt động": "the audio source became inactive",
+      "âm thanh đến quá nhanh để lưu kịp": "audio arrived too fast to store",
+      "trình ghi âm của Chrome báo lỗi": "Chrome's recorder reported an error",
+      "chưa lưu đủ audio": "audio was not stored completely",
+      "tiện ích đã khởi động lại khi đang ghi": "the extension restarted while recording",
+      "đã đạt giới hạn lưu audio trên máy": "the local audio limit was reached",
+      "ghi âm dừng ngoài dự kiến": "recording stopped unexpectedly",
+      "Bản ghi bị gián đoạn. Xử lý tự động chỉ chạy khi bạn xác nhận chép lời phần đã ghi.": "Interrupted recording. Automatic processing runs only after you confirm transcription of the recorded part.",
+      "Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.": "This recording was interrupted, so it was not processed automatically. Select Transcribe recorded part to start transcription and notes.",
+      "Chép lời phần đã ghi": "Transcribe recorded part",
       " (có bản nháp chưa lưu)": " (has an unsaved draft)",
       " (liên kết nguồn không hợp lệ)": " (invalid source link)",
       " Chưa xác nhận được việc dọn upload dở; lần thử lại sẽ bắt đầu bằng một upload mới.": " Cleanup of the partial upload is not confirmed; the next try starts with a new upload.",

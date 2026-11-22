@@ -8,7 +8,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -899,6 +899,17 @@ def _migrate_v19(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v20(connection: sqlite3.Connection) -> None:
+    """Record why a saved extension prefix ended before a clean Stop."""
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(extension_recording_sessions)")
+    }
+    if "capture_interruption_code" not in columns:
+        connection.execute(
+            "ALTER TABLE extension_recording_sessions ADD COLUMN capture_interruption_code TEXT"
+        )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -1059,6 +1070,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 19:
             _migrate_v19(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (19)")
+        if current_version < 20:
+            _migrate_v20(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (20)")
         connection.commit()
     finally:
         connection.close()

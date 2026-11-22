@@ -66,6 +66,18 @@
         <button id="setup-error-button" class="text-button" type="button" hidden>Mở thiết lập</button>
       </div>
 
+      <section id="recovery-panel" class="action-panel" aria-labelledby="recovery-heading" hidden>
+        <div class="action-heading-row">
+          <h2 id="recovery-heading">Bản ghi bị gián đoạn</h2>
+          <span id="recovery-duration" class="elapsed" aria-label="Thời lượng đã ghi (ước tính)">00:00</span>
+        </div>
+        <p id="recovery-reason" class="action-help"></p>
+        <div class="recovery-actions">
+          <button id="save-partial-button" class="primary-button action-button" type="button">Lưu phần đã ghi</button>
+          <button id="cancel-remote-button" class="secondary-button action-button" type="button">Hủy phiên trên server</button>
+        </div>
+      </section>
+
       <section id="action-panel" class="action-panel" aria-labelledby="action-heading">
         <div class="action-heading-row">
           <h2 id="action-heading">Điều khiển</h2>

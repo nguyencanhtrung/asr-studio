@@ -576,6 +576,7 @@ def create_meeting(
             "recordings.extension_session_id, recordings.storage_key, recordings.content_type, "
             "recordings.duration_seconds, sessions.state AS extension_state, "
             "sessions.error_code AS extension_error_code, "
+            "sessions.capture_interruption_code AS extension_interruption_code, "
             "sessions.error_message AS extension_error_message "
             "FROM recordings JOIN meetings ON meetings.id = recordings.meeting_id "
             "LEFT JOIN extension_recording_sessions AS sessions "
@@ -635,6 +636,7 @@ def create_meeting(
             "recordings.extension_session_id, recordings.storage_key, recordings.content_type, "
             "recordings.duration_seconds, sessions.state AS extension_state, "
             "sessions.error_code AS extension_error_code, "
+            "sessions.capture_interruption_code AS extension_interruption_code, "
             "sessions.error_message AS extension_error_message "
             "FROM recordings JOIN meetings ON meetings.id = recordings.meeting_id "
             "LEFT JOIN extension_recording_sessions AS sessions "
@@ -668,6 +670,13 @@ def _meeting_summary(row: sqlite3.Row) -> dict[str, object]:
             else None
         ),
     }
+    interruption_code = (
+        row["extension_interruption_code"] if extension_session_id is not None else None
+    )
+    # A saved prefix of an interrupted capture stays labeled as incomplete.
+    recording["interrupted"] = (
+        {"code": interruption_code} if interruption_code is not None else None
+    )
     if artifact_error_code is not None:
         recording["error"] = {
             "code": artifact_error_code,
@@ -697,6 +706,7 @@ def get_meeting(data_dir: Path, meeting_id: str) -> dict[str, object]:
             "recordings.extension_session_id, recordings.storage_key, recordings.content_type, "
             "recordings.duration_seconds, sessions.state AS extension_state, "
             "sessions.error_code AS extension_error_code, "
+            "sessions.capture_interruption_code AS extension_interruption_code, "
             "sessions.error_message AS extension_error_message "
             "FROM meetings JOIN recordings ON recordings.meeting_id = meetings.id "
             "LEFT JOIN extension_recording_sessions AS sessions "
@@ -740,6 +750,9 @@ def _history_item(row: sqlite3.Row) -> dict[str, object]:
         "recording_state": artifact_state,
         "recording_source": "extension" if extension_session_id is not None else "upload",
         "recording_error_code": artifact_error_code,
+        "recording_interruption_code": (
+            row["extension_interruption_code"] if extension_session_id is not None else None
+        ),
         "deletion_status": ("failed" if deletion_error_code else "pending")
         if deletion_requested_at
         else None,
@@ -761,7 +774,8 @@ def list_meetings(data_dir: Path, *, query: str | None = None) -> dict[str, obje
             "meetings.metadata_version, meetings.deletion_requested_at, "
             "meetings.deletion_error_code, recordings.extension_session_id, "
             "recordings.duration_seconds, sessions.state AS extension_state, "
-            "sessions.error_code AS extension_error_code "
+            "sessions.error_code AS extension_error_code, "
+            "sessions.capture_interruption_code AS extension_interruption_code "
             "FROM meetings JOIN recordings ON recordings.meeting_id = meetings.id "
             "LEFT JOIN extension_recording_sessions AS sessions "
             "ON sessions.id = recordings.extension_session_id "

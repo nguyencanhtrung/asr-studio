@@ -319,3 +319,32 @@ def test_extension_decoder_rejects_invalid_late_opus_packet(tmp_path):
             timeout_seconds=10,
         )
     assert not (tmp_path / "bad.m4a").exists()
+
+
+def test_saved_interrupted_prefix_tolerates_only_the_truncated_tail(tmp_path):
+    # MediaRecorder output is a live stream without duration, like this fixture.
+    source = _webm(tmp_path, streaming=True, duration=6)
+    complete = source.read_bytes()
+    prefix = complete[: len(complete) // 2]
+    source.write_bytes(prefix)
+    output = tmp_path / "audio.m4a"
+    result = media.normalize_extension_media(
+        source,
+        output,
+        max_duration_seconds=10,
+        max_output_bytes=1024**2,
+        timeout_seconds=20,
+        truncated_tail_ok=True,
+    )
+    assert 0 < result.duration_seconds < 6
+    assert media.probe_media(output, max_duration_seconds=10).codec_name == "aac"
+    assert source.read_bytes() == prefix
+    assert list((tmp_path / ".tmp").iterdir()) == []
+
+
+def test_truncated_tail_filter_keeps_other_demuxer_errors():
+    tail = b"[matroska,webm @ 0x55d0] File ended prematurely at pos. 67200160 (0x40164a0)"
+    assert media._without_truncated_tail(tail + b"\n") == b""
+    assert media._without_truncated_tail(b"[matroska,webm @ 0x1] File ended prematurely") == b""
+    other = b"[matroska,webm @ 0x1] Invalid EBML number"
+    assert media._without_truncated_tail(tail + b"\n" + other) == other
