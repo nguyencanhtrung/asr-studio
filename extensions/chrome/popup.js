@@ -188,7 +188,7 @@ function renderSourceButton(button, source, capture) {
 
 function render() {
   const snapshot = state.status;
-  $("release-panel").hidden = !snapshot?.updateSafe;
+  $("release-panel").hidden = !snapshot || (!snapshot.updateSafe && !snapshot.checksEnabled);
   $("release-checks").checked = Boolean(snapshot?.checksEnabled);
   $("release-checks").disabled = isPending(state, "release-checks");
   const bundle = bundleFor(snapshot?.availableUpdate);

@@ -51,7 +51,8 @@ done
 
 # The host updater and the read-only app share this admission lock and startup mode.
 update_dir=.asr-studio/updates
-mkdir -p "$update_dir"
+mkdir -p "$update_dir" || fail "Give the installation user write access to .asr-studio and its updates directory."
+[ -w .asr-studio ] && [ -w "$update_dir" ] || fail "Give the installation user write access to .asr-studio and its updates directory."
 if [ "${ASR_UPDATER_OWNS_LOCK:-0}" != 1 ] && command -v flock >/dev/null 2>&1; then
     exec 9>.asr-studio/updater.lock
     flock -n 9 || fail "Another startup or update is active."

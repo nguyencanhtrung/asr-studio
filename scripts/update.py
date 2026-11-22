@@ -33,8 +33,18 @@ def output(*args):
     return run(*args, stdout=subprocess.PIPE, text=True, timeout=90).stdout.strip()
 
 
+def sync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def write_file(path, data, mode=0o600):
-    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=".asr-update-", suffix=".tmp", delete=False
+    ) as handle:
         temporary = Path(handle.name)
         try:
             handle.write(data)
@@ -42,6 +52,7 @@ def write_file(path, data, mode=0o600):
             os.fchmod(handle.fileno(), mode)
             os.fsync(handle.fileno())
             os.replace(temporary, path)
+            sync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -162,8 +173,8 @@ def check_layout(layout):
 
 
 def backup_data(backup, container, old_id):
-    descriptor = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "wb") as archive:
+    # Publish only a complete, readable archive. A retry cannot overwrite an earlier backup.
+    with tempfile.NamedTemporaryFile(dir=backup.parent, prefix=".cold-backup-") as archive:
         run(
             "docker",
             "run",
@@ -184,7 +195,9 @@ def backup_data(backup, container, old_id):
             stdout=archive,
         )
         os.fsync(archive.fileno())
-    run("tar", "-tf", str(backup), stdout=subprocess.DEVNULL)
+        run("tar", "-tf", archive.name, stdout=subprocess.DEVNULL)
+        os.link(archive.name, backup)
+        sync_directory(backup.parent)
 
 
 def require_clean_checkout():
@@ -256,7 +269,7 @@ def apply(release, scheduled):
         journal = STATE / "update-transaction.json"
         write_file(journal, json.dumps(record).encode())
         marker = PUBLIC / "maintenance"
-        marker.touch()
+        write_file(marker, b"", 0o644)
         switched = False
         pin_written = False
         startup_attempted = False
@@ -304,10 +317,14 @@ def apply(release, scheduled):
             if startup_attempted or migration:
                 startup("--offline", old_image)
             marker.unlink()
+            sync_directory(PUBLIC)
             journal.unlink()
+            sync_directory(STATE)
             raise
         marker.unlink()
+        sync_directory(PUBLIC)
         journal.replace(STATE / "last-update.json")
+        sync_directory(STATE)
 
 
 def main():

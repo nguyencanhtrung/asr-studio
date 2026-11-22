@@ -46,7 +46,9 @@ online start. The app reads the cached result from a read-only directory.
 Apply fetches the exact tag, verifies the image revision and pins its digest in
 `.env`. Unset exported `ASR_IMAGE` in future shells so the pin takes effect.
 A dirty checkout, active request, pending recording/upload, processing task or
-model installation defers the update. Finish the work and retry. The checkout
+model installation defers the update. The message identifies the blocking item
+when one exists. A Notes workflow waiting for a provider can resume after the
+update once the provider is configured. The checkout
 stays at the release tag after success. The project name, existing data mounts
 and model directory must resolve to their previous locations.
 
@@ -68,7 +70,8 @@ For a schema change, run `--apply` manually. It stops Compose, makes an archive
 of the entire data volume and reads the archive before switching releases. If
 startup fails after the switch, services stay stopped and the transaction and
 maintenance marker remain. After an interruption, stop the project's services
-and inspect the journal before recovery.
+and inspect the journal before recovery. When `schema_change` is false and
+`backup` is null, keep the existing data volume and start at step 2.
 
 1. Keep a separate copy of the current volume. Select the cold backup recorded
    in the journal. Extract it into an empty recovery volume and verify the

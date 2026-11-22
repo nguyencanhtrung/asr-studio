@@ -1450,6 +1450,7 @@ def test_native_repair_session_failure_clears_previous_connected_state(
 
 
 def test_release_opt_in_checks_only_github_and_disabling_clears_the_notice(paired_capture):
+    # REST fixture follows https://docs.github.com/en/rest/releases/assets#list-release-assets.
     context, worker, _, _, _ = paired_capture
     # The real Chrome permission dialog and alarms use a disposable Xvfb profile.
     # Stub only the external release feed, inside its calling service worker.
@@ -1488,7 +1489,84 @@ def test_release_opt_in_checks_only_github_and_disabling_clears_the_notice(paire
             "credentials": "omit",
         }
     ]
+    alarm_name = "asr-extension-production-v1:release-check"
+    alarm = worker.evaluate("name => chrome.alarms.get(name)", alarm_name)
+    assert alarm["periodInMinutes"] == 1440
     toggle.click()
     expect(toggle).not_to_be_checked()
     expect(popup.locator("#release-links")).to_be_hidden()
     popup.wait_for_function("async () => await chrome.action.getBadgeText({}) === ''")
+    assert worker.evaluate("name => chrome.alarms.get(name)", alarm_name) is None
+    toggle.click()
+    expect(toggle).to_be_checked()
+    expect(popup.locator("#release-links")).to_be_visible()
+    # Removing host access in Chrome must revoke the preference and its daily alarm.
+    assert popup.evaluate("chrome.permissions.remove({origins:['https://api.github.com/*']})")
+    expect(toggle).not_to_be_checked()
+    expect(popup.locator("#release-links")).to_be_hidden()
+    popup.wait_for_function("async name => !(await chrome.alarms.get(name))", arg=alarm_name)
+
+
+def test_capture_survives_release_permission_denial_and_failed_daily_check(paired_capture):
+    context, worker, _, control, tab = paired_capture
+    options = context.new_page()
+    options.goto(f"chrome-extension://{EXTENSION_ID}/popup.html")
+    toggle = options.locator("#release-checks")
+    expect(toggle).to_be_visible()
+    # Simulate the user's denial at the browser permission boundary.
+    options.evaluate("chrome.permissions.request = async () => false")
+    toggle.click()
+    expect(options.locator("#release-permission")).to_be_visible()
+    expect(toggle).not_to_be_checked()
+    assert not _status(control)["checksEnabled"]
+    options.reload()
+    worker.evaluate("""() => {
+        const original = self.fetch;
+        self.failedReleaseChecks = 0;
+        self.fetch = (url, init) => {
+            if (String(url).startsWith('https://api.github.com/')) {
+                self.failedReleaseChecks++;
+                return Promise.reject(new TypeError('network unavailable'));
+            }
+            return original(url, init);
+        };
+    }""")
+    toggle.click()
+    _approve_host_permission(options, "https://api.github.com")
+    expect(toggle).to_be_checked()
+    assert worker.evaluate("self.failedReleaseChecks") == 1
+    options.close()
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    assert popup.evaluate("!document.querySelector('#release-panel').hidden")
+    assert popup.evaluate("document.querySelector('#release-links').hidden")
+    tab.wait_for_timeout(2200)
+    popup.click("#stop-button")
+    popup.close()
+    deadline = time.monotonic() + 40
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        if sessions and sessions[0]["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(150)
+    assert sessions[0]["upload"]["cleaned"]
+    assert sessions[0]["upload"]["receipt"]["recording_id"]
+
+    # Chrome may clear an alarm at startup. Remove the now-unused server permission
+    # to invoke the same reconciliation function, leaving the GitHub grant in place.
+    alarm = "asr-extension-production-v1:release-check"
+    server = _status(control)["connection"]["serverUrl"]
+    assert control.evaluate(
+        """async ([name, server]) => {
+        await chrome.alarms.clear(name);
+        await chrome.storage.local.set({'asr-extension-production-v1:release-last-attempt': 1});
+        return chrome.permissions.remove({origins: [server + '/*']});
+    }""",
+        [alarm, server],
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and worker.evaluate("self.failedReleaseChecks") < 2:
+        control.wait_for_timeout(100)
+    assert worker.evaluate("self.failedReleaseChecks") == 2
+    assert worker.evaluate("name => chrome.alarms.get(name)", alarm)["periodInMinutes"] == 1440

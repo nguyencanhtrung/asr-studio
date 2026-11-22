@@ -2856,7 +2856,9 @@ The web app reads the host result from a read-only mount. Neither audio processi
 nor the web request path needs a release-service connection.
 
 The host takes an exclusive admission lock before checking durable work. API
-requests hold shared locks while running. A persistent maintenance marker keeps
+requests and the processing scheduler hold shared locks while admitting work.
+Waiting Notes workflows survive the restart in SQLite. Running workflows and
+active tasks hold the update until they finish. A persistent maintenance marker keeps
 requests out across container replacement or an interrupted migration. The old
 data volume is archived cold before a manual schema change. Scheduled updates
 defer that transition. See [host updates and recovery](user-guide.md#host-updates)

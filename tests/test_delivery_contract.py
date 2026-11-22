@@ -689,6 +689,56 @@ def test_shell_syntax_gate_propagates_a_script_failure(tmp_path):
     assert "syntax error" in result.stderr.casefold() or "unterminated" in result.stderr.casefold()
 
 
+@pytest.mark.parametrize(("tag", "stable"), [("v1.2.3", True), ("v1.2.3-rc.1", False)])
+def test_release_record_preserves_latest_stable_when_creating_a_prerelease(tmp_path, tag, stable):
+    job = load_yaml(PIPELINE_PATH)["jobs"]["release-record"]
+    prepare = next(step["run"] for step in job["steps"] if step.get("id") == "release")
+    # Spy only on arguments to gh. A missing release causes 'gh release view' to fail.
+    # CLI flags: https://cli.github.com/manual/gh_release_create
+    _write_executable(
+        tmp_path / "gh",
+        '#!/bin/sh\n[ "$2" = create ] || exit 1\nprintf "%s\\n" "$@" > "$RUNNER_TEMP/args"\n',
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "GITHUB_REF_NAME": tag,
+        "GITHUB_OUTPUT": str(tmp_path / "outputs"),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+    subprocess.run(["bash", "-e", "-c", prepare], env=env, check=True)
+    assert (tmp_path / "outputs").read_text().strip() == f"stable={str(stable).lower()}"
+    args = (tmp_path / "args").read_text().splitlines()
+    assert args[:4] == ["release", "create", tag, "--verify-tag"]
+    assert ("--prerelease" in args) == (not stable)
+    assert ("--latest=false" in args) == (not stable)
+
+
+def test_stable_release_publishes_the_matching_extension_bundle_and_sidecars():
+    jobs = load_yaml(PIPELINE_PATH)["jobs"]
+    record = jobs["release-record"]
+    assert record["outputs"]["stable"] == "${{ steps.release.outputs.stable }}"
+
+    publish = jobs["release-extension"]
+    assert publish["needs"] == "release-record"
+    assert publish["if"] == "needs.release-record.outputs.stable == 'true'"
+    assert publish["permissions"] == {"contents": "write"}
+    step = next(
+        step for step in publish["steps"] if step["name"] == "Publish versioned extension bundle"
+    )
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    commands = step["run"]
+    assert "jq -er .version extensions/chrome/manifest.json" in commands
+    assert commands.index('test "v${version}" = "${GITHUB_REF_NAME}"') < commands.index(
+        "python3 scripts/bundle-extension.py"
+    )
+    assert "asr-studio-extension-${GITHUB_REF_NAME}.zip" in commands
+    assert '--source-commit "${GITHUB_SHA}"' in commands
+    assert 'for asset in "${bundle}" "${bundle}.sha256" "${bundle}.metadata.json"' in commands
+    assert 'gh release upload "${GITHUB_REF_NAME}" "${asset}"' in commands
+    assert 'cmp "${asset}"' in commands
+
+
 def test_platform_images_publish_only_on_version_tags_with_native_runners():
     jobs = load_yaml(PIPELINE_PATH)["jobs"]
     publish_platform = jobs["publish-platform"]

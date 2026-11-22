@@ -67,19 +67,23 @@ def require_idle() -> None:
             raise SystemExit("The running app does not share the host maintenance lock.")
     data = Path(os.environ["ASR_DATA_DIR"]) / "app.sqlite3"
     checks = {
-        "upload": "SELECT 1 FROM uploads WHERE status IN ('receiving','uploaded','validating')",
-        "capture": "SELECT 1 FROM extension_recording_sessions "
+        "upload": "SELECT id FROM uploads WHERE status IN ('receiving','uploaded','validating')",
+        "capture": "SELECT id FROM extension_recording_sessions "
         "WHERE state IN ('receiving','finalizing','archiving','archived')",
-        "processing": "SELECT 1 FROM processing_workflows WHERE state IN ('waiting','running')",
-        "task": "SELECT 1 FROM tasks WHERE status IN ('accepted','running','stopping')",
+        "task": "SELECT id FROM tasks WHERE status IN ('accepted','running','stopping')",
+        # The scheduler needs the admission lock to start a durable waiting step.
+        "processing workflow": "SELECT id FROM processing_workflows WHERE state = 'running'",
     }
     with closing(sqlite3.connect(data.as_uri() + "?mode=ro", uri=True)) as db:
         db.execute("BEGIN")
         for label, query in checks.items():
-            if db.execute(query + " LIMIT 1").fetchone():
-                raise SystemExit(f"Update deferred: pending {label}.")
-    if any((Path(os.environ["ASR_INSTALL_DIR"]) / "requests").glob("*.json")):
-        raise SystemExit("Update deferred: model installation.")
+            row = db.execute(query + " LIMIT 1").fetchone()
+            if row:
+                raise SystemExit(f"Update deferred: pending {label} {row[0]}.")
+    request_dir = Path(os.environ["ASR_INSTALL_DIR"]) / "requests"
+    request = next(request_dir.glob("*.json"), None)
+    if request is not None:
+        raise SystemExit(f"Update deferred: model installation {request.name}.")
 
 
 if __name__ == "__main__":

@@ -69,10 +69,14 @@ const UPDATE_SETTING = `${STORAGE_NAMESPACE}:release-setting`;
 const UPDATE_RESULT = `${STORAGE_NAMESPACE}:release-result`;
 const UPDATE_ALARM = `${STORAGE_NAMESPACE}:release-check`;
 
+const UPDATE_LAST_ATTEMPT = `${STORAGE_NAMESPACE}:release-last-attempt`;
+const UPDATE_INTERVAL_MINUTES = 24 * 60;
+
 async function checkForUpdate() {
   const token = (await storageGet(UPDATE_SETTING))[UPDATE_SETTING];
   if (!token || !await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) return;
   try {
+    await storageSet({ [UPDATE_LAST_ATTEMPT]: Date.now() });
     const installed = chrome.runtime.getManifest().version;
     const tag = await latestBundle(installed);
     await serializeUpdatePreference(async () => {
@@ -88,10 +92,15 @@ async function checkForUpdate() {
 }
 
 async function reconcileUpdateAlarm() {
-  const enabled = (await storageGet(UPDATE_SETTING))[UPDATE_SETTING];
+  const settings = await storageGet([UPDATE_SETTING, UPDATE_LAST_ATTEMPT]);
+  const enabled = settings[UPDATE_SETTING];
   if (enabled && await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) {
     if (!await chrome.alarms.get(UPDATE_ALARM)) {
-      await chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 1440 });
+      // Chrome can clear alarms on restart. Preserve the deadline across short sessions.
+      const now = Date.now();
+      const lastAttempt = Math.min(settings[UPDATE_LAST_ATTEMPT] || 0, now);
+      const when = Math.max(now, lastAttempt + UPDATE_INTERVAL_MINUTES * 60_000);
+      await chrome.alarms.create(UPDATE_ALARM, { when, periodInMinutes: UPDATE_INTERVAL_MINUTES });
     }
   } else {
     if (enabled) await storageSet({ [UPDATE_SETTING]: null });
@@ -111,7 +120,10 @@ function setUpdateChecks(enabled) {
     if (enabled && !await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) {
       throw makeError("update_permission", "GitHub permission is required.");
     }
-    await storageSet({ [UPDATE_SETTING]: enabled ? crypto.randomUUID() : null });
+    await storageSet({
+      [UPDATE_SETTING]: enabled ? crypto.randomUUID() : null,
+      [UPDATE_LAST_ATTEMPT]: enabled ? Date.now() : null
+    });
     await reconcileUpdateAlarm();
     if (enabled) void checkForUpdate().catch(() => {});
     await broadcastStatus();

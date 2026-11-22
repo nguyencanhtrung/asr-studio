@@ -6,6 +6,7 @@
 __pycache__/
 *.py[cod]
 .asr-studio/
+/.asr-update-*.tmp
 .asr-en-vi/
 .coverage
 htmlcov/

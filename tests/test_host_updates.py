@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from asr_studio import updates
-from asr_studio.storage import initialize
+from asr_studio.storage import database_path, initialize
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("host_update", ROOT / "scripts/update.py")
@@ -20,6 +20,7 @@ IMAGE = host.IMAGE + "@sha256:" + "b" * 64
 
 
 def test_check_requires_newer_stable_and_a_platform_digest():
+    # https://docs.github.com/en/rest/releases/releases#get-the-latest-release
     stable = {"tag_name": "v0.10.0", "draft": False, "prerelease": False}
     assert host.release_tag(stable, "0.9.8") == "v0.10.0"
     for release in [
@@ -29,6 +30,9 @@ def test_check_requires_newer_stable_and_a_platform_digest():
     ]:
         assert host.release_tag(release, "0.9.8") is None
     assert host.release_tag(stable, "0.11.0") is None
+    # docker buildx imagetools inspect --raw returns the registry manifest/index document.
+    # https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/
+    # https://github.com/opencontainers/image-spec/blob/v1.1.1/image-index.md
     manifest = {
         "manifests": [
             {"platform": {"os": "linux", "architecture": "amd64"}, "digest": "sha256:" + "b" * 64}
@@ -66,8 +70,145 @@ def test_exclusive_admission_and_durable_pending_work(tmp_path, monkeypatch):
                 "INSERT INTO uploads(id, filename, declared_size, status, raw_key) "
                 "VALUES('a','clip.webm',64,'receiving','raw/a')"
             )
-        with pytest.raises(SystemExit, match="pending upload"):
+        with pytest.raises(SystemExit, match="pending upload a"):
             updates.require_idle()
+
+
+def _seed_update_work(
+    data_dir: Path,
+    *,
+    workflow_state: str,
+    waiting_reason: str | None = None,
+    task_status: str | None = None,
+) -> None:
+    """Create the smallest valid durable workflow/task fixture for admission checks."""
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "INSERT INTO meetings(id, title, language_hint) "
+            "VALUES ('update-meeting', 'Update', 'en')"
+        )
+        connection.execute(
+            "INSERT INTO uploads(id, filename, declared_size, status, raw_key, managed_key) "
+            "VALUES ('update-upload', 'clip.webm', 1, 'ready', 'raw/update', 'recordings/update')"
+        )
+        connection.execute(
+            "INSERT INTO recordings(id, meeting_id, upload_id, storage_key, content_type, "
+            "duration_seconds) VALUES ('update-recording', 'update-meeting', "
+            "'update-upload', 'recordings/update', 'audio/mp4', 1)"
+        )
+        connection.execute(
+            "INSERT INTO processing_workflows(id, meeting_id, recording_id, state, asr_language) "
+            "VALUES (?, 'update-meeting', 'update-recording', ?, 'en')",
+            ("w" * 32, workflow_state),
+        )
+        connection.execute(
+            "INSERT INTO processing_steps(id, workflow_id, kind, state, waiting_reason) "
+            "VALUES (?, ?, 'notes', ?, ?)",
+            ("s" * 32, "w" * 32, workflow_state, waiting_reason),
+        )
+        if task_status is not None:
+            connection.execute(
+                "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
+                "model_name, device, compute_type, language_hint, status, stage, "
+                "audio_duration_seconds) VALUES (?, ?, ?, 'update-meeting', 'transcription', "
+                "'/models/whisper-small', 'whisper-small', 'cpu', 'int8', 'en', ?, 'running', 1)",
+                ("t" * 32, "update-task-request", "h" * 64, task_status),
+            )
+        connection.commit()
+
+
+def _require_idle_with_seeded_work(tmp_path, monkeypatch, **seed) -> None:
+    data_dir = tmp_path / "data"
+    initialize(data_dir)
+    for setting, value in (
+        ("ASR_UPDATE_DIR", tmp_path),
+        ("ASR_DATA_DIR", data_dir),
+        ("ASR_INSTALL_DIR", tmp_path / "install"),
+    ):
+        monkeypatch.setenv(setting, str(value))
+    (tmp_path / "admission.lock").touch()
+    _seed_update_work(data_dir, **seed)
+    with host.exclusive(tmp_path / "admission.lock"):
+        updates.require_idle()
+
+
+def test_provider_unconfigured_waiting_notes_workflow_allows_update(tmp_path, monkeypatch):
+    _require_idle_with_seeded_work(
+        tmp_path,
+        monkeypatch,
+        workflow_state="waiting",
+        waiting_reason="provider_unconfigured",
+    )
+
+
+def test_running_workflow_defers_and_identifies_the_blocker(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit, match=r"pending processing workflow w{32}"):
+        _require_idle_with_seeded_work(tmp_path, monkeypatch, workflow_state="running")
+
+
+def test_active_task_defers_and_identifies_the_blocker(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit, match="pending task t{32}"):
+        _require_idle_with_seeded_work(
+            tmp_path, monkeypatch, workflow_state="succeeded", task_status="running"
+        )
+
+
+def test_model_installation_defers_and_identifies_request_filename(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    initialize(data_dir)
+    install_dir = tmp_path / "install"
+    request_dir = install_dir / "requests"
+    request_dir.mkdir(parents=True)
+    (request_dir / "model-2026-11-22.json").write_text("{}")
+    for setting, value in (
+        ("ASR_UPDATE_DIR", tmp_path),
+        ("ASR_DATA_DIR", data_dir),
+        ("ASR_INSTALL_DIR", install_dir),
+    ):
+        monkeypatch.setenv(setting, str(value))
+    lock = tmp_path / "admission.lock"
+    lock.touch()
+    with (
+        host.exclusive(lock),
+        pytest.raises(SystemExit, match="model installation model-2026-11-22[.]json"),
+    ):
+        updates.require_idle()
+
+
+def test_backup_data_does_not_publish_a_failed_archive_and_preserves_existing_backup(
+    tmp_path, monkeypatch
+):
+    backup = tmp_path / "before-release.tar"
+    calls = []
+
+    def fail_tar(*args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("docker", "run"):
+            raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(host, "run", fail_tar)
+    with pytest.raises(subprocess.CalledProcessError):
+        host.backup_data(backup, "old-container", "old-image")
+    assert not backup.exists()
+    assert not list(tmp_path.glob(".cold-backup-*"))
+
+    def successful_tar(*args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("docker", "run"):
+            kwargs["stdout"].write(b"verified archive")
+
+    monkeypatch.setattr(host, "run", successful_tar)
+    host.backup_data(backup, "old-container", "old-image")
+    assert backup.read_bytes() == b"verified archive"
+    assert not list(tmp_path.glob(".cold-backup-*"))
+
+    original = backup.read_bytes()
+    with pytest.raises(FileExistsError):
+        host.backup_data(backup, "old-container", "old-image")
+    assert backup.read_bytes() == original
+    assert not list(tmp_path.glob(".cold-backup-*"))
+    assert calls
 
 
 @pytest.fixture
@@ -104,6 +245,9 @@ def deployment(tmp_path, monkeypatch):
     host.run("git", "switch", "-q", "main")
     real_output = host.output
     real_run = host.run
+    # test_host_updates_docker exercises these fields against the engine and Compose directly.
+    # https://docs.docker.com/reference/api/engine/ (ContainerInspect and ImageInspect)
+    # https://docs.docker.com/reference/cli/docker/compose/config/
     mounts = [
         {"Type": "volume", "Name": "demo_data", "Source": "/docker/data", "Destination": "/data"}
     ]
@@ -139,6 +283,34 @@ def deployment(tmp_path, monkeypatch):
 
     monkeypatch.setattr(host, "run", commands)
     return checkout, public, previous, target, calls
+
+
+@pytest.mark.parametrize("bad_ref", ["oldid", IMAGE])
+def test_revision_mismatch_preserves_checkout_and_image_pin(deployment, monkeypatch, bad_ref):
+    checkout, public, previous, _, _ = deployment
+    image_revision = host.image_revision
+    monkeypatch.setattr(
+        host, "image_revision", lambda ref: "wrong" if ref == bad_ref else image_revision(ref)
+    )
+    before = (checkout / ".env").read_bytes()
+    with pytest.raises(ValueError, match="must match|does not match"):
+        host.apply({"tag": "v0.10.0", "image": IMAGE}, scheduled=False)
+    assert host.output("git", "rev-parse", "HEAD") == previous
+    assert (checkout / ".env").read_bytes() == before
+    assert not (public / "maintenance").exists()
+
+
+def test_concurrent_host_command_defers_before_discovery(deployment, monkeypatch):
+    _, public, _, _, calls = deployment
+    (public / "mode").write_text("online")
+    monkeypatch.setattr(sys, "argv", ["update", "--apply"])
+    monkeypatch.setattr(host, "discover", lambda: pytest.fail("concurrent release discovery"))
+    with (
+        host.exclusive(public.parent / "updater.lock"),
+        pytest.raises(SystemExit, match="another operation"),
+    ):
+        host.main()
+    assert not calls
 
 
 @pytest.mark.parametrize("health_failure", [False, True])
