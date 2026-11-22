@@ -89,7 +89,21 @@ notes processing. Those results remain in the ASR Studio web app.
 
 ## Updates and verification limits
 
-Update the unpacked extension only after active capture and upload work ends.
+In the popup, enable **Check GitHub for updates** and approve access to
+`api.github.com`. The worker checks immediately and then daily. The NEW badge
+and download links appear only after the versioned ZIP, SHA-256 and build
+metadata are published and capture, upload and recovery have finished. Turning
+the checkbox off clears the reminder and stops checks.
+
+Stop capture and wait for the final durable receipt for every pending recording.
+Download the ZIP and checksum from the release, verify the checksum and compare
+the manifest public key with the installed copy. Keep a copy of the previous
+bundle. Close Chrome, replace the entire contents of the original unpacked
+directory, reopen the same profile and select **Reload** at
+`chrome://extensions`. Verify ID, pairing and a synthetic capture. Removing
+the extension clears its local state. Roll back at the same path only if the
+previous version supports the current storage schema.
+
 No claim is made here about physical microphone quality or long-duration
 reliability. Synthetic capture tests and focused Node checks do not replace
 those checks. The native browser gate uses a disposable Chromium profile, a synthetic tab tone

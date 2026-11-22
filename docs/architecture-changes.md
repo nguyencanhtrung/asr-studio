@@ -2846,3 +2846,18 @@ Tag: security, architecture, access. Target: `src/asr_studio/config.py`,
 **Follow-ups.** Future provider pages should use the same overview-row and heading-role contracts. No new dependency or color token was added. The disclosure marker has one 150 ms rotation, covered by the existing reduced-motion override.
 
 Tag: design, frontend. Target: `DESIGN.md` and `docs/frontend-design.md`.
+
+## Release discovery and host-managed updates
+
+A public release record can precede the image manifest or extension attachments.
+The host checks the manifest for its Docker platform and pins the child digest.
+The Chrome worker checks the release attachments after the user grants GitHub access.
+The web app reads the host result from a read-only mount. Neither audio processing
+nor the web request path needs a release-service connection.
+
+The host takes an exclusive admission lock before checking durable work. API
+requests hold shared locks while running. A persistent maintenance marker keeps
+requests out across container replacement or an interrupted migration. The old
+data volume is archived cold before a manual schema change. Scheduled updates
+defer that transition. See [host updates and recovery](user-guide.md#host-updates)
+and [extension updates](../extensions/chrome/README.md#updates-and-verification-limits).

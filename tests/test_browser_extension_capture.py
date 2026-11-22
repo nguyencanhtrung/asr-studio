@@ -446,6 +446,7 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     popup.click("#start-button")
     popup.wait_text("#capture-state", "Recording")
     assert popup.evaluate("document.documentElement.scrollWidth") <= 400
+    assert popup.evaluate('document.getElementById("release-panel").hidden')
     popup.screenshot(tmp_path / "popup-recording.png")
     popup.close()
     control.close()
@@ -1446,3 +1447,48 @@ def test_native_repair_session_failure_clears_previous_connected_state(
     expect(control.locator("#pair-button")).to_be_enabled()
     assert not _status(control)["connection"].get("paired")
     expect(control.locator("#connection-dot")).not_to_have_class("status-dot is-ready")
+
+
+def test_release_opt_in_checks_only_github_and_disabling_clears_the_notice(paired_capture):
+    context, worker, _, _, _ = paired_capture
+    # The real Chrome permission dialog and alarms use a disposable Xvfb profile.
+    # Stub only the external release feed, inside its calling service worker.
+    worker.evaluate("""() => {
+        const original = self.fetch;
+        self.releaseCalls = [];
+        self.fetch = (resource, init) => {
+            if (!String(resource).startsWith('https://api.github.com/')) {
+                return original(resource, init);
+            }
+            self.releaseCalls.push({url:String(resource), credentials:init.credentials});
+            const name = 'asr-studio-extension-v99.0.0.zip';
+            const base = 'https://github.com/nguyencanhtrung/asr-studio/releases/download/v99.0.0/';
+            const assets = ['', '.sha256', '.metadata.json'].map(suffix => ({
+                name:name+suffix, browser_download_url:base+name+suffix, state:'uploaded', size:32
+            }));
+            return Promise.resolve(Response.json({tag_name:'v99.0.0',draft:false,
+                prerelease:false,assets}));
+        };
+    }""")
+    popup = context.new_page()
+    popup.goto(f"chrome-extension://{EXTENSION_ID}/popup.html")
+    toggle = popup.locator("#release-checks")
+    expect(toggle).to_be_visible()
+    expect(toggle).not_to_be_checked()
+    expect(popup.locator("#release-links")).to_be_hidden()
+    assert worker.evaluate("self.releaseCalls.length") == 0
+    toggle.click()
+    _approve_host_permission(popup, "https://api.github.com")
+    expect(toggle).to_be_checked()
+    expect(popup.locator("#release-zip")).to_have_text("ZIP v99.0.0")
+    popup.wait_for_function("async () => await chrome.action.getBadgeText({}) === 'NEW'")
+    assert worker.evaluate("self.releaseCalls") == [
+        {
+            "url": "https://api.github.com/repos/nguyencanhtrung/asr-studio/releases/latest",
+            "credentials": "omit",
+        }
+    ]
+    toggle.click()
+    expect(toggle).not_to_be_checked()
+    expect(popup.locator("#release-links")).to_be_hidden()
+    popup.wait_for_function("async () => await chrome.action.getBadgeText({}) === ''")

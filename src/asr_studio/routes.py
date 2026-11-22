@@ -75,6 +75,7 @@ from asr_studio.tasks import (
     update_current_generation_segment_text,
     update_current_generation_speaker_name,
 )
+from asr_studio.updates import available_version
 from asr_studio.worker import is_healthy as worker_is_healthy
 
 SESSION_COOKIE = "asr_studio_session"
@@ -153,6 +154,9 @@ def _asset_response(filename: str, media_type: str) -> Response:
     if filename == "shell.html":
         content = (WEB_DIR / filename).read_text(encoding="utf-8")
         content = content.replace("{{ASR_STUDIO_VERSION}}", escape_html(__version__))
+        tag = available_version()
+        content = content.replace("{{UPDATE_VISIBILITY}}", "" if tag else "hidden")
+        content = content.replace("{{UPDATE_TAG}}", escape_html(tag))
         return HTMLResponse(content, media_type=media_type)
     return FileResponse(WEB_DIR / filename, media_type=media_type)
 

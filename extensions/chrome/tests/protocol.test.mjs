@@ -51,6 +51,10 @@ test("production binding requires the exact API endpoint and a separate web orig
       webOrigin: "https://asr.example.test"
     }
   );
+  assert.throws(
+    () => bindingFromCapabilities("https://asr.example.test/base", capabilities({api_version: API_VERSION + 1})),
+    { code: "api_version_mismatch" }
+  );
   assert.equal(permissionPattern(binding.serverUrl), "https://asr.example.test/base/*");
   assert.throws(
     () => bindingFromCapabilities("https://asr.example.test/base", capabilities({ prototype: true })),

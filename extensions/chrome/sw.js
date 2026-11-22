@@ -1,3 +1,4 @@
+import { latestBundle, RELEASE_ORIGIN, bundleFor } from "./release.js";
 import {
   canonicalManifest,
   bindingFromCapabilities,
@@ -64,11 +65,66 @@ const UPLOAD_ALARM_PREFIX = `${STORAGE_NAMESPACE}:upload:`;
 const POLL_ALARM_PREFIX = `${STORAGE_NAMESPACE}:receipt:`;
 const DISCARD_CANCEL_TIMEOUT_MS = 5000;
 
+const UPDATE_SETTING = `${STORAGE_NAMESPACE}:release-setting`;
+const UPDATE_RESULT = `${STORAGE_NAMESPACE}:release-result`;
+const UPDATE_ALARM = `${STORAGE_NAMESPACE}:release-check`;
+
+async function checkForUpdate() {
+  const token = (await storageGet(UPDATE_SETTING))[UPDATE_SETTING];
+  if (!token || !await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) return;
+  try {
+    const installed = chrome.runtime.getManifest().version;
+    const tag = await latestBundle(installed);
+    await serializeUpdatePreference(async () => {
+      if ((await storageGet(UPDATE_SETTING))[UPDATE_SETTING] === token) {
+        await storageSet({ [UPDATE_RESULT]: { token, tag, installed } });
+      }
+    });
+  } catch {
+    // Keep the last complete result. Capture and upload have separate retry schedules.
+    return;
+  }
+  await broadcastStatus();
+}
+
+async function reconcileUpdateAlarm() {
+  const enabled = (await storageGet(UPDATE_SETTING))[UPDATE_SETTING];
+  if (enabled && await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) {
+    if (!await chrome.alarms.get(UPDATE_ALARM)) {
+      await chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 1440 });
+    }
+  } else {
+    if (enabled) await storageSet({ [UPDATE_SETTING]: null });
+    await chrome.alarms.clear(UPDATE_ALARM);
+  }
+}
+
+let updatePreferenceTask = Promise.resolve();
+function serializeUpdatePreference(operation) {
+  const task = updatePreferenceTask.then(operation);
+  updatePreferenceTask = task.catch(() => {});
+  return task;
+}
+
+function setUpdateChecks(enabled) {
+  return serializeUpdatePreference(async () => {
+    if (enabled && !await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) {
+      throw makeError("update_permission", "GitHub permission is required.");
+    }
+    await storageSet({ [UPDATE_SETTING]: enabled ? crypto.randomUUID() : null });
+    await reconcileUpdateAlarm();
+    if (enabled) void checkForUpdate().catch(() => {});
+    await broadcastStatus();
+    return { ok: true };
+  });
+}
+
 const sessionTokens = new Map();
 const uploadLocks = new Map();
 let startLock = null;
 let connectionBusy = false;
 let statusSequence = 0;
+let badgeSequence = 0;
 const statusEpoch = crypto.randomUUID();
 const trustedStorageReady = Promise.resolve()
   .then(() => chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }))
@@ -472,6 +528,9 @@ function publicSession(session) {
 }
 
 async function updateActionBadge(status) {
+  // A slower status read must not replace the newer recording or upload badge.
+  if (status.statusSequence <= badgeSequence) return;
+  badgeSequence = status.statusSequence;
   try {
     const capture = status?.capture;
     const hasActiveCapture = Boolean(capture && ["starting", "recording", "stopping"].includes(capture.status));
@@ -480,9 +539,12 @@ async function updateActionBadge(status) {
       const sending = session.capture?.captureComplete || session.upload?.recoveryChoice === "save";
       return sending && !session.upload?.cleaned && uploadState !== "discarded";
     });
-    const text = hasActiveCapture ? "REC" : hasPendingUpload ? "UP" : "";
+    const text = hasActiveCapture ? "REC" : hasPendingUpload ? "UP" : status?.availableUpdate ? "NEW" : "";
     await chrome.action.setBadgeText({ text });
-    if (text) await chrome.action.setBadgeBackgroundColor({ color: hasActiveCapture ? "#a63838" : "#8e2433" });
+    if (text && status.statusSequence === badgeSequence) {
+      const color = { REC: "#a63838", UP: "#8e2433", NEW: "#485465" }[text];
+      await chrome.action.setBadgeBackgroundColor({ color });
+    }
   } catch {
     // Badge support is useful feedback, never a capture dependency.
   }
@@ -500,7 +562,16 @@ async function publicStatus(overrideCapture = null, message = "") {
   const capture = overrideCapture
     ? { ...overrideCapture, sessionId: overrideCapture.sessionId || owner?.clientRecordingId, startedAt: overrideCapture.startedAt || owner?.createdAt }
     : owner ? publicSession(owner).capture : null;
+  const update = await storageGet([UPDATE_SETTING, UPDATE_RESULT]).catch(() => ({}));
+  const result = update[UPDATE_RESULT];
+  const updateSafe = !startLock && !isActiveCapture({ capture }) && !sessions.some((session) =>
+    isActiveCapture(session) || hasPendingLocalAudio(session) || holdsRemoteSession(session));
+  const tag = update[UPDATE_SETTING] && update[UPDATE_SETTING] === result?.token
+    && result.installed === chrome.runtime.getManifest().version ? result.tag : null;
   const status = {
+    updateSafe,
+    checksEnabled: Boolean(update[UPDATE_SETTING]),
+    availableUpdate: updateSafe && bundleFor(tag) ? tag : null,
     statusEpoch,
     statusSequence: sequence,
     connection: contextPublic(context) || (await getConfiguredServerUrl() ? { serverUrl: await getConfiguredServerUrl(), paired: false, prototype: false } : null),
@@ -1139,6 +1210,8 @@ async function processCaptureStatus(status) {
 async function messageFromUi(message) {
   await recoveryReady;
   switch (message?.type) {
+    case "SET_UPDATE_CHECKS":
+      return setUpdateChecks(message.enabled === true);
     case "GET_STATUS":
       await reconcileCaptureOwner().catch(() => {});
       return { ok: true, status: await publicStatus() };
@@ -1182,7 +1255,8 @@ async function messageFromUi(message) {
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name.startsWith(UPLOAD_ALARM_PREFIX)) void uploadSession(alarm.name.slice(UPLOAD_ALARM_PREFIX.length));
+  if (alarm.name === UPDATE_ALARM) void checkForUpdate().catch(() => {});
+  else if (alarm.name.startsWith(UPLOAD_ALARM_PREFIX)) void uploadSession(alarm.name.slice(UPLOAD_ALARM_PREFIX.length));
   else if (alarm.name.startsWith(POLL_ALARM_PREFIX)) void uploadSession(alarm.name.slice(POLL_ALARM_PREFIX.length));
 });
 
@@ -1245,3 +1319,8 @@ async function reconcileCaptureOwner({ duringStart = false } = {}) {
 }
 const recoveryReady = requireTrustedStorage().then(purgeDiscardedCaptures).then(reconcileCaptureOwner);
 void recoveryReady.then(resumeUploads).catch(() => {});
+
+void serializeUpdatePreference(reconcileUpdateAlarm).catch(() => {});
+chrome.permissions.onRemoved.addListener(() => {
+  void serializeUpdatePreference(reconcileUpdateAlarm).then(() => broadcastStatus()).catch(() => {});
+});

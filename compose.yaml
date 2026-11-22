@@ -31,6 +31,7 @@ services:
     ports:
       - "127.0.0.1:${ASR_PORT:-8765}:8765"
     environment:
+      ASR_UPDATE_DIR: /run/asr-updates
       ASR_DATA_DIR: /var/lib/asr-studio/data
       ASR_AUTH_DIR: /var/lib/asr-studio/auth
       ASR_PROVIDER_DIR: /var/lib/asr-studio/provider
@@ -57,6 +58,7 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:
+      - "./.asr-studio/updates:/run/asr-updates:ro"
       - data:/var/lib/asr-studio/data
       - auth:/var/lib/asr-studio/auth
       - provider:/var/lib/asr-studio/provider

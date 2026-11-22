@@ -88,12 +88,14 @@ def _run_start(
     prepared_asr_model: bool = False,
     source_revision: str | None = CHECKOUT_REVISION,
     image_revision: str = "match",
-    checkout: Path = ROOT,
+    checkout: Path | None = None,
     compose_project: str = "asr-studio",
     existing_volumes: tuple[str, ...] = (),
     copy_fail: str = "none",
 ) -> subprocess.CompletedProcess[str]:
     tmp_path.mkdir(parents=True, exist_ok=True)
+    if checkout is None:
+        checkout = _checkout_copy(tmp_path / "checkout")
     model_root = tmp_path / "models"
     model_directory = model_root / "speaker-diarization-community-1"
     for relative_path in model_files:
@@ -497,9 +499,11 @@ def test_offline_start_leaves_the_only_service_that_can_download_stopped(tmp_pat
         tmp_path / "offline", COMMUNITY_1_FILES, args=("--offline",), prepared_asr_model=True
     )
     assert offline.returncode == 0, offline.stdout + offline.stderr
+    assert (tmp_path / "offline/checkout/.asr-studio/updates/mode").read_text() == "offline\n"
     assert " --scale model-installer=0 " in offline.docker_log
     source = _run_start(tmp_path / "source", COMMUNITY_1_FILES, prepared_asr_model=True)
     assert source.returncode == 0, source.stdout + source.stderr
+    assert (tmp_path / "source/checkout/.asr-studio/updates/mode").read_text() == "online\n"
     assert "--scale" not in source.docker_log
 
 

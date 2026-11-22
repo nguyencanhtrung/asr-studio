@@ -81,6 +81,7 @@ function localizedError(error) {
   const known = {
     microphone_denied: t("Chrome chưa cấp quyền microphone."),
     invalid_url: t("URL server không hợp lệ."),
+    api_version_mismatch: t("API không tương thích. Kiểm tra phiên bản extension và server."),
     protocol_mismatch: t("Server trả về dữ liệu không đúng hợp đồng."),
     backend_mismatch: t("Server trả về dữ liệu của backend khác."),
     invalid_web_url: t("URL web của server không hợp lệ để mở kết quả."),
