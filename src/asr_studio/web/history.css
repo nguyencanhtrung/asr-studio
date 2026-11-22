@@ -46,7 +46,10 @@
 .recent-link .link-title,
 .day-meeting .link-title {
   overflow: hidden;
-  font-weight: 620;
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -132,8 +135,11 @@
 }
 
 .cal-title {
+  font-family: var(--font-display);
   font-size: var(--text-small);
-  font-weight: 650;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
 }
 
 .cal-step,
@@ -292,8 +298,9 @@
 .calendar-head h2 {
   margin: 6px 0 4px;
   font-size: var(--text-title-lg);
-  font-weight: 500;
-  letter-spacing: -0.03em;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
 }
 
 .calendar-sub {
@@ -399,7 +406,8 @@
 .day-panel h3 {
   margin: 6px 0 0;
   font-size: var(--text-subtitle);
-  font-weight: 560;
+  font-weight: 600;
+  line-height: 1.15;
 }
 
 .day-panel-count {
@@ -537,9 +545,11 @@
 
 .meeting-delete-header h2 {
   margin: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-title);
-  font-weight: 500;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
 }
 
 .meeting-delete-body {

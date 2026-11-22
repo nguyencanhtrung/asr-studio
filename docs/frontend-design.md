@@ -56,7 +56,7 @@ Màu sắc dùng semantic tokens trong [`design-system.css`](../src/asr_studio/w
 
 ### 3.2. Chữ, biểu tượng và bề mặt
 
-- Newsreader Variable dùng cho tiêu đề; Inter Variable dùng cho điều khiển và nội dung chính; JetBrains Mono dùng cho timestamp, version và metadata kỹ thuật. Cả ba được self-host với Vietnamese subset.
+- **Four Hands Rule:** Newsreader Variable chỉ dùng cho wordmark/tên sản phẩm và các tagline hoặc blockquote italic đã có; Archivo Variable (weight 600, `-0.015em`, line-height khoảng 1.15) dùng cho mọi heading/title; Hanken Grotesk Variable dùng cho điều khiển và nội dung chính; JetBrains Mono dùng cho timestamp, version và metadata kỹ thuật. Cả bốn được self-host với Vietnamese subset khi cần.
 - Dùng font có sẵn hoặc đóng gói cùng frontend; không tải font hay icon từ Internet trong runtime.
 - Giữ mật độ gọn của prototype: tiêu đề rõ, metadata nhẹ hơn, phân cấp nội dung bằng cỡ chữ, độ đậm và khoảng cách.
 - Icon nét đơn, đồng nhất; logo ứng dụng là biểu tượng sóng âm trong ô vuông bo góc. GitHub dùng biểu tượng GitHub riêng.

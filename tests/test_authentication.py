@@ -33,9 +33,11 @@ async def test_shared_design_assets_and_fonts_are_public_and_local(client):
 
     assert design_css.status_code == 200
     assert design_css.headers["content-type"].startswith("text/css")
+    assert "Archivo Variable" in design_css.text
+    assert "Hanken Grotesk Variable" in design_css.text
     assert "Newsreader Variable" in design_css.text
-    assert "Inter Variable" in design_css.text
     assert "JetBrains Mono" in design_css.text
+    assert "Inter Variable" not in design_css.text
     assert "https://" not in design_css.text
     assert "http://" not in design_css.text
     assert theme_js.status_code == 200
@@ -51,7 +53,7 @@ async def test_shared_design_assets_and_fonts_are_public_and_local(client):
     unknown = await client.get("/assets/fonts/not-bundled.woff2")
     assert unknown.status_code == 404
     license_files = sorted((WEB_DIR / "fonts").glob("LICENSE-*.txt"))
-    assert len(license_files) == 3
+    assert len(license_files) == 4
     assert all("SIL OPEN FONT LICENSE" in path.read_text() for path in license_files)
 
 

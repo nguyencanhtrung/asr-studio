@@ -82,9 +82,18 @@ SESSION_COOKIE = "asr_studio_session"
 WEB_DIR = Path(__file__).parent / "web"
 FONT_FILES = frozenset(
     {
-        "inter-vietnamese.woff2",
-        "inter-latin-ext.woff2",
-        "inter-latin.woff2",
+        "archivo-vietnamese.woff2",
+        "archivo-vietnamese-italic.woff2",
+        "archivo-latin-ext.woff2",
+        "archivo-latin-ext-italic.woff2",
+        "archivo-latin.woff2",
+        "archivo-latin-italic.woff2",
+        "hanken-grotesk-vietnamese.woff2",
+        "hanken-grotesk-vietnamese-italic.woff2",
+        "hanken-grotesk-latin-ext.woff2",
+        "hanken-grotesk-latin-ext-italic.woff2",
+        "hanken-grotesk-latin.woff2",
+        "hanken-grotesk-latin-italic.woff2",
         "newsreader-vietnamese.woff2",
         "newsreader-latin-ext.woff2",
         "newsreader-latin.woff2",

@@ -290,7 +290,7 @@ def _design_metrics(page):
           overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           bodyFont: getComputedStyle(document.body).fontFamily,
           headingFont: getComputedStyle(document.querySelector("h1, h2")).fontFamily,
-          monoFont: getComputedStyle(document.querySelector(".brand-wordmark")).fontFamily,
+          wordmarkFont: getComputedStyle(document.querySelector(".brand-wordmark")).fontFamily,
           storedTheme: localStorage.getItem("asr-studio:theme"),
         })"""
     )
@@ -340,15 +340,15 @@ def test_design_system_theme_fonts_focus_and_offline_assets(live, signed_in, tmp
         "theme": "dark",
         "preference": "system",
         "overflow": 0,
-        "bodyFont": '"Inter Variable", system-ui, -apple-system, sans-serif',
-        "headingFont": '"Newsreader Variable", Georgia, "Times New Roman", serif',
-        "monoFont": '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace',
+        "bodyFont": '"Hanken Grotesk Variable", system-ui, -apple-system, sans-serif',
+        "headingFont": '"Archivo Variable", "Helvetica Neue", Arial, sans-serif',
+        "wordmarkFont": '"Newsreader Variable", Georgia, "Times New Roman", serif',
         "storedTheme": None,
     }
     assert page.evaluate(
         """() => [
-          document.fonts.check('16px "Inter Variable"', "Điều phối cuộc họp"),
-          document.fonts.check('32px "Newsreader Variable"', "Mở không gian làm việc"),
+          document.fonts.check('16px "Hanken Grotesk Variable"', "Điều phối cuộc họp"),
+          document.fonts.check('32px "Archivo Variable"', "Mở không gian làm việc"),
           document.fonts.check('12px "JetBrains Mono"', "Tiếng Việt EN VI"),
         ].every(Boolean)"""
     )
@@ -580,6 +580,11 @@ def test_history_search_calendar_navigation_and_return(live, browser_context):
     expect(page.locator("#calendar-title")).to_be_visible()
     expect(large.locator(".cal-title")).to_have_text("Tháng 10 · 2026")
     expect(page.locator("#mini-calendar .cal-title")).to_have_text("Tháng 10 · 2026")
+    for title in (large.locator(".cal-title"), page.locator("#mini-calendar .cal-title")):
+        style = title.evaluate(
+            "el => { const s = getComputedStyle(el); return [s.fontFamily, s.fontWeight]; }"
+        )
+        assert "Archivo Variable" in style[0] and style[1] == "600"
 
     # Monday-first: 1 Oct 2026 is a Thursday, so the grid starts on 28 Sep.
     expect(large.locator(".cal-weekdays span").first).to_have_text("T2")

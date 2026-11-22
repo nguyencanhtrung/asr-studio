@@ -31,98 +31,103 @@ colors:
   danger-light: "#a63838"
   danger-dark: "#f0958e"
 typography:
+  wordmark:
+    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontSize: "0.9375rem"
+    fontWeight: 500
+    letterSpacing: "-0.01em"
   access-display:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "clamp(2.65rem, 6vw, 4.5rem)"
-    fontWeight: 500
-    lineHeight: 1.02
-    letterSpacing: "-0.045em"
+    fontWeight: 600
+    lineHeight: 1.15
+    letterSpacing: "-0.015em"
   access-display-mobile:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "2.7rem"
-    fontWeight: 500
-    lineHeight: 1.02
-    letterSpacing: "-0.045em"
+    fontWeight: 600
+    lineHeight: 1.15
+    letterSpacing: "-0.015em"
   headline:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "clamp(1.5rem, 3vw, 2.125rem)"
-    fontWeight: 500
-    lineHeight: 1.2
-    letterSpacing: "-0.035em"
+    fontWeight: 600
+    lineHeight: 1.15
+    letterSpacing: "-0.015em"
   meeting-headline:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "clamp(1.625rem, 3vw, 2.25rem)"
-    fontWeight: 500
-    lineHeight: 1.2
-    letterSpacing: "-0.035em"
+    fontWeight: 600
+    lineHeight: 1.15
+    letterSpacing: "-0.015em"
   title:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.75rem"
-    fontWeight: 500
-    lineHeight: 1.2
-    letterSpacing: "-0.035em"
+    fontWeight: 600
+    lineHeight: 1.15
+    letterSpacing: "-0.015em"
   calendar-title:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.75rem"
-    fontWeight: 500
-    lineHeight: 1.2
+    fontWeight: 600
+    lineHeight: 1.15
   dialog-title:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.5rem"
-    fontWeight: 500
-    lineHeight: 1.2
+    fontWeight: 600
+    lineHeight: 1.15
   dialog-title-mobile:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.5rem"
-    fontWeight: 500
-    lineHeight: 1.2
+    fontWeight: 600
+    lineHeight: 1.15
   mobile-title:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.5rem"
-    fontWeight: 500
-    lineHeight: 1.2
+    fontWeight: 600
+    lineHeight: 1.15
   section-title:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.125rem"
-    fontWeight: 560
-    lineHeight: 1.3
+    fontWeight: 600
+    lineHeight: 1.15
   interface-heading:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1rem"
-    fontWeight: 500
-    lineHeight: 1.3
+    fontWeight: 600
+    lineHeight: 1.15
   intro:
-    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontFamily: "Hanken Grotesk Variable, system-ui, sans-serif"
     fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.7
   reading:
-    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontFamily: "Hanken Grotesk Variable, system-ui, sans-serif"
     fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.7
   panel-title:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1rem"
-    fontWeight: 650
-    lineHeight: 1.3
+    fontWeight: 600
+    lineHeight: 1.15
   subheading:
-    fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
+    fontFamily: "Archivo Variable, Helvetica Neue, Arial, sans-serif"
     fontSize: "1rem"
-    fontWeight: 650
-    lineHeight: 1.3
+    fontWeight: 600
+    lineHeight: 1.15
   body:
-    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontFamily: "Hanken Grotesk Variable, system-ui, sans-serif"
     fontSize: "0.9375rem"
     fontWeight: 400
     lineHeight: 1.65
   control:
-    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontFamily: "Hanken Grotesk Variable, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 600
     lineHeight: 1.55
   body-small:
-    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontFamily: "Hanken Grotesk Variable, system-ui, sans-serif"
     fontSize: "0.8125rem"
     fontWeight: 400
     lineHeight: 1.6
@@ -197,7 +202,7 @@ components:
 
 ASR Studio feels like a precise working ledger: calm enough for long review sessions, editorial enough to belong to the bibo product family, and technical enough to expose provenance, runtime state, and recoverable errors without ceremony. Warm paper and charcoal fields carry the visual world; burgundy signal lines, fine rules, and disciplined typography establish hierarchy.
 
-The brand foundation is portable: palette roles, the Newsreader–Inter–JetBrains Mono relationship, hairlines, compact radii, accessible focus, and restrained motion. The sidebar, calendars, transcript generations, runtime panels, speaker tools, and one-step create-meeting dialog are ASR-specific operational components. Future products may reuse the foundation without copying this application's information architecture.
+The brand foundation is portable: palette roles, the Newsreader–Archivo–Hanken Grotesk–JetBrains Mono relationship, hairlines, compact radii, accessible focus, and restrained motion. The sidebar, calendars, transcript generations, runtime panels, speaker tools, and one-step create-meeting dialog are ASR-specific operational components. Future products may reuse the foundation without copying this application's information architecture.
 
 **Key Characteristics:**
 
@@ -232,24 +237,25 @@ The palette pairs warm paper neutrals with charcoal dark surfaces and a reserved
 
 ## Typography
 
-- **Display Font:** Newsreader Variable (with Georgia and Times New Roman fallbacks)
-- **Body Font:** Inter Variable (with system UI fallbacks)
+- **Wordmark/Serif Font:** Newsreader Variable (with Georgia and Times New Roman fallbacks), reserved for the ASR Studio name and existing italic taglines or blockquotes
+- **Display Font:** Archivo Variable (with Helvetica Neue and Arial fallbacks), weight 600 for headings and title-level styles
+- **Body Font:** Hanken Grotesk Variable (with system UI fallbacks) for running text and controls
 - **Label/Mono Font:** JetBrains Mono (with platform monospace fallbacks)
 
-**Character:** Newsreader gives saved work and section titles an editorial voice. Inter keeps Vietnamese and English controls compact and readable; JetBrains Mono turns runtime state, timestamps, versions, IDs, and small uppercase labels into a distinct technical layer.
+**Character:** Newsreader names the product, Archivo gives headings a clear engineered edge, Hanken Grotesk keeps Vietnamese and English controls compact and readable, and JetBrains Mono turns runtime state, timestamps, versions, IDs, and small uppercase labels into a distinct technical layer.
 
 ### Hierarchy
 
-- **Headline:** Medium-weight Newsreader with tight tracking for access, empty-state, and meeting titles.
-- **Title:** Medium-weight Newsreader for workspace and calendar headings.
-- **Body:** Inter at compact dashboard sizes with generous line height for explanations and transcript prose.
-- **Reading:** Inter at 16px, with a 1.7 line height for rendered meeting notes and 1.6 for transcript text; the Markdown editor stays in JetBrains Mono at 15px.
+- **Headline:** Archivo at weight 600, 1.15 line height, and tight `-0.015em` tracking for access, empty-state, and meeting titles.
+- **Title:** Archivo at weight 600 for workspace, calendar, dialog, section, and card headings.
+- **Body:** Hanken Grotesk at compact dashboard sizes with generous line height for explanations and transcript prose.
+- **Reading:** Hanken Grotesk at 16px, with a 1.7 line height for rendered meeting notes and 1.6 for transcript text; the Markdown editor stays in JetBrains Mono at 15px.
 - **Label:** JetBrains Mono at 12px, usually uppercase with at most 0.08em tracking, for operational metadata rather than long content.
 - **Scale:** Every size comes from the `--text-*` tokens in `design-system.css`: label 12, small 13, control 14, body 15, reading 16, subtitle 18, heading 20, title 24, title-lg 28 (px at the default 16px root).
 
 ### Named Rules
 
-**The Three-Voice Rule.** Serif names the subject, sans-serif supports the task, and mono reports the machine; do not interchange those roles for decoration.
+**The Four Hands Rule.** Newsreader names, Archivo heads, Hanken Grotesk explains, and mono measures. Running text is never serif or display, and a number worth believing is set in mono.
 
 **The 12px Floor.** No visible text is smaller than 12px, controls are at least 14px and reading prose is at least 16px. Font sizes are rem tokens, never px, so the browser's text size setting applies.
 
@@ -313,7 +319,7 @@ Corners are compact and engineered: controls use the small radius, content panel
 
 ### Transcript Segments
 
-- **Read mode (default):** One bordered row per segment, on the subtle surface with the medium radius. It holds the timestamp button (mono, 14px, accent; seeks and plays), the speaker name (14px, semibold ink), the text (Inter reading, 16px) and, when the segment needs review, the amber "Cần kiểm tra" cue with its reasons (13px, bordered, never color alone). No field, select or save button is rendered. The playing segment keeps its accent border and soft fill.
+- **Read mode (default):** One bordered row per segment, on the subtle surface with the medium radius. It holds the timestamp button (mono, 14px, accent; seeks and plays), the speaker name (14px, semibold ink), the text (Hanken Grotesk reading, 16px) and, when the segment needs review, the amber "Cần kiểm tra" cue with its reasons (13px, bordered, never color alone). No field, select or save button is rendered. The playing segment keeps its accent border and soft fill.
 - **Sửa:** A secondary button, always visible and never hover-only, at the end of the speaker line. A read row has two tab stops: the timestamp and "Sửa". Its accessible name carries the start time and, with an unsaved draft, "(có bản nháp chưa lưu)".
 - **Editor:** "Sửa" swaps only that row for the editor: speaker select, text area (16px), "Lưu đoạn" and "Hủy", and a closed "Chi tiết" disclosure (14px) holding "Gán ban đầu" and the model measures. One editor is open at a time; opening another returns the first row to read mode and keeps its unsaved text. The select saves on change; Esc or "Hủy" closes, Ctrl/⌘+Enter saves from any control in the editor, and focus returns to that row's "Sửa" afterwards. Esc and "Hủy" drop ordinary typed text but keep a conflict-marked draft: the row stays marked, and "Sửa" reopens it with the draft and its review panel.
 - **Draft mark:** A row with an unsaved draft shows "Bản nháp chưa lưu" in warning ink on a dashed warning border, so the mark never relies on color alone. After a version conflict, "Tải lại bản mới nhất" sits in the open editor or rename form, and in the conflict panel above the transcript while that row or chip is closed.
@@ -356,7 +362,7 @@ Corners are compact and engineered: controls use the small radius, content panel
 
 ### Inputs / Fields
 
-- **Style:** Neutral surface, one-pixel border, compact radius, and Inter for ordinary values; tokens, commands, and technical values may use JetBrains Mono.
+- **Style:** Neutral surface, one-pixel border, compact radius, and Hanken Grotesk for ordinary values; tokens, commands, and technical values may use JetBrains Mono.
 - **Focus:** Accent outline and/or border shift with sufficient contrast in both themes.
 - **Error / Disabled:** Danger copy accompanies invalid state; disabled fields retain readable value text.
 
@@ -400,7 +406,7 @@ Provider connection appears as two equal-width sticky sidebar-footer buttons, Op
 
 The dialog title is the Vietnamese **Cài đặt** h2 above a fixed-height two-column body. The desktop navigation has five top-level sections on a subtle surface, with **AI Provider** sub-items; the scrolling content column shows one section at a time. The selected tab uses the soft accent fill, accent border and heavier weight. At 680px and below, the list becomes a row above the content. At 22.5rem and below, the **Theme** choices use two even rows with one choice per row. Arrow keys, Home and End move between sections on either axis.
 
-The **AI Provider** overview is read-only and lists the provider sub-items **OpenAI**, **Google Antigravity**, disabled **Local AI** with **Coming later**, and **Automatic processing**. The top-level list then continues with **ASR Model**, **Devices**, **Theme** and **About**. On phones only top-level items remain in the row; provider and processing pages expose a back link. Each provider page always includes an account disclosure: it is closed when connected and steady, open while disconnected or while sign-in, an error, confirmation or focus requires it, and account rows appear only when account data exists. Its marker rotates over 150 ms, with the existing reduced-motion override removing that transition. Each help line sits under the control it explains, and disconnect confirmation uses the danger colours. The page title is 18px Inter Variable 600, group titles are 15px Inter Variable 600, and the dialog title is the only serif heading.
+The **AI Provider** overview is read-only and lists the provider sub-items **OpenAI**, **Google Antigravity**, disabled **Local AI** with **Coming later**, and **Automatic processing**. The top-level list then continues with **ASR Model**, **Devices**, **Theme** and **About**. On phones only top-level items remain in the row; provider and processing pages expose a back link. Each provider page always includes an account disclosure: it is closed when connected and steady, open while disconnected or while sign-in, an error, confirmation or focus requires it, and account rows appear only when account data exists. Its marker rotates over 150 ms, with the existing reduced-motion override removing that transition. Each help line sits under the control it explains, and disconnect confirmation uses the danger colours. The page title is 18px Archivo Variable 600, group titles are 15px Archivo Variable 600, and the dialog title is a display heading rather than serif text.
 
 **Theme** holds language and display-mode radio groups for system, light and dark. They always show the value in use and remain browser preferences owned by `i18n.js` and `theme.js`; a language change reloads the page and reopens Settings at Theme. **About** holds the software description, real version, source link, developer's name and website.
 

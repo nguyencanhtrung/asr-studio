@@ -144,10 +144,10 @@ textarea:focus-visible {
 }
 
 .brand-wordmark {
-  font-family: var(--font-mono);
+  font-family: var(--font-serif);
   font-size: var(--text-body);
-  font-weight: 400;
-  letter-spacing: 0.04em;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
@@ -342,10 +342,11 @@ textarea:focus-visible {
   max-width: min(60vw, 820px);
   overflow: hidden;
   margin: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-title-lg);
-  font-weight: 500;
-  letter-spacing: -0.035em;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -486,10 +487,11 @@ textarea:focus-visible {
 .welcome-stage h2,
 .meeting-error h2 {
   margin: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: clamp(1.5rem, 3vw, 2.125rem);
-  font-weight: 500;
-  letter-spacing: -0.035em;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
 }
 
 .welcome-copy {
@@ -539,6 +541,8 @@ textarea:focus-visible {
   color: var(--ink);
   font-size: var(--text-body);
   font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
 }
 
 .principle-intro > p:last-child {
@@ -578,7 +582,8 @@ textarea:focus-visible {
 .principle-card h3 {
   margin: 0 0 4px;
   font-size: var(--text-control);
-  font-weight: 680;
+  font-weight: 600;
+  line-height: 1.15;
 }
 
 .principle-card p {
@@ -677,11 +682,11 @@ textarea:focus-visible {
   max-width: 100%;
   overflow-wrap: anywhere;
   margin: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: clamp(1.625rem, 3vw, 2.25rem);
-  font-weight: 500;
-  letter-spacing: -0.035em;
-  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
 }
 
 .meeting-metadata {
@@ -786,7 +791,8 @@ textarea:focus-visible {
 .automatic-processing-heading h3 {
   margin: 0;
   font-size: var(--text-subtitle);
-  font-weight: 620;
+  font-weight: 600;
+  line-height: 1.15;
 }
 
 .automatic-processing-heading p,
@@ -974,7 +980,8 @@ textarea:focus-visible {
 .audio-heading h3 {
   margin: 0;
   font-size: var(--text-reading);
-  font-weight: 650;
+  font-weight: 600;
+  line-height: 1.15;
 }
 
 .source-label {
@@ -1130,10 +1137,11 @@ textarea:focus-visible {
 
 .dialog-header h2 {
   margin: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-title-lg);
-  font-weight: 500;
-  letter-spacing: -0.03em;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
 }
 
 .icon-button {
@@ -2079,7 +2087,8 @@ textarea:focus-visible {
 .generation-heading h4 {
   margin: 0;
   font-size: var(--text-reading);
-  font-weight: 650;
+  font-weight: 600;
+  line-height: 1.15;
 }
 
 .transcription-actions {
@@ -2527,6 +2536,7 @@ textarea:focus-visible {
   color: var(--ink);
   font-size: var(--text-small);
   font-weight: 600;
+  line-height: 1.15;
   scroll-margin-top: var(--player-gap); /* "Đặt tên trước" in the notes tab focuses it */
 }
 
@@ -2651,6 +2661,8 @@ textarea:focus-visible {
   margin: 0;
   color: var(--warning);
   font-size: var(--text-label);
+  font-weight: 600;
+  line-height: 1.15;
 }
 
 .transcript-draft-context {

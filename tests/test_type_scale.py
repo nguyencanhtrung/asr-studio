@@ -140,6 +140,45 @@ def test_stylesheets_take_every_font_size_from_the_rem_scale():
     assert used == set(tokens)
 
 
+def test_four_hands_font_tokens_and_local_faces_are_declared():
+    expected_tokens = {
+        '--font-display: "Archivo Variable", "Helvetica Neue", Arial, sans-serif;',
+        '--font-serif: "Newsreader Variable", Georgia, "Times New Roman", serif;',
+        '--font-sans: "Hanken Grotesk Variable", system-ui, -apple-system, sans-serif;',
+        '--font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;',
+    }
+    paths = (
+        WEB / "design-system.css",
+        Path(__file__).resolve().parents[1] / "extensions/chrome/asr-design.css",
+    )
+    for path in paths:
+        css = path.read_text()
+        assert expected_tokens <= set(line.strip() for line in css.splitlines())
+        assert 'font-family: "Inter Variable"' not in css
+        assert "font-optical-sizing" not in css
+        font_dir = path.parent / "fonts"
+        expected_assets = {
+            "archivo-vietnamese.woff2",
+            "archivo-latin-ext.woff2",
+            "archivo-latin.woff2",
+            "archivo-vietnamese-italic.woff2",
+            "archivo-latin-ext-italic.woff2",
+            "archivo-latin-italic.woff2",
+            "hanken-grotesk-vietnamese.woff2",
+            "hanken-grotesk-latin-ext.woff2",
+            "hanken-grotesk-latin.woff2",
+            "hanken-grotesk-vietnamese-italic.woff2",
+            "hanken-grotesk-latin-ext-italic.woff2",
+            "hanken-grotesk-latin-italic.woff2",
+        }
+        assert all((font_dir / asset).is_file() for asset in expected_assets)
+        assert not list(font_dir.glob("*inter*"))
+        for family in ("Archivo Variable", "Hanken Grotesk Variable"):
+            assert f'font-family: "{family}"' in css
+            assert "font-display: swap" in css
+            assert "font-weight: 100 900" in css
+
+
 @pytest.mark.browser
 @pytest.mark.parametrize("width", [1440, 390])
 def test_every_screen_keeps_the_type_floor(live, signed_in, width):
@@ -223,14 +262,14 @@ def test_settings_uses_the_intentional_type_roles(live, signed_in):
           };
         }"""
     )
-    assert "Newsreader" in typography["title"]["family"]
+    assert "Archivo Variable" in typography["title"]["family"]
+    assert typography["title"]["weight"] == "600"
     assert typography["title"]["size"] == "24px"
-    assert typography["title"]["weight"] == "500"
     assert float(typography["title"]["spacing"].removesuffix("px")) >= -0.36
     for role in ("group", "section", "subsection"):
-        assert "Inter Variable" in typography[role]["family"], role
+        assert "Archivo Variable" in typography[role]["family"], role
         assert typography[role]["weight"] == "600", role
-        assert typography[role]["spacing"] in {"normal", "0px"}, role
+        assert float(typography[role]["spacing"].removesuffix("px")) < 0, role
     assert typography["label"]["weight"] == "600"
     reference = typography["fieldLabels"]["openai"]
     assert reference["size"] == "13px"
@@ -240,10 +279,10 @@ def test_settings_uses_the_intentional_type_roles(live, signed_in):
         assert label["weight"] == reference["weight"], role
         assert label["color"] == reference["color"], role
     assert typography["intro"]["size"] == "14px"
-    assert "Inter Variable" in typography["badge"]["family"]
+    assert "Hanken Grotesk Variable" in typography["badge"]["family"]
     assert typography["badge"]["weight"] == "600"
     assert set(typography["weights"]) <= {"400", "500", "600", "700"}
-    assert set(typography["headings"]) <= {"normal", "0px"}
+    assert all(float(value.removesuffix("px")) < 0 for value in typography["headings"])
 
 
 @pytest.mark.browser
@@ -769,7 +808,7 @@ def test_provider_launchers_keep_control_typography(live, signed_in):
           return {family: style.fontFamily, weight: style.fontWeight};
         }"""
     )
-    assert "Inter Variable" in typography["family"], typography
+    assert "Hanken Grotesk Variable" in typography["family"], typography
     assert typography["weight"] == "680", typography
 
 
