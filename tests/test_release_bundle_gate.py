@@ -34,7 +34,7 @@ def test_bundle_gate_uses_actual_version_and_schema_contract(tmp_path, monkeypat
     monkeypatch.chdir(ROOT)
     monkeypatch.setattr(module.subprocess, "run", run)
     with pytest.raises(StopAfterVersion):
-        module.prepare("synthetic-image", tmp_path, "0.2.7")
+        module.prepare("synthetic-image", tmp_path, "0.2.8")
     assert len(calls) == 2
 
 
