@@ -593,6 +593,7 @@ const { t, UI_LOCALE } = (() => {
       "OMP trả về URL đăng nhập không hợp lệ.": "OMP returned an invalid sign-in URL.",
       "Phiên làm việc đã hết. Đang chuyển đến trang đăng nhập.": "Your session has ended. Redirecting to the sign-in page.",
       "Phiên Google Antigravity không còn hiệu lực. Hãy kết nối lại.": "The Google Antigravity session is no longer valid. Reconnect.",
+      "Bản cập nhật server": "Server update",
       "Phiên bản notes đã lưu": "Saved notes version",
       "Phiên bản notes đã đổi trong lúc đồng bộ. Hãy chọn lại để tiếp tục.": "The notes version changed during sync. Choose it again to continue.",
       "Phiên bản này không còn là bản hiện tại. Bản nháp vẫn được giữ để xem lại và thêm vào transcript hiện tại.": "This version is no longer the current one. The draft is kept to review and add to the current transcript.",

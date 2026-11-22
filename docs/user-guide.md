@@ -25,6 +25,81 @@ the Compose port directly. The proxy must redirect or reject remote plaintext HT
 the login UI. See [Web access and GUI origins](web-access.md) for loopback aliases, LAN/VPN HTTPS
 origins and private Tailscale Serve.
 
+### Host updates
+
+Start the first release containing the updater with the normal installation
+procedure. Run these commands from that installation's checkout on its Linux
+Docker host. Use the same Docker context and Compose project as the running app.
+The updater uses Python 3, Git, flock, Docker Compose and Buildx.
+
+```sh
+./scripts/update.sh --check
+./scripts/update.sh --apply
+```
+
+Checking contacts GitHub Releases and the GHCR registry. A newer stable release
+appears in the workspace after refresh once the registry publishes an image for
+the daemon's architecture. Checks run only when invoked. Starting with
+`--offline` disables both commands and the banner until the next successful
+online start. The app reads the cached result from a read-only directory.
+
+Apply fetches the exact tag, verifies the image revision and pins its digest in
+`.env`. Unset exported `ASR_IMAGE` in future shells so the pin takes effect.
+A dirty checkout, active request, pending recording/upload, processing task or
+model installation defers the update. The message identifies the blocking item
+when one exists. A Notes workflow waiting for a provider can resume after the
+update once the provider is configured. The checkout
+stays at the release tag after success. The project name, existing data mounts
+and model directory must resolve to their previous locations.
+
+For daily checks, add a line to the Docker operator's crontab, replacing the path
+with the installation directory. Use `--scheduled` in place of `--check` to opt
+into automatic installation of same-schema releases during this window.
+
+```cron
+15 3 * * * cd /srv/asr-studio && ./scripts/update.sh --check
+```
+
+**Recovery.** The updater records the previous checkout, image reference and
+image ID in `.asr-studio/update-transaction.json`. After success it becomes
+`.asr-studio/last-update.json`. A failed same-schema health check restores the
+previous checkout and image pin and starts the cached image offline. Inspect the
+failure, then use the installation's normal online startup to resume checks.
+
+For a schema change, run `--apply` manually. It stops Compose, makes an archive
+of the entire data volume and reads the archive before switching releases. If
+startup fails after the switch, services stay stopped and the transaction and
+maintenance marker remain. After an interruption, stop the project's services
+and inspect the journal before recovery. When `schema_change` is false and
+`backup` is null, keep the existing data volume and start at step 2.
+
+1. Keep a separate copy of the current volume. Select the cold backup recorded
+   in the journal. Extract it into an empty recovery volume and verify the
+   SQLite database and a known recording there before replacing the contents
+   of the stopped installation's data volume. For example, set `backup` and
+   `previous_image_id` from the journal to extract and check the cold backup.
+
+   ```sh
+   recovery_volume=$(docker volume create)
+   docker run --rm -i --pull=never --network none \
+     -v "$recovery_volume:/var/lib/asr-studio/data" --entrypoint tar \
+     "$previous_image_id" -C /var/lib/asr-studio/data -xf - < "$backup"
+   docker run --rm --pull=never --network none \
+     -v "$recovery_volume:/var/lib/asr-studio/data" --entrypoint python \
+     "$previous_image_id" -c 'import sqlite3; db = sqlite3.connect("file:/var/lib/asr-studio/data/app.sqlite3?mode=ro", uri=True); print(db.execute("PRAGMA integrity_check").fetchone()[0])'
+   ```
+
+   Expect `ok`. Keep the recovered volume and original archive until the
+   restored installation passes verification.
+2. Restore the recorded checkout and set `ASR_IMAGE` to the previous image in
+   `.env`. Compare its local Docker image ID with `previous_image_id`. Keep the
+   original Compose project, model path, provider and auth volumes.
+3. Run `./scripts/start.sh --offline`. After the installation check passes,
+   move the maintenance marker and journal to a protected recovery directory,
+   reload the workspace and verify the recording. Resume online operation
+   when ready. With an incomplete backup and a migrated database, use a
+   forward-compatible release to recover the data.
+
 ### Start modes
 
 | Mode                   | Behavior                                                                                                                                                   |

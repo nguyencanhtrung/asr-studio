@@ -31,6 +31,7 @@ from asr_studio.notes_document import PROMPT_VERSION, SCHEMA_VERSION
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.service_runtime import acquire_service_lock, write_service_heartbeat
 from asr_studio.storage import database_path
+from asr_studio.updates import admit_work
 
 MAX_WORKFLOWS = 32
 MAX_STEPS = 64
@@ -1740,7 +1741,9 @@ class AutomaticProcessingScheduler:
                     self.settings.data_dir, "processing", "idle", role="processing"
                 )
                 try:
-                    self.reconcile_once()
+                    with admit_work() as admitted:
+                        if admitted:
+                            self.reconcile_once()
                 except Exception:
                     # State transitions are retried on the next pass; a malformed
                     # provider/model is represented by a durable waiting reason.

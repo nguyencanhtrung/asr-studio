@@ -1,4 +1,6 @@
+import { latestBundle, RELEASE_ORIGIN, bundleFor } from "./release.js";
 import {
+  API_VERSION,
   canonicalManifest,
   bindingFromCapabilities,
   endpointUrl,
@@ -64,11 +66,79 @@ const UPLOAD_ALARM_PREFIX = `${STORAGE_NAMESPACE}:upload:`;
 const POLL_ALARM_PREFIX = `${STORAGE_NAMESPACE}:receipt:`;
 const DISCARD_CANCEL_TIMEOUT_MS = 5000;
 
+const UPDATE_SETTING = `${STORAGE_NAMESPACE}:release-setting`;
+const UPDATE_RESULT = `${STORAGE_NAMESPACE}:release-result`;
+const UPDATE_ALARM = `${STORAGE_NAMESPACE}:release-check`;
+
+const UPDATE_LAST_ATTEMPT = `${STORAGE_NAMESPACE}:release-last-attempt`;
+const UPDATE_INTERVAL_MINUTES = 24 * 60;
+
+async function checkForUpdate() {
+  const token = (await storageGet(UPDATE_SETTING))[UPDATE_SETTING];
+  if (!token || !await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) return;
+  try {
+    await storageSet({ [UPDATE_LAST_ATTEMPT]: Date.now() });
+    const installed = chrome.runtime.getManifest().version;
+    const tag = await latestBundle(installed);
+    await serializeUpdatePreference(async () => {
+      if ((await storageGet(UPDATE_SETTING))[UPDATE_SETTING] === token) {
+        await storageSet({ [UPDATE_RESULT]: { token, tag, installed } });
+      }
+    });
+  } catch {
+    // Keep the last complete result. Capture and upload have separate retry schedules.
+    return;
+  }
+  await broadcastStatus();
+}
+
+async function reconcileUpdateAlarm() {
+  const settings = await storageGet([UPDATE_SETTING, UPDATE_LAST_ATTEMPT]);
+  const enabled = settings[UPDATE_SETTING];
+  if (enabled && await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) {
+    if (!await chrome.alarms.get(UPDATE_ALARM)) {
+      // Chrome can clear alarms on restart. Preserve the deadline across short sessions.
+      const now = Date.now();
+      const lastAttempt = Math.min(settings[UPDATE_LAST_ATTEMPT] || 0, now);
+      const when = Math.max(now, lastAttempt + UPDATE_INTERVAL_MINUTES * 60_000);
+      await chrome.alarms.create(UPDATE_ALARM, { when, periodInMinutes: UPDATE_INTERVAL_MINUTES });
+    }
+  } else {
+    if (enabled) await storageSet({ [UPDATE_SETTING]: null });
+    await chrome.alarms.clear(UPDATE_ALARM);
+  }
+}
+
+let updatePreferenceTask = Promise.resolve();
+function serializeUpdatePreference(operation) {
+  const task = updatePreferenceTask.then(operation);
+  updatePreferenceTask = task.catch(() => {});
+  return task;
+}
+
+function setUpdateChecks(enabled) {
+  return serializeUpdatePreference(async () => {
+    if (enabled && !await chrome.permissions.contains({ origins: [RELEASE_ORIGIN] })) {
+      throw makeError("update_permission", "GitHub permission is required.");
+    }
+    await storageSet({
+      [UPDATE_SETTING]: enabled ? crypto.randomUUID() : null,
+      [UPDATE_LAST_ATTEMPT]: enabled ? Date.now() : null
+    });
+    await reconcileUpdateAlarm();
+    if (enabled) void checkForUpdate().catch(() => {});
+    await broadcastStatus();
+    return { ok: true };
+  });
+}
+
 const sessionTokens = new Map();
+const incompatibleBindings = new Map();
 const uploadLocks = new Map();
 let startLock = null;
 let connectionBusy = false;
 let statusSequence = 0;
+let badgeSequence = 0;
 const statusEpoch = crypto.randomUUID();
 const trustedStorageReady = Promise.resolve()
   .then(() => chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }))
@@ -305,7 +375,8 @@ async function pairWithServer(serverUrl, code) {
   }
   // The server activates a paired device only after its bearer proves usable.
   // Complete that exchange before persisting or announcing a connected context.
-  await ensureSessionToken(context);
+  await ensureSessionToken(context, { capabilitiesVerified: true });
+  incompatibleBindings.delete(key);
   await setServerUrl(normalized);
   const stored = await storageGet(TRUSTED_CONTEXTS);
   const contexts = { ...(stored[TRUSTED_CONTEXTS] || {}), [key]: context };
@@ -351,11 +422,48 @@ function remainingTimeout(deadlineAt, fallbackMs) {
   return remaining;
 }
 
-async function ensureSessionToken(context, timeoutMs = 15000, deadlineAt = null) {
+function storedApiError(binding) {
+  return binding.apiVersion === API_VERSION
+    ? null
+    : makeError("api_version_mismatch", "The extension and server need compatible API versions.");
+}
+
+async function checkPairedApi(context, timeoutMs) {
+  const { binding } = context;
+  const key = contextKey(binding);
+  try {
+    const mismatch = storedApiError(binding);
+    if (mismatch) throw mismatch;
+    const response = await fetchJson(binding.serverUrl, "api/extension/v1/capabilities", { cache: "no-store" }, timeoutMs);
+    bindingFromCapabilities(binding.serverUrl, response.body);
+    if (incompatibleBindings.delete(key)) void broadcastStatus().catch(() => {});
+  } catch (error) {
+    if (error.code === "api_version_mismatch") {
+      sessionTokens.delete(key);
+      if (!incompatibleBindings.has(key)) {
+        incompatibleBindings.set(key, safeError(error));
+        void broadcastStatus().catch(() => {});
+      }
+    }
+    throw error;
+  }
+}
+
+async function checkApiAfterRejection(context, error, timeoutMs, deadlineAt = null) {
+  if (error.code !== "protocol_mismatch" && !(error.status >= 400 && error.status < 500)) return;
+  try {
+    await checkPairedApi(context, remainingTimeout(deadlineAt, timeoutMs));
+  } catch (checkError) {
+    if (checkError.code === "api_version_mismatch") throw checkError;
+  }
+}
+
+async function ensureSessionToken(context, { timeoutMs = 15000, deadlineAt = null, capabilitiesVerified = false } = {}) {
   const key = contextKey(context.binding);
   const cached = sessionTokens.get(key);
-  if (cached && cached.expiresAt > Date.now() + 30000) return cached.token;
+  if (cached && cached.expiresAt > Date.now() + 30000 && !safeApiError(context.binding)) return cached.token;
   if (!context.deviceToken) throw makeError("pair_required", "Pair the extension with ASR Studio first.");
+  if (!capabilitiesVerified) await checkPairedApi(context, remainingTimeout(deadlineAt, timeoutMs));
   const response = await requestJson(
     context.binding.serverUrl,
     "api/extension/v1/session",
@@ -375,7 +483,7 @@ async function ensureSessionToken(context, timeoutMs = 15000, deadlineAt = null)
 }
 
 async function authorizedRequest(context, relativePath, init = {}, allowRenew = true, timeoutMs = 15000, deadlineAt = null) {
-  const token = await ensureSessionToken(context, timeoutMs, deadlineAt);
+  const token = await ensureSessionToken(context, { timeoutMs, deadlineAt });
   const headers = new Headers(init.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   try {
@@ -390,6 +498,7 @@ async function authorizedRequest(context, relativePath, init = {}, allowRenew = 
       sessionTokens.delete(contextKey(context.binding));
       return authorizedRequest(context, relativePath, init, false, timeoutMs, deadlineAt);
     }
+    await checkApiAfterRejection(context, error, timeoutMs, deadlineAt);
     throw error;
   }
 }
@@ -472,6 +581,9 @@ function publicSession(session) {
 }
 
 async function updateActionBadge(status) {
+  // A slower status read must not replace the newer recording or upload badge.
+  if (status.statusSequence <= badgeSequence) return;
+  badgeSequence = status.statusSequence;
   try {
     const capture = status?.capture;
     const hasActiveCapture = Boolean(capture && ["starting", "recording", "stopping"].includes(capture.status));
@@ -480,12 +592,20 @@ async function updateActionBadge(status) {
       const sending = session.capture?.captureComplete || session.upload?.recoveryChoice === "save";
       return sending && !session.upload?.cleaned && uploadState !== "discarded";
     });
-    const text = hasActiveCapture ? "REC" : hasPendingUpload ? "UP" : "";
+    const text = hasActiveCapture ? "REC" : hasPendingUpload ? "UP" : status?.availableUpdate ? "NEW" : "";
     await chrome.action.setBadgeText({ text });
-    if (text) await chrome.action.setBadgeBackgroundColor({ color: hasActiveCapture ? "#a63838" : "#8e2433" });
+    if (text && status.statusSequence === badgeSequence) {
+      const color = { REC: "#a63838", UP: "#8e2433", NEW: "#485465" }[text];
+      await chrome.action.setBadgeBackgroundColor({ color });
+    }
   } catch {
     // Badge support is useful feedback, never a capture dependency.
   }
+}
+
+function safeApiError(binding) {
+  const mismatch = storedApiError(binding);
+  return mismatch ? safeError(mismatch) : incompatibleBindings.get(contextKey(binding)) || null;
 }
 
 async function publicStatus(overrideCapture = null, message = "") {
@@ -500,9 +620,21 @@ async function publicStatus(overrideCapture = null, message = "") {
   const capture = overrideCapture
     ? { ...overrideCapture, sessionId: overrideCapture.sessionId || owner?.clientRecordingId, startedAt: overrideCapture.startedAt || owner?.createdAt }
     : owner ? publicSession(owner).capture : null;
+  const update = await storageGet([UPDATE_SETTING, UPDATE_RESULT]).catch(() => ({}));
+  const result = update[UPDATE_RESULT];
+  const updateSafe = !startLock && !isActiveCapture({ capture }) && !sessions.some((session) =>
+    isActiveCapture(session) || hasPendingLocalAudio(session) || holdsRemoteSession(session));
+  const tag = update[UPDATE_SETTING] && update[UPDATE_SETTING] === result?.token
+    && result.installed === chrome.runtime.getManifest().version ? result.tag : null;
   const status = {
+    updateSafe,
+    checksEnabled: Boolean(update[UPDATE_SETTING]),
+    availableUpdate: updateSafe && bundleFor(tag) ? tag : null,
     statusEpoch,
     statusSequence: sequence,
+    compatibilityError: context
+      ? safeApiError(context.binding)
+      : null,
     connection: contextPublic(context) || (await getConfiguredServerUrl() ? { serverUrl: await getConfiguredServerUrl(), paired: false, prototype: false } : null),
     micReady: mic.ready,
     capture,
@@ -689,7 +821,7 @@ async function schedulePoll(sessionId, delay = 1500) {
 }
 
 function isRetryable(error) {
-  return ["network_error", "timeout", "backend_unavailable", "backend_storage", "byte_limit"].includes(error?.code) || error?.status >= 500;
+  return ["network_error", "timeout", "backend_unavailable", "backend_storage", "byte_limit", "api_version_mismatch"].includes(error?.code) || error?.status >= 500;
 }
 
 async function sessionContext(session) {
@@ -944,6 +1076,7 @@ async function uploadSession(sessionId, source = "recovery") {
       let session = await getSession(sessionId);
       if (!session || session.upload.cleaned) return { session, recheck: false };
       let failedOperation = null;
+      let context;
       try {
         while (true) {
           const decision = decideUpload(session, Date.now(), { source });
@@ -955,7 +1088,7 @@ async function uploadSession(sessionId, source = "recovery") {
           }
 
           failedOperation = decision.action;
-          const context = await sessionContext(session);
+          context = await sessionContext(session);
           if (decision.action === "cancel") {
             session = await cancelRemoteSession(session, context);
             await broadcastStatus();
@@ -998,6 +1131,13 @@ async function uploadSession(sessionId, source = "recovery") {
         }
       } catch (error) {
         try {
+          if (context && error.code === "protocol_mismatch") {
+            try {
+              await checkApiAfterRejection(context, error, 15000);
+            } catch (mismatch) {
+              error = mismatch;
+            }
+          }
           session = await getSession(sessionId);
           const retryable = isRetryable(error);
           const failure = classifyUploadFailure(session, failedOperation, {
@@ -1139,6 +1279,8 @@ async function processCaptureStatus(status) {
 async function messageFromUi(message) {
   await recoveryReady;
   switch (message?.type) {
+    case "SET_UPDATE_CHECKS":
+      return setUpdateChecks(message.enabled === true);
     case "GET_STATUS":
       await reconcileCaptureOwner().catch(() => {});
       return { ok: true, status: await publicStatus() };
@@ -1182,7 +1324,8 @@ async function messageFromUi(message) {
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name.startsWith(UPLOAD_ALARM_PREFIX)) void uploadSession(alarm.name.slice(UPLOAD_ALARM_PREFIX.length));
+  if (alarm.name === UPDATE_ALARM) void checkForUpdate().catch(() => {});
+  else if (alarm.name.startsWith(UPLOAD_ALARM_PREFIX)) void uploadSession(alarm.name.slice(UPLOAD_ALARM_PREFIX.length));
   else if (alarm.name.startsWith(POLL_ALARM_PREFIX)) void uploadSession(alarm.name.slice(POLL_ALARM_PREFIX.length));
 });
 
@@ -1245,3 +1388,11 @@ async function reconcileCaptureOwner({ duringStart = false } = {}) {
 }
 const recoveryReady = requireTrustedStorage().then(purgeDiscardedCaptures).then(reconcileCaptureOwner);
 void recoveryReady.then(resumeUploads).catch(() => {});
+void recoveryReady.then(getCurrentContext).then((context) => {
+  if (context) return checkPairedApi(context, 15000);
+}).catch(() => {});
+
+void serializeUpdatePreference(reconcileUpdateAlarm).catch(() => {});
+chrome.permissions.onRemoved.addListener(() => {
+  void serializeUpdatePreference(reconcileUpdateAlarm).then(() => broadcastStatus()).catch(() => {});
+});

@@ -1,3 +1,4 @@
+import { bundleFor, RELEASE_ORIGIN } from "./release.js";
 import { capturePresentation, initialState, isActiveCapture, isPending, pendingRecovery, reduce } from "./popup-core.js";
 import { recordedDurationLabel } from "./capture-core.js";
 
@@ -67,6 +68,7 @@ function localizedError(error) {
     mic_required: t("Hãy cấp quyền microphone trên trang thiết lập."),
     offscreen_unavailable: t("Chrome chưa tạo được bộ ghi nền. Hãy thử lại."),
     forbidden_sender: t("Yêu cầu không đến từ giao diện extension được tin cậy."),
+    api_version_mismatch: t("API không tương thích. Kiểm tra phiên bản extension và server."),
     protocol_mismatch: t("Server trả về dữ liệu không đúng hợp đồng."),
     backend_mismatch: t("Server trả về dữ liệu của backend khác."),
     invalid_web_url: t("URL web của server không hợp lệ để mở kết quả."),
@@ -186,6 +188,16 @@ function renderSourceButton(button, source, capture) {
 
 function render() {
   const snapshot = state.status;
+  $("release-panel").hidden = !snapshot || (!snapshot.updateSafe && !snapshot.checksEnabled);
+  $("release-checks").checked = Boolean(snapshot?.checksEnabled);
+  $("release-checks").disabled = isPending(state, "release-checks");
+  const bundle = bundleFor(snapshot?.availableUpdate);
+  $("release-links").hidden = !bundle;
+  if (bundle) {
+    $("release-zip").textContent = `ZIP ${snapshot.availableUpdate}`;
+    $("release-zip").href = bundle;
+    $("release-checksum").href = bundle + ".sha256";
+  }
   const capture = snapshot?.capture || null;
   const presentation = capturePresentation(snapshot);
   const connection = snapshot?.connection;
@@ -200,9 +212,9 @@ function render() {
   setText(elements.deviceExpiry, connection?.paired ? formatDeviceExpiry(connection.deviceExpiresAt) : "");
   setText(elements.message, localizedMessage(state.message));
 
-  const visibleError = Boolean(state.error);
-  elements.error.hidden = !visibleError;
-  setText(elements.errorCopy, localizedError(state.error));
+  const error = snapshot?.compatibilityError || state.error;
+  elements.error.hidden = !error;
+  setText(elements.errorCopy, localizedError(error));
   elements.setupErrorButton.hidden = !state.setupRequired;
 
   elements.startButton.hidden = active;
@@ -253,6 +265,17 @@ function toggleGate(source) {
   const enabled = capture.gates?.[source] === false;
   void sendRequest(`gate-${source}`, { type: "SET_GATE", source, enabled }, loadStatus);
 }
+
+$("release-checks").addEventListener("change", async (event) => {
+  const enabled = event.target.checked;
+  $("release-permission").hidden = true;
+  if (enabled && !await chrome.permissions.request({ origins: [RELEASE_ORIGIN] }).catch(() => false)) {
+    $("release-permission").hidden = false;
+    render();
+    return;
+  }
+  await sendRequest("release-checks", { type: "SET_UPDATE_CHECKS", enabled }, loadStatus);
+});
 
 elements.startButton.addEventListener("click", () => void sendRequest("start", { type: "START_CAPTURE" }, loadStatus));
 elements.stopButton.addEventListener("click", () => void sendRequest("stop", { type: "STOP_CAPTURE" }, loadStatus));

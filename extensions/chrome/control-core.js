@@ -8,6 +8,7 @@ export const initialState = Object.freeze({
   devices: [],
   mic: "unknown",
   connection: null,
+  compatibilityError: null,
   capture: null,
   sessions: [],
   message: "",
@@ -61,6 +62,7 @@ export function reduce(state, action) {
       return copyState(state, {
         ready: true,
         connection: action.status.connection,
+        compatibilityError: snapshot.compatibilityError || null,
         serverUrl: state.serverUrlEdited ? state.serverUrl : action.status.connection?.serverUrl || "",
         mic: action.status.micReady === true ? "ready" : state.mic,
         capture: action.status.capture,
@@ -78,7 +80,7 @@ export function reduce(state, action) {
     case "setup-closed":
       return copyState(state, { setupOpen: false, error: "" });
     case "reset-pairing":
-      return copyState(state, { connection: null, setupOpen: true, message: "Đã xóa ghép nối. Hãy ghép lại với server đã chọn." });
+      return copyState(state, { connection: null, compatibilityError: null, setupOpen: true, message: "Đã xóa ghép nối. Hãy ghép lại với server đã chọn." });
     default:
       return state;
   }

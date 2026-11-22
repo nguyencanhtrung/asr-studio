@@ -14,6 +14,10 @@ const { t, getLocale, onLanguageChange } = (() => {
   const attributes = [];
   const originalTitle = document.title;
   const EN = {
+    "API không tương thích. Kiểm tra phiên bản extension và server.": "Incompatible API. Check the extension and server versions.",
+    "Kiểm tra bản mới trên GitHub": "Check GitHub for updates",
+    "Cần cấp quyền GitHub để kiểm tra bản mới.": "Allow access to GitHub to check for updates.",
+    "Kiểm tra SHA-256, thay bundle tại thư mục đã cài rồi Reload.": "Verify SHA-256, replace the installed bundle and reload.",
     "Chưa hủy xong": "Not canceled yet",
     "Mở thiết lập để cấp quyền và thử hủy lại. Audio vẫn được giữ.": "Open setup to grant access and retry the cancel. Audio is retained.",
     "Đã đạt giới hạn lưu audio trên máy. Bản ghi được giữ lại.": "The local audio limit was reached. The recording is retained.",

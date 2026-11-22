@@ -144,20 +144,58 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      stable: ${{ steps.release.outputs.stable }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Prepare release record
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          stable=false
+          if [[ "${GITHUB_REF_NAME}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            stable=true
+          fi
+          echo "stable=${stable}" >> "${GITHUB_OUTPUT}"
+          flags=()
+          if [[ "${stable}" == false ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
           if gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft > "${RUNNER_TEMP}/is-draft"; then
             test "$(cat "${RUNNER_TEMP}/is-draft")" = false
           else
-            gh release create "${GITHUB_REF_NAME}" --verify-tag \
+            gh release create "${GITHUB_REF_NAME}" --verify-tag "${flags[@]}" \
               --title "${GITHUB_REF_NAME}" \
               --notes "Source release. Platform images are being verified. Corresponding-source archives are uploaded before each image is published; see the repository release notes for scope and limitations."
           fi
+
+  release-extension:
+    if: needs.release-record.outputs.stable == 'true'
+    name: Publish Chrome extension
+    needs: release-record
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Publish versioned extension bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -er .version extensions/chrome/manifest.json)
+          test "v${version}" = "${GITHUB_REF_NAME}"
+          bundle="${RUNNER_TEMP}/asr-studio-extension-${GITHUB_REF_NAME}.zip"
+          python3 scripts/bundle-extension.py --output "${bundle}" --source-commit "${GITHUB_SHA}"
+          for asset in "${bundle}" "${bundle}.sha256" "${bundle}.metadata.json"; do
+            if ! gh release upload "${GITHUB_REF_NAME}" "${asset}"; then
+              mkdir -p "${RUNNER_TEMP}/published"
+              gh release download "${GITHUB_REF_NAME}" -p "$(basename "${asset}")" -D "${RUNNER_TEMP}/published"
+              cmp "${asset}" "${RUNNER_TEMP}/published/$(basename "${asset}")"
+            fi
+          done
 
   publish-platform:
     name: Publish ${{ matrix.platform }} container

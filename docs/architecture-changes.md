@@ -2846,3 +2846,28 @@ Tag: security, architecture, access. Target: `src/asr_studio/config.py`,
 **Follow-ups.** Future provider pages should use the same overview-row and heading-role contracts. No new dependency or color token was added. The disclosure marker has one 150 ms rotation, covered by the existing reduced-motion override.
 
 Tag: design, frontend. Target: `DESIGN.md` and `docs/frontend-design.md`.
+
+## Release discovery and host-managed updates
+
+A public release record can precede the image manifest or extension attachments.
+The host checks the manifest for its Docker platform and pins the child digest.
+The Chrome worker checks the release attachments after the user grants GitHub access.
+The web app reads the host result from a read-only mount. Neither audio processing
+nor the web request path needs a release-service connection.
+
+The host takes an exclusive admission lock before checking durable work. API
+requests and the processing scheduler hold shared locks while admitting work.
+Waiting Notes workflows survive the restart in SQLite. Running workflows and
+active tasks hold the update until they finish. A persistent maintenance marker keeps
+requests out across container replacement or an interrupted migration. The old
+data volume is archived cold before a manual schema change. Scheduled updates
+defer that transition. See [host updates and recovery](user-guide.md#host-updates)
+and [extension updates](../extensions/chrome/README.md#updates-and-verification-limits).
+
+The paired extension verifies the API when the worker starts or refreshes a
+session token. A rejected authorized request can also trigger a capability
+check while the cached token is still valid. A version mismatch shows a warning
+in the popup and control page. Pending audio stays in its original local
+session and retries against the same pairing. This keeps a capability request
+out of the successful per-chunk path while making a failed upgrade visible.
+[Acceptance criteria and evidence](https://github.com/nguyencanhtrung/asr-studio/issues/243)

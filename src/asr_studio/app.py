@@ -29,6 +29,7 @@ from asr_studio.processing_routes import install_processing_routes
 from asr_studio.recordings import recover_recordings
 from asr_studio.routes import install_routes
 from asr_studio.storage import initialize
+from asr_studio.updates import admit_work
 
 PUBLIC_ROUTES = frozenset(
     {
@@ -354,7 +355,19 @@ def create_app(
                     JSONResponse({"detail": "JSON body required"}, status_code=415)
                 )
 
-        response = await call_next(request)
+        if path == "/healthz":
+            response = await call_next(request)
+        else:
+            with admit_work() as admitted:
+                response = (
+                    await call_next(request)
+                    if admitted
+                    else JSONResponse(
+                        {"detail": "Server update in progress"},
+                        status_code=503,
+                        headers={"Retry-After": "30"},
+                    )
+                )
         return (
             _extension_response(request, response)
             if is_extension

@@ -42,6 +42,7 @@ ROOT = Path(__file__).parents[1]
 class RequestLog(list):
     fail_create_responses = False
     cancel_not_found = False
+    reject_recording_requests = False
 
 
 def _approve_host_permission(page, server_url: str) -> None:
@@ -176,6 +177,10 @@ def capture_server(tmp_path, request):
         ):
             transient_remaining -= 1
             return JSONResponse({"error": {"code": "temporary"}}, status_code=transient_status)
+        if requests.reject_recording_requests and request.url.path.startswith(
+            "/api/extension/v1/recording-sessions"
+        ):
+            return JSONResponse({"error": {"code": "conflict"}}, status_code=409)
         if requests.cancel_not_found and request.url.path.endswith("/cancel"):
             # The server hides a session from another device's owner behind this 404.
             return JSONResponse({"error": {"code": "recording_not_found"}}, status_code=404)
@@ -446,6 +451,7 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     popup.click("#start-button")
     popup.wait_text("#capture-state", "Recording")
     assert popup.evaluate("document.documentElement.scrollWidth") <= 400
+    assert popup.evaluate('document.getElementById("release-panel").hidden')
     popup.screenshot(tmp_path / "popup-recording.png")
     popup.close()
     control.close()
@@ -1294,6 +1300,64 @@ def test_native_temporary_http_failure_retries_retained_audio(
         assert db.execute("SELECT count(*) FROM meetings").fetchone()[0] == 1
 
 
+def test_paired_extension_retains_and_retries_audio_after_server_api_change(
+    capture_server, paired_capture, monkeypatch
+):
+    from asr_studio import extension_routes
+
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    connection = _status(control)["connection"]
+    assert connection["paired"]
+    version = extension_routes.EXTENSION_API_VERSION
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version + 1)
+    requests.reject_recording_requests = True
+
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    # Pairing already minted a token, so the rejected request must trigger a fresh probe.
+    warning = "Incompatible API. Check the extension and server versions."
+    popup.wait_text("#error-copy", warning)
+    assert popup.evaluate("!document.querySelector('#error-copy').parentElement.hidden")
+    tab.wait_for_timeout(1500)
+    popup.click("#stop-button")
+    popup.close()
+
+    expect(control.locator("#global-error")).to_have_text(warning)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        status = _status(control)
+        session = status["sessions"][0]
+        if session["capture"]["captureComplete"] and session["upload"]["error"]:
+            break
+        control.wait_for_timeout(100)
+    assert status["connection"] == connection
+    assert session["capture"]["captureComplete"] and session["capture"]["chunkCount"] > 0
+    assert session["upload"]["state"] == "retryable"
+    assert session["upload"]["error"]["code"] == "api_version_mismatch"
+    assert not session["upload"]["cleaned"] and not session["upload"]["receipt"]
+    assert sum(path.endswith("/capabilities") for _method, path in requests) >= 2
+    assert ("POST", "/api/extension/v1/recording-sessions") in requests
+    assert not any(path.endswith("/finalize") for _method, path in requests)
+
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version)
+    requests.reject_recording_requests = False
+    expect(control.locator("#global-error")).to_have_text("", timeout=20000)
+    deadline = time.monotonic() + 35
+    while time.monotonic() < deadline:
+        status = _status(control)
+        session = status["sessions"][0]
+        if session["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(100)
+    assert session["upload"]["cleaned"] and session["upload"]["receipt"]["recording_id"]
+    assert status["connection"] == connection
+    assert sum(path.endswith("/finalize") for _method, path in requests) == 1
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT count(*) FROM recordings").fetchone()[0] == 1
+
+
 def test_native_capture_runs_transcript_and_notes_after_client_receipt(
     capture_server, paired_capture, tmp_path, monkeypatch
 ):
@@ -1446,3 +1510,126 @@ def test_native_repair_session_failure_clears_previous_connected_state(
     expect(control.locator("#pair-button")).to_be_enabled()
     assert not _status(control)["connection"].get("paired")
     expect(control.locator("#connection-dot")).not_to_have_class("status-dot is-ready")
+
+
+def test_release_opt_in_checks_only_github_and_disabling_clears_the_notice(paired_capture):
+    # REST fixture follows https://docs.github.com/en/rest/releases/assets#list-release-assets.
+    context, worker, _, _, _ = paired_capture
+    # The real Chrome permission dialog and alarms use a disposable Xvfb profile.
+    # Stub only the external release feed, inside its calling service worker.
+    worker.evaluate("""() => {
+        const original = self.fetch;
+        self.releaseCalls = [];
+        self.fetch = (resource, init) => {
+            if (!String(resource).startsWith('https://api.github.com/')) {
+                return original(resource, init);
+            }
+            self.releaseCalls.push({url:String(resource), credentials:init.credentials});
+            const name = 'asr-studio-extension-v99.0.0.zip';
+            const base = 'https://github.com/nguyencanhtrung/asr-studio/releases/download/v99.0.0/';
+            const assets = ['', '.sha256', '.metadata.json'].map(suffix => ({
+                name:name+suffix, browser_download_url:base+name+suffix, state:'uploaded', size:32
+            }));
+            return Promise.resolve(Response.json({tag_name:'v99.0.0',draft:false,
+                prerelease:false,assets}));
+        };
+    }""")
+    popup = context.new_page()
+    popup.goto(f"chrome-extension://{EXTENSION_ID}/popup.html")
+    toggle = popup.locator("#release-checks")
+    expect(toggle).to_be_visible()
+    expect(toggle).not_to_be_checked()
+    expect(popup.locator("#release-links")).to_be_hidden()
+    assert worker.evaluate("self.releaseCalls.length") == 0
+    toggle.click()
+    _approve_host_permission(popup, "https://api.github.com")
+    expect(toggle).to_be_checked()
+    expect(popup.locator("#release-zip")).to_have_text("ZIP v99.0.0")
+    popup.wait_for_function("async () => await chrome.action.getBadgeText({}) === 'NEW'")
+    assert worker.evaluate("self.releaseCalls") == [
+        {
+            "url": "https://api.github.com/repos/nguyencanhtrung/asr-studio/releases/latest",
+            "credentials": "omit",
+        }
+    ]
+    alarm_name = "asr-extension-production-v1:release-check"
+    alarm = worker.evaluate("name => chrome.alarms.get(name)", alarm_name)
+    assert alarm["periodInMinutes"] == 1440
+    toggle.click()
+    expect(toggle).not_to_be_checked()
+    expect(popup.locator("#release-links")).to_be_hidden()
+    popup.wait_for_function("async () => await chrome.action.getBadgeText({}) === ''")
+    assert worker.evaluate("name => chrome.alarms.get(name)", alarm_name) is None
+    toggle.click()
+    expect(toggle).to_be_checked()
+    expect(popup.locator("#release-links")).to_be_visible()
+    # Removing host access in Chrome must revoke the preference and its daily alarm.
+    assert popup.evaluate("chrome.permissions.remove({origins:['https://api.github.com/*']})")
+    expect(toggle).not_to_be_checked()
+    expect(popup.locator("#release-links")).to_be_hidden()
+    popup.wait_for_function("async name => !(await chrome.alarms.get(name))", arg=alarm_name)
+
+
+def test_capture_survives_release_permission_denial_and_failed_daily_check(paired_capture):
+    context, worker, _, control, tab = paired_capture
+    options = context.new_page()
+    options.goto(f"chrome-extension://{EXTENSION_ID}/popup.html")
+    toggle = options.locator("#release-checks")
+    expect(toggle).to_be_visible()
+    # Simulate the user's denial at the browser permission boundary.
+    options.evaluate("chrome.permissions.request = async () => false")
+    toggle.click()
+    expect(options.locator("#release-permission")).to_be_visible()
+    expect(toggle).not_to_be_checked()
+    assert not _status(control)["checksEnabled"]
+    options.reload()
+    worker.evaluate("""() => {
+        const original = self.fetch;
+        self.failedReleaseChecks = 0;
+        self.fetch = (url, init) => {
+            if (String(url).startsWith('https://api.github.com/')) {
+                self.failedReleaseChecks++;
+                return Promise.reject(new TypeError('network unavailable'));
+            }
+            return original(url, init);
+        };
+    }""")
+    toggle.click()
+    _approve_host_permission(options, "https://api.github.com")
+    expect(toggle).to_be_checked()
+    assert worker.evaluate("self.failedReleaseChecks") == 1
+    options.close()
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    assert popup.evaluate("!document.querySelector('#release-panel').hidden")
+    assert popup.evaluate("document.querySelector('#release-links').hidden")
+    tab.wait_for_timeout(2200)
+    popup.click("#stop-button")
+    popup.close()
+    deadline = time.monotonic() + 40
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        if sessions and sessions[0]["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(150)
+    assert sessions[0]["upload"]["cleaned"]
+    assert sessions[0]["upload"]["receipt"]["recording_id"]
+
+    # Chrome may clear an alarm at startup. Remove the now-unused server permission
+    # to invoke the same reconciliation function, leaving the GitHub grant in place.
+    alarm = "asr-extension-production-v1:release-check"
+    server = _status(control)["connection"]["serverUrl"]
+    assert control.evaluate(
+        """async ([name, server]) => {
+        await chrome.alarms.clear(name);
+        await chrome.storage.local.set({'asr-extension-production-v1:release-last-attempt': 1});
+        return chrome.permissions.remove({origins: [server + '/*']});
+    }""",
+        [alarm, server],
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and worker.evaluate("self.failedReleaseChecks") < 2:
+        control.wait_for_timeout(100)
+    assert worker.evaluate("self.failedReleaseChecks") == 2
+    assert worker.evaluate("name => chrome.alarms.get(name)", alarm)["periodInMinutes"] == 1440

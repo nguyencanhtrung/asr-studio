@@ -124,6 +124,15 @@
         <button id="setup-hint-button" class="secondary-button" type="button">Mở thiết lập</button>
       </section>
 
+      <section id="release-panel" hidden>
+        <label><input type="checkbox" id="release-checks"> Kiểm tra bản mới trên GitHub</label>
+        <p id="release-permission" role="status" hidden>Cần cấp quyền GitHub để kiểm tra bản mới.</p>
+        <p id="release-links" hidden>
+          <a id="release-zip" target="_blank" rel="noreferrer"></a> ·
+          <a id="release-checksum" target="_blank" rel="noreferrer">SHA-256</a>
+          <span>Kiểm tra SHA-256, thay bundle tại thư mục đã cài rồi Reload.</span>
+        </p>
+      </section>
       <p class="privacy-note">Audio chỉ được dọn sau receipt bền vững từ đúng backend.</p>
     </main>
     <script type="module" src="popup.js"></script>

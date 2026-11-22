@@ -181,8 +181,11 @@ export function endpointUrl(serverUrl, relativePath) {
 
 export function bindingFromCapabilities(serverUrl, capabilities) {
   const base = normalizeServerUrl(serverUrl);
-  if (!capabilities || capabilities.protocol !== PROTOCOL || capabilities.prototype !== PROTOTYPE || capabilities.api_version !== API_VERSION) {
+  if (!capabilities || capabilities.protocol !== PROTOCOL || capabilities.prototype !== PROTOTYPE) {
     throw makeError("protocol_mismatch", "The server does not advertise the production extension protocol.");
+  }
+  if (capabilities.api_version !== API_VERSION) {
+    throw makeError("api_version_mismatch", "The extension and server need compatible API versions.");
   }
   let advertisedServer;
   let webUrl;

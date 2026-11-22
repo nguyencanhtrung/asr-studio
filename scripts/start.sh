@@ -49,6 +49,23 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# The host updater and the read-only app share this admission lock and startup mode.
+update_dir=.asr-studio/updates
+mkdir -p "$update_dir" || fail "Give the installation user write access to .asr-studio and its updates directory."
+[ -w .asr-studio ] && [ -w "$update_dir" ] || fail "Give the installation user write access to .asr-studio and its updates directory."
+if [ "${ASR_UPDATER_OWNS_LOCK:-0}" != 1 ] && command -v flock >/dev/null 2>&1; then
+    exec 9>.asr-studio/updater.lock
+    flock -n 9 || fail "Another startup or update is active."
+fi
+touch "$update_dir/admission.lock"
+chmod 755 "$update_dir"
+chmod 644 "$update_dir/admission.lock"
+if [ "$mode" = offline ]; then
+    printf '%s\n' offline > "$update_dir/mode.tmp"
+    chmod 644 "$update_dir/mode.tmp"
+    mv "$update_dir/mode.tmp" "$update_dir/mode"
+fi
+
 # The model installer writes /models, a host directory, as the user that owns it.
 ASR_MODEL_UID=${ASR_MODEL_UID:-$(id -u)}
 ASR_MODEL_GID=${ASR_MODEL_GID:-$(id -g)}
@@ -307,6 +324,11 @@ fi
 compose_runtime up --pull never --no-build --detach --wait $installer_scale \
     --wait-timeout "${ASR_STARTUP_TIMEOUT:-120}"
 compose_runtime exec -T app python -m asr_studio.cli installation check
+if [ "$mode" != offline ]; then
+    printf '%s\n' online > "$update_dir/mode.tmp"
+    chmod 644 "$update_dir/mode.tmp"
+    mv "$update_dir/mode.tmp" "$update_dir/mode"
+fi
 if [ -t 1 ]; then
     compose_runtime exec -T app python -m asr_studio.cli access show
 else

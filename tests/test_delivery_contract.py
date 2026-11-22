@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import tomllib
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 import yaml
@@ -88,12 +91,14 @@ def _run_start(
     prepared_asr_model: bool = False,
     source_revision: str | None = CHECKOUT_REVISION,
     image_revision: str = "match",
-    checkout: Path = ROOT,
+    checkout: Path | None = None,
     compose_project: str = "asr-studio",
     existing_volumes: tuple[str, ...] = (),
     copy_fail: str = "none",
 ) -> subprocess.CompletedProcess[str]:
     tmp_path.mkdir(parents=True, exist_ok=True)
+    if checkout is None:
+        checkout = _checkout_copy(tmp_path / "checkout")
     model_root = tmp_path / "models"
     model_directory = model_root / "speaker-diarization-community-1"
     for relative_path in model_files:
@@ -497,9 +502,11 @@ def test_offline_start_leaves_the_only_service_that_can_download_stopped(tmp_pat
         tmp_path / "offline", COMMUNITY_1_FILES, args=("--offline",), prepared_asr_model=True
     )
     assert offline.returncode == 0, offline.stdout + offline.stderr
+    assert (tmp_path / "offline/checkout/.asr-studio/updates/mode").read_text() == "offline\n"
     assert " --scale model-installer=0 " in offline.docker_log
     source = _run_start(tmp_path / "source", COMMUNITY_1_FILES, prepared_asr_model=True)
     assert source.returncode == 0, source.stdout + source.stderr
+    assert (tmp_path / "source/checkout/.asr-studio/updates/mode").read_text() == "online\n"
     assert "--scale" not in source.docker_log
 
 
@@ -683,6 +690,136 @@ def test_shell_syntax_gate_propagates_a_script_failure(tmp_path):
 
     assert result.returncode != 0
     assert "syntax error" in result.stderr.casefold() or "unterminated" in result.stderr.casefold()
+
+
+@pytest.mark.parametrize(("tag", "stable"), [("v1.2.3", True), ("v1.2.3-rc.1", False)])
+def test_release_record_preserves_latest_stable_when_creating_a_prerelease(tmp_path, tag, stable):
+    job = load_yaml(PIPELINE_PATH)["jobs"]["release-record"]
+    prepare = next(step["run"] for step in job["steps"] if step.get("id") == "release")
+    # Spy only on arguments to gh. A missing release causes 'gh release view' to fail.
+    # CLI flags: https://cli.github.com/manual/gh_release_create
+    _write_executable(
+        tmp_path / "gh",
+        '#!/bin/sh\n[ "$2" = create ] || exit 1\nprintf "%s\\n" "$@" > "$RUNNER_TEMP/args"\n',
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "GITHUB_REF_NAME": tag,
+        "GITHUB_OUTPUT": str(tmp_path / "outputs"),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+    subprocess.run(["bash", "-e", "-c", prepare], env=env, check=True)
+    assert (tmp_path / "outputs").read_text().strip() == f"stable={str(stable).lower()}"
+    args = (tmp_path / "args").read_text().splitlines()
+    assert args[:4] == ["release", "create", tag, "--verify-tag"]
+    assert ("--prerelease" in args) == (not stable)
+    assert ("--latest=false" in args) == (not stable)
+
+
+def test_stable_release_publishes_the_matching_extension_bundle_and_sidecars(tmp_path):
+    jobs = load_yaml(PIPELINE_PATH)["jobs"]
+    assert jobs["release-record"]["outputs"]["stable"] == "${{ steps.release.outputs.stable }}"
+    publish = jobs["release-extension"]
+    assert publish["needs"] == "release-record"
+    assert publish["if"] == "needs.release-record.outputs.stable == 'true'"
+    assert publish["permissions"] == {"contents": "write"}
+    step = next(
+        step for step in publish["steps"] if step["name"] == "Publish versioned extension bundle"
+    )
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+
+    checkout = tmp_path / "checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts/bundle-extension.py", checkout / "scripts")
+    extension = checkout / "extensions/chrome"
+    extension.mkdir(parents=True)
+    (extension / "manifest.json").write_text('{"version": "1.2.3"}\n')
+
+    # A matching existing asset rejects upload and remains downloadable by exact name.
+    # https://cli.github.com/manual/gh_release_upload
+    # https://cli.github.com/manual/gh_release_download
+    _write_executable(
+        tmp_path / "gh",
+        dedent("""\
+            #!/bin/sh
+            set -eu
+            tag=$3
+            remote="$TEST_RELEASE/$tag"
+            case "$1 $2" in
+                'release upload')
+                    shift 3
+                    mkdir -p "$remote"
+                    for asset do
+                        name=${asset##*/}
+                        [ ! -e "$remote/$name" ] || exit 1
+                        cp "$asset" "$remote/$name"
+                    done
+                    ;;
+                'release download')
+                    shift 3
+                    while [ "$#" -gt 0 ]; do
+                        case "$1" in
+                            -p|--pattern) asset=$2 ;;
+                            -D|--dir) destination=$2 ;;
+                            *) exit 2 ;;
+                        esac
+                        shift 2
+                    done
+                    cp "$remote/$asset" "$destination/$asset"
+                    ;;
+                *) exit 2 ;;
+            esac
+            """),
+    )
+
+    def run_release(tag: str, runner_name: str):
+        runner = tmp_path / runner_name
+        runner.mkdir()
+        env = {
+            **_environment_without_git(),
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "TEST_RELEASE": str(tmp_path / "remote"),
+            "RUNNER_TEMP": str(runner),
+            "GITHUB_REF_NAME": tag,
+            "GITHUB_SHA": CHECKOUT_REVISION,
+            "GH_TOKEN": "fixture-token",
+        }
+        return subprocess.run(
+            ["bash", "-e", "-c", step["run"]],
+            cwd=checkout,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+    assert run_release("v1.2.4", "wrong-tag").returncode != 0
+    assert not (tmp_path / "remote").exists()
+    tag = "v1.2.3"
+    first = run_release(tag, "first")
+    assert first.returncode == 0, first.stderr
+    release = tmp_path / "remote" / tag
+    filename = f"asr-studio-extension-{tag}.zip"
+    bundle, checksum, metadata = (
+        release / (filename + suffix) for suffix in ("", ".sha256", ".metadata.json")
+    )
+    original = {asset.name: asset.read_bytes() for asset in release.iterdir()}
+    assert original.keys() == {bundle.name, checksum.name, metadata.name}
+    digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+    assert checksum.read_text() == f"{digest}  {filename}\n"
+    sidecar = json.loads(metadata.read_text())
+    assert sidecar["sha256"] == digest
+    assert sidecar["source_commit"] == CHECKOUT_REVISION
+
+    repeated = run_release(tag, "repeat")
+    assert repeated.returncode == 0, repeated.stderr
+    assert {asset.name: asset.read_bytes() for asset in release.iterdir()} == original
+
+    bundle.write_bytes(b"conflicting release asset")
+    assert run_release(tag, "conflict").returncode != 0
+    assert bundle.read_bytes() == b"conflicting release asset"
 
 
 def test_platform_images_publish_only_on_version_tags_with_native_runners():

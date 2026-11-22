@@ -1090,3 +1090,18 @@ def test_phone_sections_become_a_row_above_the_content(live, signed_in, gpu_work
     for radio in page.locator("#settings-panel-theme label").all():
         label = radio.bounding_box()
         assert label["x"] + label["width"] <= shell["x"] + shell["width"]
+
+
+def test_cached_update_shows_host_command_and_offline_hides_it(signed_in, tmp_path, monkeypatch):
+    _, page = signed_in()
+    monkeypatch.setenv("ASR_UPDATE_DIR", str(tmp_path))
+    (tmp_path / "release.json").write_text('{"tag":"v99.0.0"}')
+    (tmp_path / "mode").write_text("online")
+    page.reload()
+    banner = page.locator("#server-update")
+    expect(banner).to_be_visible()
+    expect(banner).to_contain_text("v99.0.0")
+    expect(banner).to_contain_text("./scripts/update.sh --apply")
+    (tmp_path / "mode").write_text("offline")
+    page.reload()
+    expect(banner).to_be_hidden()
