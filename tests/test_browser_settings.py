@@ -375,16 +375,22 @@ def test_phone_settings_open_from_the_top_bar_and_the_dialog_scrolls(
     gear = page.get_by_role("button", name="Cài đặt")
     expect(gear).to_be_visible()
     box = gear.bounding_box()
-    assert box["y"] + box["height"] <= 70, box  # in the top bar, not in a footer
+    header = page.locator(".workspace-header").bounding_box()
+    assert box["y"] + box["height"] <= header["y"], box
     assert 34 <= box["width"] <= 40 and abs(box["width"] - box["height"]) <= 0.5
     sidebar = page.locator(".sidebar").bounding_box()
     assert box["x"] + box["width"] <= sidebar["x"] + sidebar["width"] + 0.5
     assert overflow(page) <= 0
-    expect(page.get_by_role("link", name=re.compile("ASR Studio"))).to_be_visible()
+    expect(page.get_by_role("link", name="ASR Studio — về workspace")).to_be_visible()
 
-    # Tab order equals the visual order: language, OpenAI, Google, then the gear.
-    page.locator(".sidebar-masthead .lang-toggle").focus()
-    for expected in ("#launcher-chatgpt", "#launcher-antigravity", "#settings-open"):
+    page.get_by_text("Cuộc họp và lịch", exact=True).focus()
+    for expected in (
+        "#launcher-chatgpt",
+        "#launcher-antigravity",
+        "#settings-open",
+        ".github-link",
+        ".version-link",
+    ):
         page.keyboard.press("Tab")
         expect(page.locator(expected)).to_be_focused()
 
@@ -896,8 +902,15 @@ def test_language_still_applies_when_the_return_to_settings_cannot_be_stored(liv
 
 
 def test_about_names_the_software_its_real_version_and_the_developer(live, signed_in):
-    context, page = signed_in(viewport={"width": 1280, "height": 800})
+    context, page = signed_in(viewport={"width": 375, "height": 800})
     page.goto(f"{live.url}/")
+    repository_url = "https://github.com/nguyencanhtrung/asr-studio"
+    footer_repo = page.get_by_role("link", name="Mã nguồn ASR Studio trên GitHub")
+    expect(footer_repo).to_be_visible()
+    expect(footer_repo).to_have_attribute("href", repository_url)
+    footer_version = page.get_by_role("link", name=f"Version {__version__}")
+    expect(footer_version).to_be_visible()
+    expect(footer_version).to_have_attribute("href", f"{repository_url}/releases")
     open_section(page, "Giới thiệu")
     panel = page.locator("#settings-panel-about")
     expect(panel).to_contain_text("ASR Studio chép lời và tạo notes riêng tư")
@@ -905,6 +918,12 @@ def test_about_names_the_software_its_real_version_and_the_developer(live, signe
     assert "ghi chú cuộc họp" not in panel.text_content()
     expect(panel).to_contain_text("Nguyễn Cảnh Trung")
     expect(page.locator("#settings-version")).to_have_text(__version__)
+    expect(page.locator("#settings-version")).to_have_attribute(
+        "href", f"{repository_url}/releases"
+    )
+    expect(panel.get_by_role("link", name="nguyencanhtrung/asr-studio")).to_have_attribute(
+        "href", repository_url
+    )
     link = panel.get_by_role("link", name="bibo.id.vn")
     assert link.get_attribute("href") == "https://bibo.id.vn"
     assert link.get_attribute("target") == "_blank"

@@ -660,8 +660,9 @@
 }
 
 @media (max-width: 680px) {
-  .mini-calendar-section {
-    display: none;
+  .sidebar-history .recent-section,
+  .sidebar-history .mini-calendar-section {
+    margin: 12px 0;
   }
 
   .calendar-head {
@@ -672,7 +673,12 @@
     min-height: 54px;
   }
 
-  .calendar-large .cal-chip,
+  .calendar-large .cal-chip {
+    min-height: 24px;
+    padding: 4px 2px;
+  }
+
+  .calendar-large .cal-chip + .cal-chip,
   .calendar-large .cal-more {
     display: none;
   }

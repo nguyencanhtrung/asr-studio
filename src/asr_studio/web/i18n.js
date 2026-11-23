@@ -692,6 +692,7 @@ const { t, UI_LOCALE } = (() => {
       "Tên người nói đã thay đổi. Xem tên mới nhất rồi chỉnh bản nháp trước khi lưu.": "The speaker name changed. View the latest name and adjust the draft before saving.",
       "Tìm cuộc họp theo tên": "Search meetings by name",
       "Tìm cuộc họp theo tên…": "Search meetings by name…",
+      "Cuộc họp và lịch": "Meetings and calendar",
       "Tùy chọn": "Optional",
       "Tùy chọn tên": "Name optional",
       "Tạm mất kết nối khi đọc tiến độ. Tác vụ vẫn thuộc worker; đang thử đọc lại.": "Connection lost while reading progress. The task still belongs to the worker; reading again.",

@@ -2871,3 +2871,24 @@ in the popup and control page. Pending audio stays in its original local
 session and retries against the same pairing. This keeps a capability request
 out of the successful per-chunk path while making a failed upgrade visible.
 [Acceptance criteria and evidence](https://github.com/nguyencanhtrung/asr-studio/issues/243)
+
+## #251 — Keep meeting navigation and product links within reach on phones
+
+The phone layout hid the recent/search section, mini calendar, GitHub link and version.
+The full calendar and the Settings gear provided alternate touch entry points. The
+mobile sidebar now uses a native disclosure for the same history and mini calendar
+that stay open on wider screens. The footer shows both providers and keeps the gear
+and GitHub icons together with the build version below them. The links share the
+product configuration used by About.
+
+The mobile month grid keeps one event link per day and the day selection opens the
+complete list. This bounds cell height while keeping a meeting directly reachable
+from the grid. The disclosure belongs to the current page. Search, calendar selection,
+history and provider status continue to use their existing state and APIs.
+
+The browser checks cover mobile disclosure, keyboard flow, full-calendar navigation,
+desktop footer alignment and actual link destinations. The screenshots use
+synthetic meetings rendered by Chromium against a disposable FastAPI service.
+[Screenshots](assets/frontend/issue-251) · [Issue #251](https://github.com/nguyencanhtrung/asr-studio/issues/251).
+
+Tag: design. Target: frontend design and release notes.
