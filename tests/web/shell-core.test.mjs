@@ -936,6 +936,25 @@ const doneXhr = (xhr) => {
   xhr.onload();
 };
 
+test("view keeps cancel visible while checking and removes it only after the ready signal starts create", async () => {
+  const env = setup();
+  await uploading(env);
+  doneXhr(env.xhrs[0]);
+
+  assert.equal(env.state().phase, "checking");
+  let view = selectView(env.state());
+  assert.equal(view.cancelHidden, false);
+  assert.equal(view.createDisabled, true);
+  assert.equal(view.closeDisabled, false);
+
+  await env.answer(env.is("POST", "/complete"), 200, { status: "ready" });
+  assert.equal(env.state().phase, "creating");
+  view = selectView(env.state());
+  assert.equal(view.cancelHidden, true);
+  assert.equal(view.createDisabled, true);
+  assert.equal(view.closeDisabled, true);
+});
+
 test("a cancel during offset recovery stands; the late state reply does not turn it into an error", async () => {
   const env = setup();
   await uploading(env);

@@ -11,6 +11,7 @@ import re
 import sqlite3
 import threading
 import wave
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
@@ -98,6 +99,16 @@ def _track_requests(page) -> list[tuple[str, str]]:
 
 def _count(requests, method: str, path: str) -> int:
     return sum(1 for item in requests if item == (method, path))
+
+
+def _assert_in_dialog_viewport(dialog, locator, name):
+    dialog_box = dialog.bounding_box()
+    element_box = locator.bounding_box()
+    assert dialog_box is not None and element_box is not None, name
+    assert dialog_box["x"] - 1 <= element_box["x"]
+    assert dialog_box["y"] - 1 <= element_box["y"]
+    assert element_box["x"] + element_box["width"] <= dialog_box["x"] + dialog_box["width"] + 1
+    assert element_box["y"] + element_box["height"] <= dialog_box["y"] + dialog_box["height"] + 1
 
 
 def _open_dialog(page):
@@ -195,6 +206,67 @@ def test_a_closed_file_picker_does_not_close_the_dialog(live, signed_in):
 
     page.keyboard.press("Escape")  # Escape still closes it
     expect(dialog).to_be_hidden()
+
+
+def test_keyboard_dropzone_opens_picker_and_returns_focus_to_the_origin(live, signed_in):
+    _context, page = signed_in()
+    dialog = _open_dialog(page)
+    dropzone = page.get_by_role("button", name=re.compile(r"Chọn tệp hoặc kéo thả tại đây"))
+
+    expect(dropzone).to_be_enabled()
+    expect(page.locator("#recording-file")).to_be_enabled()
+
+    dropzone.focus()
+    with page.expect_file_chooser() as chooser_info:
+        dropzone.press("Enter")
+    chooser_info.value.set_files(_recording("Keyboard picker.wav"))
+    expect(page.locator("#selected-file")).to_be_visible()
+    status = page.get_by_role("status").filter(has_text=re.compile("Keyboard picker"))
+    expect(status).to_be_visible()
+    expect(page.get_by_role("button", name="Đổi file")).to_be_visible()
+    assert status.evaluate("el => !el.contains(document.querySelector('#change-file'))")
+    expect(dropzone).to_be_focused()
+
+    dropzone.focus()
+    with page.expect_file_chooser() as chooser_info:
+        dropzone.press("Space")
+    chooser_info.value.set_files(_recording("Keyboard picker two.wav"))
+    expect(page.locator("#selected-file-name")).to_have_text("Keyboard picker two.wav")
+    expect(dropzone).to_be_focused()
+
+    dropzone.focus()
+    with page.expect_file_chooser():
+        dropzone.press("Enter")
+    page.locator("#recording-file").dispatch_event("cancel")
+    expect(dialog).to_be_visible()
+    expect(dropzone).to_be_focused()
+
+
+def test_drag_drop_uses_the_policy_backed_native_dropzone(live, signed_in):
+    _context, page = signed_in()
+    _open_dialog(page)
+    dropzone = page.get_by_role("button", name=re.compile(r"Chọn tệp hoặc kéo thả tại đây"))
+    expect(page.locator("#recording-file")).to_have_attribute("accept", re.compile(r"\.wav"))
+
+    page.evaluate(
+        """() => {
+          const dropzone = document.querySelector('#file-drop');
+          const transfer = new DataTransfer();
+          transfer.items.add(new File(['x'], 'Dragged.wav', {type: 'audio/wav'}));
+          for (const type of ['dragenter', 'dragover']) {
+            dropzone.dispatchEvent(new DragEvent(type, {
+              bubbles: true, cancelable: true, dataTransfer: transfer,
+            }));
+          }
+          dropzone.dispatchEvent(new DragEvent('drop', {
+            bubbles: true, cancelable: true, dataTransfer: transfer,
+          }));
+        }"""
+    )
+
+    expect(dropzone).to_be_enabled()
+    expect(page.locator("#selected-file-name")).to_have_text("Dragged.wav")
+    expect(page.locator("#selected-file")).to_be_visible()
 
 
 def test_title_prefill_trims_padding_around_the_file_name(live, signed_in):
@@ -393,6 +465,12 @@ def test_browser_uploads_sequential_chunks_and_recovers_after_a_failed_request(
     expect(dialog).to_have_attribute("data-state", "uploading", timeout=10_000)
     page.locator("#cancel-upload").focus()
     expect(page.locator("#state-label")).to_have_text("Đang tải lên", timeout=10_000)
+    expect(page.locator("#transfer-progress")).to_be_visible()
+    expect(page.locator("#workflow-state")).to_be_visible()
+    expect(page.locator("#workflow-state")).to_contain_text(
+        re.compile(r"Đang (tải file lên|kiểm tra số byte|thử lại phần file)")
+    )
+    expect(page.locator("#cancel-upload")).to_be_visible()
     assert page.evaluate("document.activeElement?.id") == "cancel-upload"
 
     meeting_id = _meeting_id(page)
@@ -474,6 +552,8 @@ def test_cancel_keeps_the_form_and_retry_reruns_the_whole_flow(live, signed_in, 
     expect(page.locator("#meeting-date-input")).to_have_value("2026-10-15")
     expect(page.locator('input[name="language_hint"][value="vi"]')).to_be_checked()
     assert _count(requests, "POST", "/api/meetings") == 0
+    expect(page.locator("#workflow-state")).to_be_visible()
+    expect(page.locator("#workflow-state")).to_contain_text("Upload đã bị hủy")
     retry = dialog.get_by_role("button", name="Tải lên lại")
     expect(retry).to_be_enabled()
 
@@ -576,8 +656,10 @@ def test_failed_create_keeps_the_form_and_a_retry_only_creates(live, signed_in, 
     assert _count(requests, "POST", "/api/meetings") == 2
 
 
-def test_state_labels_are_vietnamese_and_never_technical_codes(live, signed_in, media_tools):
-    _context, page = signed_in()
+def test_state_labels_are_vietnamese_and_never_technical_codes(
+    live, signed_in, media_tools, tmp_path
+):
+    _context, page = signed_in(viewport={"width": 360, "height": 640})
     dialog = _open_dialog(page)
     label = page.locator("#state-label")
 
@@ -606,19 +688,83 @@ def test_state_labels_are_vietnamese_and_never_technical_codes(live, signed_in, 
     expect_state("error", "Có lỗi")
     page.unroute("**/api/uploads/*/content**")
 
+    content = dialog.locator(".dialog-content")
+    assert content.evaluate("el => el.scrollHeight > el.clientHeight")
+    content.evaluate("el => { el.scrollTop = 0; }")
+    assert content.evaluate("el => el.scrollTop") == 0
+
+    footer = dialog.locator(".dialog-actions")
+    progress_group = page.locator("#transfer-progress")
+    progressbar = page.locator("#upload-progress")
+    progress_value = page.locator("#upload-progress-value")
+    workflow = page.locator("#workflow-state")
+    create = dialog.get_by_role("button", name="Tạo cuộc họp")
+
     page.route("**/api/uploads/*/content**", lambda route: None)
     retry.click()
     expect_state("uploading", "Đang tải lên")
+    expect(progress_group).to_be_visible()
+    expect(progressbar).to_be_visible()
+    expect(progress_value).to_have_text(re.compile(r"\d+%|đã gửi"))
+    expect(workflow).to_be_visible()
+    expect(cancel).to_be_visible()
+    for name, locator in (
+        ("footer", footer),
+        ("transfer progress", progress_group),
+        ("progressbar", progressbar),
+        ("progress value", progress_value),
+        ("workflow status", workflow),
+        ("cancel action", cancel),
+        ("create action", create),
+    ):
+        _assert_in_dialog_viewport(dialog, locator, name)
+    assert content.evaluate("el => el.scrollTop") == 0
     cancel.click()
     expect_state("aborted", "Đã hủy")
     page.unroute("**/api/uploads/*/content**")
 
+    content.evaluate("el => { el.scrollTop = 0; }")
     page.route("**/api/uploads/*/complete", lambda route: None)
     retry.click()
     expect_state("checking", "Đang kiểm tra")
+    expect(progress_group).to_be_visible()
+    expect(progressbar).to_be_visible()
+    assert progressbar.get_attribute("value") is None
+    expect(progress_value).to_contain_text("Đang kiểm tra")
+    expect(workflow).to_be_visible()
+    expect(cancel).to_be_visible()
+    for name, locator in (
+        ("footer while checking", footer),
+        ("indeterminate progress", progress_group),
+        ("indeterminate progressbar", progressbar),
+        ("checking value", progress_value),
+        ("checking workflow status", workflow),
+        ("checking cancel action", cancel),
+        ("checking create action", create),
+    ):
+        _assert_in_dialog_viewport(dialog, locator, name)
+    assert content.evaluate("el => el.scrollTop") == 0
+    screenshot_path = Path(
+        os.environ.get(
+            "ASR_ISSUE_255_SCREENSHOT",
+            str(tmp_path / "issue-255-held-transfer-mobile.png"),
+        )
+    )
+    screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(screenshot_path), animations="disabled", caret="hide")
+    assert screenshot_path.stat().st_size > 10_000
     cancel.click()
     expect_state("aborted", "Đã hủy")
     page.unroute("**/api/uploads/*/complete")
+
+    expect(retry).to_be_visible()
+    for name, locator in (
+        ("footer after cancel", footer),
+        ("retry action", retry),
+        ("retry workflow status", workflow),
+        ("retry create action", create),
+    ):
+        _assert_in_dialog_viewport(dialog, locator, name)
 
     held = []
 
@@ -1202,8 +1348,32 @@ def test_create_dialog_fits_360px_and_stays_legible_in_both_themes(live, signed_
         "#auto-transcribe-help",
         "#create-asr-model-help",
         "#state-label",
+        "#selected-file-name",
+        "#workflow-state",
     ):
         assert _contrast(page, selector) >= 4.5, selector
+
+    file_name_metrics = page.locator("#selected-file-name").evaluate(
+        """el => {
+          const style = getComputedStyle(el);
+          const lineHeight = parseFloat(style.lineHeight);
+          return {
+            whiteSpace: style.whiteSpace,
+            lineCount: Math.round(el.scrollHeight / lineHeight),
+          };
+        }"""
+    )
+    assert file_name_metrics["whiteSpace"] == "normal"
+    assert file_name_metrics["lineCount"] >= 2
+
+    content = page.locator(".dialog-content")
+    assert content.evaluate("el => el.scrollHeight > el.clientHeight")
+    content.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    expect(page.locator("#workflow-state")).to_be_visible()
+    dialog_box = dialog.bounding_box()
+    footer_box = page.locator(".dialog-actions").bounding_box()
+    assert footer_box["y"] + footer_box["height"] <= dialog_box["y"] + dialog_box["height"] + 1
+    assert page.locator("#workflow-state").evaluate("el => el.closest('.dialog-actions') !== null")
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])

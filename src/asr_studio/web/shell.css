@@ -1103,6 +1103,7 @@ textarea:focus-visible {
   width: min(700px, calc(100% - 36px));
   max-width: none;
   max-height: min(820px, calc(100vh - 36px));
+  max-height: min(820px, calc(100dvh - 36px));
   overflow: visible;
   padding: 0;
   border: 1px solid var(--line-strong);
@@ -1119,6 +1120,7 @@ textarea:focus-visible {
 .dialog-shell {
   display: flex;
   max-height: min(820px, calc(100vh - 36px));
+  max-height: min(820px, calc(100dvh - 36px));
   flex-direction: column;
   overflow: hidden;
   border-radius: inherit;
@@ -1193,9 +1195,11 @@ textarea:focus-visible {
 
 .dialog-content {
   overflow-y: auto;
-  padding: 19px 27px 6px;
+  padding: 19px 27px 16px;
   scrollbar-color: var(--line-strong) var(--surface);
   scrollbar-width: thin;
+  overscroll-behavior: contain;
+  scroll-padding-block: 12px 16px;
 }
 
 .file-section {
@@ -1237,6 +1241,7 @@ textarea:focus-visible {
 .file-drop {
   position: relative;
   display: flex;
+  width: 100%;
   min-height: 90px;
   align-items: center;
   gap: 13px;
@@ -1245,6 +1250,8 @@ textarea:focus-visible {
   border-radius: 9px;
   background: var(--surface-subtle);
   cursor: pointer;
+  font: inherit;
+  text-align: start;
   transition: border-color 150ms ease, background-color 150ms ease;
 }
 
@@ -1254,7 +1261,7 @@ textarea:focus-visible {
   background: var(--accent-soft);
 }
 
-.file-drop[aria-disabled="true"] {
+.file-drop:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }
@@ -1270,6 +1277,11 @@ textarea:focus-visible {
 }
 
 .file-drop:focus-within {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
+
+.file-drop:focus-visible {
   outline: 2px solid var(--teal);
   outline-offset: 3px;
 }
@@ -1327,7 +1339,7 @@ textarea:focus-visible {
 .selected-file {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   margin-top: 8px;
   padding: 8px 10px;
@@ -1359,18 +1371,25 @@ textarea:focus-visible {
 }
 
 .selected-file-copy strong {
-  overflow: hidden;
+  display: block;
   color: var(--ink);
   font-size: var(--text-label);
   font-weight: 620;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .selected-file-copy span {
   color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: var(--text-label);
+}
+
+.selected-file .text-button {
+  flex: 0 0 auto;
+  margin-top: 1px;
 }
 
 .text-button {
@@ -1600,10 +1619,12 @@ textarea:focus-visible {
 }
 
 .workflow-state {
+  min-width: 0;
   margin: 0;
   color: var(--ink-2);
   font-size: var(--text-label);
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .state-label {
@@ -1699,8 +1720,25 @@ textarea:focus-visible {
   align-items: center;
   justify-content: flex-end;
   gap: 9px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  min-width: 0;
   padding: 13px 27px 22px;
   border-top: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.dialog-action-status {
+  flex: 1 1 15rem;
+}
+
+.dialog-action-progress {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .dialog-actions .primary-button {
@@ -1977,12 +2015,14 @@ textarea:focus-visible {
   .meeting-dialog {
     width: calc(100% - 20px);
     max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
     margin: 10px;
     border-radius: var(--radius-lg);
   }
 
   .dialog-shell {
     max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
   }
 
   .dialog-header {
@@ -2008,8 +2048,13 @@ textarea:focus-visible {
   }
 
   .dialog-actions {
+    align-items: stretch;
     justify-content: stretch;
     padding: 12px 17px 17px;
+  }
+
+  .dialog-action-status {
+    flex-basis: 100%;
   }
 
   .dialog-actions > button {
