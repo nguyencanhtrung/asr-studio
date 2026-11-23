@@ -11,7 +11,7 @@
 // with the real t(). A param is a primitive, a t() result, a timestamp() marker, or an array of those.
 
 import { combine } from "./store.js";
-import { ASR_MODEL_TEXT, bytes, errorMessageForCode } from "./shell-core.js";
+import { asrDisplayName, asrModelText, bytes, errorMessageForCode, isAsrModelId, isAsrModelRow } from "./shell-core.js";
 import { ASR_MODEL_GUIDANCE } from "./task-core.js";
 import { initialState as extensionDevicesInitialState, reduce as reduceExtensionDevices } from "./extension-devices-core.js";
 import { initialState as processingPreferencesInitialState, reduce as reduceProcessingPreferences } from "./processing-preferences-core.js";
@@ -1240,8 +1240,13 @@ const installerUsable = (installer) => installer.available && installer.models_w
 const asrPolling = (state) => state.open && state.installer.available && state.models.some(jobActive);
 const withPoll = (state) => done(state, asrPolling(state) ? [ASR_POLL] : []);
 const withInstall = (state, id, install) => ({ ...state, models: state.models.map((choice) => (choice.id === id ? { ...choice, install } : choice)) });
+const DEFINITIVE_INSTALL_REFUSALS = new Set(["gpu_required", "installer_unavailable", "models_not_writable", "model_ready", "install_not_active", "unknown_model", "worker_unavailable"]);
+const PREPARE_FALLBACK_REFUSALS = new Set(["installer_unavailable", "models_not_writable"]);
+const rawModelName = (choice) => typeof choice?.model_name === "string" ? choice.model_name : null;
+const isDefinitiveInstallRefusal = (code) => DEFINITIVE_INSTALL_REFUSALS.has(code);
 
 function asrInstallCall(state, action, method, optimistic) {
+  if (!isAsrModelId(action.id)) return done(state);
   const choice = state.models.find((item) => item.id === action.id && item.id !== "auto");
   // A second click on a job that is already going asks for nothing; Cancel is the only click that does.
   if (!choice || (method === "POST" && jobActive(choice))) return done(state);
@@ -1252,7 +1257,7 @@ function asrInstallCall(state, action, method, optimistic) {
   // Only the newest create or cancel of a model may answer: a late reply must not undo a later click.
   const mutation = (state.mutation ?? 0) + 1;
   const next = withInstall({ ...state, request: state.request + 1, notice: null, mutation, latest: { ...state.latest, [action.id]: mutation } }, action.id, optimistic);
-  return done(next, [{ type: "fetch", key: `provider/asr-install/${method}/${action.id}`, url: `/api/asr-models/${action.id}/install`, init, ok: "provider/asr-install-sent", error: "provider/asr-install-refused", meta: { id: action.id, mutation } }]);
+  return done(next, [{ type: "fetch", key: `provider/asr-install/${method}/${action.id}`, url: `/api/asr-models/${encodeURIComponent(action.id)}/install`, init, ok: "provider/asr-install-sent", error: "provider/asr-install-refused", meta: { id: action.id, method, mutation } }]);
 }
 
 function reduceAsr(state, action) {
@@ -1272,10 +1277,11 @@ function reduceAsr(state, action) {
       if (action.meta.id !== state.request) return done(state);
       const list = action.response.body?.asr_models;
       if (!Array.isArray(list)) return done({ ...state, status: "error" });
-      const models = list.filter((choice) => isObject(choice) && (choice.id === "auto" || Object.hasOwn(ASR_MODEL_TEXT, choice.id)));
+      const models = list.filter(isAsrModelRow);
       const installer = action.response.body?.installer;
-      const defaultModel = typeof action.response.body?.default_model === "string" ? action.response.body.default_model : null;
-      const hardwareModel = typeof action.response.body?.hardware_model === "string" ? action.response.body.hardware_model : null;
+      const { default_model: saved, hardware_model: hardware } = action.response.body;
+      const defaultModel = isAsrModelId(saved) && saved !== "auto" ? saved : null;
+      const hardwareModel = typeof hardware === "string" ? hardware : null;
       const next = { ...state, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
         // A reply with no usable model must say so; an empty list would leave the section blank.
         status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
@@ -1287,7 +1293,9 @@ function reduceAsr(state, action) {
       return state.status === "ready" ? withPoll(state) : done({ ...state, status: "error" });
     // The new value shows at once. A catalog read already in flight predates it and is dropped.
     case "provider/asr-default-chosen": {
+      if (!isAsrModelId(action.value)) return done(state);
       const value = action.value === "auto" ? null : action.value;
+      if (value && !state.models.some((choice) => choice.id === value && choice.ready === true)) return done(state);
       const defaultMutation = (state.defaultMutation ?? 0) + 1;
       const init = { method: "PUT", headers: { Accept: "application/json", "Content-Type": "application/json" }, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ asr_model: value }) };
       return done({ ...state, request: state.request + 1, defaultMutation, defaultPending: value, defaultRefusal: null }, [
@@ -1299,7 +1307,8 @@ function reduceAsr(state, action) {
       if (action.meta.mutation !== state.defaultMutation) return done(state);
       const refused = action.type === "provider/asr-default-refused";
       const request = state.request + 1;
-      const value = refused ? state.defaultModel : state.defaultPending;
+      const saved = action.response?.body?.default_model;
+      const value = !refused && (saved === null || (isAsrModelId(saved) && saved !== "auto")) ? saved : state.defaultModel;
       return done({ ...state, request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request), ...(refused ? [] : [ASR_SETTINGS_CHANGED])]);
     }
     case "provider/asr-install-requested":
@@ -1316,7 +1325,11 @@ function reduceAsr(state, action) {
       if (action.meta.mutation !== state.latest?.[action.meta.id]) return done(state);
       const code = action.error?.body?.detail?.code ?? "request_failed";
       const request = state.request + 1;
-      return done({ ...state, request, notice: { id: action.meta.id, code } }, [asrFetch(request)]);
+      const fallback = action.meta.method !== "DELETE" && isDefinitiveInstallRefusal(code);
+      const next = fallback
+        ? withInstall(state, action.meta.id, { state: "refused", error: code, fallback: true, showPrepare: PREPARE_FALLBACK_REFUSALS.has(code) })
+        : state;
+      return done({ ...next, request, notice: { id: action.meta.id, code } }, [asrFetch(request)]);
     }
     // The copy button: the clipboard is a call effect; the feedback line is state. A refused clipboard selects the command.
     case "provider/asr-copy-requested": {
@@ -1381,8 +1394,7 @@ export function selectProviderOverview(state) {
   ];
 }
 
-// What the settings dialog shows for the ASR catalog: the three models with their real readiness, and the default.
-// The default is what "auto" resolves to; it is marked on the model whose directory it is.
+// What the settings dialog shows for the catalog: server readiness and the resolved default.
 const ASR_STATUS = {
   ready: t("Sẵn sàng"),
   not_prepared: t("Chưa chuẩn bị"),
@@ -1403,15 +1415,13 @@ const DEFAULT_REFUSALS = {
 };
 
 // The control above the list: the hardware's default, or one model that can run here now.
-function defaultControl(s, auto, models, usable) {
+function defaultControl(s, auto, rows, usable, hardware) {
   const chosen = s.defaultPending !== undefined ? s.defaultPending : s.defaultModel ?? null;
-  const hardware = s.hardwareModel;
-  const label = (row) => (row.ready ? ASR_MODEL_TEXT[row.id].label : t("{model} · chưa sẵn sàng", { model: ASR_MODEL_TEXT[row.id].label }));
   const options = [
     { value: "auto", label: hardware ? t("Tự động theo phần cứng ({model})", { model: hardware }) : t("Tự động theo phần cứng") },
-    ...models.map((row) => ({ value: row.id, label: label(row), disabled: !row.ready })),
+    ...rows.map((row) => ({ value: row.id, label: row.state === "ready" ? row.label : t("{model} · chưa sẵn sàng", { model: row.label }), disabled: row.state !== "ready" })),
   ];
-  const name = chosen && ASR_MODEL_TEXT[chosen]?.label;
+  const name = rows.find((row) => row.id === chosen)?.label ?? chosen;
   const broken = Boolean(chosen && auto && !auto.ready && s.defaultPending === undefined);
   const damaged = Boolean(s.defaultDamaged && !chosen && usable);
   return {
@@ -1434,6 +1444,7 @@ function defaultControl(s, auto, models, usable) {
 
 const INSTALL_GUIDANCE = t("Tải model công khai về máy này. Bản ghi không rời khỏi máy.");
 const INSTALL_PHASES = {
+  sending: t("Đang gửi yêu cầu cài đặt…"),
   queued: t("Đang chờ cài đặt…"),
   downloading: t("Đang tải model…"),
   converting: t("Đang chuyển đổi model…"),
@@ -1471,7 +1482,7 @@ function installView(choice, notice) {
   const spaceLine = space ? (space.free ? t("Cần {required} trống, còn {free}.", space) : t("Cần {required} trống.", space)) : null;
   const refusal = notice ? INSTALL_REFUSALS[notice.code] ?? INSTALL_REFUSALS.request_failed : null;
   if (JOB_ACTIVE.includes(job.state)) {
-    const phase = job.state === "running" ? job.phase ?? "downloading" : job.state;
+    const phase = job.sending ? "sending" : job.state === "running" ? job.phase ?? "downloading" : job.state;
     const total = finite(job.bytes_total);
     const done = finite(job.bytes_done);
     const counting = phase === "downloading" && total && done !== null;
@@ -1494,33 +1505,44 @@ export function selectAsr(s) {
   const models = s.models.filter((choice) => choice.id !== "auto");
   if (s.status === "loading" && !models.length) return { text, defaultText: null, rows: [] };
   if (s.status === "error" || s.status === "empty") return { text, defaultText: null, rows: [] };
-  const defaultName = auto?.model_name ?? null;
+  const hardware = s.hardwareModel ?? (auto?.chosen ? null : rawModelName(auto));
+  const hardwareLabel = asrDisplayName(hardware);
+  const hardwareMatches = hardware !== null ? models.filter((choice) => rawModelName(choice) === hardware) : [];
+  const defaultId = s.defaultModel ?? (hardwareMatches.length === 1 ? hardwareMatches[0].id : null);
   const usable = installerUsable(s.installer);
   const rows = models.map((choice) => {
-    const reason = choice.ready ? "ready" : choice.reason in ASR_STATUS ? choice.reason : "not_prepared";
+    const reason = choice.ready === true ? "ready" : Object.hasOwn(ASR_STATUS, choice.reason) ? choice.reason : "not_prepared";
+    const notice = s.notice?.id === choice.id ? s.notice : null;
+    const prepareFallback = choice.install?.fallback === true;
     // Without a usable installer the page keeps what it always had: the command to copy.
-    const install = reason === "not_prepared" && (usable || (s.installer.available && jobActive(choice))) ? installView(choice, s.notice?.id === choice.id ? s.notice : null) : null;
+    const install = reason === "not_prepared" && !prepareFallback && (usable || (s.installer.available && jobActive(choice))) ? installView(choice, notice) : null;
     const busy = install?.view.kind === "progress";
     const state = busy ? "installing" : reason;
+    const refusal = notice ? INSTALL_REFUSALS[notice.code] ?? INSTALL_REFUSALS.request_failed : null;
+    const command = reason === "not_prepared" && !install && (!prepareFallback || choice.install?.showPrepare === true) ? choice.prepare_command || "" : "";
     return {
       id: choice.id,
-      label: ASR_MODEL_TEXT[choice.id].label,
-      note: ASR_MODEL_TEXT[choice.id].note,
-      isDefault: Boolean(defaultName) && choice.model_name === defaultName,
+      ...asrModelText(choice),
+      isDefault: choice.id === defaultId,
       state,
       status: ASR_STATUS[state],
-      guidance: reason === "ready" ? null : install ? INSTALL_GUIDANCE : ASR_MODEL_GUIDANCE[reason] ?? null,
-      command: reason === "not_prepared" && !install ? choice.prepare_command || "" : "",
+      guidance: install ? INSTALL_GUIDANCE : refusal ?? (reason === "not_prepared" && choice.prepare_command
+        ? INSTALL_REFUSALS[s.installer.available ? "models_not_writable" : "installer_unavailable"]
+        : ASR_MODEL_GUIDANCE[reason] ?? null),
+      command,
       copy: s.copy?.id === choice.id ? ASR_COPY[s.copy.how] : null,
       install: install?.view ?? null,
       progress: install?.progress ?? null,
     };
   });
   // No worker means no model can be checked: say it once, above the list, instead of on every row.
-  if (rows.length && rows.every((row) => row.state === "worker_unavailable")) {
-    return { text: ASR_MODEL_GUIDANCE.worker_unavailable, defaultText: null, defaultControl: auto ? defaultControl(s, auto, rows.map((row) => ({ id: row.id, ready: false })), false) : null, rows: rows.map((row) => ({ ...row, guidance: null })) };
-  }
-  return { text, defaultText: null, defaultControl: auto ? defaultControl(s, auto, rows.map((row) => ({ id: row.id, ready: row.state === "ready" })), true) : null, rows };
+  const workerDown = rows.length > 0 && rows.every((row) => row.state === "worker_unavailable");
+  return {
+    text: workerDown ? ASR_MODEL_GUIDANCE.worker_unavailable : text,
+    defaultText: null,
+    defaultControl: auto ? defaultControl(s, auto, rows, !workerDown, hardwareLabel) : null,
+    rows: workerDown ? rows.map((row) => ({ ...row, guidance: null })) : rows,
+  };
 }
 
 export function selectView(d, s) {

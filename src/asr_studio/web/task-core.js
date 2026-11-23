@@ -13,7 +13,7 @@
 // User-visible text is data: t(text, params) here only keeps the Vietnamese source string, and the view translates it.
 
 import { ACTIVE_TASK_STATES, LANGUAGES, failureOf } from "./history-core.js";
-import { ASR_MODEL_TEXT, AUTO_TRANSCRIBE_HANDOFF_PREFIX, errorMessageForCode, isWorkspaceAuthenticationFailure } from "./shell-core.js";
+import { AUTO_TRANSCRIBE_HANDOFF_PREFIX, asrAutoNote, asrModelText, errorMessageForCode, isAsrModelId, isAsrModelRow, isWorkspaceAuthenticationFailure } from "./shell-core.js";
 
 const t = (text, params) => (params ? { text, params } : { text });
 
@@ -96,7 +96,7 @@ const isObject = (value) => value !== null && typeof value === "object" && !Arra
 
 export const isActive = (task) => Boolean(task && ACTIVE_TASK_STATES.includes(task.status));
 const validLanguage = (value) => (typeof value === "string" && LANGUAGE_HINTS.has(value) ? value : null);
-const validModel = (value) => (typeof value === "string" && Object.hasOwn(ASR_MODEL_TEXT, value) ? value : null);
+const validModel = (value) => (isAsrModelId(value) ? value : null);
 
 // ---- language ----
 
@@ -140,8 +140,8 @@ export function displayedModel(state, shown) {
 // still be retried: the server answers it from the run it already accepted.
 function modelBlocked(state, shown) {
   if (pendingFor(state, shown.id)) return false;
-  const choice = (shown.asrModels || []).find((entry) => entry.id === displayedModel(state, shown));
-  return Boolean(choice && ["not_prepared", "gpu_required"].includes(choice.reason));
+  const choice = (shown.asrModels || []).find((entry) => entry?.id === displayedModel(state, shown));
+  return Boolean(choice && choice.ready !== true && choice.reason !== "worker_unavailable");
 }
 
 // ---- the pending request id ----
@@ -482,6 +482,7 @@ export function reduce(state, action) {
     case "task/model-chosen": {
       const asrModel = validModel(action.model);
       if (!action.shown || !asrModel) return out(state);
+      if (!(action.shown.asrModels || []).some((choice) => choice?.id === asrModel)) return out(state);
       // The start button and the guidance follow the choice.
       return out(repaint({ ...state, asrModel: { meetingId: action.shown.id, selection: asrModel } }));
     }
@@ -551,20 +552,16 @@ export function selectRuntime(runtime) {
 }
 
 function selectModel(state, shown, disabled) {
-  const choices = (shown.asrModels || []).filter((choice) => validModel(choice.id));
+  const choices = (shown.asrModels || []).filter(isAsrModelRow);
   if (!choices.length) return null;
   const value = displayedModel(state, shown);
   const choice = choices.find((entry) => entry.id === value);
-  const note = value !== "auto"
-    ? ASR_MODEL_TEXT[value].note
-    : choice && choice.model_name
-      ? (choice.chosen ? t("Theo Cài đặt: {model}.", { model: choice.model_name }) : t("Theo phần cứng của máy: {model}.", { model: choice.model_name }))
-      : t("Theo phần cứng của máy.");
+  const note = value === "auto" ? asrAutoNote(choice) : choice && asrModelText(choice).note;
   const reason = choice ? choice.reason : null;
   return {
     value,
     disabled,
-    options: choices.map((entry) => ({ id: entry.id, label: ASR_MODEL_TEXT[entry.id].label, ready: Boolean(entry.ready) })),
+    options: choices.map((entry) => ({ id: entry.id, label: asrModelText(entry).label, ready: entry.ready === true })),
     note,
     blocked: modelBlocked(state, shown),
     guidance: reason && !disabled ? ASR_MODEL_GUIDANCE[reason] ?? null : null,

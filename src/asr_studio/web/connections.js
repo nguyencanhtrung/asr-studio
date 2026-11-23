@@ -672,9 +672,12 @@ function asrRow(row) {
   head.append(name);
   if (row.isDefault) head.append(asrBadge("default", t("Mặc định")));
   head.append(asrBadge("status", tr(row.status)));
-  const note = document.createElement("p");
-  note.textContent = tr(row.note);
-  item.append(head, note);
+  item.append(head);
+  if (row.note) {
+    const note = document.createElement("p");
+    note.textContent = tr(row.note);
+    item.append(note);
+  }
   if (row.guidance) {
     const guidance = document.createElement("p");
     guidance.className = "asr-model-guidance";

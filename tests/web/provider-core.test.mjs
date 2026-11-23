@@ -1149,11 +1149,12 @@ const ASR = {
     { id: "pho-whisper-large", model_name: "pho", ready: false, reason: "not_prepared", prepare_command: "prepare pho" },
     { id: "qwen3-asr-1.7b", model_name: "qwen", ready: false, reason: "gpu_required", prepare_command: null },
     { id: "future-model", model_name: "x", ready: true, reason: null, prepare_command: null },
+    { id: "future%2Fmodel", ready: true },
   ],
 };
 const asrCalls = (env) => env.calls.filter((c) => c.url === "/api/asr-models");
 
-test("opening Settings reads the real catalog and lists the three models with readiness", async () => {
+test("opening Settings lists safe catalog rows with readiness and server labels", async () => {
   const env = setup();
   env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
   assert.equal(env.state().asr.status, "loading");
@@ -1163,10 +1164,12 @@ test("opening Settings reads the real catalog and lists the three models with re
     ["whisper-large-v3", "ready", true],
     ["pho-whisper-large", "not_prepared", false],
     ["qwen3-asr-1.7b", "gpu_required", false],
+    ["future-model", "ready", false],
   ]);
-  assert.deepEqual(view.rows.map((row) => row.command), ["", "prepare pho", ""]); // only an unprepared model has one
+  assert.deepEqual(view.rows.map((row) => row.command), ["", "prepare pho", "", ""]); // only an unprepared model has one
   assert.match(view.rows[2].guidance.text, /chỉ chạy trên GPU NVIDIA/);
-  assert.deepEqual(view.defaultControl.options.map((item) => item.value), ["auto", "whisper-large-v3", "pho-whisper-large", "qwen3-asr-1.7b"]);
+  assert.deepEqual(view.defaultControl.options.map((item) => item.value), ["auto", "whisper-large-v3", "pho-whisper-large", "qwen3-asr-1.7b", "future-model"]);
+  assert.equal(view.defaultControl.options.at(-1).label, "x");
   assert.equal(view.defaultControl.value, "auto");
 });
 
@@ -1195,7 +1198,7 @@ test("the copy button writes the command through the clipboard effect and the re
   assert.deepEqual(env.clipboard.written, ["prepare pho"]);
   assert.deepEqual(env.state().asr.copy, { id: "pho-whisper-large", how: "copied" });
   const rows = selectAsr(env.state().asr).rows;
-  assert.deepEqual(rows.map((row) => row.copy?.text ?? null), [null, "Đã sao chép lệnh.", null]);
+  assert.deepEqual(rows.map((row) => row.copy?.text ?? null), [null, "Đã sao chép lệnh.", null, null]);
   // A model without a command, or an unknown id, copies nothing.
   env.store.dispatch({ type: "provider/asr-copy-requested", id: "qwen3-asr-1.7b" });
   env.store.dispatch({ type: "provider/asr-copy-requested", id: "nope" });
@@ -1231,7 +1234,7 @@ test("a copy result that arrives after Settings was reopened changes nothing", a
 });
 
 test("a catalog reply with no usable model says so instead of showing a blank section", async () => {
-  for (const body of [[], [null, 5, { id: "evil" }], [{ id: "auto", model_name: "x", ready: true }]]) {
+  for (const body of [[], [null, 5, { id: "../unsafe" }], [{ id: "auto", model_name: "x", ready: true }]]) {
     const env = setup();
     env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
     await env.answer(env.is("GET", "/api/asr-models"), 200, { asr_models: body });
@@ -1307,13 +1310,14 @@ test("less free space than the model needs blocks the button and says how much i
   assert.equal(phoRow(unknown).install.spaceLine.text, "Cần {required} trống.");
 });
 
-test("Cài đặt model posts once, shows queued at once, then follows the job until the model is ready", async () => {
+test("Cài đặt model posts once, distinguishes sending from queued, and follows the job until ready", async () => {
   const env = await openedWith(catalog());
   env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
   assert.equal(phoRow(env).state, "installing");
-  assert.equal(phoRow(env).install.phase.text, "Đang chờ cài đặt…");
+  assert.equal(phoRow(env).install.phase.text, "Đang gửi yêu cầu cài đặt…");
   assert.equal(env.pending(env.is("POST", `/api/asr-models/${PHO}/install`)).length, 1);
   await env.answer(env.is("POST", `/api/asr-models/${PHO}/install`), 202, { install: { state: "queued" } });
+  assert.equal(phoRow(env).install.phase.text, "Đang chờ cài đặt…");
   assert.deepEqual(env.live(), [1000]); // reading again while the job is active
 
   env.fire(1000);
@@ -1335,6 +1339,25 @@ test("Cài đặt model posts once, shows queued at once, then follows the job u
   row = phoRow(env);
   assert.deepEqual([row.state, row.status.text, row.install, row.command], ["ready", "Sẵn sàng", null, ""]);
   assert.deepEqual(env.live(), []); // nothing left to wait for: polling stops by itself
+});
+
+test("install and cancel encode safe catalog IDs and reject unsafe segments before requests", async () => {
+  const id = "future+v2";
+  const unsafe = "future%2Fv2";
+  const body = catalog();
+  body.asr_models.push(model(id), model(unsafe));
+  const env = await openedWith(body);
+  env.store.dispatch({ type: "provider/asr-install-requested", id });
+  const url = "/api/asr-models/future%2Bv2/install";
+  await env.answer(env.is("POST", url), 202, { install: { state: "queued" } });
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id });
+  assert.equal(env.pending(env.is("DELETE", url)).length, 1);
+
+  const state = env.store.getState();
+  const forged = { ...state, asr: { ...state.asr, models: [...state.asr.models, model(unsafe)] } };
+  for (const type of ["provider/asr-install-requested", "provider/asr-cancel-requested"]) {
+    assert.deepEqual(reduce(forged, { type, id: unsafe }).effects, []);
+  }
 });
 
 test("a double click makes one request on screen and Hủy asks to stop the job", async () => {
@@ -1437,6 +1460,52 @@ test("a refused install shows why, then reads the catalog again for the truth", 
   assert.equal(withNotice.install.kind, "offer");
 });
 
+test("a definitive refusal clears sending, keeps the prepare command through a failed refresh, and reconciles", async () => {
+  const env = await openedWith(catalog());
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  const mutation = env.state().asr.latest[PHO];
+  env.store.dispatch({
+    type: "provider/asr-install-refused",
+    error: { status: 409, body: { detail: { code: "models_not_writable" } } },
+    meta: { id: PHO, method: "POST", mutation },
+  });
+  assert.equal(phoRow(env).install, null);
+  assert.equal(phoRow(env).command, "prepare pho-whisper-large");
+  assert.match(phoRow(env).guidance.text, /không ghi được/);
+  await env.fail(env.is("GET", "/api/asr-models"));
+  assert.equal(phoRow(env).install, null);
+  assert.equal(phoRow(env).command, "prepare pho-whisper-large");
+  env.store.dispatch({ type: "provider/asr-poll" });
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { install: { state: "idle" } } }));
+  assert.equal(phoRow(env).install.kind, "offer");
+  assert.equal(phoRow(env).command, "");
+});
+
+test("other definitive refusals clear sending without offering a stale install action", async () => {
+  for (const code of ["gpu_required", "worker_unavailable", "model_ready", "unknown_model"]) {
+    const env = await openedWith(catalog());
+    env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+    const mutation = env.state().asr.latest[PHO];
+    env.store.dispatch({ type: "provider/asr-install-refused", error: { status: 409, body: { detail: { code } } }, meta: { id: PHO, method: "POST", mutation } });
+    assert.equal(phoRow(env).install, null, code);
+    assert.equal(phoRow(env).command, "", code);
+  }
+});
+
+test("an uncertain install transport keeps sending until catalog truth replaces it", async () => {
+  const env = await openedWith(catalog());
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  const mutation = env.state().asr.latest[PHO];
+  env.store.dispatch({ type: "provider/asr-install-refused", error: { status: 503 }, meta: { id: PHO, method: "POST", mutation } });
+  assert.equal(phoRow(env).install.phase.text, "Đang gửi yêu cầu cài đặt…");
+  await env.fail(env.is("GET", "/api/asr-models"));
+  assert.equal(phoRow(env).install.phase.text, "Đang gửi yêu cầu cài đặt…");
+  env.fire(1000);
+  await env.answer(env.is("GET", "/api/asr-models"), 200, catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } }));
+  assert.equal(phoRow(env).install.phase.text, "Đang tải model…");
+  assert.equal(phoRow(env).install.cancelDisabled, false);
+});
+
 test("polling reads only while Settings is open, and closing it stops the timer", async () => {
   const env = await openedWith(catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } }));
   assert.deepEqual(env.live(), [1000]);
@@ -1477,11 +1546,59 @@ test("a job found running when Settings opens is shown at once, and stays shown 
 // ---- the default model in Settings ----
 
 test("a model that cannot run here cannot be chosen as the default", () => {
-  const state = { ...initialState.asr, status: "ready", models: ASR.asr_models.filter((m) => m.id !== "future-model"), installer: { available: true, models_writable: true }, hardwareModel: "whisper-large-v3" };
+  const state = { ...initialState.asr, status: "ready", models: ASR.asr_models.slice(0, 5), installer: { available: true, models_writable: true }, hardwareModel: "whisper-large-v3" };
   const control = selectAsr(state).defaultControl;
   assert.deepEqual(control.options.filter((o) => o.disabled).map((o) => o.value), ["pho-whisper-large", "qwen3-asr-1.7b"]);
   assert.equal(control.options.find((o) => o.value === "whisper-large-v3").disabled, false);
   assert.equal(control.disabled, false);
+});
+
+test("manual badges use the server ID; hardware Auto requires an unambiguous server name", async () => {
+  const id = "future+v2";
+  const future = model(id, { label: "Future v2", model_name: "shared", ready: true });
+  const other = model("future-base", { model_name: "shared", ready: true });
+  const auto = { id: "auto", model_name: "shared", chosen: true, ready: true };
+  const body = { asr_models: [auto, other, future], hardware_model: "shared", default_model: id };
+  const env = await openedWith(body);
+  const badges = (asr) => selectAsr(asr).rows.filter((row) => row.isDefault).map((row) => row.id);
+  assert.deepEqual(badges(env.state().asr), [id]);
+  assert.deepEqual(selectAsr(env.state().asr).defaultControl.text.params, { model: "Future v2" });
+  assert.deepEqual(badges((await openedWith({ ...body, default_model: null })).state().asr), []);
+
+  const hardware = { asr_models: [{ ...auto, model_name: "unknown", chosen: false }, future], hardware_model: "shared" };
+  assert.deepEqual(badges((await openedWith(hardware)).state().asr), [id]);
+  const absent = { asr_models: [auto, future], hardware_model: "/private/shared" };
+  const unknown = selectAsr((await openedWith(absent)).state().asr);
+  assert.equal(unknown.rows.some((row) => row.isDefault), false);
+  assert.equal(unknown.defaultControl.options[0].label.text, "Tự động theo phần cứng");
+  const padded = selectAsr((await openedWith({ asr_models: [auto, future], hardware_model: "shared " })).state().asr);
+  assert.equal(padded.rows.some((row) => row.isDefault), false);
+  assert.deepEqual(padded.defaultControl.options[0].label.params, { model: "shared" });
+  const exactUnsafe = selectAsr((await openedWith({
+    asr_models: [{ ...auto, model_name: "fixture@weights" }, { ...future, model_name: "fixture@weights" }],
+    hardware_model: "fixture@weights",
+  })).state().asr);
+  assert.deepEqual(exactUnsafe.rows.filter((row) => row.isDefault).map((row) => row.id), [id]);
+  assert.equal(exactUnsafe.defaultControl.options[0].label.text, "Tự động theo phần cứng");
+});
+
+test("default actions require a safe ready catalog ID and an acknowledged badge follows the response", async () => {
+  const env = await openedWith({ ...ASR, default_model: "whisper-large-v3" });
+  for (const value of ["../future", "future%2Fmodel", "absent-model", "pho-whisper-large", null]) {
+    env.store.dispatch({ type: "provider/asr-default-chosen", value });
+  }
+  assert.equal(env.pending(env.is("PUT", "/api/asr-models/default")).length, 0);
+  const state = env.store.getState();
+  const forged = { ...state, asr: { ...state.asr, models: [...state.asr.models, model("../future", { ready: true })] } };
+  assert.deepEqual(reduce(forged, { type: "provider/asr-default-chosen", value: "../future" }).effects, []);
+  env.store.dispatch({ type: "provider/asr-default-chosen", value: "future-model" });
+  assert.equal(selectAsr(env.state().asr).defaultControl.value, "future-model");
+  assert.equal(selectAsr(env.state().asr).rows.find((row) => row.isDefault).id, "whisper-large-v3");
+  await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "whisper-large-v3" });
+  assert.equal(selectAsr(env.state().asr).rows.find((row) => row.isDefault).id, "whisper-large-v3");
+  env.store.dispatch({ type: "provider/asr-default-chosen", value: "future-model" });
+  await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "future-model" });
+  assert.equal(selectAsr(env.state().asr).rows.find((row) => row.isDefault).id, "future-model");
 });
 
 test("a chosen default that stopped working says so instead of looking fine", () => {

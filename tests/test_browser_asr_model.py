@@ -6,8 +6,10 @@ import os
 import re
 import shutil
 import uuid
+from pathlib import Path
 
 import pytest
+from notes_helpers import seed_completed_transcript
 from playwright.sync_api import expect
 from seeding import prepare_diarization_model, seed_meeting
 from test_browser_history import _prepare_browser_asr_model, _prepare_browser_qwen_model
@@ -429,3 +431,179 @@ def test_a_broken_default_tells_the_create_dialog_before_the_upload(live, signed
     page.goto(f"{live.url}/")
     page.locator("header [data-open-meeting-dialog], .header-create").first.click()
     expect(page.locator("#create-asr-model-help")).to_contain_text("Mở Cài đặt")
+
+
+@pytest.mark.parametrize("layout, width, height", [("desktop", 1280, 900), ("mobile", 390, 844)])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_asr_catalog_and_community_dependency(live, signed_in, layout, width, height, scheme):
+    """Serve a synthetic catalog through loopback; keep the real transcript name editor."""
+    _context, page = signed_in(viewport={"width": width, "height": height}, color_scheme=scheme)
+    english = scheme == "dark"
+    if english:
+        page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    note = (
+        "Transcripts require Community-1 to separate speakers."
+        if english
+        else "Transcript cần Community-1 để tách người nói."
+    )
+    name_note = (
+        "Renaming updates only the speaker’s display name."
+        if english
+        else "Đổi tên chỉ cập nhật tên hiển thị của người nói."
+    )
+    ready, install, unsafe = "fixture+v2", "fixture+compact", "fixture%2Fprivate"
+    state = {
+        "asr_models": [
+            {"id": "auto", "model_name": "fixture-weights", "ready": True, "chosen": True},
+            {"id": "fixture-base", "model_name": "fixture-weights", "ready": True},
+            {"id": ready, "label": "Fixture V2", "model_name": "fixture-weights", "ready": True},
+            {
+                "id": install,
+                "label": "/private/weights",
+                "model_name": "Fixture Compact",
+                "ready": False,
+                "reason": "not_prepared",
+                "install": {"state": "idle"},
+            },
+            {"id": unsafe, "label": "Unsafe row", "ready": True},
+        ],
+        "default_model": ready,
+        "hardware_model": "fixture-weights",
+        "installer": {"available": True, "models_writable": True},
+    }
+    meeting_id, generation_id, _segments = seed_completed_transcript(
+        live.settings.data_dir, title="ASR fixture meeting"
+    )
+    default_attempts, install_requests = [], []
+    install_row = state["asr_models"][3]
+
+    def default_response(route):
+        assert route.request.method == "PUT"
+        default_attempts.append(route.request.post_data_json["asr_model"])
+        if len(default_attempts) == 1:
+            route.fulfill(status=409, json={"detail": {"code": "not_prepared"}})
+        else:
+            state["default_model"] = default_attempts[-1]
+            route.fulfill(json={"default_model": state["default_model"]})
+
+    def install_response(route):
+        install_requests.append((route.request.method, route.request.url))
+        install_row["install"] = (
+            {"state": "running", "phase": "downloading", "bytes_done": 32, "bytes_total": 128}
+            if route.request.method == "POST"
+            else {"state": "idle"}
+        )
+        route.fulfill(status=202, json={"install": install_row["install"]})
+
+    def meeting_response(route):
+        response = route.fetch()
+        body = response.json()
+        body["transcription"]["asr_models"] = state["asr_models"]
+        route.fulfill(response=response, json=body)
+
+    def evidence(label):
+        directory = os.environ.get("ASR_UI_EVIDENCE_DIR")
+        if directory:
+            target = Path(directory) / f"{layout}-{scheme}-{label}.png"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=target, animations="disabled")
+
+    page.route("**/api/asr-models", lambda route: route.fulfill(json=state))
+    page.route("**/api/asr-models/default", default_response)
+    page.route("**/api/asr-models/*/install", install_response)
+    page.route(f"**/api/meetings/{meeting_id}", meeting_response)
+    page.goto(f"{live.url}/")
+    expect(page.locator("html")).to_have_attribute("data-theme", scheme)
+    gear = page.locator("#settings-open")
+    gear.click()
+    page.get_by_role("tab", name="ASR Model").click()
+    expect(page.locator("#asr-transcript-dependency")).to_have_text(note)
+    rows = page.locator("#asr-models > li")
+    expect(rows).to_have_count(3)
+    expect(rows.locator("strong")).to_have_text(
+        ["fixture-weights", "Fixture V2", "Fixture Compact"]
+    )
+    badge = rows.locator('[data-kind="default"]')
+    expect(badge).to_have_count(1)
+    assert badge.evaluate("element => element.closest('li').dataset.model") == ready
+
+    default = page.locator("#asr-default-select")
+    expect(default.locator(f'option[value="{install}"]')).to_be_disabled()
+    default.focus()
+    default.select_option("fixture-base")
+    expect(page.locator("#asr-default-refusal")).to_be_visible()
+    expect(default).to_have_value(ready)
+    expect(default).to_be_focused()
+    default.select_option("fixture-base")
+    expect(page.locator("#asr-default-refusal")).to_be_hidden()
+    expect(page.locator("#asr-default")).to_contain_text("fixture-weights")
+    expect(default).to_be_focused()
+    assert default_attempts == ["fixture-base", "fixture-base"]
+    default.select_option(ready)
+    expect(page.locator("#asr-default")).to_contain_text("Fixture V2")
+
+    compact = rows.filter(has_text="Fixture Compact")
+    button = compact.get_by_role("button", name="Install model" if english else "Cài đặt model")
+    button.press("Enter")
+    progress = compact.locator("progress")
+    expect(progress).to_have_js_property("value", 0.25)
+    expect(compact.locator(".asr-progress-detail")).to_contain_text("/")
+    cancel = compact.get_by_role("button", name="Cancel" if english else "Hủy")
+    expect(cancel).to_be_focused()
+    assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+    evidence("settings-progress")
+    cancel.press("Enter")
+    expect(button).to_be_focused()
+    url = f"{live.url}/api/asr-models/fixture%2Bcompact/install"
+    assert install_requests == [("POST", url), ("DELETE", url)]
+    page.keyboard.press("Escape")
+    expect(gear).to_be_focused()
+
+    create = page.locator(".header-create")
+    create.click()
+    expect(page.locator("#auto-transcribe-help")).to_contain_text(note)
+    selector = page.locator("#create-asr-model")
+    expect(selector.locator("option")).to_have_count(4)
+    assert [option.get_attribute("value") for option in selector.locator("option").all()] == [
+        "auto",
+        "fixture-base",
+        ready,
+        install,
+    ]
+    expect(selector.locator(f'option[value="{install}"]')).to_be_disabled()
+    selector.select_option(ready)
+    expect(selector).to_have_value(ready)
+    if (layout, scheme) == ("mobile", "dark"):
+        selector.scroll_into_view_if_needed()
+        evidence("new-meeting")
+    page.keyboard.press("Escape")
+    expect(create).to_be_focused()
+
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    selector = page.locator("#transcription-model")
+    expect(selector.locator("option")).to_have_count(4)
+    expect(selector.locator(f'option[value="{ready}"]')).to_contain_text("Fixture V2")
+    selector.select_option(ready)
+    expect(selector).to_have_value(ready)
+    expect(page.locator("#transcription-dependency")).to_have_text(note)
+    expect(page.locator("#speaker-name-help")).to_have_text(name_note)
+    if (layout, scheme) == ("desktop", "light"):
+        page.locator("#speaker-name-help").scroll_into_view_if_needed()
+        evidence("rerun-and-names")
+
+    page.locator("#speaker-catalog .speaker-chip").press("Enter")
+    name = page.locator(".speaker-name-form input")
+    expect(name).to_be_focused()
+    name.fill("Alex Fixture")
+    with page.expect_response(
+        lambda response: response.request.method == "PATCH" and "/speakers/" in response.url
+    ) as renamed:
+        name.press("Enter")
+    assert renamed.value.ok
+    path = f"/api/meetings/{meeting_id}/transcript-generations/{generation_id}/speakers/SPEAKER_00"
+    assert renamed.value.url.endswith(path)
+    chip = page.locator("#speaker-catalog .speaker-chip")
+    expect(chip).to_contain_text("Alex Fixture")
+    expect(chip).to_be_focused()
+    expect(selector).to_have_value(ready)
+    expect(page.locator("#transcription-dependency")).to_have_text(note)

@@ -4,8 +4,10 @@ import test from "node:test";
 import { createRunner, createStore } from "../../src/asr_studio/web/store.js";
 import {
   AUTO_TRANSCRIBE_HANDOFF_PREFIX,
+  asrDisplayName,
   canSubmit,
   initialState,
+  isAsrModelId,
   isWorkspaceAuthenticationFailure,
   reduce,
   responseMessage,
@@ -210,14 +212,36 @@ test("opening loads the model catalog, ignores stale replies, and hides it after
   assert.equal(selectView(failed.state()).asrModel, null);
 });
 
-test("a model this page does not know is dropped from the catalog", async () => {
+test("ASR IDs are single path segments and display names exclude paths", () => {
+  for (const id of ["auto", "future.model+v2", "MODEL_v3"]) assert.equal(isAsrModelId(id), true, id);
+  for (const id of [null, 42, "", "1", ".", "..", "../x", "x/y", "x\\y", "x%2Fy", "x#y", "x?y", "x\ny", "x\n", " x", "x\"y"]) {
+    assert.equal(isAsrModelId(id), false, JSON.stringify(id));
+  }
+  assert.equal(asrDisplayName(" Mô hình (Bản 2)+ "), "Mô hình (Bản 2)+");
+  for (const name of ["/private/model", "C:\\private\\model", "private/model", "file:model", "..", "name\npath"]) {
+    assert.equal(asrDisplayName(name), null, name);
+  }
+});
+
+test("create catalog keeps unknown safe rows and rejects unsafe model choices", async () => {
   const env = setup();
-  env.store.dispatch({ type: "shell/dialog-opened", stored: {} });
-  await env.answer(env.is("GET", "/api/asr-models"), 200, { asr_models: [null, { id: "future-model", ready: true }, ...ASR_MODELS.asr_models] });
-  assert.deepEqual(
-    selectView(env.state()).asrModel.options.map((option) => option.id),
-    ASR_MODELS.asr_models.map((choice) => choice.id),
-  );
+  const extra = [
+    { id: "future+v2", ready: true, label: "Future model (v2)", model_name: "weights-v2" },
+    { id: "future-base", ready: false, label: "/private/weights", model_name: "Local base" },
+    { id: "future-large", ready: true, model_name: "C:\\private\\weights" },
+    { id: "../unsafe", ready: true },
+    null,
+  ];
+  await opened(env, {}, POLICY, { asr_models: [...ASR_MODELS.asr_models, ...extra] });
+  assert.deepEqual(selectView(env.state()).asrModel.options.slice(4).map(({ id, label, disabled }) => [id, label, disabled]), [
+    ["future+v2", "Future model (v2)", false],
+    ["future-base", "Local base", true],
+    ["future-large", "future-large", false],
+  ]);
+  env.store.dispatch({ type: "shell/asr-model-chosen", model: "future+v2" });
+  assert.equal(env.state().form.asrModel, "future+v2");
+  const forged = { ...env.state(), asrModels: [...env.state().asrModels, extra[3]] };
+  assert.equal(reduce(forged, { type: "shell/asr-model-chosen", model: "../unsafe" }).state, forged);
 });
 
 test("remembered choices fill the form; unknown language is ignored", () => {

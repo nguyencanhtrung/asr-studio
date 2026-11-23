@@ -2145,6 +2145,10 @@ textarea:focus-visible {
   line-height: 1.35;
 }
 
+#transcription-dependency {
+  margin: 8px 0 0;
+}
+
 .transcription-actions > button {
   grid-column: 2;
   grid-row: 2;
@@ -2540,6 +2544,10 @@ textarea:focus-visible {
   font-size: var(--text-small);
   font-weight: 600;
   scroll-margin-top: var(--player-gap); /* "Đặt tên trước" in the notes tab focuses it */
+}
+
+.speaker-catalog > .field-help {
+  margin: 0 0 9px;
 }
 
 .speaker-catalog-list {
