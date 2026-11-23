@@ -465,17 +465,9 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     requests_before_stop = list(requests)
     assert any(method == "PUT" and "/chunks/" in path for method, path in requests_before_stop)
     popup.click("#stop-button")
-    stopping_seen = False
-    stopping_deadline = time.monotonic() + 5
-    while time.monotonic() < stopping_deadline:
-        if (
-            popup.evaluate('document.getElementById("capture-state")?.textContent.trim()')
-            == "Stopping recording"
-        ):
-            stopping_seen = True
-            break
-        tab.wait_for_timeout(25)
-    assert stopping_seen
+    # The popup-core Node test pins the transient stopping wording. Native coverage
+    # waits for durable stop, receipt, cleanup and rendered-row outcomes instead of
+    # racing a paint that may finish before the browser can sample it.
     popup.close()
     control = context.new_page()
     control.goto(f"chrome-extension://{EXTENSION_ID}/control.html")
