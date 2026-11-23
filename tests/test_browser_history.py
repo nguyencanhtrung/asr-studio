@@ -547,12 +547,9 @@ def test_history_search_calendar_navigation_and_return(live, browser_context):
 
     recent = page.locator("#recent-list a")
     expect(recent).to_have_count(3)
-    expect(recent.first).to_be_visible()
-    assert [t.strip() for t in page.locator("#recent-list .link-title").all_inner_texts()] == [
-        "Beta sync",
-        "Alpha review",
-        "Gamma planning",
-    ]
+    expect(page.locator("#recent-list .link-title")).to_have_text(
+        ["Beta sync", "Alpha review", "Gamma planning"], use_inner_text=True
+    )
     # Date and recording length only; there is no start time to show.
     assert page.locator("#recent-list .link-date").all_inner_texts() == [
         "14/10/2026 · 1 giờ 24 phút",

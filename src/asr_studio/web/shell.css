@@ -1828,6 +1828,7 @@ textarea:focus-visible {
     display: grid;
     width: auto;
     grid-template-columns: repeat(2, max-content);
+    justify-items: center;
     gap: 0 0.5rem;
     margin: 0;
     padding: 0;

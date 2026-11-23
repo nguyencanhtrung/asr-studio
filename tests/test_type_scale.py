@@ -646,7 +646,7 @@ def test_provider_launchers_stay_in_the_sticky_footer(live, signed_in, width):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("width", [390, 360, 320], ids=["390", "360", "320"])
-def test_phone_launchers_are_logo_buttons_on_the_wordmark_row(live, signed_in, width):
+def test_phone_footer_keeps_accessible_launchers_and_product_links(live, signed_in, width):
     _context, page = signed_in(viewport={"width": width, "height": 844})
     page.goto(f"{live.url}/")
     launchers = page.locator(".sidebar-footer .connection-launcher")
@@ -664,45 +664,40 @@ def test_phone_launchers_are_logo_buttons_on_the_wordmark_row(live, signed_in, w
         # The LED sits on the top-right corner, inside the button.
         assert dot["x"] + dot["width"] <= box["x"] + box["width"] + 0.5
         assert dot["x"] > box["x"] + box["width"] / 2 and dot["y"] < box["y"] + box["height"] / 2
-    # GitHub and Version stay out of the top bar; the gear joins it after the provider logos.
-    expect(page.locator(".github-link")).to_be_hidden()
-    assert page.locator(".version-link").is_hidden()
-    expect(page.locator("#settings-open")).to_be_visible()
+    gear = page.get_by_role("button", name="Cài đặt")
+    github = page.get_by_role("link", name="Mã nguồn ASR Studio trên GitHub")
+    version = page.locator(".version-link")
+    for control in (gear, github, version):
+        expect(control).to_be_visible()
+        expect(control).to_be_in_viewport()
 
-    # One row: brand, wordmark, theme, EN, OpenAI, Google and the gear share a centre line, left to
-    # right. Below 360px the wordmark is clipped to keep the row; the brand keeps its name.
-    wordmark = [".sidebar-masthead .brand-wordmark"] if width >= 360 else []
-    items = [
-        ".sidebar-masthead .brand-mark",
-        *wordmark,
-        ".sidebar-masthead .theme-toggle",
-        ".sidebar-masthead .lang-toggle",
-        "#launcher-chatgpt",
-        "#launcher-antigravity",
-        "#settings-open",
-    ]
-    boxes = [page.locator(selector).bounding_box() for selector in items]
-    centres = [box["y"] + box["height"] / 2 for box in boxes]
-    assert max(centres) - min(centres) <= 1, (width, boxes)
-    for left, right in zip(boxes, boxes[1:], strict=False):
-        assert left["x"] + left["width"] <= right["x"] + 0.5, (width, boxes)
-    sidebar = page.locator(".sidebar").bounding_box()
-    assert boxes[-1]["x"] + boxes[-1]["width"] <= sidebar["x"] + sidebar["width"] + 0.5
+    gear_box, github_box, version_box = (
+        control.bounding_box() for control in (gear, github, version)
+    )
+    assert gear_box["y"] == github_box["y"]
+    assert gear_box["x"] + gear_box["width"] <= github_box["x"]
+    assert version_box["y"] >= gear_box["y"] + gear_box["height"]
+    pair_center = (gear_box["x"] + github_box["x"] + github_box["width"]) / 2
+    assert abs(pair_center - (version_box["x"] + version_box["width"] / 2)) <= 0.5
     assert page.evaluate("document.documentElement.scrollWidth - innerWidth") <= 0
 
-    # Tab order equals the visual order, and each logo button still opens its dialog.
     page.locator(".sidebar-masthead .lang-toggle").focus()
-    page.keyboard.press("Tab")
-    expect(launchers.nth(0)).to_be_focused()
-    page.keyboard.press("Tab")
-    expect(launchers.nth(1)).to_be_focused()
-    page.keyboard.press("Tab")
-    expect(page.locator("#settings-open")).to_be_focused()
-    page.keyboard.press("Shift+Tab")
-    page.keyboard.press("Enter")
+    for control in (
+        page.get_by_text("Cuộc họp và lịch", exact=True),
+        launchers.nth(0),
+        launchers.nth(1),
+        gear,
+        github,
+        version,
+    ):
+        page.keyboard.press("Tab")
+        expect(control).to_be_focused()
+
+    launchers.nth(1).press("Enter")
     expect(page.locator("#connections-dialog")).to_be_visible()
     page.keyboard.press("Escape")
     expect(page.locator("#connections-dialog")).to_be_hidden()
+    expect(launchers.nth(1)).to_be_focused()
     if width < 360:
         expect(page.locator(".brand")).to_have_accessible_name("ASR Studio — về workspace")
         assert page.locator(".sidebar-masthead .brand-wordmark").bounding_box()["width"] <= 1
