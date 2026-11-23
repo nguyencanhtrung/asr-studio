@@ -135,6 +135,56 @@ def test_rendered_table_edit_keeps_other_markdown_and_focus(live, signed_in, sch
     assert page_errors == []
 
 
+def test_rich_keystrokes_keep_clean_markdown_and_block_structure_enter(live, signed_in):
+    _context, page = signed_in()
+    markdown = "# Plan\n\nHello\n\n- one\n- two\n"
+    _, revision, _, _ = _open_notes(live, page, lambda *_: markdown)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    editor = page.locator("#notes-rich-editor")
+    paragraph = editor.locator('[contenteditable="plaintext-only"]').filter(has_text="Hello")
+    paragraph.click()
+    page.keyboard.press("End")
+    page.keyboard.type(" world (draft).")
+    list_item = editor.get_by_role("listitem").first.locator('[contenteditable="plaintext-only"]')
+    list_item.click()
+    page.keyboard.press("End")
+    page.keyboard.press("Enter")
+    expect(list_item).to_be_focused()
+    with page.expect_response(lambda response: response.request.method == "PATCH") as saved:
+        paragraph.press("Control+Enter")
+    assert saved.value.ok
+    stored = get_note(live.settings.data_dir, revision["id"])["markdown"]
+    assert stored == markdown.replace("Hello", "Hello world (draft).")
+    assert "&#32;" not in stored
+    assert r"\." not in stored
+
+
+def test_rich_invalid_code_input_reverts_and_ime_enter_is_allowed(live, signed_in):
+    _context, page = signed_in()
+    markdown = "# Notes\n\nUse `npm ci`.\n"
+    _, revision, _, _ = _open_notes(live, page, lambda *_: markdown)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    code = page.locator('#notes-rich-editor code[contenteditable="plaintext-only"]')
+    code.click()
+    page.keyboard.press("End")
+    page.keyboard.type("`")
+    expect(code).to_have_text("npm ci")
+    assert get_note(live.settings.data_dir, revision["id"])["markdown"] == markdown
+    composing = page.evaluate(
+        """() => {
+          const node = document.querySelector(
+            "#notes-rich-editor [contenteditable='plaintext-only']"
+          );
+          const event = new KeyboardEvent('keydown', {
+            key: 'Enter', isComposing: true, bubbles: true, cancelable: true,
+          });
+          node.dispatchEvent(event);
+          return event.defaultPrevented;
+        }"""
+    )
+    assert composing is False
+
+
 def test_mixed_markdown_falls_back_without_hiding_view_citations_or_source_links(live, signed_in):
     _context, page = signed_in()
 
@@ -173,6 +223,53 @@ def test_mixed_markdown_falls_back_without_hiding_view_citations_or_source_links
     after.click()
     expect(page.locator("#notes-source-text")).to_contain_text("We need a launch plan.")
     expect(page.locator("#notes-source-heading")).to_be_focused()
+
+
+def test_raw_boundaries_keep_view_source_links_and_reject_indented_tables(live, signed_in):
+    _context, page = signed_in()
+
+    def hard_break(_original, meeting, snapshot, segments):
+        href = f"/meetings/{meeting}?notes_source={snapshot}&segment={segments[0]}#transcript"
+        return f"# Notes\n\n[Before break]({href})  \nNext line.\n"
+
+    _open_notes(live, page, hard_break)
+    expect(
+        page.locator("#notes-preview").get_by_role(
+            "link", name="Mở nguồn transcript tại Before break"
+        )
+    ).to_be_visible()
+
+    def indented_table(*_):
+        return "# Notes\n\n    | A | B |\n    | --- | --- |\n    | x | y |\n"
+
+    _open_notes(live, page, indented_table)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    expect(page.locator("#notes-rich-fallback")).to_be_visible()
+    expect(page.locator("#notes-rich-editor table")).to_have_count(0)
+
+
+def test_unsupported_lists_keep_every_line_and_exact_view_chips(live, signed_in):
+    _context, page = signed_in()
+
+    def unsupported_lists(markdown, *_):
+        return (
+            markdown.replace(
+                "- The team reviewed its launch plan.",
+                "- The team reviewed its launch plan. \n  continuation text",
+                1,
+            )
+            + "\n1. Ordered first\n  ordered continuation\n2. Ordered second\n"
+        )
+
+    _open_notes(live, page, unsupported_lists)
+    preview = page.locator("#notes-preview")
+    expect(preview).to_contain_text("continuation text")
+    expect(preview).to_contain_text("1. Ordered first")
+    expect(preview).to_contain_text("ordered continuation")
+    expect(preview).to_contain_text("2. Ordered second")
+    assert preview.locator(".notes-citation-chip").count() >= 2
+    page.get_by_role("button", name="Viết", exact=True).click()
+    expect(page.locator("#notes-rich-fallback")).to_be_visible()
 
 
 def _stub_clipboard(page):
@@ -218,6 +315,10 @@ def test_email_preview_pins_saved_revision_and_reports_clipboard_outcomes(live, 
     opener.click()
     dialog = page.get_by_role("dialog", name="Xem trước email")
     expect(dialog).to_be_visible()
+    colors = dialog.locator("#notes-copy-document").evaluate(
+        "element => [getComputedStyle(element).backgroundColor, getComputedStyle(element).color]"
+    )
+    assert colors == ["rgb(255, 255, 255)", "rgb(34, 34, 34)"]
     expect(dialog.get_by_role("heading", name="Xem trước email")).to_be_focused()
     expect(dialog.locator("#notes-copy-subject")).to_have_text("Chủ đề: Launch briefing")
     expect(dialog.get_by_role("region", name="Introduction")).to_be_visible()

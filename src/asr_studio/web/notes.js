@@ -240,7 +240,15 @@ function renderBlocks(root, blocks, { rich = false, disabled = false, selectionI
         case "raw": {
           const fallback = document.createElement("pre");
           fallback.className = "notes-markdown-fallback";
-          fallback.textContent = block.text;
+          if (block.viewLines) {
+            block.viewLines.forEach((line, index) => {
+              if (index) fallback.append(document.createElement("br"));
+              appendInline(fallback, line.nodes || line, false);
+              line.chips?.forEach((chip) => fallback.append(citationChip(chip)));
+            });
+          } else {
+            fallback.textContent = block.text;
+          }
           return fallback;
         }
         default: {
@@ -258,6 +266,7 @@ function renderBlocks(root, blocks, { rich = false, disabled = false, selectionI
       element.dataset.richIndex = String(index);
       element.setAttribute("aria-label", t("Sửa đoạn {number}", { number: index + 1 }));
       element.setAttribute("role", "textbox");
+      element.setAttribute("aria-multiline", "false");
       element.spellcheck = true;
     });
   }
@@ -489,6 +498,7 @@ function renderCopyPreview(preview) {
   }
   const { content, status, copying } = preview;
   const email = content.kind === "email";
+  setAttr(els.copyDialog, "data-copy-kind", content.kind);
   setProp(els.copyTitle, "textContent", email ? t("Xem trước email") : t("Xem trước nội dung có định dạng"));
   setProp(els.copyPin, "textContent", t("Bản đã lưu · edit {version}", { version: content.editVersion }));
   setProp(els.copySubject, "textContent", email ? t("Chủ đề: {subject}", { subject: content.subject }) : "");
@@ -634,7 +644,20 @@ function saveShortcut(event) {
 }
 
 function updateRichRun(element, value) {
-  dispatch({ type: "notes/rich-edited", index: Number(element.dataset.richIndex), before: element.dataset.richValue, value });
+  const before = element.dataset.richValue;
+  const index = Number(element.dataset.richIndex);
+  dispatch({ type: "notes/rich-edited", index, before, value });
+  const work = selectView(store.getState()).savedWork;
+  const run = work.mode === "rich" && work.blocks.flatMap(blockRuns)[index];
+  if (value !== before && run?.text === before) {
+    element.textContent = before;
+    setData(element, "richValue", before);
+    if (element.isConnected && document.activeElement === element && element.firstChild) {
+      const selection = window.getSelection();
+      selection?.collapse(element.firstChild, before.length);
+    }
+    return;
+  }
   if (els.rich.hidden) focusEditor();
   else if (!element.isConnected) focusEditor();
 }
@@ -655,7 +678,13 @@ function insertRichText(element, text) {
 }
 
 els.markdown.addEventListener("keydown", saveShortcut);
-els.rich.addEventListener("keydown", saveShortcut);
+els.rich.addEventListener("keydown", (event) => {
+  if (!event.isComposing && event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    return;
+  }
+  saveShortcut(event);
+});
 els.rich.addEventListener("compositionstart", (event) => {
   event.target.setAttribute("data-composing", "");
 });
@@ -667,14 +696,13 @@ els.rich.addEventListener("input", (event) => {
   if (!event.isComposing && !event.target.hasAttribute("data-composing")) updateRichRun(event.target, event.target.textContent);
 });
 els.rich.addEventListener("beforeinput", (event) => {
-  if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
+  if (!event.isComposing && (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak")) {
     event.preventDefault();
-    insertRichText(event.target, "\n");
   }
 });
 els.rich.addEventListener("paste", (event) => {
   event.preventDefault();
-  insertRichText(event.target, event.clipboardData.getData("text/plain"));
+  insertRichText(event.target, event.clipboardData.getData("text/plain").replace(/\r\n?|\n/g, " "));
 });
 els.rich.addEventListener("drop", (event) => event.preventDefault());
 for (const [button, mode] of [[els.modeView, "view"], [els.modeRich, "rich"], [els.modeWrite, "write"]]) {

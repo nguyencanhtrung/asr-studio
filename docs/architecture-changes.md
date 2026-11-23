@@ -2977,6 +2977,13 @@ and copies only after confirmation. Email sections come from headings in the
 saved Markdown. The meeting context carries the active tab so leaving Notes can
 cancel a preview independently of plain copy and export.
 
+View citation matching remains independent of rich-edit eligibility: unsupported
+lists retain safe unchanged generated-bullet chips, while fenced/HTML/indented
+raw blocks remain non-citable. Raw-boundary headings and hard-break paragraphs
+still preserve section scope and safe authored source links in View. Saved rich
+and email previews use the same neutral light document surface as clipboard HTML,
+including when the app shell is dark.
+
 **Verification.** The Notes reducer and Notes editor browser tests cover exact
 source bytes after an edit, tab and revision races, mixed-format source parity,
 and clipboard outcomes. This change adds no runtime library or export format.

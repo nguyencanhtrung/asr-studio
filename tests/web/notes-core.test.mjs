@@ -1533,6 +1533,18 @@ test("rich text runs edit only their source range and cancel restores the select
   assert.equal(saved(env).conflict.editVersion, 2);
 });
 
+test("rich text edits keep ordinary spaces and punctuation canonical", async () => {
+  const env = setup();
+  const markdown = "# Plan\n\nHello\n\n- one\n- two\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const index = runs.findIndex((node) => node.text === "Hello");
+  env.dispatch("rich-edited", { index, before: "Hello", value: "Hello world (draft)." });
+  assert.equal(saved(env).value, markdown.replace("Hello", "Hello world (draft)."));
+  assert.doesNotMatch(saved(env).value, /&#32;|\\[().]/);
+});
+
 test("raw edits preserve untouched CRLF and CR delimiters", async () => {
   const env = setup();
   await opened(env, { revisions: [revision({ markdown: "# A\r\n\r\nEdit me\rKeep me\n" })] });
@@ -1563,6 +1575,61 @@ test("unsupported inline tokens leave surrounding source links and stored citati
   assert.equal(saved(env).value, markdown);
   env.dispatch("rich-edited", { index: 0, before: "Plan", value: "Wrong" });
   assert.equal(saved(env).value, markdown);
+});
+
+test("citation matching treats raw headings and indented code as hard boundaries", async () => {
+  const env = setup();
+  const bullet = "The team reviewed its launch plan.";
+  const markdown = "# Meeting Notes\n\n## Overview\n\nNothing recorded.\n\n## Elsewhere  \n\n- " + `${bullet}\n`;
+  await opened(env, { revisions: [revision({
+    markdown,
+    citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg1", start_seconds: 9 }] }],
+  })] });
+  const view = selectView(env.state()).savedWork;
+  assert.equal(view.blocks.find((block) => block.kind === "list").items[0].chips.length, 0);
+  const code = "# Notes\n\n    | A | B |\n    | --- | --- |\n    | x | y |\n";
+  env.dispatch("draft-edited", { value: code });
+  assert.equal(selectView(env.state()).savedWork.blocks[1].kind, "raw");
+  env.dispatch("mode-chosen", { mode: "rich" });
+  assert.equal(selectView(env.state()).savedWork.mode, "write");
+  assert.equal(selectView(env.state()).savedWork.richFallback, true);
+});
+
+test("View keeps a safe authored source link visible through a Markdown hard break", async () => {
+  const env = setup();
+  const href = "/meetings/m1?notes_source=s1&segment=seg1#transcript";
+  const markdown = `# Notes\n\n[Before break](${href})  \nNext line.\n`;
+  await opened(env, { revisions: [revision({ markdown })] });
+  const raw = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  const source = raw.viewLines.flatMap(({ nodes }) => nodes).find((node) => node.kind === "source");
+  assert.equal(source.text, "Before break");
+  assert.equal(source.href, href);
+});
+
+test("View keeps citation parity for unsupported lists and raw heading scope", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\n## Actions \n\n- Alpha.\n  - sub note\n- Beta. \n";
+  await opened(env, { revisions: [revision({
+    markdown,
+    citations: [
+      { section: "Actions", text: "Alpha.", sources: [{ id: "seg-a", start_seconds: 1 }] },
+      { section: "Actions", text: "Beta.", sources: [{ id: "seg-b", start_seconds: 2 }] },
+    ],
+  })] });
+  const raw = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.deepEqual(raw.viewLines.map((line) => line.chips.map((chip) => chip.segmentId)), [["seg-a"], [], ["seg-b"]]);
+
+  const scoped = "# Notes\n\n## Decisions\n\n- Email the vendor.\n\n## Actions \n\n- Email the vendor.\n";
+  const scopedEnv = setup();
+  await opened(scopedEnv, { revisions: [revision({
+    markdown: scoped,
+    citations: [
+      { section: "Decisions", text: "Email the vendor.", sources: [{ id: "seg-d", start_seconds: 1 }] },
+      { section: "Actions", text: "Email the vendor.", sources: [{ id: "seg-a", start_seconds: 50 }] },
+    ],
+  })] });
+  const lists = selectView(scopedEnv.state()).savedWork.blocks.filter((block) => block.kind === "list");
+  assert.equal(lists[1].items[0].chips[0].segmentId, "seg-a");
 });
 
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {

@@ -462,6 +462,10 @@
   margin-left: auto;
 }
 
+.notes-toolbar-actions > .text-button {
+  min-height: 40px;
+}
+
 .notes-meta-row {
   display: flex;
   align-items: center;
@@ -875,6 +879,28 @@ a.notes-citation-chip:focus-visible {
 
 .notes-copy-dialog::backdrop {
   background: var(--overlay);
+}
+
+/* Saved rich/email previews mirror the neutral document written to the clipboard, even in dark mode. */
+.notes-copy-dialog[data-copy-kind] {
+  color-scheme: light;
+  background: #fff;
+  color: #222;
+  border-color: #c6c9cf;
+}
+
+.notes-copy-dialog[data-copy-kind] .notes-copy-header p {
+  color: #535861;
+}
+
+.notes-copy-dialog[data-copy-kind] .notes-copy-document {
+  background: #fff;
+  color: #222;
+  border-color: #c6c9cf;
+}
+
+.notes-copy-dialog[data-copy-kind] .notes-copy-document a {
+  color: #174b82;
 }
 
 .notes-copy-header {

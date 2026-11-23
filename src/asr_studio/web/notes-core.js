@@ -424,6 +424,8 @@ const referenceKey = (reference) => `${reference.meetingId}\u0000${reference.sna
 // shows none and never another bullet's. Each entry is used once, in order. Identical bullets cannot
 // be told apart, so a text keeps its chips only while the notes hold as many bullets with it as they
 // were made with: once one was edited or removed, or another was edited into a copy, none keeps a chip.
+const citationBoundary = "\u0000";
+
 function citedBullets(lines, citations) {
   const found = new Map();
   if (!citations.length) return found;
@@ -440,6 +442,10 @@ function citedBullets(lines, citations) {
   const counts = new Map();
   let section = "";
   lines.forEach((line, index) => {
+    if (line === citationBoundary) {
+      section = `${citationBoundary}${index}`;
+      return;
+    }
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       section = heading[2].trim();
@@ -681,7 +687,19 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
   const citationLines = Array(lines.length).fill("");
   const line = (index) => lines[index]?.text || "";
   const inline = (text, start) => inlineNodes(text, start, revision, origin, presentation);
-  const raw = (start, end) => ({ kind: "raw", text: markdown.slice(lines[start].offset, lines[end - 1].offset + line(end - 1).length) });
+  const raw = (start, end, { viewLines = false, citable = false } = {}) => {
+    if (citable) {
+      for (let index = start; index < end; index++) citationLines[index] = line(index);
+    } else if (!citationLines[start]) {
+      citationLines[start] = citationBoundary;
+    }
+    const block = { kind: "raw", text: markdown.slice(lines[start].offset, lines[end - 1].offset + line(end - 1).length) };
+    if (viewLines && presentation === "view") {
+      block.viewLines = lines.slice(start, end).map(({ text, offset }) => inline(text, offset));
+      block.viewLineIndexes = lines.slice(start, end).map((_, index) => start + index);
+    }
+    return block;
+  };
   const isThematic = (value) => /^(?: *-){3,} *$|^(?: *\*){3,} *$|^(?: *_){3,} *$/.test(value);
   const startsRaw = (value) => /^(?: {1,4}|\t|>|<|\[[^\]]+\]:|[-*+]\s*$|\d+[.)]\s*$)/.test(value)
     || /^#{1,6}\s*$/.test(value) || isThematic(value);
@@ -700,6 +718,8 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       index++;
       continue;
     }
+    const citationHeading = text.match(/^(#{1,6})\s+(.+)$/);
+    if (citationHeading) citationLines[index] = text;
     const close = fenceEnd(text);
     if (close) {
       // Literal Markdown fences close on a later line. HTML may close on its opening line.
@@ -710,7 +730,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       index = end;
       continue;
     }
-    if (isTableRule(line(index + 1)) || (text.includes("|") && /^\s*[:\-]+\s*$/.test(line(index + 1)))) {
+    if (!startsRaw(text) && (isTableRule(line(index + 1)) || (text.includes("|") && /^\s*[:\-]+\s*$/.test(line(index + 1))))) {
       let end = index + 2;
       while (line(end).includes("|")) end++;
       const headers = tableCells(text);
@@ -765,8 +785,9 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
         end = continuation + 1;
         while (line(end).trim() && !startsBlock(line(end).trimStart())) end++;
       }
-      if (unsupported) blocks.push(raw(index, end));
-      else {
+      if (unsupported) {
+        blocks.push(raw(index, end, { viewLines: presentation === "view", citable: presentation === "view" }));
+      } else {
         for (const item of items) citationLines[item.index] = line(item.index);
         blocks.push({ kind: "list", start, items });
       }
@@ -779,8 +800,9 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     // Keep setext headings, reference definitions, HTML, multiline hard breaks and
     // GFM syntax outside the supported profile visible in their original spelling.
     const paragraph = lines.slice(index, end);
-    if (unsupported || paragraph.some(({ text: value }) => /(?: {2,}|\\)$/.test(value) || /^ {0,3}[=-]+ *$/.test(value))) {
-      blocks.push(raw(index, end));
+    const hardBreak = paragraph.some(({ text: value }) => /(?: {2,}|\\)$/.test(value));
+    if (unsupported || hardBreak || paragraph.some(({ text: value }) => /^ {0,3}[=-]+ *$/.test(value))) {
+      blocks.push(raw(index, end, { viewLines: !unsupported && hardBreak }));
     } else {
       blocks.push({ kind: "paragraph", lines: paragraph.map(({ text: value, offset: start }) => inline(value, start)) });
     }
@@ -789,8 +811,14 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
   if (presentation === "view") {
     const cited = citedBullets(citationLines, revision.display_citations || revision.citations || []);
     for (const block of blocks) {
-      if (block.kind !== "list" || block.start !== null) continue;
-      for (const item of block.items) item.chips = (cited.get(item.index) || []).map((source) => citationChip(revision, source));
+      if (block.kind === "list" && block.start === null) {
+        for (const item of block.items) item.chips = (cited.get(item.index) || []).map((source) => citationChip(revision, source));
+      } else if (block.kind === "raw" && block.viewLines) {
+        block.viewLines = block.viewLines.map((nodes, index) => ({
+          nodes,
+          chips: (cited.get(block.viewLineIndexes[index]) || []).map((source) => citationChip(revision, source)),
+        }));
+      }
     }
   }
   return blocks;
@@ -808,7 +836,7 @@ export function blockRuns(block) {
 }
 
 function canEditRich(blocks) {
-  return blocks.length > 0 && blocks.every((block) => block.kind !== "raw"
+  return blocks.length > 0 && blocks.every((block) => block.kind !== "raw" && !block.unsupported
     && blockRuns(block).every((node) => Number.isInteger(node.start)));
 }
 
@@ -838,29 +866,37 @@ function rawTextareaEdit(markdown, value) {
     + markdown.slice(offsets[before.length - tail]);
 }
 
+function escapeRichValue(value, node, markdown) {
+  if (node.kind === "code") return /[`\r\n]/.test(value) ? null : value;
+  const syntax = "\\`*_[]<>~&|";
+  let escaped = [...value].map((char) => syntax.includes(char) ? `\\${char}` : char).join("").replace(/\t/g, "&#9;");
+  const lineStart = markdown.lastIndexOf("\n", node.start - 1) + 1;
+  const atLineStart = markdown.slice(lineStart, node.start) === "";
+  if (node.kind === "text" && atLineStart) {
+    const ordered = value.match(/^\d{1,9}([.)]) /);
+    if (ordered) {
+      const marker = ordered[1];
+      const position = ordered[0].indexOf(marker);
+      escaped = escaped.slice(0, position) + `\\${marker}` + escaped.slice(position + 1);
+    } else if (/^(?:#|[-+]) /.test(value)) {
+      escaped = `\\${escaped}`;
+    }
+  }
+  if (["strong", "em", "link"].includes(node.kind)) {
+    escaped = escaped.replace(/^ +| +$/g, (spaces) => spaces.replace(/ /g, "&#32;"));
+  }
+  return escaped;
+}
+
 function richMarkdownEdit(state, action, revision, draft) {
   if (state.mode !== "rich") return null;
   const blocks = markdownBlocks(draft.value, revision, state.origin);
   const nodes = blocks.flatMap(blockRuns);
   const node = nodes[action.index];
   if (!canEditRich(blocks) || !node || node.text !== action.before || node.text === action.value) return null;
-  const raw = draft.value.slice(node.start, node.end);
-  const [first, tail] = sharedEdges(node.text, action.value);
-  const offsets = [0];
-  for (let index = 0; index < raw.length; index++) {
-    const space = raw.slice(index).match(/^&#(?:32|9);/);
-    if (node.kind !== "code" && space) index += space[0].length - 1;
-    else if (node.kind !== "code" && raw[index] === "\\" && escapedPunctuation.test(raw[index + 1] || "")) index++;
-    offsets.push(index + 1);
-  }
-  const change = action.value.slice(first, action.value.length - tail);
-  const escaped = node.kind === "code" ? change
-    : change.replace(/[\\`*_\[\]<>~|&#=+.!()-]/g, "\\$&")
-      .replace(/\t/g, "&#9;").replace(/ /g, (space, index) => (
-        (first === 0 && index === 0) || (tail === 0 && index === change.length - 1) ? "&#32;" : space
-      ));
-  return draft.value.slice(0, node.start + offsets[first]) + escaped
-    + draft.value.slice(node.start + offsets[node.text.length - tail]);
+  const escaped = escapeRichValue(action.value, node, draft.value);
+  if (escaped === null) return null;
+  return draft.value.slice(0, node.start) + escaped + draft.value.slice(node.end);
 }
 
 const escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({
