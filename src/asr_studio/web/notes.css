@@ -434,9 +434,8 @@
   outline-offset: -2px;
 }
 
-.notes-mode-label {
+#notes-mode-rich {
   position: relative;
-  display: inline-flex;
 }
 
 .notes-mode-button svg {
@@ -448,14 +447,13 @@
   stroke-width: 1.7;
 }
 
-/* Hangs off the label's corner so showing it never moves the toolbar. */
+/* Keep the marker inside its button without moving the toolbar. */
 .notes-unsaved-dot {
   position: absolute;
-  top: 0;
-  left: 100%;
-  width: 8px;
-  height: 8px;
-  margin-left: 4px;
+  inset-block-start: 4px;
+  inset-inline-end: 4px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--warning);
 }
@@ -749,6 +747,21 @@ a.notes-citation-chip:focus-visible {
     flex-direction: column;
   }
 
+  /* Keep the two compact, icon-only actions together after the long labelled actions. */
+  .notes-toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .notes-toolbar-actions > button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .notes-toolbar-actions > :not(#notes-copy):not(#notes-export) {
+    grid-column: 1 / -1;
+  }
+
   .notes-run-actions > .primary-button,
   .notes-run-actions > .secondary-button,
   .notes-toolbar-actions > button,
@@ -770,3 +783,129 @@ a.notes-citation-chip:focus-visible {
 }
 
 #notes-source-members { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 8px; }
+
+.notes-meta-row {
+  flex-wrap: wrap;
+}
+
+.notes-mode-toggle {
+  flex: 0 0 auto;
+}
+
+.notes-mode-button {
+  gap: 5px;
+  padding-inline: 8px;
+}
+
+.notes-markdown-preview ol,
+.notes-copy-document :is(ol, ul) {
+  margin: 0 0 12px;
+  padding-inline-start: 24px;
+}
+
+.notes-table-wrap {
+  margin-block: 12px;
+  overflow: auto;
+}
+
+.notes-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.notes-table-wrap :is(th, td) {
+  min-width: 5rem;
+  padding: 6px 10px;
+  border: 1px solid var(--control-border);
+  vertical-align: top;
+}
+
+.notes-table-wrap [data-align="left"] { text-align: left; }
+.notes-table-wrap [data-align="center"] { text-align: center; }
+.notes-table-wrap [data-align="right"] { text-align: right; }
+
+.notes-markdown-fallback {
+  margin-block: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--ink);
+  font: var(--text-small)/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notes-inline-fallback { white-space: pre-wrap; }
+
+.notes-rich-editor [contenteditable="plaintext-only"] {
+  border-radius: 2px;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--control-border);
+  white-space: pre-wrap;
+  cursor: text;
+}
+
+.notes-rich-editor [contenteditable]:focus-visible,
+.notes-copy-document:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.notes-rich-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.notes-copy-dialog {
+  width: min(42rem, calc(100% - 28px));
+  max-height: calc(100dvh - 28px);
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.notes-copy-dialog[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+}
+
+.notes-copy-dialog::backdrop {
+  background: var(--overlay);
+}
+
+.notes-copy-header {
+  overflow-wrap: anywhere;
+}
+
+.notes-copy-header h2,
+.notes-copy-header p {
+  margin: 0 0 4px;
+}
+
+.notes-copy-header p {
+  color: var(--ink-2);
+  font-size: var(--text-control);
+}
+
+.notes-copy-document {
+  min-width: 0;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  overflow-wrap: anywhere;
+}
+
+.notes-copy-document > :first-child { margin-top: 0; }
+.notes-copy-document a { color: var(--accent); }
+
+.notes-copy-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

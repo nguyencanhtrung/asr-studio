@@ -374,7 +374,10 @@
                   <select id="notes-revision-selector" aria-label="Chọn phiên bản notes đã lưu"></select>
                 </div>
                 <div class="notes-toolbar-actions">
-                  <button class="icon-button" id="notes-save" type="button" aria-label="Lưu bản nháp" title="Lưu bản nháp"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 3h10l2 2v12H4V3Z" /><path d="M7 3v4h6V3M7 17v-5h6v5" /></svg></button>
+                  <button class="secondary-button" id="notes-save" type="button">Lưu bản nháp</button>
+                  <button class="text-button" id="notes-edit-cancel" type="button">Hủy chỉnh sửa</button>
+                  <button class="secondary-button" id="notes-copy-rich" type="button" aria-haspopup="dialog">Sao chép có định dạng</button>
+                  <button class="secondary-button" id="notes-copy-email" type="button" aria-haspopup="dialog">Xem trước email</button>
                   <button class="icon-button" id="notes-copy" type="button" aria-label="Sao chép bản đã lưu" title="Sao chép bản đã lưu"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" /><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7" /></svg></button>
                   <button class="icon-button" id="notes-export" type="button" aria-label="Tải Markdown đã lưu" title="Tải Markdown đã lưu"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 17h12" /></svg></button>
                 </div>
@@ -393,13 +396,18 @@
                 <p class="notes-revision-meta" id="notes-revision-meta"></p>
                 <div class="notes-mode-toggle" role="group" aria-label="Chế độ notes">
                   <button class="notes-mode-button" id="notes-mode-view" type="button" aria-pressed="true" aria-label="Xem" title="Xem"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10Z" /><circle cx="10" cy="10" r="2.5" /></svg></button>
-                  <button class="notes-mode-button" id="notes-mode-write" type="button" aria-pressed="false" aria-label="Viết" title="Viết"><span class="notes-mode-label"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m13.5 3.5 3 3L7 16H4v-3l9.5-9.5Z" /></svg><span class="notes-unsaved-dot" id="notes-unsaved-dot" title="Có thay đổi chưa lưu" aria-hidden="true" hidden></span></span></button>
+                  <button class="notes-mode-button" id="notes-mode-rich" type="button" aria-pressed="false">
+                    Viết<span class="notes-unsaved-dot" id="notes-unsaved-dot" title="Có thay đổi chưa lưu" aria-hidden="true" hidden></span>
+                  </button>
+                  <button class="notes-mode-button" id="notes-mode-write" type="button" aria-pressed="false">Markdown</button>
                 </div>
               </div>
               <p class="notes-link-warning" id="notes-link-warning" role="status" aria-live="polite" hidden></p>
               <div class="notes-frame">
                 <p class="notes-draft-banner" id="notes-view-draft" hidden>Đang xem bản nháp chưa lưu</p>
                 <div class="notes-markdown-preview" id="notes-preview" aria-label="Bản xem trước notes đã chọn"></div>
+                <p class="notes-draft-banner" id="notes-rich-fallback" role="status" hidden>Nội dung này cần chỉnh sửa trực tiếp bằng Markdown.</p>
+                <div class="notes-markdown-preview notes-rich-editor" id="notes-rich-editor" role="group" aria-label="Soạn notes có định dạng" hidden></div>
                 <label class="visually-hidden" for="notes-markdown">Chỉnh sửa Markdown của phiên bản notes đã chọn</label>
                 <textarea id="notes-markdown" rows="20" spellcheck="true" aria-describedby="notes-draft-status" hidden></textarea>
               </div>
@@ -583,6 +591,20 @@
         </div>
       </main>
     </div>
+
+    <dialog class="notes-copy-dialog" id="notes-copy-dialog" aria-labelledby="notes-copy-title" aria-describedby="notes-copy-pin">
+      <div class="notes-copy-header">
+        <h2 id="notes-copy-title" tabindex="-1" autofocus></h2>
+        <p id="notes-copy-pin"></p>
+        <p id="notes-copy-subject"></p>
+      </div>
+      <div class="notes-copy-document" id="notes-copy-document" role="region" aria-label="Nội dung đã lưu" tabindex="0"></div>
+      <p class="notes-action-status" id="notes-copy-result" role="status" aria-live="polite"></p>
+      <div class="notes-copy-controls">
+        <button class="primary-button" id="notes-copy-confirm" type="button">Sao chép</button>
+        <button class="secondary-button" id="notes-copy-close" type="button">Đóng</button>
+      </div>
+    </dialog>
 
     <dialog class="meeting-dialog" id="meeting-dialog" aria-labelledby="dialog-title" data-state="idle">
       <div class="dialog-shell">

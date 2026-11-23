@@ -248,7 +248,7 @@ function parseDetail(payload) {
     || !Number.isInteger(note.edit_version)
     || !["current", "stale", "historical"].includes(note.source_state)
   ) return null;
-  return note;
+  return normalizeRevision(note, note.meeting_id);
 }
 
 function normalizeCatalog(payload) {
@@ -459,46 +459,6 @@ function citedBullets(lines, citations) {
   return found;
 }
 
-// Inline nodes of one Markdown line: text, strong, code, em, link {…ids}, invalid {text, reason}.
-function inlineNodes(text, revision, origin) {
-  const token = /\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g;
-  const unescape = (value) => value.replace(/\\([\\`*_{}\[\]<>()#!|~+\-.>:@])/g, "$1");
-  const nodes = [];
-  let previous = 0;
-  let match;
-  while ((match = token.exec(text))) {
-    if (match.index > previous) nodes.push({ kind: "text", text: unescape(text.slice(previous, match.index)) });
-    if (match[1] !== undefined) {
-      const source = sourceReference(match[2], origin, revision.meeting_id, revision.source_snapshot_id);
-      if (revision.warnings.some((warning) => warning.href === match[2])) {
-        // Typed with a source the saved snapshot lacks: shown as text, never opened or repaired.
-        nodes.push({ kind: "invalid", text: unescape(match[1]), reason: t(" (liên kết nguồn không hợp lệ)") });
-      } else if (source) {
-        nodes.push({
-          kind: "link",
-          text: unescape(match[1]),
-          href: source.href,
-          meetingId: source.meetingId,
-          snapshotId: source.snapshotId,
-          segmentId: source.segmentId,
-          label: t("Mở nguồn transcript tại {time}", { time: unescape(match[1]) }),
-        });
-      } else {
-        nodes.push({ kind: "text", text: unescape(match[0]) });
-      }
-    } else if (match[3] !== undefined) {
-      nodes.push({ kind: "strong", text: unescape(match[3]) });
-    } else if (match[4] !== undefined) {
-      nodes.push({ kind: "code", text: unescape(match[4]) });
-    } else {
-      nodes.push({ kind: "em", text: unescape(match[5]) });
-    }
-    previous = token.lastIndex;
-  }
-  if (previous < text.length) nodes.push({ kind: "text", text: unescape(text.slice(previous)) });
-  return nodes;
-}
-
 function citationChip(revision, source, group = "") {
   const count = source.members?.length || 1;
   const label = count > 1 ? `${chipLabel(source.start_seconds)}–${chipLabel(source.end_seconds)}` : chipLabel(source.start_seconds);
@@ -512,52 +472,471 @@ function citationChip(revision, source, group = "") {
   };
 }
 
-// Blocks of the preview: {kind: heading, level, nodes} | {kind: list, items: [{nodes, chips}]} | {kind: paragraph, lines: [nodes]}.
-function markdownBlocks(markdown, revision, mode, origin) {
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-  // The panel's own heading is an h3, so the shallowest heading in the notes becomes an h4.
-  const shallowest = Math.min(
-    ...lines.map((line) => line.match(/^(#{1,6})\s+(.+)$/)).filter(Boolean).map((match) => match[1].length),
-  );
-  // Chips belong to Xem; the Markdown, Viết, the copy and the download never carry a reference.
-  const cited = mode === "view" ? citedBullets(lines, revision.display_citations || revision.citations || []) : new Map();
-  const blocks = [];
-  let list = null;
-  let paragraph = null;
-  for (const [index, line] of lines.entries()) {
-    if (!line.trim()) {
-      paragraph = null;
-      list = null;
+const escapedPunctuation = /[!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-]/;
+const headingPattern = /^(#{1,6}) +([^ ].*)$/;
+const listPattern = /^( {0,3})([-*+]|\d{1,9}[.)]) +([^ ].*)$/;
+const lineEnding = /\r\n?|\n/;
+
+function unescapeMarkdown(value) {
+  return value.replace(/\\([!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-])|&#(32|9);/g,
+    (_, punctuation, space) => punctuation || (space === "32" ? " " : "\t"));
+}
+
+function ordinaryHref(raw) {
+  if (!/^https?:\/\//i.test(raw) || /[\s<>"'\\\x00-\x1f\x7f]/u.test(raw)) return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.searchParams.has("notes_source")) return null;
+  return raw;
+}
+
+function bracketEnd(text, start) {
+  let end = start;
+  let depth = 0;
+  do {
+    for (; end < text.length; end++) {
+      if (text[end] === "\\") end++;
+      else if (text[end] === "[") depth++;
+      else if (text[end] === "]" && --depth === 0) break;
+    }
+    end++;
+  } while (text[end] === "[");
+  if (text[end] === "(") {
+    depth = 1;
+    for (end++; end < text.length; end++) {
+      if (text[end] === "\\") end++;
+      else if (text[end] === "(") depth++;
+      else if (text[end] === ")" && --depth === 0) break;
+    }
+    end++;
+  }
+  return Math.min(end, text.length);
+}
+
+function htmlLiteralEnd(text, index) {
+  const rest = text.slice(index);
+  if (rest.startsWith("<!--")) {
+    const end = rest.indexOf("-->", 4);
+    return end === -1 ? text.length : index + end + 3;
+  }
+  const tag = rest.match(/^<\/?([a-z][\w-]*)(?:[^<>"']|"[^"]*"|'[^']*')*>/i);
+  if (!tag) {
+    const end = text.indexOf(">", index + 1);
+    return end === -1 ? index + 1 : end + 1;
+  }
+  const name = tag[1].toLowerCase();
+  if (/^<(?:script|style|iframe|object|svg|math|code|pre)(?:\s|>)/i.test(tag[0])) {
+    const close = rest.match(new RegExp(`</${name}\\s*>`, "i"));
+    return close ? index + close.index + close[0].length : text.length;
+  }
+  return index + tag[0].length;
+}
+
+// The supported inline tokens have one editable text run with a source range. Anything
+// ambiguous stays literal, including nested styles, images, HTML and reference links.
+function inlineNodes(text, offset, revision, origin, presentation) {
+  const nodes = [];
+  let start = 0;
+  const addText = (end) => {
+    if (end > start) nodes.push({ kind: "text", text: unescapeMarkdown(text.slice(start, end)), start: offset + start, end: offset + end });
+  };
+  let index = 0;
+  const addRaw = (end) => {
+    addText(index);
+    nodes.push({ kind: "raw", text: text.slice(index, end) });
+    start = index = end;
+  };
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "\\" && escapedPunctuation.test(text[index + 1] || "")) {
+      index += 2;
       continue;
     }
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      paragraph = null;
-      list = null;
-      blocks.push({ kind: "heading", level: Math.min(6, heading[1].length - shallowest + 4), nodes: inlineNodes(heading[2], revision, origin) });
+    const space = char === "&" && text.slice(index).match(/^&#(?:32|9);/);
+    if (space) {
+      index += space[0].length;
       continue;
     }
-    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
-    if (bullet) {
-      paragraph = null;
-      if (!list) {
-        list = { kind: "list", items: [] };
-        blocks.push(list);
+    if (char === "!" && text[index + 1] === "[") {
+      addRaw(bracketEnd(text, index + 1));
+      continue;
+    }
+    if (char === "[") {
+      const match = text.slice(index).match(/^\[((?:\\[^\r\n]|[^\[\]\\])+)\]\(([^()\s]+)\)/);
+      if (!match) {
+        addRaw(bracketEnd(text, index));
+        continue;
       }
-      list.items.push({
-        nodes: inlineNodes(bullet[1], revision, origin),
-        chips: (cited.get(index) || []).map((source) => citationChip(revision, source)),
-      });
+      addText(index);
+      const [markup, label, dest] = match;
+      const source = revision.source_snapshot_id && sourceReference(dest, origin, revision.meeting_id, revision.source_snapshot_id);
+      const invalid = revision.warnings.some((warning) => warning.href === dest);
+      const href = ordinaryHref(dest);
+      // Only View annotates sources. Clipboard can carry safe links the author wrote.
+      if (presentation === "view" && invalid) {
+        nodes.push({ kind: "invalid", text: unescapeMarkdown(label), reason: t(" (liên kết nguồn không hợp lệ)") });
+      } else if (presentation === "view" && source) {
+        nodes.push({ kind: "source", ...source, text: unescapeMarkdown(label), label: t("Mở nguồn transcript tại {time}", { time: unescapeMarkdown(label) }) });
+      } else if (presentation === "clipboard" && source && !invalid) {
+        nodes.push({ kind: "link", href: new URL(source.href, origin).href, text: unescapeMarkdown(label) });
+      } else if (href && !source && !invalid && !/(^|[^\\])[*_`<&]/.test(label)) {
+        nodes.push({ kind: "link", href, text: unescapeMarkdown(label), start: offset + index + 1, end: offset + index + 1 + label.length });
+      } else {
+        nodes.push({ kind: "raw", text: markup });
+      }
+      start = index += markup.length;
       continue;
     }
-    list = null;
-    if (!paragraph) {
-      paragraph = { kind: "paragraph", lines: [] };
-      blocks.push(paragraph);
+    if (char === "*" || char === "_" || char === "`") {
+      const word = /[\p{L}\p{N}]/u;
+      if (char === "_" && word.test(text[index - 1] || "") && word.test(text[index + 1] || "")) {
+        index++;
+        continue;
+      }
+      let runEnd = index + 1;
+      while (text[runEnd] === char) runEnd++;
+      const delimiter = text.slice(index, runEnd);
+      if (delimiter.length > (char === "`" ? 1 : 2)) {
+        const close = text.indexOf(delimiter, runEnd);
+        addRaw(close < 0 ? (char === "`" ? text.length : runEnd) : close + delimiter.length);
+        continue;
+      }
+      const contentStart = index + delimiter.length;
+      let end = contentStart;
+      while (end < text.length && text[end] !== char) {
+        end += char !== "`" && text[end] === "\\" && escapedPunctuation.test(text[end + 1] || "") ? 2 : 1;
+      }
+      const value = text.slice(contentStart, end);
+      if (!value || value !== value.trim() || !text.startsWith(delimiter, end) || text[end + delimiter.length] === char
+        || (char === "_" && (word.test(text[index - 1] || "") || word.test(text[end + delimiter.length] || "")))
+        || (char !== "`" && /(^|[^\\])[*_`\[\]<~]/.test(value))) {
+        addRaw(text.startsWith(delimiter, end) ? end + delimiter.length : char === "`" ? text.length : runEnd);
+        continue;
+      }
+      addText(index);
+      nodes.push({
+        kind: char === "`" ? "code" : delimiter.length === 2 ? "strong" : "em",
+        text: char === "`" ? value : unescapeMarkdown(value),
+        start: offset + contentStart,
+        end: offset + end,
+      });
+      start = index = end + delimiter.length;
+      continue;
     }
-    paragraph.lines.push(inlineNodes(line, revision, origin));
+    if (char === "<") {
+      addRaw(htmlLiteralEnd(text, index));
+      continue;
+    }
+    if (text.startsWith("~~", index)) {
+      const close = text.indexOf("~~", index + 2);
+      addRaw(close < 0 ? index + 2 : close + 2);
+      continue;
+    }
+    const entity = char === "&" && text.slice(index).match(/^&(?:#\w+|[a-z]+);/i);
+    if (entity || char === "]") {
+      addRaw(index + (entity ? entity[0].length : 1));
+      continue;
+    }
+    index++;
+  }
+  addText(text.length);
+  return nodes;
+}
+
+function tableCells(line) {
+  if (!line.includes("|")) return null;
+  const cells = [];
+  let start = 0;
+  const addCell = (end) => {
+    const cell = line.slice(start, end);
+    cells.push({ text: cell.trim(), offset: start + cell.length - cell.trimStart().length });
+  };
+  for (let index = 0; index < line.length; index++) {
+    if (line[index] === "\\" && escapedPunctuation.test(line[index + 1] || "")) index++;
+    else if (line[index] === "|") {
+      addCell(index);
+      start = index + 1;
+    }
+  }
+  if (!cells.length) return null;
+  addCell(line.length);
+  if (!cells[0].text) cells.shift();
+  if (!cells.at(-1)?.text) cells.pop();
+  return cells.length ? cells : null;
+}
+
+function markdownBlocks(markdown, revision, origin, presentation = "rich") {
+  const pieces = markdown.split(/(\r\n?|\n)/);
+  const lines = [];
+  let offset = 0;
+  for (let index = 0; index < pieces.length; index += 2) {
+    lines.push({ text: pieces[index], offset });
+    offset += pieces[index].length + (pieces[index + 1]?.length || 0);
+  }
+  const blocks = [];
+  const citationLines = Array(lines.length).fill("");
+  const line = (index) => lines[index]?.text || "";
+  const inline = (text, start) => inlineNodes(text, start, revision, origin, presentation);
+  const raw = (start, end) => ({ kind: "raw", text: markdown.slice(lines[start].offset, lines[end - 1].offset + line(end - 1).length) });
+  const isThematic = (value) => /^(?: *-){3,} *$|^(?: *\*){3,} *$|^(?: *_){3,} *$/.test(value);
+  const startsRaw = (value) => /^(?: {1,4}|\t|>|<|\[[^\]]+\]:|[-*+]\s*$|\d+[.)]\s*$)/.test(value)
+    || /^#{1,6}\s*$/.test(value) || isThematic(value);
+  const fenceEnd = (value) => {
+    const opening = value.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (opening) return new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \t]*$`);
+    if (/^ {0,3}<!--/.test(value)) return /-->/;
+    const tag = value.match(/^ {0,3}<(script|style|iframe|object|svg|math|code|pre|textarea)(?:\s|>|$)/i);
+    return tag ? new RegExp(`</${tag[1]}\\s*>`, "i") : null;
+  };
+  const isTableRule = (value) => /\|/.test(value) && /^[\s|:-]+$/.test(value);
+  const startsBlock = (value) => headingPattern.test(value) || listPattern.test(value) || startsRaw(value) || fenceEnd(value);
+  for (let index = 0; index < lines.length;) {
+    const text = line(index);
+    if (!text.trim()) {
+      index++;
+      continue;
+    }
+    const close = fenceEnd(text);
+    if (close) {
+      // Literal Markdown fences close on a later line. HTML may close on its opening line.
+      let end = index + (/^ {0,3}</.test(text) ? 0 : 1);
+      while (end < lines.length && !close.test(line(end))) end++;
+      end = Math.min(lines.length, end + 1);
+      blocks.push(raw(index, end));
+      index = end;
+      continue;
+    }
+    if (isTableRule(line(index + 1)) || (text.includes("|") && /^\s*[:\-]+\s*$/.test(line(index + 1)))) {
+      let end = index + 2;
+      while (line(end).includes("|")) end++;
+      const headers = tableCells(text);
+      const rules = tableCells(line(index + 1));
+      const rows = lines.slice(index, end).map((entry) => tableCells(entry.text));
+      if (!headers || rules?.length !== headers.length || !rules.every((cell) => /^:?-{3,}:?$/.test(cell.text))
+        || rows.some((row) => row?.length !== headers.length || row.some((cell) => !cell.text || cell.text.includes("`")))) {
+        blocks.push(raw(index, end));
+      } else {
+        blocks.push({
+          kind: "table",
+          align: rules.map(({ text: rule }) => rule.endsWith(":") ? rule.startsWith(":") ? "center" : "right" : "left"),
+          rows: rows.filter((_, row) => row !== 1).map((row, rowIndex) => row.map((cell) => inline(cell.text, lines[index + (rowIndex ? rowIndex + 1 : 0)].offset + cell.offset))),
+        });
+      }
+      index = end;
+      continue;
+    }
+    const heading = text.match(headingPattern);
+    if (heading && !/ +#+ *$/.test(text) && !/\s$/.test(text)) {
+      citationLines[index] = text;
+      blocks.push({ kind: "heading", level: heading[1].length, nodes: inline(heading[2], lines[index].offset + text.length - heading[2].length) });
+      index++;
+      continue;
+    }
+    const list = text.match(listPattern);
+    if (list && !isThematic(text)) {
+      const ordered = /^\d/.test(list[2]);
+      const marker = list[2].at(-1);
+      const start = ordered ? Number(list[2].slice(0, -1)) : null;
+      let indent = list[1].length;
+      const items = [];
+      let end = index;
+      let unsupported = false;
+      while (end < lines.length && line(end).trim()) {
+        const item = line(end).match(listPattern);
+        if (item && !isThematic(line(end)) && item[2].at(-1) === marker && item[1].length <= indent) {
+          indent = item[1].length;
+          unsupported ||= /^\[[ xX]\](?: |$)/.test(item[3]) || /\s$/.test(item[3]);
+          items.push({ index: end, nodes: inline(item[3], lines[end].offset + line(end).length - item[3].length), chips: [] });
+        } else if (startsBlock(line(end)) && !/^\s/.test(line(end))) {
+          break;
+        } else {
+          unsupported = true;
+        }
+        end++;
+      }
+      let continuation = end;
+      while (continuation < lines.length && !line(continuation).trim()) continuation++;
+      if (continuation < lines.length && /^\s/.test(line(continuation))) {
+        unsupported = true;
+        end = continuation + 1;
+        while (line(end).trim() && !startsBlock(line(end).trimStart())) end++;
+      }
+      if (unsupported) blocks.push(raw(index, end));
+      else {
+        for (const item of items) citationLines[item.index] = line(item.index);
+        blocks.push({ kind: "list", start, items });
+      }
+      index = end;
+      continue;
+    }
+    let end = index + 1;
+    const unsupported = startsRaw(text) || Boolean(heading) || /^ {0,3}[=\-]+ *$/.test(line(end));
+    while (line(end).trim() && !fenceEnd(line(end)) && (unsupported || !startsBlock(line(end)))) end++;
+    // Keep setext headings, reference definitions, HTML, multiline hard breaks and
+    // GFM syntax outside the supported profile visible in their original spelling.
+    const paragraph = lines.slice(index, end);
+    if (unsupported || paragraph.some(({ text: value }) => /(?: {2,}|\\)$/.test(value) || /^ {0,3}[=-]+ *$/.test(value))) {
+      blocks.push(raw(index, end));
+    } else {
+      blocks.push({ kind: "paragraph", lines: paragraph.map(({ text: value, offset: start }) => inline(value, start)) });
+    }
+    index = end;
+  }
+  if (presentation === "view") {
+    const cited = citedBullets(citationLines, revision.display_citations || revision.citations || []);
+    for (const block of blocks) {
+      if (block.kind !== "list" || block.start !== null) continue;
+      for (const item of block.items) item.chips = (cited.get(item.index) || []).map((source) => citationChip(revision, source));
+    }
   }
   return blocks;
+}
+
+// Each editable run owns only its inner source range. Labels never include their URL.
+export function blockRuns(block) {
+  switch (block.kind) {
+    case "heading": return block.nodes;
+    case "paragraph": return block.lines.flat();
+    case "list": return block.items.flatMap((item) => item.nodes);
+    case "table": return block.rows.flat(2);
+    default: return [];
+  }
+}
+
+function canEditRich(blocks) {
+  return blocks.length > 0 && blocks.every((block) => block.kind !== "raw"
+    && blockRuns(block).every((node) => Number.isInteger(node.start)));
+}
+
+function sharedEdges(before, after) {
+  let first = 0;
+  while (first < before.length && before[first] === after[first]) first++;
+  let tail = 0;
+  while (tail < before.length - first && tail < after.length - first
+    && before[before.length - tail - 1] === after[after.length - tail - 1]) tail++;
+  return [first, tail];
+}
+
+// Textareas expose LF even when the server stores CRLF or CR. Keep separators in
+// the untouched prefix and suffix and use the document's separator for inserted lines.
+function rawTextareaEdit(markdown, value) {
+  const before = markdown.replace(/\r\n?/g, "\n");
+  if (markdown === before) return value;
+  const [first, tail] = sharedEdges(before, value);
+  const offsets = [0];
+  for (let index = 0; index < markdown.length; index++) {
+    if (markdown[index] === "\r" && markdown[index + 1] === "\n") index++;
+    offsets.push(index + 1);
+  }
+  const newline = markdown.match(lineEnding)[0];
+  return markdown.slice(0, offsets[first])
+    + value.slice(first, value.length - tail).replace(/\n/g, newline)
+    + markdown.slice(offsets[before.length - tail]);
+}
+
+function richMarkdownEdit(state, action, revision, draft) {
+  if (state.mode !== "rich") return null;
+  const blocks = markdownBlocks(draft.value, revision, state.origin);
+  const nodes = blocks.flatMap(blockRuns);
+  const node = nodes[action.index];
+  if (!canEditRich(blocks) || !node || node.text !== action.before || node.text === action.value) return null;
+  const raw = draft.value.slice(node.start, node.end);
+  const [first, tail] = sharedEdges(node.text, action.value);
+  const offsets = [0];
+  for (let index = 0; index < raw.length; index++) {
+    const space = raw.slice(index).match(/^&#(?:32|9);/);
+    if (node.kind !== "code" && space) index += space[0].length - 1;
+    else if (node.kind !== "code" && raw[index] === "\\" && escapedPunctuation.test(raw[index + 1] || "")) index++;
+    offsets.push(index + 1);
+  }
+  const change = action.value.slice(first, action.value.length - tail);
+  const escaped = node.kind === "code" ? change
+    : change.replace(/[\\`*_\[\]<>~|&#=+.!()-]/g, "\\$&")
+      .replace(/\t/g, "&#9;").replace(/ /g, (space, index) => (
+        (first === 0 && index === 0) || (tail === 0 && index === change.length - 1) ? "&#32;" : space
+      ));
+  return draft.value.slice(0, node.start + offsets[first]) + escaped
+    + draft.value.slice(node.start + offsets[node.text.length - tail]);
+}
+
+const escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+})[char]);
+
+function inlineHtml(nodes) {
+  return nodes.map((node) => {
+    const text = escapeHtml(node.text);
+    switch (node.kind) {
+      case "link": return `<a href="${escapeHtml(node.href)}" style="color:#174b82">${text}</a>`;
+      case "strong": return `<strong>${text}</strong>`;
+      case "em": return `<em>${text}</em>`;
+      case "code": return `<code>${text}</code>`;
+      case "raw": return `<span style="white-space:pre-wrap">${text}</span>`;
+      default: return text;
+    }
+  }).join("");
+}
+
+function clipboardBlockHtml(block) {
+  switch (block.kind) {
+    case "heading": return `<h${block.level}>${inlineHtml(block.nodes)}</h${block.level}>`;
+    case "paragraph": return `<p>${block.lines.map(inlineHtml).join("<br>")}</p>`;
+    case "list": {
+      const open = block.start === null ? "ul" : `ol start="${block.start}"`;
+      return `<${open}>${block.items.map((item) => `<li>${inlineHtml(item.nodes)}</li>`).join("")}</${block.start === null ? "ul" : "ol"}>`;
+    }
+    case "table": {
+      const rowTag = "tr";
+      const row = (tag, cells) => `<${rowTag}>${cells.map((nodes, index) => `<${tag} style="border:1px solid #d4d7dc;padding:4px 8px;text-align:${block.align[index]}">${inlineHtml(nodes)}</${tag}>`).join("")}</${rowTag}>`;
+      return `<table style="border-collapse:collapse"><thead>${row("th", block.rows[0])}</thead><tbody>${block.rows.slice(1).map((cells) => row("td", cells)).join("")}</tbody></table>`;
+    }
+    case "section": return `<section aria-label="${escapeHtml(block.label)}">${block.blocks.map(clipboardBlockHtml).join("")}</section>`;
+    default: return `<pre style="white-space:pre-wrap">${escapeHtml(block.text)}</pre>`;
+  }
+}
+
+function clipboardHtml(blocks) {
+  return `<div style="background:#fff;color:#222;font:14px/1.6 Arial,sans-serif">${blocks.map(clipboardBlockHtml).join("")}</div>`;
+}
+
+const emailSectionNames = new Map([
+  ["intro", "intro"], ["introduction", "intro"], ["mở đầu", "intro"], ["giới thiệu", "intro"],
+  ["body", "body"], ["nội dung", "body"],
+  ["action items", "actions"], ["confirmed action items", "actions"],
+  ["việc cần làm", "actions"], ["việc cần làm đã xác nhận", "actions"], ["hành động đã xác nhận", "actions"], ["các việc đã thống nhất", "actions"],
+  ["outro", "outro"], ["closing", "outro"], ["kết thúc", "outro"], ["lời kết", "outro"],
+]);
+
+function headingText(block) {
+  return block?.kind === "heading" && block.nodes.every((node) => node.kind !== "raw")
+    ? block.nodes.map((node) => node.text).join("") : "";
+}
+
+function emailSectionName(heading) {
+  return emailSectionNames.get(heading.toLowerCase().normalize("NFC").replace(/:\s*$/, "").trim());
+}
+
+function emailBlocks(blocks) {
+  const sections = [];
+  for (let index = 0; index < blocks.length;) {
+    const block = blocks[index];
+    const label = headingText(block);
+    const section = emailSectionName(label);
+    if (!section) {
+      sections.push(block);
+      index++;
+      continue;
+    }
+    let end = index + 1;
+    while (end < blocks.length && !(blocks[end].kind === "heading" && blocks[end].level <= block.level)) end++;
+    sections.push({ kind: "section", section, label, blocks: [block, ...emailBlocks(blocks.slice(index + 1, end))] });
+    index = end;
+  }
+  return sections;
 }
 
 // ---- state ----
@@ -583,6 +962,9 @@ export const initialState = {
   hidden: false, // the page is in the background: polls slow down
   origin: "",
   view: "",
+  // History publishes the selected meeting tab. Core tests without a tab use Notes as their
+  // implicit context; the browser always supplies the painted tab.
+  activeTab: null,
   meetingId: null,
   meeting: null,
   transcribing: false,
@@ -614,7 +996,10 @@ export const initialState = {
   taskSteps: {},
   snapshots: {}, // saved transcript snapshots by id
   readId: 0, // id of the latest notes read
-  authoritativeId: 0, // counts reads of the saved copy for copy and download
+  selectionId: 0, // changes even when the operator switches away and back
+  previewContextId: 0, // rich/email previews are valid only while this Notes context is active
+  copyPreview: null,
+  previewLoading: false,
   poll: { token: 0, scheduled: false },
   source: { id: 0, key: "", current: null, visible: false, status: "", focus: 0 },
 };
@@ -1291,18 +1676,35 @@ function useLatestSavedNote(state) {
   return out(patchNotes(next, state.meetingId, { actionMessage: t("Đã tải bản Markdown mới nhất đã lưu.") }));
 }
 
-// Copy and download use the saved text read just now, never the draft.
+const PREVIEW_READ = "notes/authoritative/preview";
+const AUTHORITATIVE_KEYS = ["notes/authoritative/copy", "notes/authoritative/export", PREVIEW_READ];
+const isPreviewAction = (action) => action === "rich" || action === "email";
+
+function staleAuthoritativeRead(state, meta) {
+  return meta.op === "authoritative" && (meta.selectionId !== state.selectionId
+    || (isPreviewAction(meta.action) && (state.activeTab !== "notes" || meta.previewContextId !== state.previewContextId)));
+}
+const blockedSavedAction = (data, noteId, draft) => draftIsDirty(draft) || Boolean(draft.conflict) || Boolean(data.saving[noteId]);
+
+// Every action reads the selected saved revision. Copy and export remain independent.
 function readSavedMarkdown(state, action) {
   const meetingId = state.meetingId;
   const data = currentEntry(state);
-  const revision = data && data.revisions.find((item) => item.id === data.selectedNoteId);
-  if (!meetingId || !revision) return out(state);
+  const revision = selectedRevision(state);
+  if (!revision) return out(state);
   const draft = state.drafts[revision.id];
-  if (draftIsDirty(draft) || draft.conflict || data.saving[revision.id]) {
+  if (blockedSavedAction(data, revision.id, draft)) {
     return out(patchNotes(state, meetingId, { actionMessage: t("Lưu hoặc giải quyết bản nháp trước khi sao chép hay tải xuống.") }));
   }
-  return out({ ...patchNotes(state, meetingId, { actionMessage: t("Đang đọc phiên bản đã lưu mới nhất…") }), authoritativeId: state.authoritativeId + 1 }, [
-    request(`notes/authoritative/${state.authoritativeId + 1}`, noteEndpoint(revision.id), "GET", undefined, "authoritative", {
+  const preview = isPreviewAction(action);
+  if (preview && state.activeTab !== "notes") return out(state);
+  const next = preview
+    ? { ...patchNotes(state, meetingId, { actionMessage: "" }), previewLoading: true }
+    : patchNotes(state, meetingId, { actionMessage: t("Đang đọc phiên bản đã lưu mới nhất…") });
+  return out(next, [
+    request(preview ? PREVIEW_READ : `notes/authoritative/${action}`, noteEndpoint(revision.id), "GET", undefined, "authoritative", {
+      previewContextId: preview ? state.previewContextId : null,
+      selectionId: state.selectionId,
       meetingId,
       noteId: revision.id,
       action,
@@ -1314,32 +1716,69 @@ function readSavedMarkdown(state, action) {
 
 function savedMarkdownRead(state, action, failed) {
   const { meetingId, noteId, currentValue, expectedVersion } = action.meta;
+  if (isPreviewAction(action.meta.action)) state = { ...state, previewLoading: false };
   const message = (actionMessage) => out(patchNotes(state, meetingId, { actionMessage }));
   if (failed) return message(apiError(action.error).message || t("Không thể đọc bản notes đã lưu mới nhất."));
   const latest = parseDetail(object(action.response.body));
   if (!latest) return message(t("Máy chủ không trả về revision notes hợp lệ."));
   if (latest.id !== noteId || latest.meeting_id !== meetingId) return message(t("Revision notes mới nhất không khớp cuộc họp."));
-  let next = patchNotes(state, meetingId, { revisions: replaceRevision(entryOf(state, meetingId), latest) });
+  const data = currentEntry(state);
   const draft = state.drafts[noteId];
-  if (draft.value !== currentValue || draft.expectedEditVersion !== expectedVersion) {
+  if (data.saving[noteId] || latest.edit_version < selectedRevision(state).edit_version) {
+    return message(t("Bản đã lưu đang thay đổi. Hãy thử lại."));
+  }
+  let next = patchNotes(state, meetingId, { revisions: replaceRevision(data, latest) });
+  if (draft.value !== currentValue || draft.expectedEditVersion !== expectedVersion || draft.conflict) {
     next = patchDraft(next, noteId, { conflict: { markdown: latest.markdown, editVersion: latest.edit_version } });
     return out(patchNotes(next, meetingId, { actionMessage: t("Bản nháp thay đổi trong lúc đồng bộ. Bản nháp được giữ; chưa sao chép hoặc tải xuống.") }));
   }
   if (latest.edit_version !== expectedVersion || latest.markdown !== currentValue) {
     next = patchDraft(next, noteId, { value: latest.markdown, baselineMarkdown: latest.markdown, expectedEditVersion: latest.edit_version, conflict: null });
   }
-  if (state.meetingId !== meetingId || entryOf(state, meetingId).selectedNoteId !== noteId) {
-    return out(patchNotes(next, meetingId, { actionMessage: t("Phiên bản notes đã đổi trong lúc đồng bộ. Hãy chọn lại để tiếp tục.") }));
-  }
   if (action.meta.action === "copy") {
     return out(patchNotes(next, meetingId, { actionMessage: "" }), [
-      call("copy", [latest.markdown], { key: "notes/copy", ok: "notes/copied", error: "notes/copy-failed", meta: { editVersion: latest.edit_version } }),
+      call("copy", [latest.markdown], { key: "notes/copy", ok: "notes/copied", error: "notes/copy-failed", meta: { editVersion: latest.edit_version, selectionId: state.selectionId } }),
     ]);
   }
-  return out(
-    patchNotes(next, meetingId, { actionMessage: t("Đã tải bản đã lưu · edit {version}.", { version: latest.edit_version }) }),
-    [call("download", [safeFilename(state.meeting && state.meeting.title), latest.markdown])],
-  );
+  if (action.meta.action === "export") {
+    return out(
+      patchNotes(next, meetingId, { actionMessage: t("Đã tải bản đã lưu · edit {version}.", { version: latest.edit_version }) }),
+      [call("download", [safeFilename(state.meeting && state.meeting.title), latest.markdown])],
+    );
+  }
+  const kind = action.meta.action;
+  const blocks = markdownBlocks(latest.markdown, latest, state.origin, "clipboard");
+  const heading = headingText(blocks[0]);
+  const content = {
+    kind, noteId, editVersion: latest.edit_version,
+    blocks: kind === "email" ? emailBlocks(blocks) : blocks,
+    subject: kind === "email"
+      ? ((!emailSectionName(heading) && heading) || state.meeting?.title || "").replace(/\s+/g, " ").trim() : "",
+    markdown: latest.markdown,
+  };
+  return out({ ...patchNotes(next, meetingId, { actionMessage: "" }), copyPreview: { content, copying: false, status: "" } });
+}
+
+function copyPreview(state) {
+  const preview = state.copyPreview;
+  if (!preview || preview.copying) return out(state);
+  const { content } = preview;
+  const next = { ...state, copyPreview: { ...preview, copying: true, status: "" } };
+  return out(next, [
+    call("copyFormatted", [clipboardHtml(content.blocks), content.markdown], {
+      key: "notes/copy-formatted", ok: "notes/preview-copied", error: "notes/preview-copy-failed", meta: { content },
+    }),
+  ]);
+}
+
+function finishPreviewCopy(state, action) {
+  const preview = state.copyPreview;
+  if (!preview || preview.content !== action.meta.content) return out(state);
+  const status = action.type === "notes/preview-copy-failed"
+    ? t("Không thể truy cập clipboard. Trình duyệt chưa sao chép nội dung.")
+    : action.value === "html" ? t("Đã sao chép nội dung có định dạng.")
+      : t("Đã sao chép văn bản Markdown vì trình duyệt không cho sao chép HTML.");
+  return out({ ...state, copyPreview: { ...preview, copying: false, status } });
 }
 
 // ---- saved transcript source ----
@@ -1490,18 +1929,29 @@ function meetingContext(state, action) {
   const detail = action.detail || {};
   const previousMeeting = state.meeting;
   const meeting = detail.view === "meeting" ? detail.meeting : null;
+  const activeTab = meeting ? detail.tab : null;
+  const leavingNotes = state.activeTab === "notes" && activeTab !== "notes";
   let next = {
     ...state,
     view: detail.view || "",
+    activeTab,
     meeting,
     transcribing: Boolean(detail.transcriptionRequestInFlight),
     speakerNames: Array.isArray(action.speakerNames) ? action.speakerNames : [],
   };
+  const previewEffects = leavingNotes ? [{ type: "cancel", key: PREVIEW_READ }] : [];
+  if (leavingNotes) {
+    next = { ...next, previewContextId: state.previewContextId + 1, copyPreview: null, previewLoading: false };
+  }
   const meetingId = meeting && meeting.id;
-  if (!meetingId) return stopPolling({ ...next, meetingId: null });
+  if (!meetingId) {
+    const stopped = stopPolling({ ...next, meetingId: null });
+    stopped.effects.push(...previewEffects);
+    return stopped;
+  }
   const changed = state.meetingId !== meetingId;
   next = { ...next, meetingId };
-  let result = out(next);
+  let result = out(next, previewEffects);
   if (changed) {
     result = then(result, stopPolling);
     result = then(result, (s) => out(patchChoice(s, { open: false })));
@@ -1526,6 +1976,7 @@ function meetingContext(state, action) {
 
 function response(state, action) {
   const { meta } = action;
+  if (staleAuthoritativeRead(state, meta)) return out(state);
   switch (meta.op) {
     case "read": {
       if (meta.id !== state.readId || meta.meetingId !== state.meetingId || (meta.poll !== null && meta.poll !== state.poll.token)) return out(state);
@@ -1559,6 +2010,7 @@ function response(state, action) {
 
 function requestFailed(state, action) {
   const { meta } = action;
+  if (staleAuthoritativeRead(state, meta)) return out(state);
   if (isWorkspaceAuthenticationFailure(action.error?.status, action.error?.body)) {
     const meetingId = state.meetingId || meta.meetingId;
     const next = meetingId ? patchNotes(state, meetingId, {
@@ -1600,10 +2052,15 @@ function requestFailed(state, action) {
   }
 }
 
+function changeMode(state, mode) {
+  return state.mode === mode ? out(state)
+    : out({ ...state, mode }, [{ type: "storage", key: VIEW_MODE_KEY, area: "local", op: "write", value: mode }]);
+}
+
 function transition(state, action) {
   switch (action.type) {
     case "notes/booted":
-      return out({ ...state, mode: action.mode === "write" ? "write" : "view", hidden: Boolean(action.hidden), origin: action.origin });
+      return out({ ...state, mode: ["write", "rich"].includes(action.mode) ? action.mode : "view", hidden: Boolean(action.hidden), origin: action.origin });
     case "notes/visibility-changed": {
       const next = { ...state, hidden: Boolean(action.hidden) };
       return state.meetingId && activeTask(currentEntry(next))
@@ -1664,18 +2121,30 @@ function transition(state, action) {
       if (!state.meetingId) return out(state);
       return out(patchNotes(state, state.meetingId, { selectedNoteId: action.id || null, actionMessage: "" }));
     }
-    case "notes/draft-edited": {
+    case "notes/draft-edited":
+    case "notes/rich-edited": {
       const revision = selectedRevision(state);
-      if (!revision) return out(state);
+      if (!revision || currentEntry(state).saving[revision.id]) return out(state);
       const draft = state.drafts[revision.id];
+      const value = action.type === "notes/rich-edited"
+        ? richMarkdownEdit(state, action, revision, draft)
+        : rawTextareaEdit(draft.value, action.value);
+      if (value === null || value === draft.value) return out(state);
       const conflict = draft.expectedEditVersion === revision.edit_version
         ? null
         : { markdown: revision.markdown, editVersion: revision.edit_version };
-      return out(patchNotes(patchDraft(state, revision.id, { value: action.value, conflict }), state.meetingId, { actionMessage: "" }));
+      return out(patchNotes(patchDraft(state, revision.id, { value, conflict }), state.meetingId, { actionMessage: "" }));
     }
-    case "notes/mode-chosen": {
-      if (action.mode === state.mode || !["view", "write"].includes(action.mode)) return out(state);
-      return out({ ...state, mode: action.mode }, [{ type: "storage", key: VIEW_MODE_KEY, area: "local", op: "write", value: action.mode }]);
+    case "notes/mode-chosen":
+      return ["view", "write", "rich"].includes(action.mode) ? changeMode(state, action.mode) : out(state);
+    case "notes/edit-canceled": {
+      const revision = selectedRevision(state);
+      if (!revision || currentEntry(state).saving[revision.id]) return out(state);
+      const draft = state.drafts[revision.id];
+      const next = draft.conflict ? state : patchDraft(state, revision.id, { value: draft.baselineMarkdown });
+      return changeMode(patchNotes(next, state.meetingId, {
+        actionMessage: draft.conflict ? t("Bản nháp đang xung đột vẫn được giữ.") : "",
+      }), "view");
     }
     case "notes/save-clicked":
       return saveSelectedNote(state);
@@ -1687,9 +2156,20 @@ function transition(state, action) {
       return readSavedMarkdown(state, "copy");
     case "notes/export-clicked":
       return readSavedMarkdown(state, "export");
+    case "notes/rich-preview-clicked":
+      return readSavedMarkdown(state, "rich");
+    case "notes/email-preview-clicked":
+      return readSavedMarkdown(state, "email");
+    case "notes/preview-closed":
+      return out({ ...state, copyPreview: null });
+    case "notes/preview-copy-clicked":
+      return copyPreview(state);
+    case "notes/preview-copied":
+    case "notes/preview-copy-failed":
+      return finishPreviewCopy(state, action);
     case "notes/copied":
     case "notes/copy-failed": {
-      if (!state.meetingId) return out(state);
+      if (action.meta.selectionId !== state.selectionId) return out(state);
       const message = action.type === "notes/copied"
         ? t("Đã sao chép bản đã lưu · edit {version}.", { version: action.meta.editVersion })
         : t("Không thể truy cập clipboard. Trình duyệt chưa sao chép nội dung.");
@@ -1755,6 +2235,14 @@ export function reduce(state, action) {
   const result = transition(state, action);
   let next = settle(result.state);
   const effects = result.effects;
+  const previous = selectedRevision(state);
+  const selected = selectedRevision(next);
+  if (state.meetingId !== next.meetingId || previous?.id !== selected?.id) {
+    next = { ...next, selectionId: state.selectionId + 1, copyPreview: null, previewLoading: false };
+    for (const key of AUTHORITATIVE_KEYS) effects.push({ type: "cancel", key });
+  } else if (next.copyPreview && selected && blockedSavedAction(currentEntry(next), selected.id, next.drafts[selected.id])) {
+    next = { ...next, copyPreview: null };
+  }
   const summary = selectSummary(next);
   if (summary && (action.type === "notes/context" || !sameSummary(selectSummary(state), summary))) {
     effects.push(call("history.setNotesSummary", summary));
@@ -1936,8 +2424,13 @@ function savedWorkView(state, data) {
   const dirty = draftIsDirty(draft);
   const busy = Boolean(data.saving[revision.id]);
   const provenance = revisionProvenance(revision).join(" · ");
+  const blocks = state.mode === "write" ? [] : markdownBlocks(draft.value, revision, state.origin, state.mode);
+  const richFallback = state.mode === "rich" && !canEditRich(blocks);
   return {
     ...view,
+    mode: richFallback ? "write" : state.mode,
+    richFallback,
+    selectionId: state.selectionId,
     draftValue: draft.value,
     textareaDisabled: busy,
     meta: [
@@ -1947,9 +2440,10 @@ function savedWorkView(state, data) {
       `Edit ${revision.edit_version}`,
     ].filter(Boolean).flatMap((part, index) => (index ? [" · ", part] : [part])),
     warning: revision.warnings.length ? { count: revision.warnings.length, first: revision.warnings[0].href } : null,
-    blocks: markdownBlocks(draft.value, revision, state.mode, state.origin),
+    blocks,
     saveDisabled: !dirty || busy,
-    copyDisabled: dirty || Boolean(draft.conflict) || busy,
+    copyDisabled: blockedSavedAction(data, revision.id, draft),
+    cancelDisabled: busy || (state.mode === "view" && !dirty),
     draftStatus: dirty
       ? t("Có thay đổi chưa lưu. Sao chép và tải xuống chỉ dùng Markdown đã lưu.")
       : t("Đang xem đúng Markdown đã lưu cho revision này."),
@@ -2052,7 +2546,8 @@ export function selectView(state) {
     task,
     error: data ? data.runError || data.readError : "",
     savedWork,
-    actionMessage: data ? data.actionMessage : "",
+    actionMessage: data?.actionMessage || (state.previewLoading ? t("Đang đọc phiên bản đã lưu mới nhất…") : ""),
+    copyPreview: state.copyPreview,
     source: sourceView(state),
   };
 }

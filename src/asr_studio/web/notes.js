@@ -8,6 +8,7 @@ import { setAttr, setProp, tr } from "./shell.js";
 import { createRunner, createStore } from "./store.js";
 import {
   VIEW_MODE_KEY,
+  blockRuns,
   currentGeneration,
   hasUnsavedDraft,
   initialState,
@@ -56,6 +57,17 @@ const els = {
   savedWork: $("#notes-saved-work"),
   selector: $("#notes-revision-selector"),
   save: $("#notes-save"),
+  editCancel: $("#notes-edit-cancel"),
+  copyRich: $("#notes-copy-rich"),
+  copyEmail: $("#notes-copy-email"),
+  copyDialog: $("#notes-copy-dialog"),
+  copyTitle: $("#notes-copy-title"),
+  copyPin: $("#notes-copy-pin"),
+  copySubject: $("#notes-copy-subject"),
+  copyDocument: $("#notes-copy-document"),
+  copyConfirm: $("#notes-copy-confirm"),
+  copyClose: $("#notes-copy-close"),
+  copyResult: $("#notes-copy-result"),
   copy: $("#notes-copy"),
   export: $("#notes-export"),
   draftStatus: $("#notes-draft-status"),
@@ -67,10 +79,13 @@ const els = {
   revisionMeta: $("#notes-revision-meta"),
   modeView: $("#notes-mode-view"),
   modeWrite: $("#notes-mode-write"),
+  modeRich: $("#notes-mode-rich"),
   unsavedDot: $("#notes-unsaved-dot"),
   linkWarning: $("#notes-link-warning"),
   viewDraft: $("#notes-view-draft"),
   preview: $("#notes-preview"),
+  rich: $("#notes-rich-editor"),
+  richFallback: $("#notes-rich-fallback"),
   markdown: $("#notes-markdown"),
   sourceView: $("#notes-source-view"),
   sourceHeading: $("#notes-source-heading"),
@@ -104,9 +119,14 @@ function readStored(key, areas = ["local", "session"]) {
 
 // ---- Markdown preview ----
 
-function appendInline(parent, nodes) {
+function appendInline(parent, nodes, rich) {
   for (const node of nodes) {
-    if (node.kind === "text") {
+    if (node.kind === "raw") {
+      const literal = document.createElement("span");
+      literal.className = "notes-inline-fallback";
+      literal.textContent = node.text;
+      parent.append(literal);
+    } else if (!rich && node.kind === "text") {
       parent.append(document.createTextNode(node.text));
     } else if (node.kind === "invalid") {
       const invalid = document.createElement("span");
@@ -117,7 +137,7 @@ function appendInline(parent, nodes) {
       reason.textContent = tr(node.reason);
       invalid.append(reason);
       parent.append(invalid);
-    } else if (node.kind === "link") {
+    } else if (node.kind === "source") {
       const link = document.createElement("a");
       link.href = node.href;
       link.dataset.notesSourceLink = "true";
@@ -128,8 +148,18 @@ function appendInline(parent, nodes) {
       link.textContent = node.text;
       parent.append(link);
     } else {
-      const element = document.createElement({ strong: "strong", code: "code", em: "em" }[node.kind]);
+      const tag = { strong: "strong", code: "code", em: "em", text: "span", link: rich ? "span" : "a" }[node.kind];
+      const element = document.createElement(tag);
       element.textContent = node.text;
+      if (node.kind === "link" && !rich) {
+        element.href = node.href;
+        element.target = "_blank";
+        element.rel = "noopener noreferrer";
+      }
+      if (rich) {
+        if (node.kind === "link") element.className = "notes-rich-link";
+        rich.push(element);
+      }
       parent.append(element);
     }
   }
@@ -149,36 +179,98 @@ function citationChip(chip) {
   return link;
 }
 
-// Rebuilt only when the shaped blocks change: a rebuild would drop keyboard focus on a chip or source link.
-function renderBlocks(root, blocks) {
-  const key = JSON.stringify(blocks);
-  if (root.dataset.blocksKey === key) return;
-  setData(root, "blocksKey", key);
-  const children = [];
-  for (const block of blocks) {
-    if (block.kind === "heading") {
-      const element = document.createElement(`h${block.level}`);
-      appendInline(element, block.nodes);
-      children.push(element);
-    } else if (block.kind === "list") {
-      const list = document.createElement("ul");
-      for (const entry of block.items) {
-        const item = document.createElement("li");
-        appendInline(item, entry.nodes);
-        for (const chip of entry.chips) item.append(citationChip(chip));
-        list.append(item);
+// Leave the existing DOM in place while an editable run changes, so the browser
+// keeps its caret and native text undo. The revision epoch owns the rendered runs.
+function renderBlocks(root, blocks, { rich = false, disabled = false, selectionId = 0, clipboard = false } = {}) {
+  const key = rich
+    ? JSON.stringify([selectionId, blocks], function (name, value) {
+      return Object.hasOwn(this, "end") && ["text", "start", "end"].includes(name) ? undefined : value;
+    })
+    : JSON.stringify(blocks);
+  const shallowest = blocks.reduce((level, block) => block.kind === "heading" ? Math.min(level, block.level) : level, 6);
+  const runs = rich ? [] : null;
+  const addInline = (parent, nodes) => appendInline(parent, nodes, runs);
+  if (root.dataset.blocksKey !== key) {
+    setData(root, "blocksKey", key);
+    const createBlock = (block) => {
+      switch (block.kind) {
+        case "heading": {
+          const level = clipboard ? block.level : Math.min(6, block.level - shallowest + 4);
+          const heading = document.createElement(`h${level}`);
+          addInline(heading, block.nodes);
+          return heading;
+        }
+        case "list": {
+          const list = document.createElement(block.start === null ? "ul" : "ol");
+          if (block.start !== null) list.start = block.start;
+          for (const entry of block.items) {
+            const item = document.createElement("li");
+            addInline(item, entry.nodes);
+            for (const chip of entry.chips) item.append(citationChip(chip));
+            list.append(item);
+          }
+          return list;
+        }
+        case "table": {
+          const wrap = document.createElement("div");
+          wrap.className = "notes-table-wrap";
+          const table = document.createElement("table");
+          const head = table.createTHead();
+          const body = table.createTBody();
+          block.rows.forEach((cells, index) => {
+            const row = (index === 0 ? head : body).insertRow();
+            cells.forEach((nodes, column) => {
+              const cell = document.createElement(index === 0 ? "th" : "td");
+              if (index === 0) cell.scope = "col";
+              cell.dataset.align = block.align[column];
+              addInline(cell, nodes);
+              row.append(cell);
+            });
+          });
+          wrap.append(table);
+          return wrap;
+        }
+        case "section": {
+          const section = document.createElement("section");
+          section.dataset.emailSection = block.section;
+          section.setAttribute("aria-label", block.label);
+          section.append(...block.blocks.map(createBlock));
+          return section;
+        }
+        case "raw": {
+          const fallback = document.createElement("pre");
+          fallback.className = "notes-markdown-fallback";
+          fallback.textContent = block.text;
+          return fallback;
+        }
+        default: {
+          const paragraph = document.createElement("p");
+          block.lines.forEach((nodes, index) => {
+            if (index) paragraph.append(document.createElement("br"));
+            addInline(paragraph, nodes);
+          });
+          return paragraph;
+        }
       }
-      children.push(list);
-    } else {
-      const paragraph = document.createElement("p");
-      block.lines.forEach((nodes, index) => {
-        if (index) paragraph.append(document.createElement("br"));
-        appendInline(paragraph, nodes);
-      });
-      children.push(paragraph);
-    }
+    };
+    root.replaceChildren(...blocks.map(createBlock));
+    runs?.forEach((element, index) => {
+      element.dataset.richIndex = String(index);
+      element.setAttribute("aria-label", t("Sửa đoạn {number}", { number: index + 1 }));
+      element.setAttribute("role", "textbox");
+      element.spellcheck = true;
+    });
   }
-  root.replaceChildren(...children);
+  if (rich) {
+    const nodes = blocks.flatMap(blockRuns);
+    root.querySelectorAll("[data-rich-index]").forEach((element, index) => {
+      const { text } = nodes[index];
+      // While IME composition is active, the DOM owns the provisional text.
+      if (!element.hasAttribute("data-composing")) setProp(element, "textContent", text);
+      setData(element, "richValue", text);
+      setAttr(element, "contenteditable", disabled ? "false" : "plaintext-only");
+    });
+  }
 }
 
 // ---- render ----
@@ -281,12 +373,16 @@ function renderSavedWork(work) {
   setProp(els.selector, "value", work.selected);
   setProp(els.savedWork, "hidden", work.hidden);
   const write = work.mode === "write";
-  setAttr(els.modeView, "aria-pressed", String(!write));
+  const rich = work.mode === "rich";
+  setAttr(els.modeView, "aria-pressed", String(!write && !rich));
   setAttr(els.modeWrite, "aria-pressed", String(write));
-  setProp(els.preview, "hidden", write);
+  setAttr(els.modeRich, "aria-pressed", String(rich));
+  setProp(els.preview, "hidden", write || rich);
   setProp(els.markdown, "hidden", !write);
+  setProp(els.rich, "hidden", !rich);
+  setProp(els.richFallback, "hidden", !work.richFallback);
   if (work.hidden) {
-    delete els.markdown.dataset.refocus;
+    delete els.savedWork.dataset.refocusSelection;
     setProp(els.revisionMeta, "textContent", tr(work.meta));
     renderBlocks(els.preview, []);
     setProp(els.markdown, "value", "");
@@ -294,25 +390,35 @@ function renderSavedWork(work) {
     return;
   }
   setProp(els.markdown, "disabled", work.textareaDisabled);
-  setProp(els.markdown, "value", work.draftValue);
+  setProp(els.markdown, "value", work.draftValue.replace(/\r\n?/g, "\n"));
   setProp(els.revisionMeta, "textContent", tr(work.meta));
   renderLinkWarning(work.warning);
-  renderBlocks(els.preview, work.blocks);
+  renderBlocks(els.preview, write || rich ? [] : work.blocks);
+  if (rich) renderBlocks(els.rich, work.blocks, { rich, disabled: work.textareaDisabled, selectionId: work.selectionId });
   setProp(els.save, "disabled", work.saveDisabled);
+  setProp(els.editCancel, "disabled", work.cancelDisabled);
+  setProp(els.copyRich, "disabled", work.copyDisabled);
+  setProp(els.copyEmail, "disabled", work.copyDisabled);
   setProp(els.copy, "disabled", work.copyDisabled);
   setProp(els.export, "disabled", work.copyDisabled);
   setProp(els.draftStatus, "textContent", tr(work.draftStatus));
   setProp(els.unsavedDot, "hidden", !work.dirty);
   setProp(els.viewDraft, "hidden", work.viewDraftHidden);
-  setAttr(els.modeWrite, "aria-label", tr(work.writeLabel));
+  setAttr(els.modeRich, "aria-label", tr(work.writeLabel));
   setProp(els.conflict, "hidden", !work.conflict);
   setProp(els.conflictMessage, "textContent", work.conflict ? tr(work.conflict.message) : "");
   setProp(els.keepDraft, "disabled", Boolean(work.conflict && work.conflict.disabled));
   setProp(els.useLatest, "disabled", Boolean(work.conflict && work.conflict.disabled));
-  // Same path as the save button: the textarea was disabled while the request ran, which drops its focus.
-  if (els.markdown.dataset.refocus && !els.markdown.disabled) {
-    delete els.markdown.dataset.refocus;
-    if (document.activeElement === document.body && !els.markdown.hidden) els.markdown.focus({ preventScroll: true });
+  const { refocusSelection, refocusRun } = els.savedWork.dataset;
+  if (refocusSelection && (refocusSelection !== String(work.selectionId) || !work.textareaDisabled)) {
+    delete els.savedWork.dataset.refocusSelection;
+    delete els.savedWork.dataset.refocusRun;
+    if (refocusSelection === String(work.selectionId)
+      && (document.activeElement === document.body || document.activeElement === els.save)) {
+      const run = rich && refocusRun && els.rich.querySelector(`[data-rich-index="${refocusRun}"]`);
+      if (run) run.focus({ preventScroll: true });
+      else focusEditor();
+    }
   }
 }
 
@@ -341,6 +447,7 @@ function renderSource(source) {
 }
 
 function render(state) {
+  if (!state.meeting) renderCopyPreview(null);
   if (!state.meeting) return; // the tab is hidden and keeps what it last showed
   const view = selectView(state);
   setProp(els.empty, "hidden", !view.needed);
@@ -366,8 +473,46 @@ function render(state) {
   renderSavedWork(view.savedWork);
   // After the saved-work block has settled, so a focused control is not moved while it is hidden.
   placeRunControls(view.run.inToolbar);
-  if (view.actionMessage) setProp(els.copyStatus, "textContent", tr(view.actionMessage));
+  setProp(els.copyStatus, "textContent", tr(view.actionMessage));
   renderSource(view.source);
+  renderCopyPreview(state.activeTab === "notes" ? view.copyPreview : null);
+}
+
+function renderCopyPreview(preview) {
+  if (!preview) {
+    if (els.copyDialog.open) {
+      els.copyDialog.close();
+      renderBlocks(els.copyDocument, []);
+      setProp(els.copySubject, "textContent", "");
+    }
+    return;
+  }
+  const { content, status, copying } = preview;
+  const email = content.kind === "email";
+  setProp(els.copyTitle, "textContent", email ? t("Xem trước email") : t("Xem trước nội dung có định dạng"));
+  setProp(els.copyPin, "textContent", t("Bản đã lưu · edit {version}", { version: content.editVersion }));
+  setProp(els.copySubject, "textContent", email ? t("Chủ đề: {subject}", { subject: content.subject }) : "");
+  setProp(els.copySubject, "hidden", !email);
+  setProp(els.copyConfirm, "textContent", email ? t("Sao chép nội dung email") : t("Sao chép"));
+  setAttr(els.copyConfirm, "aria-disabled", String(copying));
+  setProp(els.copyResult, "textContent", tr(status));
+  renderBlocks(els.copyDocument, content.blocks, { clipboard: true });
+  if (!els.copyDialog.open) els.copyDialog.showModal();
+}
+
+// Invoke write during the click. A resolved preview has no network dependency.
+async function copyFormatted(html, markdown) {
+  try {
+    await navigator.clipboard.write([new ClipboardItem({
+      "text/html": new Blob([html], { type: "text/html" }),
+      "text/plain": new Blob([markdown], { type: "text/plain" }),
+    })]);
+    return "html";
+  } catch {
+    // Some browsers expose ClipboardItem but decline the HTML write.
+    await navigator.clipboard.writeText(markdown);
+    return "plain";
+  }
 }
 
 // ---- runner ----
@@ -391,6 +536,7 @@ const run = createRunner({
     "meeting.change": meetingHistory.publishMeetingChange,
     replaceUrl: (url) => window.history.replaceState(window.history.state, "", url),
     copy: (text) => navigator.clipboard.writeText(text),
+    copyFormatted,
     download: (filename, text) => {
       const objectUrl = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
       const link = document.createElement("a");
@@ -465,23 +611,95 @@ els.model.addEventListener("change", (event) => dispatch({ type: "notes/model-pi
 els.cancel.addEventListener("click", () => dispatch({ type: "notes/cancel-clicked" }));
 els.selector.addEventListener("change", (event) => dispatch({ type: "notes/revision-picked", id: event.currentTarget.value }));
 els.markdown.addEventListener("input", (event) => dispatch({ type: "notes/draft-edited", value: event.currentTarget.value }));
-els.markdown.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
-  event.preventDefault();
+function focusEditor() {
+  if (!els.markdown.hidden) els.markdown.focus({ preventScroll: true });
+  else if (!els.rich.hidden) els.rich.querySelector('[contenteditable="plaintext-only"]')?.focus({ preventScroll: true });
+}
+
+function saveFromEditor() {
+  const focused = document.activeElement;
+  const work = selectView(store.getState()).savedWork;
+  if (work.saveDisabled) return;
   dispatch({ type: "notes/save-clicked" });
-  if (els.markdown.disabled) setData(els.markdown, "refocus", "1");
+  if (work.mode !== "view") {
+    setData(els.savedWork, "refocusSelection", String(work.selectionId));
+    setData(els.savedWork, "refocusRun", focused.dataset.richIndex || "");
+  }
+}
+
+function saveShortcut(event) {
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.isComposing) return;
+  event.preventDefault();
+  saveFromEditor();
+}
+
+function updateRichRun(element, value) {
+  dispatch({ type: "notes/rich-edited", index: Number(element.dataset.richIndex), before: element.dataset.richValue, value });
+  if (els.rich.hidden) focusEditor();
+  else if (!element.isConnected) focusEditor();
+}
+
+function insertRichText(element, text) {
+  const selection = window.getSelection();
+  if (!selection.rangeCount || !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return;
+  const range = selection.getRangeAt(0);
+  const prefix = range.cloneRange();
+  prefix.selectNodeContents(element);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const start = prefix.toString().length;
+  const value = element.textContent;
+  updateRichRun(element, value.slice(0, start) + text + value.slice(start + range.toString().length));
+  if (element.isConnected && !els.rich.hidden && element.firstChild) {
+    selection.collapse(element.firstChild, Math.min(start + text.length, element.textContent.length));
+  }
+}
+
+els.markdown.addEventListener("keydown", saveShortcut);
+els.rich.addEventListener("keydown", saveShortcut);
+els.rich.addEventListener("compositionstart", (event) => {
+  event.target.setAttribute("data-composing", "");
 });
-for (const [button, mode] of [[els.modeView, "view"], [els.modeWrite, "write"]]) {
+els.rich.addEventListener("compositionend", (event) => {
+  event.target.removeAttribute("data-composing");
+  updateRichRun(event.target, event.target.textContent);
+});
+els.rich.addEventListener("input", (event) => {
+  if (!event.isComposing && !event.target.hasAttribute("data-composing")) updateRichRun(event.target, event.target.textContent);
+});
+els.rich.addEventListener("beforeinput", (event) => {
+  if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
+    event.preventDefault();
+    insertRichText(event.target, "\n");
+  }
+});
+els.rich.addEventListener("paste", (event) => {
+  event.preventDefault();
+  insertRichText(event.target, event.clipboardData.getData("text/plain"));
+});
+els.rich.addEventListener("drop", (event) => event.preventDefault());
+for (const [button, mode] of [[els.modeView, "view"], [els.modeRich, "rich"], [els.modeWrite, "write"]]) {
   button.addEventListener("click", () => {
     const before = store.getState().mode;
     dispatch({ type: "notes/mode-chosen", mode });
-    if (mode === "write" && before !== "write") els.markdown.focus({ preventScroll: true });
+    if (mode !== "view" && before !== mode) focusEditor();
   });
 }
-els.save.addEventListener("click", () => dispatch({ type: "notes/save-clicked" }));
+els.save.addEventListener("click", saveFromEditor);
+els.editCancel.addEventListener("click", () => {
+  dispatch({ type: "notes/edit-canceled" });
+  els.modeView.focus({ preventScroll: true });
+});
 els.keepDraft.addEventListener("click", () => dispatch({ type: "notes/keep-draft-clicked" }));
 els.useLatest.addEventListener("click", () => dispatch({ type: "notes/use-latest-clicked" }));
 els.copy.addEventListener("click", () => dispatch({ type: "notes/copy-clicked" }));
+els.copyRich.addEventListener("click", () => dispatch({ type: "notes/rich-preview-clicked" }));
+els.copyEmail.addEventListener("click", () => dispatch({ type: "notes/email-preview-clicked" }));
+els.copyConfirm.addEventListener("click", () => dispatch({ type: "notes/preview-copy-clicked" }));
+els.copyClose.addEventListener("click", () => dispatch({ type: "notes/preview-closed" }));
+els.copyDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  dispatch({ type: "notes/preview-closed" });
+});
 els.export.addEventListener("click", () => dispatch({ type: "notes/export-clicked" }));
 function openSourceLink(event) {
   const link = event.target.closest("a[data-notes-source-link]");

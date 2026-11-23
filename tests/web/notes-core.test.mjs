@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createRunner, createStore } from "../../src/asr_studio/web/store.js";
 import {
+  blockRuns,
   hasUnsavedDraft,
   failureMessage,
   initialState,
@@ -100,7 +101,7 @@ function setup() {
   const live = () => timers.filter((item) => item.live).map((item) => item.delay);
   const dispatch = (type, extra = {}) => store.dispatch({ type: `notes/${type}`, ...extra });
   const context = (m = meeting(), extra = {}) =>
-    dispatch("context", { detail: { view: "meeting", meeting: m }, stored: {}, href: `${ORIGIN}/meetings/${m.id}`, ...extra });
+    dispatch("context", { detail: { view: "meeting", meeting: m, tab: "notes" }, stored: {}, href: `${ORIGIN}/meetings/${m.id}`, ...extra });
   store.dispatch({ type: "notes/booted", mode: "view", hidden: false, origin: ORIGIN });
   return { store, state: () => store.getState(), requests, answer, fail, waiting, fire, live, is, dispatch, context, written, hostCalls, hostResults };
 }
@@ -929,10 +930,14 @@ test("copy: a read of another note, or a note picked meanwhile, makes no copy", 
   const two = setup();
   await opened(two, { revisions: [revision(), revision({ id: "r2", edit_version: 1, markdown: "other" })] });
   two.dispatch("copy-clicked");
+  const request = two.waiting(two.is("GET", "/api/notes/r1"))[0];
   two.dispatch("revision-picked", { id: "r2" });
-  await two.answer(two.is("GET", "/api/notes/r1"), 200, revision());
+  assert.equal(request.signal.aborted, true);
+  request.resolve(reply(200, revision({ markdown: "stale", edit_version: 2 })));
+  await tick();
   assert.ok(!two.hostCalls.some(([name]) => name === "copy"));
-  assert.match(text(notes(two).actionMessage), /đã đổi trong lúc đồng bộ/);
+  assert.equal(notes(two).actionMessage, "");
+  assert.equal(notes(two).revisions[0].markdown, "# Plan\n- one");
 });
 test("picking a revision or editing clears the action message", async () => {
   const env = setup();
@@ -1489,4 +1494,205 @@ test("workspace authentication failure ends notes polling without dropping draft
   });
   assert.ok(!provider.effects.some(effect => effect.type === "navigate"));
   assert.deepEqual(provider.state.choice.status, state.choice.status);
+});
+
+test("rich text runs edit only their source range and cancel restores the selected baseline", async () => {
+  const env = setup();
+  const markdown = "# Weekly\r\n\r\nKeep \\*literal\\* and **ship**.\r\n\r\n"
+    + "3) First\r\n4) Second\r\n\r\n| Key | Value |\r\n| --- | ---: |\r\n| A | [docs](https://example.test/a?x=1&y=2) |\r\n";
+  await opened(env, { revisions: [revision({ markdown }), revision({ id: "r2", markdown: "# Older" })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const work = selectView(env.state()).savedWork;
+  assert.equal(work.mode, "rich");
+  assert.equal(work.blocks.find((block) => block.kind === "list").start, 3);
+  assert.equal(work.blocks.find((block) => block.kind === "table").align[1], "right");
+  const runs = work.blocks.flatMap(blockRuns);
+  const firstEdit = () => env.dispatch("rich-edited", {
+    index: runs.findIndex((node) => node.text === "ship"), before: "ship", value: "ship now",
+  });
+  firstEdit();
+  assert.equal(saved(env).value, markdown.replace("**ship**", "**ship now**"));
+  assert.equal(selectView(env.state()).savedWork.mode, "rich");
+  env.dispatch("revision-picked", { id: "r2" });
+  assert.equal(selectView(env.state()).savedWork.draftValue, "# Older");
+  env.dispatch("revision-picked", { id: "r1" });
+  env.dispatch("edit-canceled");
+  assert.equal(saved(env).value, markdown);
+  assert.equal(env.state().mode, "view");
+  assert.equal(hasUnsavedDraft(env.state()), false);
+  env.dispatch("mode-chosen", { mode: "rich" });
+  firstEdit();
+  env.dispatch("save-clicked");
+  const save = env.waiting(env.is("PATCH", "/api/notes/r1"))[0];
+  assert.deepEqual(save.body, { expected_edit_version: 1, markdown: markdown.replace("**ship**", "**ship now**") });
+  await env.answer(env.is("PATCH", "/api/notes/r1"), 409, { detail: "conflict" });
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, revision({ markdown: "# Elsewhere", edit_version: 2 }));
+  env.dispatch("edit-canceled");
+  assert.equal(env.state().mode, "view");
+  assert.equal(saved(env).value, save.body.markdown);
+  assert.equal(saved(env).conflict.editVersion, 2);
+});
+
+test("raw edits preserve untouched CRLF and CR delimiters", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision({ markdown: "# A\r\n\r\nEdit me\rKeep me\n" })] });
+  env.dispatch("draft-edited", { value: "# A\n\nEdit this\nKeep me\n" });
+  env.dispatch("save-clicked");
+  assert.equal(env.waiting(env.is("PATCH", "/api/notes/r1"))[0].body.markdown, "# A\r\n\r\nEdit this\rKeep me\n");
+});
+
+test("unsupported inline tokens leave surrounding source links and stored citation proof intact in View", async () => {
+  const env = setup();
+  const href = "/meetings/m1?notes_source=s1&segment=seg1#transcript";
+  const bullet = "The launch plan.";
+  const markdown = "# Plan\n\n  - The launch plan.\n\n"
+    + `[Before](${href}) plus [literal fragment] plus [After](${href}) and ~~struck~~\n\n`
+    + "```md\n# Plan\n- The launch plan.\n" + `[In code](${href})\n` + "```"
+    + `\n\n<script>\n\n# Plan\n- The launch plan.\n\n[In unsafe HTML](${href})\n</script>`;
+  await opened(env, { revisions: [revision({ markdown, citations: [{ section: "Plan", text: bullet, sources: [{ id: "seg1", start_seconds: 9 }] }] })] });
+  const { blocks } = selectView(env.state()).savedWork;
+  assert.equal(blocks.find((block) => block.kind === "list").items[0].chips.length, 1);
+  assert.deepEqual(blocks.flatMap(blockRuns).filter((node) => node.kind === "source").map((node) => node.text), ["Before", "After"]);
+  assert.ok(blocks.flatMap(blockRuns).some((node) => node.kind === "raw" && node.text === "[literal fragment]"));
+  const literal = blocks.filter((block) => block.kind === "raw").map((block) => block.text).join("\n");
+  assert.match(literal, /\[In code\]/);
+  assert.match(literal, /<script>[\s\S]*\[In unsafe HTML\][\s\S]*<\/script>/);
+  env.dispatch("mode-chosen", { mode: "rich" });
+  assert.equal(selectView(env.state()).savedWork.mode, "write");
+  assert.equal(selectView(env.state()).savedWork.richFallback, true);
+  assert.equal(saved(env).value, markdown);
+  env.dispatch("rich-edited", { index: 0, before: "Plan", value: "Wrong" });
+  assert.equal(saved(env).value, markdown);
+});
+
+test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision(), revision({ id: "r2" })] });
+  const metaFor = (action) => reduce(env.state(), { type: `notes/${action}-clicked` }).effects.find((effect) => effect.type === "fetch").meta;
+  const oldRevision = metaFor("copy");
+  const oldMeeting = metaFor("export");
+  env.dispatch("copy-clicked");
+  const copy = env.waiting(env.is("GET", "/api/notes/r1"))[0];
+  env.dispatch("revision-picked", { id: "r2" });
+  env.dispatch("revision-picked", { id: "r1" });
+  assert.equal(copy.signal.aborted, true);
+  env.context(meeting("m2"));
+  env.context();
+  const before = env.state();
+  for (const meta of [oldRevision, oldMeeting]) {
+    const result = reduce(before, { type: "notes/response", meta, response: { body: revision({ markdown: "# Stale", edit_version: 9 }) } });
+    assert.equal(result.state, before);
+    assert.equal(result.effects, undefined);
+    const failure = reduce(before, { type: "notes/request-failed", meta, error: { status: 401, body: { detail: "Authentication required" } } });
+    assert.equal(failure.state, before);
+    assert.equal(failure.effects, undefined);
+  }
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  env.dispatch("export-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, revision({ markdown: "# Fresh", edit_version: 2 }));
+  copy.resolve(reply(200, revision({ markdown: "# Stale", edit_version: 9 })));
+  await tick();
+  assert.deepEqual(env.hostCalls.filter(([name]) => name === "copy" || name === "download"), [["download", "Weekly.md", "# Fresh"]]);
+  assert.equal(saved(env).value, "# Fresh");
+});
+
+test("formatted previews pin the saved text, preserve safe authored links and omit proof chips", async () => {
+  const env = setup();
+  const href = "/meetings/m1?notes_source=s1&segment=seg1#transcript";
+  const markdown = "# Weekly\n\n## Intro\n\nHello & welcome.\n\n## Action Items\n\n"
+    + `- Follow [the source](${href})\n\n[bad](javascript:alert%281%29) ![beacon](https://example.test/pixel)\n\n`
+    + '<img src="https://example.test/pixel">';
+  const proof = { section: "Action Items", text: `Follow [the source](${href})`, sources: [{ id: "seg2", start_seconds: 10 }] };
+  const note = revision({ markdown, citations: [proof], edit_version: 2 });
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("draft-edited", { value: "unsaved" });
+  for (const action of ["copy", "export", "rich-preview", "email-preview"]) env.dispatch(`${action}-clicked`);
+  assert.equal(env.waiting(env.is("GET", "/api/notes/r1")).length, 0);
+  env.dispatch("edit-canceled");
+  env.dispatch("email-preview-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, note);
+  assert.equal(env.hostCalls.filter(([name]) => name === "copyFormatted").length, 0);
+  const preview = selectView(env.state()).copyPreview.content;
+  assert.equal(preview.noteId, "r1");
+  assert.equal(preview.editVersion, 2);
+  assert.equal(preview.subject, "Weekly");
+  assert.deepEqual(preview.blocks.filter((block) => block.kind === "section").map((block) => block.section), ["intro", "actions"]);
+  env.context({ ...meeting(), metadata_version: 4 });
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision({ markdown: "# Newer", edit_version: 3 })]));
+  env.hostResults.copyFormatted = async () => "plain";
+  env.dispatch("preview-copy-clicked");
+  env.dispatch("preview-copy-clicked");
+  await tick();
+  const writes = env.hostCalls.filter(([name]) => name === "copyFormatted");
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][2], markdown);
+  const html = writes[0][1];
+  assert.ok(html.includes('<section aria-label="Action Items">'));
+  assert.ok(html.includes(`href="${ORIGIN}/meetings/m1?notes_source=s1&amp;segment=seg1#transcript"`));
+  assert.ok(html.includes("&lt;img"));
+  assert.doesNotMatch(html, /<img|href="javascript:|seg2|<h1>Newer|Outro/);
+  assert.match(text(selectView(env.state()).copyPreview.status), /văn bản Markdown/);
+});
+
+test("a save that started after a read prevents a stale authoritative update", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("copy-clicked");
+  env.dispatch("draft-edited", { value: "mine" });
+  env.dispatch("save-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, revision({ markdown: "other", edit_version: 2 }));
+  assert.equal(notes(env).revisions[0].edit_version, 1);
+  assert.equal(saved(env).value, "mine");
+  assert.ok(!env.hostCalls.some(([name]) => name === "copy"));
+  await env.answer(env.is("PATCH", "/api/notes/r1"), 200, revision({ markdown: "mine", edit_version: 2 }));
+  assert.equal(saved(env).conflict, null);
+});
+
+test("a formatted preview is dismissed when the selected content becomes unsaved", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("rich-preview-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, revision());
+  assert.ok(selectView(env.state()).copyPreview);
+  env.dispatch("draft-edited", { value: "unsaved" });
+  assert.equal(selectView(env.state()).copyPreview, null);
+  env.dispatch("preview-copy-clicked");
+  assert.ok(!env.hostCalls.some(([name]) => name === "copyFormatted"));
+});
+
+test("leaving and returning to the Notes tab aborts only the preview and rejects its late reply", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  const action = { type: "notes/email-preview-clicked" };
+  const { meta } = reduce(env.state(), action).effects.find((effect) => effect.type === "fetch");
+  env.dispatch("email-preview-clicked");
+  env.dispatch("export-clicked");
+  const [preview, download] = env.waiting(env.is("GET", "/api/notes/r1"));
+  const meetingShown = env.state().meeting;
+  env.context(meetingShown, { detail: { view: "meeting", meeting: meetingShown, tab: "transcript" } });
+  assert.equal(preview.signal.aborted, true);
+  assert.equal(download.signal.aborted, false);
+  env.context(meetingShown);
+  const before = env.state();
+  const response = { type: "notes/response", meta, response: { body: revision({ markdown: "# Obsolete", edit_version: 2 }) } };
+  assert.equal(reduce(before, response).state, before);
+  assert.equal(reduce(before, { type: "notes/request-failed", meta, error: { status: 500 } }).state, before);
+  preview.resolve(reply(200, revision({ markdown: "# Obsolete", edit_version: 2 })));
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, revision());
+  assert.equal(selectView(env.state()).copyPreview, null);
+  assert.deepEqual(env.hostCalls.find(([name]) => name === "download"), ["download", "Weekly.md", "# Plan\n- one"]);
+  env.dispatch("email-preview-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, revision());
+  assert.equal(selectView(env.state()).copyPreview.content.kind, "email");
+});
+
+test("a literal inline fragment alone forces the raw editor without changing the draft", async () => {
+  const env = setup();
+  const markdown = "# Plan\n\nSend [literal fragment] **soon**.";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const work = selectView(env.state()).savedWork;
+  assert.equal(work.mode, "write");
+  assert.equal(work.richFallback, true);
+  assert.equal(work.draftValue, markdown);
 });
