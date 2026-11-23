@@ -131,9 +131,9 @@ function localizedError(error) {
 
 function localizedMessage(message) {
   if (!message) return "";
-  if (message.startsWith("Saved recorded part.")) return t("Server đã lưu phần đã ghi; hãy bắt đầu chép lời trong ASR Studio.");
-  if (message.startsWith("Uploaded.")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
-  if (message.startsWith("The server has the complete audio")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
+  if (message.startsWith("Saved recorded part.")) return t("Server đã lưu phần audio thô.");
+  if (message.startsWith("Uploaded.")) return t("Server đã lưu audio thô.");
+  if (message.startsWith("The server has the complete audio")) return t("Server đã lưu audio thô.");
   return t(message);
 }
 
@@ -188,14 +188,14 @@ function statusText(capture) {
   if (!capture) return t("Chưa sẵn sàng");
   if (capture.status === "starting") return t("Đang khởi động");
   if (capture.status === "recording") return t("Đang ghi âm");
-  if (capture.status === "stopping") return t("Đang lưu…");
+  if (capture.status === "stopping") return t("Đang dừng ghi");
   if (capture.status === "complete") return t("Đã ghi");
   if (capture.status === "interrupted") return t("Bị gián đoạn");
   return capture.status;
 }
 
 function uploadText(upload, capture) {
-  if (upload?.cleaned && upload.receipt) return capture?.status === "interrupted" ? t("đã nhận phần đã ghi") : t("đã nhận đủ");
+  if (upload?.cleaned && upload.receipt) return capture?.status === "interrupted" ? t("đã lưu phần audio thô") : t("đã lưu audio thô");
   if (capture?.status === "interrupted" && upload?.awaitingChoice) return t("chờ bạn chọn");
   if (capture?.status === "interrupted" && upload?.recoveryChoice !== "save") return t("giữ trên máy");
   if (upload?.state === "waiting_for_stop") return t("chờ dừng ghi");
@@ -248,12 +248,12 @@ function renderSessionRow(session) {
     copy.append(reason);
   }
   if (session.upload.cleaned && session.upload.receipt) {
-    title.textContent = interrupted ? t("Đã lưu phần đã ghi trên server") : t("Đã lưu đủ audio trên server");
-    const done = document.createElement("p");
-    done.textContent = interrupted
-      ? t("Có thể đóng tiện ích; hãy bắt đầu chép lời cho bản ghi bị gián đoạn trong ASR Studio.")
-      : t("Có thể đóng tiện ích; kết quả tiếp tục được xử lý trong ASR Studio.");
-    copy.append(done);
+    title.textContent = interrupted ? t("Server đã lưu phần audio thô") : t("Server đã lưu audio thô");
+    if (session.upload.meetingUrl) {
+      const done = document.createElement("p");
+      done.textContent = t("Xem trạng thái xử lý trong ASR Studio.");
+      copy.append(done);
+    }
   }
   if (session.upload.error) {
     const error = document.createElement("p");
@@ -360,7 +360,7 @@ function render() {
     ? "recording"
     : capture?.status === "complete" ? "uploading" : capture?.status === "interrupted" ? "warning" : capture ? "ready" : "";
   elements.stopButton.disabled = !capture || !["starting", "recording", "stopping"].includes(capture.status);
-  elements.stopButton.textContent = capture?.status === "stopping" ? t("Đang lưu…") : t("Dừng và lưu");
+  elements.stopButton.textContent = capture?.status === "stopping" ? t("Đang dừng ghi…") : t("Dừng và lưu");
   const levels = capture?.levels || { tab: 0, microphone: 0 };
   elements.tabMeter.value = Math.max(0, Math.min(1, levels.tab || 0));
   elements.micMeter.value = Math.max(0, Math.min(1, levels.microphone || 0));

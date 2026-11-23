@@ -63,6 +63,8 @@ export const initialState = {
   error: null,
   notice: null,
   copy: null,
+  endpointCopy: null,
+  endpointCopyRequest: 0,
   ui: null,
 };
 
@@ -106,6 +108,8 @@ const cancelEffects = [
   { type: "cancel", key: "extension/devices/revoke" },
   { type: "cancel", key: "extension/devices/copy" },
   { type: "cancel", key: "extension/devices/select-code" },
+  { type: "cancel", key: "extension/devices/endpoint-copy" },
+  { type: "cancel", key: "extension/devices/select-endpoint" },
 ];
 
 function safeDevice(value) {
@@ -165,7 +169,7 @@ function load(state, { clearCode = false } = {}) {
     notice: null,
     showRevoked: false,
     ...(clearCode
-      ? { code: null, codeExpiresAt: null, codeLifetime: null, pairingFor: null, copy: null }
+      ? { code: null, codeExpiresAt: null, codeLifetime: null, pairingFor: null, copy: null, endpointCopy: null }
       : {}),
     confirmingRevoke: null,
   }, [listEffect(request)]);
@@ -244,6 +248,33 @@ function copyEffect(state) {
   }];
 }
 
+function endpointIndex(state, action) {
+  if (Number.isInteger(action.index)) return action.index;
+  if (typeof action.url === "string") return state.serverUrls.indexOf(action.url);
+  return -1;
+}
+
+function endpointCopyEffect(state, index) {
+  const url = state.serverUrls[index];
+  if (typeof url !== "string" || !url) return same(state);
+  if (state.endpointCopy?.state === "pending" && state.endpointCopy.index === index) return same(state);
+  const request = state.endpointCopyRequest + 1;
+  return done({
+    ...state,
+    endpointCopy: { index, url, state: "pending", text: null },
+    endpointCopyRequest: request,
+    ui: null,
+  }, [{
+    type: "call",
+    key: "extension/devices/endpoint-copy",
+    name: "extension.devices.write",
+    args: [url],
+    ok: "extension/devices-endpoint-copy-succeeded",
+    error: "extension/devices-endpoint-copy-failed",
+    meta: { index, url, request },
+  }]);
+}
+
 export function reduce(state, action) {
   switch (action.type) {
     case "provider/dialog-opened":
@@ -265,6 +296,7 @@ export function reduce(state, action) {
         error: null,
         notice: null,
         copy: null,
+        endpointCopy: null,
         ui: null,
       }, cancelEffects);
     case "extension/devices-lifetime-chosen":
@@ -289,6 +321,7 @@ export function reduce(state, action) {
         extensionId: normalized.extensionId,
         serverUrls: normalized.serverUrls,
         devices: normalized.devices,
+        endpointCopy: null,
       });
     }
     case "extension/devices-failed":
@@ -323,6 +356,29 @@ export function reduce(state, action) {
     case "extension/devices-copy-failed":
       if (!state.open || action.meta?.request !== state.codeRequest) return same(state);
       return done({ ...state, copy: { state: "selected", text: t("Không sao chép được. Mã đã được chọn; nhấn Ctrl+C.") }, ui: "select-code" }, [{ type: "call", key: "extension/devices/select-code", name: "extension.devices.select-code" }]);
+    case "extension/devices-endpoint-copy-requested":
+      if (!state.open) return same(state);
+      return endpointCopyEffect(state, endpointIndex(state, action));
+    case "extension/devices-endpoint-copy-succeeded":
+      if (!state.open || !state.endpointCopy
+        || action.meta?.request !== state.endpointCopyRequest
+        || action.meta?.index !== state.endpointCopy.index
+        || action.meta?.url !== state.endpointCopy.url) return same(state);
+      return done({ ...state, endpointCopy: { ...state.endpointCopy, state: "copied", text: t("Đã sao chép endpoint.") }, ui: null });
+    case "extension/devices-endpoint-copy-failed":
+      if (!state.open || !state.endpointCopy
+        || action.meta?.request !== state.endpointCopyRequest
+        || action.meta?.index !== state.endpointCopy.index
+        || action.meta?.url !== state.endpointCopy.url) return same(state);
+      return done({
+        ...state,
+        endpointCopy: { ...state.endpointCopy, state: "selected", text: t("Không sao chép được. Chọn endpoint rồi nhấn Ctrl+C.") },
+      }, [{
+        type: "call",
+        key: "extension/devices/select-endpoint",
+        name: "extension.devices.select-endpoint",
+        args: [state.endpointCopy.index],
+      }]);
     case "extension/devices-revoke-requested":
       if (!state.open || state.pendingRevoke || !selectDevice(state, action.deviceId)) return same(state);
       return done({ ...state, confirmingRevoke: action.deviceId, error: null, notice: null, ui: null });
@@ -383,6 +439,7 @@ export function selectDevices(state) {
     error: state.error,
     notice: state.notice,
     copy: state.copy,
+    endpointCopy: state.endpointCopy,
     ui: state.ui,
     showRevoked: state.showRevoked,
     revokedCount,

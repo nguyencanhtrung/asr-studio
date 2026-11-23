@@ -1328,6 +1328,7 @@ button.provider-overview-row:focus-visible {
   border-top: 1px solid var(--hairline);
 }
 
+.device-endpoint-value,
 .device-endpoints code,
 .extension-device-id,
 .extension-device-ledger dd code {
@@ -1335,6 +1336,48 @@ button.provider-overview-row:focus-visible {
   font-family: var(--font-mono);
   font-size: var(--text-small);
   overflow-wrap: anywhere;
+}
+
+.device-endpoint-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.device-endpoint-value {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.device-endpoint-value:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+}
+
+.device-endpoint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.device-endpoint-actions .connection-message {
+  margin: 0;
+}
+
+.device-endpoint-copy-status[data-state="copied"] {
+  color: var(--success);
+}
+
+.device-endpoint-copy-status[data-state="selected"] {
+  color: var(--warning);
 }
 
 .extension-device-list {
@@ -1487,13 +1530,19 @@ button.provider-overview-row:focus-visible {
     gap: 10px;
   }
 
+  .device-endpoint-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .device-code-actions,
+  .device-endpoint-actions,
   .extension-device-actions {
     align-items: stretch;
     flex-direction: column;
   }
 
   .device-code-actions > button,
+  .device-endpoint-actions > button,
   .extension-device-actions > button {
     width: 100%;
   }

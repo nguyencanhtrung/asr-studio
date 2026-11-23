@@ -427,6 +427,49 @@ function deviceRow(row) {
   return item;
 }
 
+function endpointRow(url, index) {
+  const item = document.createElement("li");
+  const row = document.createElement("div");
+  row.className = "device-endpoint-row";
+  const value = document.createElement("input");
+  value.className = "device-endpoint-value";
+  value.type = "text";
+  value.readOnly = true;
+  value.spellcheck = false;
+  value.value = url;
+  value.dataset.endpointIndex = String(index);
+  value.setAttribute("aria-label", tr(t("Endpoint máy chủ")));
+
+  const actions = document.createElement("div");
+  actions.className = "device-endpoint-actions";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "secondary-button";
+  copy.dataset.endpointAction = "copy";
+  copy.dataset.endpointIndex = String(index);
+  copy.textContent = tr(t("Sao chép endpoint"));
+  copy.setAttribute("aria-label", tr(t("Sao chép endpoint {url}", { url })));
+  const status = document.createElement("span");
+  status.className = "connection-message device-endpoint-copy-status";
+  status.dataset.endpointCopyStatus = String(index);
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  actions.append(copy, status);
+  row.append(value, actions);
+  item.append(row);
+  return item;
+}
+
+function renderEndpointCopy(view) {
+  for (const copy of deviceEls.endpoints.querySelectorAll("[data-endpoint-action='copy']")) {
+    const index = Number(copy.dataset.endpointIndex);
+    const feedback = view.endpointCopy?.index === index ? view.endpointCopy : null;
+    const status = deviceEls.endpoints.querySelector(`[data-endpoint-copy-status="${index}"]`);
+    setProp(status, "textContent", feedback ? tr(feedback.text) : "");
+    setAttr(status, "data-state", feedback?.state || "");
+  }
+}
+
 function restoreDeviceFocus() {
   const id = deviceEls.list.dataset.focusDevice;
   if (!id) return;
@@ -545,14 +588,9 @@ function renderDevices(state) {
   const endpointSignature = JSON.stringify(view.serverUrls);
   if (deviceEls.endpoints.dataset.urls !== endpointSignature) {
     deviceEls.endpoints.dataset.urls = endpointSignature;
-    deviceEls.endpoints.replaceChildren(...view.serverUrls.map((url) => {
-      const item = document.createElement("li");
-      const endpoint = document.createElement("code");
-      endpoint.textContent = url;
-      item.append(endpoint);
-      return item;
-    }));
+    deviceEls.endpoints.replaceChildren(...view.serverUrls.map(endpointRow));
   }
+  renderEndpointCopy(view);
   setProp(deviceEls.endpointsEmpty, "hidden", view.serverUrls.length > 0 || view.loading);
   setProp(deviceEls.listStatus, "textContent", view.loading ? t("Đang tải danh sách thiết bị…") : "");
   setProp(deviceEls.listEmpty, "hidden", !view.empty);
@@ -857,10 +895,18 @@ const base = createRunner({
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       return navigator.clipboard.writeText(code);
     },
-    // The one-time code is the only device value that may be selected in the UI.
+    // Clipboard fallback selects only the endpoint input associated with the current request.
     "extension.devices.select-code": () => {
       deviceEls.code.focus();
       deviceEls.code.select();
+    },
+    "extension.devices.select-endpoint": (index) => {
+      const button = deviceEls.endpoints.querySelector(`[data-endpoint-action="copy"][data-endpoint-index="${index}"]`);
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement && active !== button) return;
+      const input = deviceEls.endpoints.querySelector(`[data-endpoint-index="${index}"]`);
+      input?.focus({ preventScroll: true });
+      input?.select();
     },
   },
   now: () => Date.now(),
@@ -1000,6 +1046,12 @@ deviceEls.form.addEventListener("submit", (event) => {
 deviceEls.lifetime.addEventListener("change", () => dispatch({ type: "extension/devices-lifetime-chosen", value: deviceEls.lifetime.value }));
 deviceEls.showRevoked.addEventListener("change", () => dispatch({ type: "extension/devices-revoked-visibility-changed", value: deviceEls.showRevoked.checked }));
 deviceEls.copy.addEventListener("click", () => dispatch({ type: "extension/devices-copy-requested" }));
+deviceEls.endpoints.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-endpoint-action='copy']");
+  if (!action) return;
+  const index = Number(action.dataset.endpointIndex);
+  if (Number.isInteger(index)) dispatch({ type: "extension/devices-endpoint-copy-requested", index });
+});
 deviceEls.list.addEventListener("click", (event) => {
   const action = event.target.closest("[data-device-action]");
   if (!action) return;
