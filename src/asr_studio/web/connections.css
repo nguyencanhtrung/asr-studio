@@ -948,6 +948,10 @@ button.provider-overview-row:focus-visible {
   }
 }
 
+#asr-transcript-dependency {
+  margin: 0 0 12px;
+}
+
 .asr-default-control {
   display: grid;
   gap: 6px;

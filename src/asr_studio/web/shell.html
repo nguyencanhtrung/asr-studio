@@ -459,13 +459,14 @@
                 </div>
                 <div class="transcription-language-control" id="transcription-model-control" hidden>
                   <label for="transcription-model">Model ASR</label>
-                  <select id="transcription-model" aria-describedby="transcription-model-help"></select>
+                  <select id="transcription-model" aria-describedby="transcription-model-help transcription-dependency"></select>
                   <p class="field-help" id="transcription-model-help"></p>
                 </div>
                 <button class="primary-button" id="start-transcription" type="button">Chép lời</button>
                 <button class="secondary-button" id="cancel-transcription" type="button" hidden>Hủy</button>
               </div>
             </header>
+            <p class="field-help" id="transcription-dependency">Transcript cần Community-1 để tách người nói.</p>
             <div class="transcription-model-guidance" id="transcription-model-guidance" role="status" hidden>
               <p id="transcription-model-guidance-text"></p>
               <div class="task-diagnostic-command-wrap" id="transcription-model-command-wrap" hidden>
@@ -536,6 +537,7 @@
               <div class="transcript-draft-recovery" id="transcript-draft-recovery" hidden></div>
               <section class="speaker-catalog" id="speaker-catalog" aria-labelledby="speaker-catalog-title">
                 <h5 id="speaker-catalog-title" tabindex="-1">Người nói trong phiên bản này</h5>
+                <p class="field-help" id="speaker-name-help">Đổi tên chỉ cập nhật tên hiển thị của người nói.</p>
                 <ul class="speaker-catalog-list" id="speaker-catalog-list"></ul>
                 <form class="speaker-add-form" id="speaker-add-form" novalidate>
                   <label for="speaker-add-name">Thêm người nói <span class="optional-mark">Tùy chọn tên</span></label>
@@ -646,7 +648,7 @@
               </div>
               <div class="auto-transcribe">
                 <label class="auto-transcribe-option"><input id="auto-transcribe" type="checkbox" checked aria-describedby="auto-transcribe-help" /><span>Chép lời ngay sau khi tạo</span></label>
-                <p class="field-help" id="auto-transcribe-help">Bỏ chọn để chép lời thủ công sau.</p>
+                <p class="field-help" id="auto-transcribe-help">Transcript cần Community-1 để tách người nói. Bỏ chọn để chép lời thủ công sau.</p>
                 <div class="create-asr-model field-group" id="create-asr-model-control" hidden>
                   <label for="create-asr-model">Model chép lời</label>
                   <select id="create-asr-model" aria-describedby="create-asr-model-help"></select>
@@ -903,6 +905,7 @@
           <div class="settings-panel" id="settings-panel-asr" role="tabpanel" aria-labelledby="settings-tab-asr" tabindex="0" hidden>
             <h3 class="settings-group-title">ASR Model</h3>
             <p class="connections-intro" id="asr-intro">Trạng thái model chép lời trên máy này. Mỗi lần chép lời vẫn có thể chọn model riêng.</p>
+            <p class="field-help" id="asr-transcript-dependency">Transcript cần Community-1 để tách người nói.</p>
             <div class="asr-default-control" id="asr-default-control" hidden>
               <label for="asr-default-select">Model mặc định</label>
               <select id="asr-default-select" aria-describedby="asr-default"></select>

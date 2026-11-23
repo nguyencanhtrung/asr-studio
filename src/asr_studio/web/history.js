@@ -2595,7 +2595,7 @@ function renderModelControl(view) {
   setProp(guidance, "hidden", !(model && model.guidance));
   if (!model) return;
   const selector = $("#transcription-model");
-  const optionsKey = model.options.map((option) => `${option.id}:${option.ready}`).join("|");
+  const optionsKey = JSON.stringify(model.options);
   if (selector.dataset.optionsKey !== optionsKey) {
     selector.replaceChildren(...model.options.map((option) => {
       const element = document.createElement("option");
@@ -2608,6 +2608,7 @@ function renderModelControl(view) {
   setProp(selector, "value", model.value);
   setProp(selector, "disabled", model.disabled);
   setProp($("#transcription-model-help"), "textContent", tr(model.note));
+  setProp($("#transcription-model-help"), "hidden", !model.note);
   if (model.guidance) setProp($("#transcription-model-guidance-text"), "textContent", tr(model.guidance));
   setProp($("#transcription-model-command-wrap"), "hidden", !model.command);
   setProp($("#transcription-model-command"), "value", model.command);

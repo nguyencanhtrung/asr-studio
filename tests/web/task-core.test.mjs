@@ -630,6 +630,31 @@ test("the chosen model goes with this run's request and with its uncertain retry
   assert.equal(env.view().model.disabled, true);
 });
 
+test("rerun takes safe future catalog rows, blocks unavailable ones, and preserves a pending selection", async () => {
+  const id = "future+v2";
+  const model = { id, label: "/private/label", model_name: "Future v2", ready: true };
+  const meeting = withChoices({}, [...CHOICES, model, { id: "future-base", ready: false, reason: "temporarily_unavailable" }, { id: "future%2Fv2", ready: true }, null]);
+  const env = await opened(meeting);
+  assert.deepEqual(env.view().model.options.slice(4), [
+    { id, label: "Future v2", ready: true },
+    { id: "future-base", label: "future-base", ready: false },
+  ]);
+  env.send("task/model-chosen", { model: "future%2Fv2" });
+  env.send("task/model-chosen", { model: "not-in-catalog" });
+  assert.equal(env.view().model.value, "auto");
+  env.send("task/model-chosen", { model: "future-base" });
+  env.send("task/start-clicked", { requestId: "blocked" });
+  assert.equal(env.sent("/api/tasks").length, 0);
+  env.send("task/model-chosen", { model: id });
+  env.send("task/start-clicked", { requestId: "future" });
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, id);
+  const stored = { [requestStorageKey("m1")]: env.stored.get(requestStorageKey("m1")) };
+  const reopened = await opened(withChoices(), { stored });
+  reopened.send("task/start-clicked", { requestId: "fresh" });
+  assert.equal(reopened.sent("/api/tasks")[0].body.asr_model, id);
+  assert.equal(reopened.sent("/api/tasks")[0].body.request_id, "future");
+});
+
 test("a restored request keeps its model; a record from an older page means Tự động", async () => {
   const kept = JSON.stringify({ requestId: "k", languageHint: "en", asrModel: "qwen3-asr-1.7b" });
   const restored = await opened(withChoices(), { stored: { [requestStorageKey("m1")]: kept } });
@@ -639,7 +664,7 @@ test("a restored request keeps its model; a record from an older page means Tự
 
   const older = JSON.stringify({ requestId: "k", languageHint: "en" });
   assert.equal((await opened(withChoices(), { stored: { [requestStorageKey("m1")]: older } })).view().model.value, "auto");
-  const forged = JSON.stringify({ requestId: "k", languageHint: "en", asrModel: "cloud" });
+  const forged = JSON.stringify({ requestId: "k", languageHint: "en", asrModel: "../cloud" });
   assert.equal((await opened(withChoices(), { stored: { [requestStorageKey("m1")]: forged } })).view().model.value, "auto");
 });
 
@@ -829,6 +854,13 @@ test("a named create-dialog hand-off selects that model for the automatic start"
   assert.equal(env.stored.has(autoStartStorageKey("m1")), false);
   assert.equal(env.sent("/api/tasks")[0].body.asr_model, "qwen3-asr-1.7b");
   assert.equal(env.view().model.value, "qwen3-asr-1.7b");
+});
+
+test("raw ASR handoffs accept safe future IDs and preserve legacy Auto", async () => {
+  for (const [value, id] of [["future+v2", "future+v2"], ["../future", "auto"], ["1", "auto"]]) {
+    const env = await opened(withChoices(), { stored: { [autoStartStorageKey("m1")]: value } });
+    assert.equal(env.sent("/api/tasks")[0].body.asr_model, id);
+  }
 });
 
 test("the hand-off does not start a meeting that already has a task or a transcript, and is still consumed", async () => {

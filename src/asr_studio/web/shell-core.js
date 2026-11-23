@@ -19,6 +19,27 @@ export const ASR_MODEL_TEXT = {
   "pho-whisper-large": { label: "PhoWhisper-large", note: t("Tối ưu tiếng Việt. Không dành cho English.") },
   "qwen3-asr-1.7b": { label: "Qwen3-ASR-1.7B", note: t("Đa ngôn ngữ, chỉ GPU. Không có điểm tin cậy.") },
 };
+
+// A catalog ID is a single URL segment. Older New Meeting handoffs reserve "1" for Auto.
+export const isAsrModelId = (value) => typeof value === "string" && value !== "1" && /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(value);
+export const isAsrModelRow = (row) => Boolean(row && typeof row === "object" && isAsrModelId(row.id));
+
+export function asrDisplayName(value) {
+  const name = typeof value === "string" ? value.trim() : "";
+  return /^[\p{L}\p{N}][\p{L}\p{M}\p{N} ._+()-]*$/u.test(name) ? name : null;
+}
+
+export function asrModelText(choice) {
+  if (Object.hasOwn(ASR_MODEL_TEXT, choice.id)) return ASR_MODEL_TEXT[choice.id];
+  return { label: asrDisplayName(choice.label) ?? asrDisplayName(choice.model_name) ?? choice.id };
+}
+
+export function asrAutoNote(choice) {
+  const name = asrDisplayName(choice?.model_name);
+  if (choice?.chosen) return name ? t("Theo Cài đặt: {model}.", { model: name }) : t("Theo Cài đặt.");
+  return name ? t("Theo phần cứng của máy: {model}.", { model: name }) : t("Theo phần cứng của máy.");
+}
+
 export const bytes = (value) => ({ fmt: "bytes", value });
 export const decimal = (value) => ({ fmt: "decimal", value });
 
@@ -218,11 +239,7 @@ function normalizePolicy(payload) {
 
 function normalizeAsrModels(payload) {
   if (!payload || !Array.isArray(payload.asr_models)) return null;
-  return payload.asr_models.filter((choice) => (
-    choice
-    && typeof choice === "object"
-    && Object.hasOwn(ASR_MODEL_TEXT, choice.id)
-  ));
+  return payload.asr_models.filter(isAsrModelRow);
 }
 
 function fileExtension(filename) {
@@ -322,11 +339,7 @@ function selectAsrModel(state, disabled) {
   if (!choices.length || !choices.some((choice) => choice.id === "auto")) return null;
   const value = choices.some((choice) => choice.id === state.form.asrModel) ? state.form.asrModel : "auto";
   const selected = choices.find((choice) => choice.id === value);
-  const note = value === "auto"
-    ? selected.model_name
-      ? (selected.chosen ? t("Theo Cài đặt: {model}.", { model: selected.model_name }) : t("Theo phần cứng của máy: {model}.", { model: selected.model_name }))
-      : t("Theo phần cứng của máy.")
-    : ASR_MODEL_TEXT[value].note;
+  const note = value === "auto" ? asrAutoNote(selected) : asrModelText(selected).note;
   const warning = choices.some((choice) => choice.id !== "auto" && !choice.ready)
     ? t("Model chưa sẵn sàng: chuẩn bị ở trang cuộc họp.")
     : null;
@@ -338,11 +351,11 @@ function selectAsrModel(state, disabled) {
     disabled,
     options: choices.map((choice) => ({
       id: choice.id,
-      label: ASR_MODEL_TEXT[choice.id].label,
-      ready: Boolean(choice.ready),
-      disabled: choice.id !== "auto" && !choice.ready,
+      label: asrModelText(choice).label,
+      ready: choice.ready === true,
+      disabled: choice.id !== "auto" && choice.ready !== true,
     })),
-    help: brokenDefault ? [note, " ", brokenDefault] : warning ? [note, " ", warning] : note,
+    help: brokenDefault ? [note, " ", brokenDefault] : note && warning ? [note, " ", warning] : note ?? warning,
   };
 }
 
@@ -1141,9 +1154,10 @@ export function reduce(state, action) {
         { type: "storage", key: AUTO_TRANSCRIBE_KEY, area: "local", op: "write", value: action.value ? "1" : "0" },
       ]);
     case "shell/asr-model-chosen": {
+      if (!isAsrModelId(action.model)) return same(state);
       if (action.model === "auto") return set(state, { form: { ...state.form, asrModel: "auto" } });
       const choice = modelChoices(state).find((entry) => entry.id === action.model);
-      if (!choice || !choice.ready) return same(state);
+      if (choice?.ready !== true) return same(state);
       return set(state, { form: { ...state.form, asrModel: action.model } });
     }
     case "shell/submit-requested":

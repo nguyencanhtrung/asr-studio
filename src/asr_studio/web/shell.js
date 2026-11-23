@@ -119,7 +119,7 @@ function render(state) {
   for (const input of [titleInput, dateInput, autoTranscribeInput, ...languageInputs]) setProp(input, "disabled", view.fieldsDisabled);
   setProp(asrModelControl, "hidden", !view.asrModel);
   if (view.asrModel) {
-    const optionsKey = view.asrModel.options.map((option) => `${option.id}:${option.ready}`).join("|");
+    const optionsKey = JSON.stringify(view.asrModel.options);
     if (asrModelInput.dataset.optionsKey !== optionsKey) {
       asrModelInput.replaceChildren(...view.asrModel.options.map((option) => {
         const element = document.createElement("option");
@@ -133,6 +133,7 @@ function render(state) {
     setProp(asrModelInput, "value", view.asrModel.value);
     setProp(asrModelInput, "disabled", view.asrModel.disabled);
     setProp(asrModelHelp, "textContent", tr(view.asrModel.help));
+    setProp(asrModelHelp, "hidden", !view.asrModel.help);
   }
 
   setProp(retryUploadButton, "hidden", view.retryHidden);

@@ -280,6 +280,7 @@ def test_asr_section_shows_real_readiness_and_a_copyable_prepare_command(
     expect(qwen_row.locator('.asr-badge[data-kind="default"]')).to_have_text("Mặc định")
     expect(pho.locator('.asr-badge[data-kind="default"]')).to_have_count(0)
     expect(whisper.locator('.asr-badge[data-kind="status"]')).to_have_text("Chưa chuẩn bị")
+    expect(whisper).to_contain_text("Dịch vụ cài model chưa chạy. Dùng lệnh chuẩn bị model.")
     expect(pho.locator('.asr-badge[data-kind="status"]')).to_have_text("Sẵn sàng")
     command = whisper.get_by_label("Lệnh chuẩn bị model")
     expect(command).to_be_visible()
@@ -317,7 +318,7 @@ def test_asr_copy_refused_selects_the_command_and_says_so(live, signed_in, gpu_w
     assert selected == page.locator("#asr-command-whisper-large-v3").input_value()
 
 
-@pytest.mark.parametrize("models", [[], [None, 5, {"id": "evil"}]], ids=["empty", "unusable"])
+@pytest.mark.parametrize("models", [[], [None, 5, {"id": "../model"}]], ids=["empty", "unusable"])
 def test_asr_section_says_so_when_the_catalog_has_no_usable_model(live, signed_in, models):
     _context, page = signed_in(viewport={"width": 1280, "height": 900})
     page.route(
