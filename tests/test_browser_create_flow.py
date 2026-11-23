@@ -463,6 +463,25 @@ def test_browser_uploads_sequential_chunks_and_recovers_after_a_failed_request(
     page.locator("#auto-transcribe").set_checked(False)
     dialog.get_by_role("button", name="Tạo cuộc họp").click()
     expect(dialog).to_have_attribute("data-state", "uploading", timeout=10_000)
+    expect(page.locator("#file-drop")).to_be_disabled()
+    assert page.evaluate("document.querySelector('#file-drop').disabled === false")
+    drop_result = page.evaluate(
+        """() => {
+          const dropzone = document.querySelector('#file-drop');
+          const transfer = new DataTransfer();
+          transfer.items.add(new File(['replacement'], 'Replacement.wav', {type: 'audio/wav'}));
+          const event = new DragEvent('drop', {
+            bubbles: true, cancelable: true, dataTransfer: transfer,
+          });
+          const dispatched = dropzone.dispatchEvent(event);
+          return {
+            defaultPrevented: !dispatched,
+            selected: document.querySelector('#selected-file-name').textContent,
+          };
+        }"""
+    )
+    assert drop_result["defaultPrevented"]
+    assert drop_result["selected"] == "Chunked.wav"
     page.locator("#cancel-upload").focus()
     expect(page.locator("#state-label")).to_have_text("Đang tải lên", timeout=10_000)
     expect(page.locator("#transfer-progress")).to_be_visible()

@@ -82,7 +82,9 @@ function render(state) {
   setProp(fileLimits, "textContent", tr(view.limits));
   setProp(fileInput, "accept", view.accept);
   setProp(fileInput, "disabled", view.fileInputDisabled);
-  setProp(fileDrop, "disabled", view.fileInputDisabled);
+  setProp(fileDrop, "tabIndex", view.fileInputDisabled ? -1 : 0);
+  if (view.fileInputDisabled) setAttr(fileDrop, "aria-disabled", "true");
+  else fileDrop.removeAttribute("aria-disabled");
   setProp(changeFileButton, "disabled", view.changeFileDisabled);
 
   setProp(fileError, "textContent", tr(state.fileError));
