@@ -601,24 +601,25 @@
                 <label id="file-label" for="recording-file">Bản ghi <span class="required-mark">*</span></label>
                 <span class="section-note">Audio hoặc video</span>
               </div>
-              <label class="file-drop" id="file-drop" for="recording-file">
-                <input
-                  class="visually-hidden file-picker"
-                  id="recording-file"
-                  name="recording"
-                  type="file"
-                  aria-describedby="file-instructions file-limits file-error"
-                  disabled
-                />
+              <button class="file-drop" id="file-drop" type="button" aria-controls="recording-file" aria-describedby="file-instructions file-limits file-error" aria-disabled="true" tabindex="-1">
                 <span class="drop-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v5h14v-5" /></svg>
                 </span>
                 <span class="drop-copy"><strong>Chọn tệp hoặc kéo thả tại đây</strong><span id="file-instructions">Chỉ nhận các định dạng được công bố bên dưới.</span></span>
                 <span class="drop-action">Chọn file</span>
-              </label>
+              </button>
+              <input
+                class="visually-hidden file-picker"
+                id="recording-file"
+                name="recording"
+                type="file"
+                aria-describedby="file-instructions file-limits file-error"
+                tabindex="-1"
+                disabled
+              />
               <div class="selected-file" id="selected-file" hidden>
                 <span class="file-chip-icon" aria-hidden="true">A</span>
-                <span class="selected-file-copy"><strong id="selected-file-name"></strong><span id="selected-file-size"></span></span>
+                <span class="selected-file-copy" id="selected-file-copy" role="status" aria-live="polite" aria-atomic="true"><strong id="selected-file-name"></strong><span id="selected-file-size"></span></span>
                 <button class="text-button" id="change-file" type="button">Đổi file</button>
               </div>
               <p class="file-limits" id="file-limits">Đang tải giới hạn của ứng dụng…</p>
@@ -660,12 +661,8 @@
             <section class="upload-state" aria-label="Trạng thái tải bản ghi lên">
               <div class="upload-state-header">
                 <span class="upload-state-icon" aria-hidden="true"><span></span></span>
-                <div><p class="upload-state-label">TẢI LÊN VÀ KIỂM TRA</p><p class="workflow-state" id="workflow-state" aria-live="polite">Chưa chọn file.</p></div>
+                <div><p class="upload-state-label">TẢI LÊN VÀ KIỂM TRA</p></div>
                 <span class="state-label" id="state-label">Chưa chọn file</span>
-              </div>
-              <div class="transfer-progress" id="transfer-progress" hidden>
-                <div class="progress-heading"><span>Tiến độ truyền file</span><span id="upload-progress-value">0%</span></div>
-                <progress id="upload-progress" max="100" value="0" aria-label="Tiến độ truyền file"></progress>
               </div>
               <p class="validation-state" id="validation-state" aria-live="polite"></p>
               <p class="validation-state" id="upload-notice" aria-live="polite"></p>
@@ -674,7 +671,12 @@
             <p class="form-error" id="form-error" role="alert" tabindex="-1" hidden></p>
           </div>
 
-          <footer class="dialog-actions">
+          <footer class="dialog-actions" aria-describedby="workflow-state">
+            <div class="transfer-progress dialog-action-progress" id="transfer-progress" hidden>
+              <div class="progress-heading"><span>Tiến độ truyền file</span><span id="upload-progress-value">0%</span></div>
+              <progress id="upload-progress" max="100" value="0" aria-label="Tiến độ truyền file" aria-describedby="workflow-state validation-state upload-notice"></progress>
+            </div>
+            <p class="workflow-state dialog-action-status" id="workflow-state" aria-live="polite">Chưa chọn file.</p>
             <button class="secondary-button" id="cancel-upload" type="button" hidden>Hủy tải lên</button>
             <button class="secondary-button" id="retry-upload" type="button" hidden>Tải lên lại</button>
             <button class="primary-button" id="create-meeting" type="submit" disabled>Tạo cuộc họp</button>

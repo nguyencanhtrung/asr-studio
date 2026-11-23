@@ -82,7 +82,9 @@ function render(state) {
   setProp(fileLimits, "textContent", tr(view.limits));
   setProp(fileInput, "accept", view.accept);
   setProp(fileInput, "disabled", view.fileInputDisabled);
-  setAttr(fileDrop, "aria-disabled", String(view.fileInputDisabled));
+  setProp(fileDrop, "tabIndex", view.fileInputDisabled ? -1 : 0);
+  if (view.fileInputDisabled) setAttr(fileDrop, "aria-disabled", "true");
+  else fileDrop.removeAttribute("aria-disabled");
   setProp(changeFileButton, "disabled", view.changeFileDisabled);
 
   setProp(fileError, "textContent", tr(state.fileError));
@@ -104,6 +106,7 @@ function render(state) {
   setProp(uploadProgressValue, "textContent", tr(state.progress.text));
   setProp(selectedFile, "hidden", !state.file);
   setProp(selectedFileName, "textContent", state.file ? state.file.name : "");
+  setAttr(selectedFileName, "title", state.file ? state.file.name : "");
   setProp(selectedFileSize, "textContent", state.file ? formatBytes(state.file.size, UI_LOCALE) : "");
 
   // Typing already matches the state, so only a programmatic change touches the inputs.
@@ -204,13 +207,24 @@ for (const button of document.querySelectorAll("[data-open-meeting-dialog]")) {
 
 const requestClose = () => dispatch({ type: "shell/dialog-close-requested" });
 closeDialogButton.addEventListener("click", requestClose);
-changeFileButton.addEventListener("click", () => fileInput.click());
+const openFilePicker = (origin) => {
+  if (fileInput.disabled) return;
+  const restore = () => {
+    fileInput.removeEventListener("change", restore);
+    fileInput.removeEventListener("cancel", restore);
+    if (origin?.isConnected) origin.focus({ preventScroll: true });
+  };
+  fileInput.addEventListener("change", restore);
+  fileInput.addEventListener("cancel", restore);
+  fileInput.click();
+};
+changeFileButton.addEventListener("click", () => openFilePicker(changeFileButton));
+fileDrop.addEventListener("click", () => openFilePicker(fileDrop));
 fileInput.addEventListener("change", () => {
   const file = fileInput.files && fileInput.files[0];
   fileInput.value = "";
   if (file) dispatch({ type: "shell/file-selected", file });
 });
-
 fileDrop.addEventListener("dragenter", (event) => {
   event.preventDefault();
   if (!fileInput.disabled) fileDrop.classList.add("is-dragging");
