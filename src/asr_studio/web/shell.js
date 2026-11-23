@@ -207,16 +207,16 @@ for (const button of document.querySelectorAll("[data-open-meeting-dialog]")) {
 
 const requestClose = () => dispatch({ type: "shell/dialog-close-requested" });
 closeDialogButton.addEventListener("click", requestClose);
-let pickerOrigin = null;
 const openFilePicker = (origin) => {
   if (fileInput.disabled) return;
-  pickerOrigin = origin;
+  const restore = () => {
+    fileInput.removeEventListener("change", restore);
+    fileInput.removeEventListener("cancel", restore);
+    if (origin?.isConnected) origin.focus({ preventScroll: true });
+  };
+  fileInput.addEventListener("change", restore);
+  fileInput.addEventListener("cancel", restore);
   fileInput.click();
-};
-const restorePickerFocus = () => {
-  const origin = pickerOrigin;
-  pickerOrigin = null;
-  if (origin?.isConnected) origin.focus({ preventScroll: true });
 };
 changeFileButton.addEventListener("click", () => openFilePicker(changeFileButton));
 fileDrop.addEventListener("click", () => openFilePicker(fileDrop));
@@ -224,9 +224,7 @@ fileInput.addEventListener("change", () => {
   const file = fileInput.files && fileInput.files[0];
   fileInput.value = "";
   if (file) dispatch({ type: "shell/file-selected", file });
-  restorePickerFocus();
 });
-fileInput.addEventListener("cancel", restorePickerFocus);
 fileDrop.addEventListener("dragenter", (event) => {
   event.preventDefault();
   if (!fileInput.disabled) fileDrop.classList.add("is-dragging");
