@@ -521,7 +521,7 @@ Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không
 | không đăng nhập | `login-requested` | nút đăng nhập khóa, xóa lỗi (ChatGPT: cả thông báo); lặp khi đang khởi động hoặc đã có login thì bị bỏ | ChatGPT: `open-window reserve`; Google: `fetch login-start` |
 | ChatGPT chờ cửa sổ | `window-blocked` | lỗi `POPUP_BLOCKED`, nút mở lại | |
 | ChatGPT chờ cửa sổ | `window-reserved` | | `fetch login-start` |
-| khởi động | `login-start` hợp lệ | ChatGPT: có login, `loginGen + 1`; Google: có login, link, ô nhập mã | lưu sessionStorage; ChatGPT: `open-window navigate`, `schedule poll-wait` 500; Google: `fetch poll` ngay |
+| khởi động | `login-start` hợp lệ | ChatGPT: có login, `loginGen + 1`; Google: có login, link, ô nhập mã, focus ô nhập bằng one-shot `focus:input` | lưu sessionStorage; ChatGPT: `open-window navigate`, `schedule poll-wait` 500; Google: `fetch poll` ngay |
 | khởi động | `login-start` sai phiên, URL không an toàn, lỗi (ChatGPT) | lỗi hiện ra, nút mở lại, không có login | `open-window close` |
 | khởi động | `login-start` Google: phiên không phải object | lỗi `INVALID_LOGIN_SESSION`, nút mở lại, không có login | |
 | khởi động | `login-start` Google: URL sai hoặc không an toàn | lỗi hiện ra, login vẫn giữ và đã lưu: hiện bảng đăng nhập và nút Hủy (người dùng hủy được), không poll | |

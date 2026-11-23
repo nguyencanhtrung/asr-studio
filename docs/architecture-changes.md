@@ -2921,11 +2921,16 @@ native disclosure transition; native keyboard behavior remains unchanged. The la
 fixture waits for settled geometry and reads all relevant rectangles in one DOM
 evaluation.
 
-**Before and after.** The baseline run was 77 passed and 1 failed in 127.26 s; the
-failure was the 360px geometry assertion above. The corrected targeted browser suite
-passed 85 tests in 144.20 s, the copy-parity browser fixture passed both Vietnamese and
-English cases (`2 passed` in 4.24 s), and the Node provider reducer suite passed 97
-tests with Node 24. Fixture screenshots cover desktop/mobile light/dark states and
+**Before and after.** The baseline run was 77 passed and 1 failed in 127.26 s
+(`baseline-browser.log` in the issue run directory); the
+failure was the 360px geometry assertion above. The final d07c48e targeted browser
+suite passed 86 tests in 145.76 s (`logs-final-d07/browser-targeted.log` in the issue run directory);
+the earlier corrected-copy fixture passed both Vietnamese and English cases (`2 passed`
+in 4.24 s; `logs-corrected-copy/browser-copy-parity.log` in the issue run directory).
+The final Node 24 web suite passed 672 tests, including 99 provider reducer tests
+(`logs-final-d07/node-web-all.log` and `logs-final-d07/node-provider-core.log` in the
+issue run directory).
+Fixture screenshots cover desktop/mobile light/dark states and
 use only synthetic provider data: [desktop light Vietnamese](assets/frontend/issue-252/desktop-light-vi.png),
 [desktop dark English](assets/frontend/issue-252/desktop-dark-en.png),
 [mobile light Vietnamese](assets/frontend/issue-252/mobile-light-vi.png), and
