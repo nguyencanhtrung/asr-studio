@@ -656,10 +656,11 @@ def test_failed_create_keeps_the_form_and_a_retry_only_creates(live, signed_in, 
     assert _count(requests, "POST", "/api/meetings") == 2
 
 
+@pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_state_labels_are_vietnamese_and_never_technical_codes(
-    live, signed_in, media_tools, tmp_path
+    live, signed_in, media_tools, tmp_path, scheme
 ):
-    _context, page = signed_in(viewport={"width": 360, "height": 640})
+    _context, page = signed_in(color_scheme=scheme, viewport={"width": 360, "height": 640})
     dialog = _open_dialog(page)
     label = page.locator("#state-label")
 
@@ -744,12 +745,14 @@ def test_state_labels_are_vietnamese_and_never_technical_codes(
     ):
         _assert_in_dialog_viewport(dialog, locator, name)
     assert content.evaluate("el => el.scrollTop") == 0
-    screenshot_path = Path(
-        os.environ.get(
-            "ASR_ISSUE_255_SCREENSHOT",
-            str(tmp_path / "issue-255-held-transfer-mobile.png"),
-        )
-    )
+    screenshot_dir = os.environ.get("ASR_ISSUE_255_SCREENSHOT_DIR")
+    screenshot_override = os.environ.get("ASR_ISSUE_255_SCREENSHOT")
+    if screenshot_dir:
+        screenshot_path = Path(screenshot_dir) / f"held-transfer-mobile-{scheme}.png"
+    elif screenshot_override and scheme == "light":
+        screenshot_path = Path(screenshot_override)
+    else:
+        screenshot_path = tmp_path / f"issue-255-held-transfer-mobile-{scheme}.png"
     screenshot_path.parent.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(screenshot_path), animations="disabled", caret="hide")
     assert screenshot_path.stat().st_size > 10_000
@@ -780,6 +783,36 @@ def test_state_labels_are_vietnamese_and_never_technical_codes(
     held[0].continue_()
     page.unroute("**/api/meetings")
     _meeting_id(page)
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_create_dialog_desktop_layout_and_optional_screenshot(live, signed_in, scheme):
+    _context, page = signed_in(color_scheme=scheme, viewport={"width": 1280, "height": 900})
+    dialog = _open_dialog(page)
+    page.locator("#recording-file").set_input_files(_recording("Desktop upload evidence.wav"))
+    page.locator('input[name="language_hint"][value="vi"]').check()
+
+    assert (
+        page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        == 0
+    )
+    assert page.locator(".dialog-content").evaluate("el => el.scrollWidth - el.clientWidth") == 0
+    dialog_box = dialog.bounding_box()
+    assert dialog_box is not None and dialog_box["width"] <= 700
+    for locator in (
+        page.locator("#selected-file-copy"),
+        page.locator("#meeting-name"),
+        page.locator("#workflow-state"),
+        dialog.get_by_role("button", name="Tạo cuộc họp"),
+    ):
+        _assert_in_dialog_viewport(dialog, locator, "desktop dialog control")
+
+    screenshot_dir = os.environ.get("ASR_ISSUE_255_SCREENSHOT_DIR")
+    if screenshot_dir:
+        screenshot_path = Path(screenshot_dir) / f"new-meeting-desktop-{scheme}.png"
+        screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(screenshot_path), animations="disabled", caret="hide")
+        assert screenshot_path.stat().st_size > 10_000
 
 
 def test_state_label_is_vietnamese_while_the_policy_is_still_loading(live, signed_in):
