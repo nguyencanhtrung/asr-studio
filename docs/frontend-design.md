@@ -521,15 +521,15 @@ Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không
 | không đăng nhập | `login-requested` | nút đăng nhập khóa, xóa lỗi (ChatGPT: cả thông báo); lặp khi đang khởi động hoặc đã có login thì bị bỏ | ChatGPT: `open-window reserve`; Google: `fetch login-start` |
 | ChatGPT chờ cửa sổ | `window-blocked` | lỗi `POPUP_BLOCKED`, nút mở lại | |
 | ChatGPT chờ cửa sổ | `window-reserved` | | `fetch login-start` |
-| khởi động | `login-start` hợp lệ | ChatGPT: có login, `loginGen + 1`; Google: có login, link, ô nhập mã | lưu sessionStorage; ChatGPT: `open-window navigate`, `schedule poll-wait` 500; Google: `fetch poll` ngay |
+| khởi động | `login-start` hợp lệ | ChatGPT: có login, `loginGen + 1`; Google: có login, link, ô nhập mã, focus ô nhập bằng one-shot `focus:input` | lưu sessionStorage; ChatGPT: `open-window navigate`, `schedule poll-wait` 500; Google: `fetch poll` ngay |
 | khởi động | `login-start` sai phiên, URL không an toàn, lỗi (ChatGPT) | lỗi hiện ra, nút mở lại, không có login | `open-window close` |
 | khởi động | `login-start` Google: phiên không phải object | lỗi `INVALID_LOGIN_SESSION`, nút mở lại, không có login | |
 | khởi động | `login-start` Google: URL sai hoặc không an toàn | lỗi hiện ra, login vẫn giữ và đã lưu: hiện bảng đăng nhập và nút Hủy (người dùng hủy được), không poll | |
 | khởi động (ChatGPT) | phiên đã hết hạn lúc trả lời | `expired` ngay | đóng cửa sổ |
 | ChatGPT | `window-closed` (người dùng đã đóng) | lỗi "cửa sổ đã đóng"; vẫn poll | |
 | có login | `poll-due` (đúng `loginGen`) | ChatGPT: hết hạn thì `expired` | `fetch poll` |
-| có login | `poll` pending | ChatGPT: kiểm hết hạn, chép lại; Google: áp lại link/ô nhập | `schedule poll-wait` 1000 |
-| có login | `poll` kết thúc (`connected`, `cancelled`, `expired`, `failed`) | không login; thông báo hoặc lỗi theo trạng thái; ChatGPT xóa lỗi | xóa sessionStorage; `connected`: tải lại + `call provider.choice-changed` |
+| có login | `poll` pending | ChatGPT: kiểm hết hạn, chép lại; Google: áp lại link/ô nhập và focus ô nhập khi prompt mới xuất hiện | `schedule poll-wait` 1000 |
+| có login | `poll` kết thúc (`connected`, `cancelled`, `expired`, `failed`) | không login; thông báo hoặc lỗi theo trạng thái; ChatGPT xóa lỗi; Google xóa giá trị ô nhập bằng one-shot `clear-input` | xóa sessionStorage; `connected`: tải lại + `call provider.choice-changed` |
 | có login | `poll` trạng thái lạ (ChatGPT) | lỗi `INVALID_LOGIN_STATUS` kèm "kiểm tra lại" | |
 | có login | `poll` lỗi | ChatGPT: lỗi kèm "kiểm tra lại", không poll tự động; Google: phiên không còn (`404`) thì `expired`, lỗi khác thì báo | Google: `schedule` 2000 |
 | ChatGPT lỗi poll | `poll-retry-requested` | xóa lỗi | `schedule poll-wait` 0 |
@@ -537,7 +537,7 @@ Ghi chú view: thanh tiến độ và số byte cập nhật tại chỗ, không
 | hủy | trả lời trạng thái kết thúc | như poll kết thúc | |
 | hủy | trả lời khác (ChatGPT) hoặc lỗi | lỗi (`CANCEL_NOT_CONFIRMED`), nút hủy mở lại, login giữ; Google: phiên không còn thì `expired`; trả lời nào cũng kết thúc | `schedule` poll 1000 |
 | Google có login | `login-input-submitted` (đã cắt khoảng trắng, không rỗng) | | `fetch login-input` |
-| Google | `login-input` ok | ô nhập xóa và đóng, áp phiên mới | |
+| Google | `login-input` ok | xóa giá trị ô nhập; đóng form theo mặc định; nếu response có prompt mới thì mở lại nhưng giữ one-shot `clear-input` | |
 | Google | `login-input` lỗi | lỗi hiện ra, ô nhập giữ | |
 | ChatGPT có login | `login-callback-submitted` (chuỗi callback chỉ nằm trong action/effect) | `callbackPending`, tăng `callbackRequest`, xóa ô nhập qua one-shot UI action | `fetch POST /login-sessions/<id>/input` với JSON `{callback_url}`; không storage, URL query hoặc fetch URL |
 | ChatGPT có callback request | `callback` ok, đúng `loginGen` và `callbackRequest` | áp trạng thái phiên; kết thúc thì xóa login/storage và tải lại provider | `schedule poll-wait` nếu còn pending |

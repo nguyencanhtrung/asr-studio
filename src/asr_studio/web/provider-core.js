@@ -213,11 +213,11 @@ export const CHATGPT = {
     disconnect: t("Ngắt kết nối"),
     disconnectedRemote: t("Đã xóa thông tin đăng nhập trong không gian làm việc và xác nhận thu hồi quyền truy cập từ xa."),
     disconnectedLocal: t("Đã ngắt kết nối trong không gian làm việc. ChatGPT chưa xác nhận thu hồi quyền từ xa; hãy kiểm tra ChatGPT → Cài đặt → Mức sử dụng."),
-    recreateStarted: t("Quyền kết nối cũ đã được thu hồi. Hãy tiếp tục trong cửa sổ ChatGPT mới."),
-    recreateConnected: t("Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT."),
+    recreateStarted: t("Đã ngắt kết nối ChatGPT hiện tại. Hãy kết nối lại để tiếp tục tạo Notes qua ChatGPT. Model và effort đã lưu sẽ được dùng lại. Hãy tiếp tục trong cửa sổ ChatGPT mới."),
+    recreateConnected: t("Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT. Model và effort đã lưu được giữ nguyên."),
     recreateSubmitting: t("Đang tạo lại đăng ký…"),
     recreate: t("Đăng ký lại"),
-    recreateConfirm: t("Đăng nhập lại"),
+    recreateConfirm: t("Tạo lại đăng ký và đăng nhập"),
   },
 };
 
@@ -656,7 +656,15 @@ function applySession(d, s, session) {
     }
     next = { ...next, loginLink: url.href };
   }
-  if (typeof session.input_prompt === "string" && session.input_prompt) next = { ...next, inputPrompt: session.input_prompt, inputOpen: true };
+  if (typeof session.input_prompt === "string" && session.input_prompt) {
+    const shouldFocusInput = !s.inputOpen || s.inputPrompt !== session.input_prompt;
+    next = {
+      ...next,
+      inputPrompt: session.input_prompt,
+      inputOpen: true,
+      ...(shouldFocusInput && s.ui !== "clear-input" ? { ui: "focus:input" } : {}),
+    };
+  }
   return { state: next, effects };
 }
 
@@ -675,7 +683,8 @@ function finishLogin(d, s, status, payload) {
     signInDisabled: false,
     loginLink: null,
     inputOpen: false,
-    ui: d.id === "chatgpt" ? "clear-callback-input:focus-message" : s.ui,
+    ui: d.id === "chatgpt" ? "clear-callback-input:focus-message" : "clear-input",
+    inputPrompt: null,
     pending: { ...s.pending, recreate: false },
   };
   const effects = [...stopPoll(d), persist(d, null)];
@@ -1532,6 +1541,11 @@ export function selectView(d, s) {
       || !s.info
       || !["connected", "reconnect_required"].includes(s.info.status)
       || Boolean(s.login),
+    reloginHidden: d.id !== "chatgpt"
+      || !s.info
+      || s.info.status !== "connected"
+      || Boolean(s.login || s.pending.recreate),
+    reloginDisabled: inUse || s.signInDisabled || s.pending.recreate,
     registrationConfirming: d.id === "chatgpt" && s.recreateConfirming,
     registrationDisabled: inUse || s.pending.recreate,
     registrationLabel: d.copy.recreateConfirm,

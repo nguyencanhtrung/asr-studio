@@ -541,6 +541,12 @@ button.provider-overview-row:focus-visible {
   color: var(--accent);
 }
 
+.connection-relogin {
+  margin-top: 12px;
+  padding-inline: 0;
+  color: var(--accent);
+}
+
 .connection-registration-confirm {
   margin-top: 12px;
   padding-top: 12px;

@@ -2892,3 +2892,58 @@ synthetic meetings rendered by Chromium against a disposable FastAPI service.
 [Screenshots](assets/frontend/issue-251) · [Issue #251](https://github.com/nguyencanhtrung/asr-studio/issues/251).
 
 Tag: design. Target: frontend design and release notes.
+
+## [#252](https://github.com/nguyencanhtrung/asr-studio/issues/252) — Provider sign-in parity in Settings
+
+**Problem and measured cause.** The provider Settings surface exposed ordinary ChatGPT
+re-login and registration recreation as related account actions, but the destructive
+confirmation button and the ordinary re-login control both announced “Đăng nhập lại”
+(“Sign in again”). The browser baseline also read the 360px launcher and status-dot
+bounding boxes across the #251 responsive disclosure transition: the launcher box was
+at `y = 656.59375` while the status dot was at `y = 109`, producing one failure after
+77 passing tests in 127.26 s. This was a fixture timing/geometry boundary, not a
+provider contract failure.
+
+**Design change.** Keep ordinary OpenAI re-login on its normal login-session endpoint
+and expose it as “Đăng nhập lại” / “Sign in again”. Give registration recreation its
+own explicit “Tạo lại đăng ký và đăng nhập” / “Recreate registration and sign in”
+accessible name. The warning says that recreation will disconnect the current ChatGPT
+connection, make notes generation through ChatGPT unavailable until reconnection, and
+preserve saved model and reasoning-effort preferences. This matches the server effect:
+it invalidates the connection version and clears only the legacy provider-state
+`notes_provider` marker; it does not clear the saved model/effort fields or SQLite's
+last-provider preference. Preserve the OMP status-only GET reschedule recovery and keep
+inference, verification, preference, and input mutations single-attempt. The browser
+forwards the existing trimmed opaque OMP value without parsing or persistence. Terminal
+OMP outcomes clear any unsent input through the existing one-shot `clear-input` action,
+and a defensive response prompt cannot replace that clear. Mobile history uses the
+native disclosure transition; native keyboard behavior remains unchanged. The launcher
+fixture waits for settled geometry and reads all relevant rectangles in one DOM
+evaluation.
+
+**Before and after.** The baseline run was 77 passed and 1 failed in 127.26 s
+(`baseline-browser.log` in the issue run directory); the
+failure was the 360px geometry assertion above. The final d07c48e targeted browser
+suite passed 86 tests in 145.76 s (`logs-final-d07/browser-targeted.log` in the issue run directory);
+the earlier corrected-copy fixture passed both Vietnamese and English cases (`2 passed`
+in 4.24 s; `logs-corrected-copy/browser-copy-parity.log` in the issue run directory).
+The final Node 24 web suite passed 672 tests, including 99 provider reducer tests
+(`logs-final-d07/node-web-all.log` and `logs-final-d07/node-provider-core.log` in the
+issue run directory).
+Fixture screenshots cover desktop/mobile light/dark states and
+use only synthetic provider data: [desktop light Vietnamese](assets/frontend/issue-252/desktop-light-vi.png),
+[desktop dark English](assets/frontend/issue-252/desktop-dark-en.png),
+[mobile light Vietnamese](assets/frontend/issue-252/mobile-light-vi.png), and
+[mobile dark English](assets/frontend/issue-252/mobile-dark-en.png).
+
+**Trade-offs and rejected options.** Native `<dialog>` focus containment and opener
+restoration remain the browser primitive; no custom keydown focus trap was added.
+Status polling was not changed to a manual retry because the existing status-only GET
+recovery is part of the provider contract. No backend, provider API, credential,
+redirect/PKCE, or persisted processing state was changed.
+
+**Follow-ups.** Keep the final PR and CI evidence attached to issue #252; the conductor
+merges only after the fresh review gate and latest checks are green.
+
+Tag: design, privacy. Target: `src/asr_studio/web/`, targeted browser/reducer tests,
+and `docs/assets/frontend/issue-252/`.

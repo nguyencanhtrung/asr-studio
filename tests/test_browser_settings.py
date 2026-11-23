@@ -411,6 +411,23 @@ def test_phone_settings_open_from_the_top_bar_and_the_dialog_scrolls(
     assert overflow(page) <= 0
 
 
+def test_mobile_history_disclosure_starts_collapsed_and_keeps_native_keyboard_toggle(
+    live, signed_in
+):
+    _context, page = signed_in(viewport={"width": 390, "height": 700})
+    page.goto(f"{live.url}/")
+    history = page.locator("#sidebar-history")
+    summary = history.locator("summary")
+    expect(history).not_to_have_attribute("open", "")
+    summary.focus()
+    page.keyboard.press("Enter")
+    expect(history).to_have_attribute("open", "")
+    expect(summary).to_be_focused()
+    page.keyboard.press("Space")
+    expect(history).not_to_have_attribute("open", "")
+    expect(summary).to_be_focused()
+
+
 def test_settings_is_complete_in_english(live, signed_in, gpu_worker):
     context, page = signed_in(viewport={"width": 1280, "height": 900})
     page.evaluate("localStorage.setItem('asr-studio:lang', 'en')")
