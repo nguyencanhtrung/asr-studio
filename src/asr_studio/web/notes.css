@@ -884,12 +884,34 @@ a.notes-citation-chip:focus-visible {
 /* Saved rich/email previews mirror the neutral document written to the clipboard, even in dark mode. */
 .notes-copy-dialog[data-copy-kind] {
   color-scheme: light;
+  --surface: #fff;
+  --surface-subtle: #f7f8fa;
+  --surface-raised: #fff;
+  --ink: #222;
+  --ink-2: #535861;
+  --ink-3: #60656d;
+  --text: #222;
+  --muted: #535861;
+  --accent: #174b82;
+  --accent-hover: #10395f;
+  --accent-soft: #e7eff7;
+  --accent-contrast: #fff;
+  --teal: #174b82;
+  --hairline: #d5d8dd;
+  --line-strong: #c6c9cf;
+  --control-border: #7b838e;
   background: #fff;
   color: #222;
   border-color: #c6c9cf;
 }
 
+.notes-copy-dialog[data-copy-kind] .notes-copy-header h2,
 .notes-copy-dialog[data-copy-kind] .notes-copy-header p {
+  color: #222;
+}
+
+.notes-copy-dialog[data-copy-kind] .notes-copy-header p,
+.notes-copy-dialog[data-copy-kind] #notes-copy-result {
   color: #535861;
 }
 
@@ -901,6 +923,12 @@ a.notes-citation-chip:focus-visible {
 
 .notes-copy-dialog[data-copy-kind] .notes-copy-document a {
   color: #174b82;
+}
+
+.notes-copy-dialog[data-copy-kind] button:focus,
+.notes-copy-dialog[data-copy-kind] [tabindex]:focus {
+  outline: 2px solid #174b82;
+  outline-offset: 2px;
 }
 
 .notes-copy-header {

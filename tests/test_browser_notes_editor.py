@@ -159,6 +159,39 @@ def test_rich_keystrokes_keep_clean_markdown_and_block_structure_enter(live, sig
     assert r"\." not in stored
 
 
+def test_rich_incremental_appends_keep_structure_and_source_bytes(live, signed_in):
+    _context, page = signed_in()
+    markdown = "# Plan\n\nHello\n\n- one\n\n| A | B |\n| --- | --- |\n| x | y |\n"
+    _, revision, _, _ = _open_notes(live, page, lambda *_: markdown)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    editor = page.locator("#notes-rich-editor")
+
+    def append(locator, value):
+        locator.click()
+        page.keyboard.press("End")
+        page.keyboard.type(value)
+
+    heading = editor.locator("h4 [contenteditable='plaintext-only']")
+    paragraph = editor.locator("p [contenteditable='plaintext-only']")
+    bullet = editor.get_by_role("listitem").get_by_role("textbox")
+    cell = editor.get_by_role("cell", name="x").get_by_role("textbox")
+    # A space typed at a run edge is temporarily entity-encoded so it cannot
+    # become Markdown structure. The next keystroke must normalize it once it
+    # is interior, while keeping the surrounding source bytes untouched.
+    runs = ((heading, "three"), (paragraph, "world"), (bullet, "more"), (cell, "value"))
+    for locator, word in runs:
+        append(locator, " ")
+        append(locator, word)
+    expect(page.locator("#notes-rich-fallback")).to_be_hidden()
+    expected = markdown.replace("# Plan", "# Plan three").replace("Hello", "Hello world")
+    expected = expected.replace("- one", "- one more").replace("| x |", "| x value |")
+    with page.expect_response(lambda response: response.request.method == "PATCH") as saved:
+        page.locator("#notes-save").click()
+    assert saved.value.ok
+    assert saved.value.request.post_data_json["markdown"] == expected
+    assert get_note(live.settings.data_dir, revision["id"])["markdown"] == expected
+
+
 def test_rich_invalid_code_input_reverts_and_ime_enter_is_allowed(live, signed_in):
     _context, page = signed_in()
     markdown = "# Notes\n\nUse `npm ci`.\n"
@@ -183,6 +216,49 @@ def test_rich_invalid_code_input_reverts_and_ime_enter_is_allowed(live, signed_i
         }"""
     )
     assert composing is False
+
+
+def test_view_citation_code_boundaries_and_literal_rich_markers(live, signed_in):
+    _context, page = signed_in()
+    fence = "`" * 3
+
+    def fenced_before_bullet(markdown, *_):
+        return markdown.replace(
+            "- The team reviewed its launch plan.",
+            f"{fence}text\nExample code\n{fence}\n\n- The team reviewed its launch plan.",
+            1,
+        )
+
+    _open_notes(live, page, fenced_before_bullet)
+    preview = page.locator("#notes-preview")
+    expect(preview.locator("pre")).to_contain_text("Example code")
+    bullet = preview.get_by_role("listitem").filter(has_text="The team reviewed its launch plan.")
+    expect(bullet.locator(".notes-citation-chip")).to_have_count(1)
+    expect(preview.locator("pre").locator(".notes-citation-chip")).to_have_count(0)
+
+    def indented_code(markdown, *_):
+        return (
+            "# Meeting Notes\n\n## Overview\n\n- Other bullet.\n\n"
+            "      - The team reviewed its launch plan.\n"
+        )
+
+    _open_notes(live, page, indented_code)
+    code = page.locator("#notes-preview pre").filter(has_text="The team reviewed its launch plan.")
+    expect(code).to_be_visible()
+    expect(code.locator(".notes-citation-chip")).to_have_count(0)
+
+    _open_notes(live, page, lambda *_: "# Notes\n\nOrdinary text.\n")
+    page.get_by_role("button", name="Viết", exact=True).click()
+    paragraph = page.locator("#notes-rich-editor p [contenteditable='plaintext-only']")
+    paragraph.fill("## Literal text")
+    with page.expect_response(lambda response: response.request.method == "PATCH") as saved:
+        page.locator("#notes-save").click()
+    assert saved.value.ok
+    page.get_by_role("button", name="Xem", exact=True).click()
+    expect(
+        page.locator("#notes-preview").get_by_role("heading", name="Literal text")
+    ).to_have_count(0)
+    expect(page.locator("#notes-preview p").filter(has_text="## Literal text")).to_have_count(1)
 
 
 def test_mixed_markdown_falls_back_without_hiding_view_citations_or_source_links(live, signed_in):
@@ -319,6 +395,23 @@ def test_email_preview_pins_saved_revision_and_reports_clipboard_outcomes(live, 
         "element => [getComputedStyle(element).backgroundColor, getComputedStyle(element).color]"
     )
     assert colors == ["rgb(255, 255, 255)", "rgb(34, 34, 34)"]
+    chrome_colors = dialog.locator(
+        "#notes-copy-result, #notes-copy-confirm, #notes-copy-close"
+    ).evaluate_all(
+        "elements => elements.map(element => ["
+        "getComputedStyle(element).color, getComputedStyle(element).backgroundColor])"
+    )
+    assert chrome_colors == [
+        ["rgb(83, 88, 97)", "rgba(0, 0, 0, 0)"],
+        ["rgb(255, 255, 255)", "rgb(23, 75, 130)"],
+        ["rgb(83, 88, 97)", "rgb(255, 255, 255)"],
+    ]
+    confirm = dialog.get_by_role("button", name="Sao chép nội dung email")
+    confirm.focus()
+    assert (
+        confirm.evaluate("element => getComputedStyle(element).outlineColor") == "rgb(23, 75, 130)"
+    )
+    dialog.get_by_role("heading", name="Xem trước email").focus()
     expect(dialog.get_by_role("heading", name="Xem trước email")).to_be_focused()
     expect(dialog.locator("#notes-copy-subject")).to_have_text("Chủ đề: Launch briefing")
     expect(dialog.get_by_role("region", name="Introduction")).to_be_visible()

@@ -1545,6 +1545,23 @@ test("rich text edits keep ordinary spaces and punctuation canonical", async () 
   assert.doesNotMatch(saved(env).value, /&#32;|\\[().]/);
 });
 
+test("rich appends normalize only the previous encoded trailing-space suffix", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\nOne&#32;point at noon\n\nPlan&#32;\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  let runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const paragraphIndex = runs.findIndex((node) => node.text === "One point at noon");
+  env.dispatch("rich-edited", {
+    index: paragraphIndex, before: "One point at noon", value: "One point at noon today",
+  });
+  assert.equal(saved(env).value, "# Notes\n\nOne&#32;point at noon today\n\nPlan&#32;\n");
+  runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const trailingIndex = runs.findIndex((node) => node.text === "Plan ");
+  env.dispatch("rich-edited", { index: trailingIndex, before: "Plan ", value: "Plan three" });
+  assert.equal(saved(env).value, "# Notes\n\nOne&#32;point at noon today\n\nPlan three\n");
+});
+
 test("raw edits preserve untouched CRLF and CR delimiters", async () => {
   const env = setup();
   await opened(env, { revisions: [revision({ markdown: "# A\r\n\r\nEdit me\rKeep me\n" })] });
@@ -1630,6 +1647,50 @@ test("View keeps citation parity for unsupported lists and raw heading scope", a
   })] });
   const lists = selectView(scopedEnv.state()).savedWork.blocks.filter((block) => block.kind === "list");
   assert.equal(lists[1].items[0].chips[0].segmentId, "seg-a");
+});
+
+test("View skips code for citation matching and rich text keeps heading markers literal", async () => {
+  const env = setup();
+  const bullet = "The team reviewed its launch plan.";
+  const markdown = "# Meeting Notes\n\n## Overview\n\n```text\nExample code\n```\n\n- " + `${bullet}\n`;
+  await opened(env, { revisions: [revision({
+    markdown,
+    citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg-a", start_seconds: 1 }] }],
+  })] });
+  const list = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "list");
+  assert.equal(list.items[0].chips[0].segmentId, "seg-a");
+
+  const indented = "# Meeting Notes\n\n## Overview\n\n- Other bullet.\n\n      - " + `${bullet}\n`;
+  env.dispatch("draft-edited", { value: indented });
+  const raw = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.ok(raw);
+  assert.deepEqual(raw.viewLines.map((line) => line.chips), [[], [], []]);
+
+  const literal = "# Notes\n\nOrdinary text.\n";
+  env.dispatch("draft-edited", { value: literal });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  env.dispatch("rich-edited", {
+    index: runs.findIndex((node) => node.text === "Ordinary text."),
+    before: "Ordinary text.",
+    value: "## Literal text",
+  });
+  assert.equal(saved(env).value, "# Notes\n\n\\## Literal text\n");
+  assert.equal(selectView(env.state()).savedWork.blocks.filter((block) => block.kind === "heading").length, 1);
+  assert.equal(selectView(env.state()).savedWork.blocks.find((block) => block.kind === "heading").level, 1);
+
+  const crEnv = setup();
+  const crlf = "# Notes\r\rOrdinary\r";
+  await opened(crEnv, { revisions: [revision({ markdown: crlf })] });
+  crEnv.dispatch("mode-chosen", { mode: "rich" });
+  const crRuns = selectView(crEnv.state()).savedWork.blocks.flatMap(blockRuns);
+  crEnv.dispatch("rich-edited", {
+    index: crRuns.findIndex((node) => node.text === "Ordinary"),
+    before: "Ordinary",
+    value: "> Literal",
+  });
+  assert.equal(saved(crEnv).value, "# Notes\r\r\\> Literal\r");
+  assert.equal(selectView(crEnv.state()).savedWork.blocks[1].kind, "paragraph");
 });
 
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {

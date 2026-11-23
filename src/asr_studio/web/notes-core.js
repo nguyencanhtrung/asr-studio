@@ -424,7 +424,7 @@ const referenceKey = (reference) => `${reference.meetingId}\u0000${reference.sna
 // shows none and never another bullet's. Each entry is used once, in order. Identical bullets cannot
 // be told apart, so a text keeps its chips only while the notes hold as many bullets with it as they
 // were made with: once one was edited or removed, or another was edited into a copy, none keeps a chip.
-const citationBoundary = "\u0000";
+const citationIgnore = "\u0001";
 
 function citedBullets(lines, citations) {
   const found = new Map();
@@ -442,8 +442,7 @@ function citedBullets(lines, citations) {
   const counts = new Map();
   let section = "";
   lines.forEach((line, index) => {
-    if (line === citationBoundary) {
-      section = `${citationBoundary}${index}`;
+    if (line === citationIgnore) {
       return;
     }
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
@@ -451,7 +450,7 @@ function citedBullets(lines, citations) {
       section = heading[2].trim();
       return;
     }
-    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    const bullet = line.match(/^ {0,3}[-*] +([^ ].*)$/);
     if (!bullet) return;
     const key = keyOf(section, bullet[1].trim());
     bullets.push({ index, key });
@@ -690,8 +689,10 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
   const raw = (start, end, { viewLines = false, citable = false } = {}) => {
     if (citable) {
       for (let index = start; index < end; index++) citationLines[index] = line(index);
-    } else if (!citationLines[start]) {
-      citationLines[start] = citationBoundary;
+    } else {
+      for (let index = start; index < end; index++) {
+        if (!citationLines[index]) citationLines[index] = citationIgnore;
+      }
     }
     const block = { kind: "raw", text: markdown.slice(lines[start].offset, lines[end - 1].offset + line(end - 1).length) };
     if (viewLines && presentation === "view") {
@@ -800,7 +801,11 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     // Keep setext headings, reference definitions, HTML, multiline hard breaks and
     // GFM syntax outside the supported profile visible in their original spelling.
     const paragraph = lines.slice(index, end);
-    const hardBreak = paragraph.some(({ text: value }) => /(?: {2,}|\\)$/.test(value));
+    const hardBreak = paragraph.some(({ text: value }) => {
+      if (/ {2,}$/.test(value)) return true;
+      const backslashes = value.match(/\\+$/)?.[0] || "";
+      return backslashes.length % 2 === 1;
+    });
     if (unsupported || hardBreak || paragraph.some(({ text: value }) => /^ {0,3}[=-]+ *$/.test(value))) {
       blocks.push(raw(index, end, { viewLines: !unsupported && hardBreak }));
     } else {
@@ -849,6 +854,55 @@ function sharedEdges(before, after) {
   return [first, tail];
 }
 
+function sourceOffsets(node, source) {
+  if (node.kind === "code") return Array.from({ length: source.length + 1 }, (_, index) => index);
+  const offsets = [0];
+  for (let index = 0; index < source.length;) {
+    let end = index + 1;
+    if (source[index] === "\\" && escapedPunctuation.test(source[index + 1] || "")) end += 1;
+    else {
+      const space = source.slice(index).match(/^&#(?:32|9);/);
+      if (space) end = index + space[0].length;
+    }
+    offsets.push(end);
+    index = end;
+  }
+  return offsets;
+}
+
+function normalizeInteriorTrailingSpaces(source, raw, offsets, display, appended) {
+  if (!appended.trim()) return source;
+  const trailing = display.match(/[ \t]+$/)?.[0] || "";
+  if (!trailing) return source;
+  const first = display.length - trailing.length;
+  const encodedStart = offsets[first];
+  const encodedEnd = offsets[display.length];
+  const encoded = raw.slice(encodedStart, encodedEnd);
+  if (!/^(?:&#32;|&#9;)+$/.test(encoded)) return source;
+  const literal = encoded.replace(/&#32;/g, " ").replace(/&#9;/g, "\t");
+  return source.slice(0, encodedStart) + literal + source.slice(encodedEnd);
+}
+
+function richBlockShape(block) {
+  switch (block.kind) {
+    case "heading": return { kind: block.kind, level: block.level, nodes: block.nodes.length };
+    case "paragraph": return { kind: block.kind, lines: block.lines.map((line) => line.length) };
+    case "list": return { kind: block.kind, start: block.start, items: block.items.map((item) => item.nodes.length) };
+    case "table": return { kind: block.kind, align: block.align, rows: block.rows.map((row) => row.length) };
+    default: return { kind: block.kind };
+  }
+}
+
+function richStructureMatches(before, after, changedIndex, value) {
+  if (before.length !== after.length) return false;
+  if (before.some((block, index) => JSON.stringify(richBlockShape(block)) !== JSON.stringify(richBlockShape(after[index])))) return false;
+  const beforeNodes = before.flatMap(blockRuns);
+  const afterNodes = after.flatMap(blockRuns);
+  if (beforeNodes.length !== afterNodes.length) return false;
+  return beforeNodes.every((node, index) => node.kind === afterNodes[index].kind
+    && afterNodes[index].text === (index === changedIndex ? value : node.text));
+}
+
 // Textareas expose LF even when the server stores CRLF or CR. Keep separators in
 // the untouched prefix and suffix and use the document's separator for inserted lines.
 function rawTextareaEdit(markdown, value) {
@@ -866,24 +920,33 @@ function rawTextareaEdit(markdown, value) {
     + markdown.slice(offsets[before.length - tail]);
 }
 
-function escapeRichValue(value, node, markdown) {
+function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = false, tableCell = false } = {}) {
   if (node.kind === "code") return /[`\r\n]/.test(value) ? null : value;
-  const syntax = "\\`*_[]<>~&|";
-  let escaped = [...value].map((char) => syntax.includes(char) ? `\\${char}` : char).join("").replace(/\t/g, "&#9;");
-  const lineStart = markdown.lastIndexOf("\n", node.start - 1) + 1;
-  const atLineStart = markdown.slice(lineStart, node.start) === "";
-  if (node.kind === "text" && atLineStart) {
+  let escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/([`*_\[\]<>])/g, "\\$1")
+    .replace(/&(?=(?:#\w+|[a-z]+);)/gi, "\\&")
+    .replace(/\t/g, "&#9;");
+  if (value.includes("~~")) escaped = escaped.replace(/~/g, "\\~");
+  if (tableCell) escaped = escaped.replace(/\|/g, "\\|");
+  if (edgeEnd) escaped = escaped.replace(/ +$/g, (spaces) => spaces.replace(/ /g, "&#32;"));
+  const lineStart = Math.max(markdown.lastIndexOf("\n", node.start - 1), markdown.lastIndexOf("\r", node.start - 1)) + 1;
+  const linePrefix = markdown.slice(lineStart, node.start);
+  const atLineStart = linePrefix === "";
+  const atListItemStart = /^ {0,3}(?:[-*+]|\d{1,9}[.)]) +$/.test(linePrefix);
+  if (node.kind === "text" && edgeStart && (atLineStart || atListItemStart)) {
     const ordered = value.match(/^\d{1,9}([.)]) /);
     if (ordered) {
       const marker = ordered[1];
       const position = ordered[0].indexOf(marker);
       escaped = escaped.slice(0, position) + `\\${marker}` + escaped.slice(position + 1);
-    } else if (/^(?:#|[-+]) /.test(value)) {
+    } else if (/^(?:#{1,6}|[-+>]) /.test(value) && !escaped.startsWith("\\")) {
       escaped = `\\${escaped}`;
     }
   }
   if (["strong", "em", "link"].includes(node.kind)) {
-    escaped = escaped.replace(/^ +| +$/g, (spaces) => spaces.replace(/ /g, "&#32;"));
+    if (edgeStart) escaped = escaped.replace(/^ +/g, (spaces) => spaces.replace(/ /g, "&#32;"));
+    if (edgeEnd) escaped = escaped.replace(/ +$/g, (spaces) => spaces.replace(/ /g, "&#32;"));
   }
   return escaped;
 }
@@ -894,9 +957,36 @@ function richMarkdownEdit(state, action, revision, draft) {
   const nodes = blocks.flatMap(blockRuns);
   const node = nodes[action.index];
   if (!canEditRich(blocks) || !node || node.text !== action.before || node.text === action.value) return null;
-  const escaped = escapeRichValue(action.value, node, draft.value);
+  let targetBlock;
+  let runOffset = 0;
+  for (const block of blocks) {
+    const blockNodes = blockRuns(block);
+    if (action.index < runOffset + blockNodes.length) {
+      targetBlock = block;
+      break;
+    }
+    runOffset += blockNodes.length;
+  }
+  const raw = draft.value.slice(node.start, node.end);
+  const offsets = sourceOffsets(node, raw);
+  if (offsets.length !== node.text.length + 1) return null;
+  const [first, tail] = sharedEdges(node.text, action.value);
+  const changed = action.value.slice(first, action.value.length - tail);
+  const escaped = escapeRichValue(changed, node, draft.value, {
+    edgeStart: first === 0,
+    edgeEnd: tail === 0,
+    tableCell: targetBlock?.kind === "table",
+  });
   if (escaped === null) return null;
-  return draft.value.slice(0, node.start) + escaped + draft.value.slice(node.end);
+  const nodeSource = draft.value.slice(node.start, node.start + offsets[first]) + escaped
+    + draft.value.slice(node.start + offsets[node.text.length - tail], node.end);
+  const normalizedSource = first === node.text.length && tail === 0 && action.value.length > first
+    ? normalizeInteriorTrailingSpaces(nodeSource, raw, offsets, node.text, action.value.slice(first)) : nodeSource;
+  const candidate = draft.value.slice(0, node.start) + normalizedSource
+    + draft.value.slice(node.end);
+  const reparsed = markdownBlocks(candidate, revision, state.origin);
+  if (!canEditRich(reparsed) || !richStructureMatches(blocks, reparsed, action.index, action.value)) return null;
+  return candidate;
 }
 
 const escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({
