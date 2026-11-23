@@ -207,16 +207,20 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                 assert metrics["header"]["right"] <= metrics["workspaceContentRight"] + 0.5
                 if width == 360:
                     assert metrics["launchers"]["bottom"] <= metrics["actions"]["top"] + 0.5
+                    assert metrics["versionVisible"]
                     page.locator(".theme-toggle").focus()
                     keyboard_order = []
-                    for _ in range(6):
+                    for _ in range(9):
                         page.keyboard.press("Tab")
                         keyboard_order.append(_focus_identity(page))
                     assert keyboard_order == [
                         ".lang-toggle",
+                        "summary",
                         "#launcher-chatgpt",
                         "#launcher-antigravity",
                         "#settings-open",
+                        "github-link",
+                        "version-link",
                         "#open-calendar",
                         ".header-create",
                     ]

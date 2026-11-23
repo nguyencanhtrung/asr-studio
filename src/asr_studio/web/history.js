@@ -2682,6 +2682,23 @@ export const meetingHistory = Object.freeze({
 
 // ---- wiring ----
 
+const sidebarHistory = $("#sidebar-history");
+const sidebarSummary = sidebarHistory.querySelector("summary");
+const compactSidebar = window.matchMedia("(max-width: 680px)");
+
+function syncSidebarHistory() {
+  if (compactSidebar.matches) {
+    if (sidebarHistory.contains(document.activeElement)) sidebarSummary.focus();
+    sidebarHistory.open = false;
+  } else {
+    sidebarHistory.open = true;
+    if (document.activeElement === sidebarSummary) $("#history-search").focus();
+  }
+}
+
+compactSidebar.addEventListener("change", syncSidebarHistory);
+syncSidebarHistory();
+
 for (const root of document.querySelectorAll("[data-calendar]")) {
   buildCalendar(root);
   root.addEventListener("click", onCalendarClick);

@@ -55,35 +55,38 @@
           </div>
         </div>
 
-        <section class="recent-section" aria-labelledby="recent-heading">
-          <input
-            class="history-search"
-            id="history-search"
-            type="search"
-            maxlength="200"
-            autocomplete="off"
-            placeholder="Tìm cuộc họp theo tên…"
-            aria-label="Tìm cuộc họp theo tên"
-          />
-          <div class="section-heading">
-            <h2 id="recent-heading">Gần đây</h2>
-            <span class="section-rule" aria-hidden="true"></span>
-          </div>
-          <p class="sidebar-empty" id="sidebar-empty" hidden></p>
-          <p class="sidebar-empty" id="search-empty" role="status" hidden></p>
-          <p class="sidebar-empty search-error" id="search-error" role="alert" hidden>
-            Không tìm kiếm được lúc này. Kết quả có thể chưa đầy đủ; hãy gõ lại để thử lần nữa.
-          </p>
-          <ul class="recent-list" id="recent-list"></ul>
-        </section>
+        <details class="sidebar-history" id="sidebar-history" open>
+          <summary>Cuộc họp và lịch</summary>
+          <section class="recent-section" aria-labelledby="recent-heading">
+            <input
+              class="history-search"
+              id="history-search"
+              type="search"
+              maxlength="200"
+              autocomplete="off"
+              placeholder="Tìm cuộc họp theo tên…"
+              aria-label="Tìm cuộc họp theo tên"
+            />
+            <div class="section-heading">
+              <h2 id="recent-heading">Gần đây</h2>
+              <span class="section-rule" aria-hidden="true"></span>
+            </div>
+            <p class="sidebar-empty" id="sidebar-empty" hidden></p>
+            <p class="sidebar-empty" id="search-empty" role="status" hidden></p>
+            <p class="sidebar-empty search-error" id="search-error" role="alert" hidden>
+              Không tìm kiếm được lúc này. Kết quả có thể chưa đầy đủ; hãy gõ lại để thử lần nữa.
+            </p>
+            <ul class="recent-list" id="recent-list"></ul>
+          </section>
 
-        <section class="mini-calendar-section" aria-labelledby="mini-calendar-heading">
-          <div class="section-heading">
-            <h2 id="mini-calendar-heading">Lịch</h2>
-            <span class="section-rule" aria-hidden="true"></span>
-          </div>
-          <div class="calendar" id="mini-calendar" data-calendar="mini"></div>
-        </section>
+          <section class="mini-calendar-section" aria-labelledby="mini-calendar-heading">
+            <div class="section-heading">
+              <h2 id="mini-calendar-heading">Lịch</h2>
+              <span class="section-rule" aria-hidden="true"></span>
+            </div>
+            <div class="calendar" id="mini-calendar" data-calendar="mini"></div>
+          </section>
+        </details>
 
         <footer class="sidebar-footer">
           <div class="connection-launchers">
@@ -129,7 +132,7 @@
             </button>
             <a
               class="github-link"
-              href="https://github.com/nguyencanhtrung/asr-studio"
+              href="{{PROJECT_REPOSITORY_URL}}"
               aria-label="Mã nguồn ASR Studio trên GitHub"
               rel="noopener noreferrer"
               target="_blank"
@@ -138,7 +141,7 @@
                 <path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.56.1.76-.24.76-.54v-2.1c-3.1.68-3.76-1.32-3.76-1.32-.5-1.3-1.24-1.65-1.24-1.65-1.02-.7.08-.68.08-.68 1.13.08 1.72 1.17 1.72 1.17 1 .1.74 1.92 3.42 1.38.1-.72.39-1.2.7-1.48-2.48-.28-5.08-1.24-5.08-5.52 0-1.22.44-2.22 1.16-3-.12-.28-.5-1.42.11-2.96 0 0 .95-.3 3.06 1.15a10.6 10.6 0 0 1 5.57 0c2.12-1.45 3.06-1.15 3.06-1.15.61 1.54.23 2.68.11 2.96.72.78 1.16 1.78 1.16 3 0 4.3-2.61 5.23-5.1 5.5.4.35.75 1.02.75 2.06v3.05c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9Z" />
               </svg>
             </a>
-            <a class="version-link" href="https://github.com/nguyencanhtrung/asr-studio/releases" rel="noopener noreferrer" target="_blank">Version {{ASR_STUDIO_VERSION}}</a>
+            <a class="version-link" href="{{PROJECT_RELEASES_URL}}" rel="noopener noreferrer" target="_blank">Version {{ASR_STUDIO_VERSION}}</a>
           </div>
         </footer>
       </aside>
@@ -1054,10 +1057,10 @@
             <p class="connections-intro">ASR Studio chép lời và tạo notes riêng tư, bằng tiếng Anh và tiếng Việt.</p>
             <p class="connections-intro">Bản ghi được chép lời ngay trên máy của bạn. Chỉ transcript được gửi đến provider notes bạn chọn, và mỗi note đều dẫn về đúng khoảnh khắc trong bản ghi.</p>
             <dl class="connection-ledger">
-              <div><dt>Phiên bản</dt><dd><a id="settings-version" href="https://github.com/nguyencanhtrung/asr-studio/releases" target="_blank" rel="noopener noreferrer">{{ASR_STUDIO_VERSION}}</a></dd></div>
-              <div><dt>Mã nguồn</dt><dd><a href="https://github.com/nguyencanhtrung/asr-studio" target="_blank" rel="noopener noreferrer">nguyencanhtrung/asr-studio</a></dd></div>
+              <div><dt>Phiên bản</dt><dd><a id="settings-version" href="{{PROJECT_RELEASES_URL}}" target="_blank" rel="noopener noreferrer">{{ASR_STUDIO_VERSION}}</a></dd></div>
+              <div><dt>Mã nguồn</dt><dd><a href="{{PROJECT_REPOSITORY_URL}}" target="_blank" rel="noopener noreferrer">{{PROJECT_REPOSITORY_LABEL}}</a></dd></div>
               <div><dt>Người phát triển</dt><dd>Nguyễn Cảnh Trung</dd></div>
-              <div><dt>Website</dt><dd><a id="settings-developer-site" href="https://bibo.id.vn" target="_blank" rel="noopener noreferrer">bibo.id.vn</a></dd></div>
+              <div><dt>Website</dt><dd><a id="settings-developer-site" href="{{PROJECT_WEBSITE_URL}}" target="_blank" rel="noopener noreferrer">{{PROJECT_WEBSITE_LABEL}}</a></dd></div>
             </dl>
           </div>
         </div>

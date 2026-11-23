@@ -9,6 +9,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 DEFAULT_PUBLIC_URL = "http://127.0.0.1:8765"
+PROJECT_REPOSITORY = "nguyencanhtrung/asr-studio"
+PROJECT_WEBSITE = "bibo.id.vn"
 DEFAULT_PROVIDER_DIR = Path("/var/lib/asr-studio/provider")
 DEFAULT_INSTALL_DIR = Path("/var/lib/asr-studio/install")
 CHATGPT_CALLBACK_PATH = "/auth/chatgpt/callback"

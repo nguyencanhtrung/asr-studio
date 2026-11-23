@@ -531,10 +531,10 @@ def test_history_search_calendar_navigation_and_return(live, browser_context):
             assert header_metrics["createLabelClip"] == "none"
         if width == 681:
             assert header_metrics["gap"] == "11px"
-    for _ in range(10):
-        if header_create.evaluate("element => element === document.activeElement"):
-            break
-        page.keyboard.press("Tab")
+    page.locator(".version-link").focus()
+    page.keyboard.press("Tab")
+    expect(page.locator("#open-calendar")).to_be_focused()
+    page.keyboard.press("Tab")
     expect(header_create).to_be_focused()
     focus_style = header_create.evaluate(
         "element => ({visible: element.matches(':focus-visible'), "
@@ -547,11 +547,9 @@ def test_history_search_calendar_navigation_and_return(live, browser_context):
 
     recent = page.locator("#recent-list a")
     expect(recent).to_have_count(3)
-    assert [t.strip() for t in page.locator("#recent-list .link-title").all_inner_texts()] == [
-        "Beta sync",
-        "Alpha review",
-        "Gamma planning",
-    ]
+    expect(page.locator("#recent-list .link-title")).to_have_text(
+        ["Beta sync", "Alpha review", "Gamma planning"], use_inner_text=True
+    )
     # Date and recording length only; there is no start time to show.
     assert page.locator("#recent-list .link-date").all_inner_texts() == [
         "14/10/2026 · 1 giờ 24 phút",
@@ -1284,10 +1282,8 @@ def test_sidebar_fits_beside_a_classic_scrollbar_and_still_scrolls(live, signed_
         expect(page.locator(".version-link")).to_be_in_viewport()
 
 
-def test_calendar_opens_from_the_sidebar_calendar_and_the_header_button_only_on_phones(
-    live, signed_in
-):
-    seed_meeting(live.settings.data_dir, "Dated meeting", "2026-10-14")
+def test_calendar_opens_from_the_sidebar_and_the_mobile_header(live, signed_in):
+    dated = seed_meeting(live.settings.data_dir, "Dated meeting", "2026-10-14")
     seed_meeting(live.settings.data_dir, "Undated meeting")
     _context, page = signed_in(viewport={"width": 1280, "height": 800})
     page.goto(f"{live.url}/", wait_until="domcontentloaded")
@@ -1314,6 +1310,33 @@ def test_calendar_opens_from_the_sidebar_calendar_and_the_header_button_only_on_
     expect(page.locator("#open-calendar")).to_be_visible()
     page.locator("#open-calendar").click()
     expect(page.locator("#calendar-view")).to_be_visible()
+    page.get_by_role("button", name="Quay lại notes").click()
+
+    disclosure = page.get_by_text("Cuộc họp và lịch", exact=True)
+    disclosure.press("Enter")
+    expect(page.locator("#mini-calendar")).to_be_visible()
+    page.keyboard.press("Tab")
+    search = page.get_by_role("searchbox", name="Tìm cuộc họp theo tên")
+    expect(search).to_be_focused()
+    search.fill("Undated")
+    expect(page.locator("#recent-list a")).to_have_count(1)
+    expect(page.locator("#recent-list a")).to_contain_text("Undated meeting")
+    search.clear()
+
+    mini_day = page.locator('#mini-calendar .cal-day[data-date="2026-10-14"]')
+    mini_day.click()
+    expect(page.locator("#day-panel-title")).to_have_text("14/10/2026")
+    expect(page.locator("#day-panel-list a")).to_contain_text("Dated meeting")
+    page.locator("#large-calendar").get_by_role("link", name="Dated meeting").click()
+    page.wait_for_url(f"{live.url}/meetings/{dated}")
+
+    page.set_viewport_size({"width": 1280, "height": 800})
+    expect(disclosure).to_be_hidden()
+    expect(search).to_be_visible()
+
+    page.set_viewport_size({"width": 375, "height": 800})
+    page.get_by_role("button", name="Switch to English").click()
+    expect(page.get_by_text("Meetings and calendar", exact=True)).to_be_visible()
 
 
 def test_diarization_error_shows_sanitized_copyable_diagnostic_command(live, browser_context):

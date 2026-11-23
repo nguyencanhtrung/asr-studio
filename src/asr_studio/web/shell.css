@@ -66,6 +66,7 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
+summary:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--teal);
   outline-offset: 3px;
@@ -112,6 +113,10 @@ textarea:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
+}
+
+.sidebar-history > summary {
+  display: none;
 }
 
 .brand {
@@ -1775,13 +1780,10 @@ textarea:focus-visible {
 
   .sidebar {
     position: static;
-    display: flex;
+    display: block;
     height: auto;
-    flex-flow: row wrap;
-    align-items: center;
     overflow-y: visible;
     scroll-padding-bottom: 0;
-    gap: 8px;
     padding: 10px 14px;
     border-right: 0;
     border-bottom: 1px solid var(--hairline);
@@ -1792,20 +1794,27 @@ textarea:focus-visible {
     padding: 0;
   }
 
-  /* Brand, wordmark, theme, EN, OpenAI, Google share one row; a row that cannot fit wraps. */
-  .sidebar-masthead {
-    min-width: 0;
-    width: auto;
-    flex: 1 1 auto;
+  .sidebar-history {
+    margin-top: 6px;
   }
 
-  /* No frame, but the same touch target as the framed controls beside it. */
-  .settings-button {
+  .sidebar-history > summary {
+    display: list-item;
+    padding: 8px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--ink-2);
+    cursor: pointer;
+    font-size: var(--text-control);
+  }
+
+  .settings-button,
+  .github-link {
     width: 2.25rem;
     height: 2.25rem;
   }
 
-  .settings-button svg {
+  .settings-button svg,
+  .github-link svg {
     width: 1.125rem;
     height: 1.125rem;
   }
@@ -1815,15 +1824,19 @@ textarea:focus-visible {
     height: 32px;
   }
 
-  .recent-section,
-  .github-link,
-  .version-link {
-    display: none;
+  .sidebar-footer-meta {
+    display: grid;
+    width: auto;
+    grid-template-columns: repeat(2, max-content);
+    justify-items: center;
+    gap: 0 0.5rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
   }
 
-  /* The gear joins the row after the provider logos; its box disappears so it is a child of the footer. */
-  .sidebar-footer-meta {
-    display: contents;
+  .sidebar-footer-meta .version-link {
+    grid-column: 1 / -1;
   }
 
   .sidebar-footer {
@@ -1831,12 +1844,11 @@ textarea:focus-visible {
     display: flex;
     flex-direction: row;
     align-items: center;
-    justify-content: flex-start;
-    gap: 6px;
-    width: auto;
-    flex: 0 0 auto;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
     min-height: 0;
-    margin: 0;
+    margin: 4px 0 0;
     padding: 0;
     background: transparent;
   }

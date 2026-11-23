@@ -38,7 +38,7 @@ from asr_studio.auth import (
     token_matches,
 )
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
-from asr_studio.config import Settings
+from asr_studio.config import PROJECT_REPOSITORY, PROJECT_WEBSITE, Settings
 from asr_studio.extension_ingest import ExtensionIngestError, retry_recording_session
 from asr_studio.media import ALLOWED_EXTENSIONS, OUTPUT_BITRATE, OUTPUT_CODEC
 from asr_studio.meeting_deletion import MeetingDeletionError, delete_meeting
@@ -154,6 +154,16 @@ def _asset_response(filename: str, media_type: str) -> Response:
     if filename == "shell.html":
         content = (WEB_DIR / filename).read_text(encoding="utf-8")
         content = content.replace("{{ASR_STUDIO_VERSION}}", escape_html(__version__))
+        repository_url = f"https://github.com/{PROJECT_REPOSITORY}"
+        product_links = {
+            "PROJECT_REPOSITORY_URL": repository_url,
+            "PROJECT_RELEASES_URL": f"{repository_url}/releases",
+            "PROJECT_REPOSITORY_LABEL": PROJECT_REPOSITORY,
+            "PROJECT_WEBSITE_URL": f"https://{PROJECT_WEBSITE}",
+            "PROJECT_WEBSITE_LABEL": PROJECT_WEBSITE,
+        }
+        for key, value in product_links.items():
+            content = content.replace("{{" + key + "}}", escape_html(value, quote=True))
         tag = available_version()
         content = content.replace("{{UPDATE_VISIBILITY}}", "" if tag else "hidden")
         content = content.replace("{{UPDATE_TAG}}", escape_html(tag))
