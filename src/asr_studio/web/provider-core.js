@@ -662,7 +662,7 @@ function applySession(d, s, session) {
       ...next,
       inputPrompt: session.input_prompt,
       inputOpen: true,
-      ...(shouldFocusInput ? { ui: "focus:input" } : {}),
+      ...(shouldFocusInput && s.ui !== "clear-input" ? { ui: "focus:input" } : {}),
     };
   }
   return { state: next, effects };
@@ -683,7 +683,7 @@ function finishLogin(d, s, status, payload) {
     signInDisabled: false,
     loginLink: null,
     inputOpen: false,
-    ui: d.id === "chatgpt" ? "clear-callback-input:focus-message" : null,
+    ui: d.id === "chatgpt" ? "clear-callback-input:focus-message" : "clear-input",
     inputPrompt: null,
     pending: { ...s.pending, recreate: false },
   };
@@ -802,8 +802,8 @@ const loginMissing = (error) => Boolean(error && (error.code === "login_session_
 
 function pollFailed(d, s, meta, error, effects = []) {
   if (meta.gen !== s.loginGen || !s.login) return done(s);
-  if (loginMissing(error)) return finishLogin(d, s, "expired");
   if (d.login.pollErrors === "retry") return done({ ...showError(d, s, error, true), loginCopy: d.copy.pollFailed }, effects);
+  if (loginMissing(error)) return finishLogin(d, s, "expired");
   return done(showError(d, s, error), [...effects, pollWait(d, d.login.pollError, meta.gen)]);
 }
 
@@ -1543,7 +1543,7 @@ export function selectView(d, s) {
       || Boolean(s.login),
     reloginHidden: d.id !== "chatgpt"
       || !s.info
-      || !["connected", "reconnect_required"].includes(s.info.status)
+      || s.info.status !== "connected"
       || Boolean(s.login || s.pending.recreate),
     reloginDisabled: inUse || s.signInDisabled || s.pending.recreate,
     registrationConfirming: d.id === "chatgpt" && s.recreateConfirming,

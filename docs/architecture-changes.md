@@ -2914,10 +2914,12 @@ it invalidates the connection version and clears only the legacy provider-state
 `notes_provider` marker; it does not clear the saved model/effort fields or SQLite's
 last-provider preference. Preserve the OMP status-only GET reschedule recovery and keep
 inference, verification, preference, and input mutations single-attempt. The browser
-forwards the existing trimmed opaque OMP value without parsing or persistence. Mobile
-history is collapsed before `matchMedia` initialization; native disclosure and keyboard
-behavior remain unchanged. The launcher fixture waits for settled geometry and reads all
-relevant rectangles in one DOM evaluation.
+forwards the existing trimmed opaque OMP value without parsing or persistence. Terminal
+OMP outcomes clear any unsent input through the existing one-shot `clear-input` action,
+and a defensive response prompt cannot replace that clear. Mobile history uses the
+native disclosure transition; native keyboard behavior remains unchanged. The launcher
+fixture waits for settled geometry and reads all relevant rectangles in one DOM
+evaluation.
 
 **Before and after.** The baseline run was 77 passed and 1 failed in 127.26 s; the
 failure was the 360px geometry assertion above. The corrected targeted browser suite

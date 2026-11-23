@@ -1514,14 +1514,32 @@ def test_missing_antigravity_login_can_be_cancelled_without_sticking(browser_run
         route.fallback()
 
     context.route("**/antigravity-session", drop_session_on_cancel)
+    page.locator("#antigravity-input").fill("unsent-redirect-value")
     page.locator("#antigravity-cancel").click()
 
     expect(page.get_by_role("button", name="Kết nối Google Antigravity")).to_be_visible()
+    expect(page.locator("#antigravity-input-form")).to_be_hidden()
+    expect(page.locator("#antigravity-input")).to_have_value("")
     assert page.evaluate("sessionStorage.getItem('asr.antigravity.pendingLogin')") is None
     assert any(
         method == "DELETE" and path.endswith("/antigravity-session")
         for method, path, _ in api.calls
     )
+    context.close()
+
+
+def test_expired_antigravity_login_clears_unsent_input(browser_runtime):
+    live, browser = browser_runtime
+    context, page, api = signed_in_page(browser, live)
+    api.antigravity_polls = ["pending", "expired"]
+    open_connection_dialog(page, "#launcher-antigravity")
+    page.get_by_role("button", name="Kết nối Google Antigravity").click()
+    expect(page.locator("#antigravity-input")).to_be_focused()
+    page.locator("#antigravity-input").fill("unsent-redirect-value")
+
+    expect(page.locator("#antigravity-error")).to_be_visible(timeout=6000)
+    expect(page.locator("#antigravity-input-form")).to_be_hidden()
+    expect(page.locator("#antigravity-input")).to_have_value("")
     context.close()
 
 
