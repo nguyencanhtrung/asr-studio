@@ -2907,18 +2907,22 @@ provider contract failure.
 **Design change.** Keep ordinary OpenAI re-login on its normal login-session endpoint
 and expose it as “Đăng nhập lại” / “Sign in again”. Give registration recreation its
 own explicit “Tạo lại đăng ký và đăng nhập” / “Recreate registration and sign in”
-accessible name and keep the warning explicit about clearing the current ChatGPT
-connection and provider-side Notes configuration. Preserve the OMP status-only GET
-reschedule recovery and keep inference, verification, preference, and input mutations
-single-attempt. The browser forwards the existing trimmed opaque OMP value without
-parsing or persistence. Mobile history is collapsed before `matchMedia` initialization;
-native disclosure and keyboard behavior remain unchanged. The launcher fixture waits
-for settled geometry and reads all relevant rectangles in one DOM evaluation.
+accessible name. The warning says that recreation will disconnect the current ChatGPT
+connection, make notes generation through ChatGPT unavailable until reconnection, and
+preserve saved model and reasoning-effort preferences. This matches the server effect:
+it invalidates the connection version and clears only the legacy provider-state
+`notes_provider` marker; it does not clear the saved model/effort fields or SQLite's
+last-provider preference. Preserve the OMP status-only GET reschedule recovery and keep
+inference, verification, preference, and input mutations single-attempt. The browser
+forwards the existing trimmed opaque OMP value without parsing or persistence. Mobile
+history is collapsed before `matchMedia` initialization; native disclosure and keyboard
+behavior remain unchanged. The launcher fixture waits for settled geometry and reads all
+relevant rectangles in one DOM evaluation.
 
 **Before and after.** The baseline run was 77 passed and 1 failed in 127.26 s; the
 failure was the 360px geometry assertion above. The corrected targeted browser suite
-passed 85 tests in 142.44 s, the copy-parity browser fixture passed both Vietnamese and
-English cases (`2 passed` in 3.86 s), and the Node provider reducer suite passed 97
+passed 85 tests in 144.20 s, the copy-parity browser fixture passed both Vietnamese and
+English cases (`2 passed` in 4.24 s), and the Node provider reducer suite passed 97
 tests with Node 24. Fixture screenshots cover desktop/mobile light/dark states and
 use only synthetic provider data: [desktop light Vietnamese](assets/frontend/issue-252/desktop-light-vi.png),
 [desktop dark English](assets/frontend/issue-252/desktop-dark-en.png),

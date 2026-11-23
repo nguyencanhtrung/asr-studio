@@ -643,13 +643,14 @@ test("ChatGPT: explicit registration recreation uses its own endpoint and keeps 
   assert.equal(own(env, CHATGPT).recreatingRegistration, true);
   assert.equal(own(env, CHATGPT).info.status, "disconnected");
   assert.equal(own(env, CHATGPT).info.account, null);
-  assert.match(own(env, CHATGPT).message.text, /xóa kết nối ChatGPT hiện tại/);
-  assert.match(own(env, CHATGPT).message.text, /cấu hình provider Notes hiện tại/);
+  assert.match(own(env, CHATGPT).message.text, /ngắt kết nối ChatGPT hiện tại/);
+  assert.match(own(env, CHATGPT).message.text, /Hãy kết nối lại để tiếp tục tạo Notes qua ChatGPT/);
+  assert.match(own(env, CHATGPT).message.text, /Model và effort đã lưu sẽ được dùng lại/);
   assert.deepEqual(env.events, ["provider.choice-changed"]);
   env.fire(500);
   await env.answer(env.is("GET", "/login-sessions/s1"), 200, { status: "connected" });
-  assert.match(own(env, CHATGPT).message.text, /xóa kết nối ChatGPT hiện tại/);
-  assert.match(own(env, CHATGPT).message.text, /cấu hình provider Notes hiện tại/);
+  assert.match(own(env, CHATGPT).message.text, /tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT/);
+  assert.match(own(env, CHATGPT).message.text, /Model và effort đã lưu được giữ nguyên/);
   assert.deepEqual(env.events, ["provider.choice-changed", "provider.choice-changed"]);
 });
 

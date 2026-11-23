@@ -786,9 +786,17 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
     page.locator("#connection-registration-trigger").click()
     expect(page.locator("#connection-registration-confirm")).to_be_visible()
     expect(page.locator("#connection-registration-confirm")).to_contain_text(
-        "xóa kết nối ChatGPT hiện tại và cấu hình provider Notes hiện tại"
+        "Thao tác này sẽ ngắt kết nối ChatGPT. Hãy kết nối lại để tiếp tục tạo Notes qua ChatGPT"
         if language == "vi"
-        else "clears the current ChatGPT connection and current Notes provider configuration"
+        else (
+            "This will disconnect ChatGPT. "
+            "Connect again to continue generating Notes through ChatGPT"
+        )
+    )
+    expect(page.locator("#connection-registration-confirm")).to_contain_text(
+        "Model và effort đã lưu sẽ được dùng lại"
+        if language == "vi"
+        else "saved model and reasoning-effort preferences will be reused"
     )
     page.locator("#connection-registration-name").fill("My ASR Studio")
     expect(page.locator("#connection-registration-confirm-button")).to_have_accessible_name(
@@ -806,9 +814,17 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
         "Chưa kết nối" if language == "vi" else "Not connected"
     )
     expect(page.locator("#connection-message")).to_contain_text(
-        "xóa kết nối ChatGPT hiện tại và cấu hình provider Notes hiện tại"
+        "ngắt kết nối ChatGPT hiện tại. Hãy kết nối lại để tiếp tục tạo Notes qua ChatGPT"
         if language == "vi"
-        else "current ChatGPT connection and current Notes provider configuration were cleared"
+        else (
+            "current ChatGPT connection was disconnected. "
+            "Connect again to continue generating Notes through ChatGPT"
+        )
+    )
+    expect(page.locator("#connection-message")).to_contain_text(
+        "Model và effort đã lưu sẽ được dùng lại"
+        if language == "vi"
+        else "saved model and reasoning-effort preferences will be reused"
     )
     second = "http://127.0.0.1:8765/auth/chatgpt/callback?state=ui-recreate-state&code=fake-code-2&client_id=oaiapp_test-123456"
     page.locator("#connection-callback-input").fill(second)
@@ -817,9 +833,9 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
         "Đã kết nối" if language == "vi" else "Connected"
     )
     expect(page.locator("#connection-message")).to_contain_text(
-        "xóa kết nối ChatGPT hiện tại và cấu hình provider Notes hiện tại"
+        "Model và effort đã lưu được giữ nguyên"
         if language == "vi"
-        else "current ChatGPT connection and current Notes provider configuration were cleared"
+        else "saved model and reasoning-effort preferences remain preserved"
     )
     assert page.evaluate("document.activeElement.id") == "connection-message"
     assert api.registration_names == ["My ASR Studio"]
