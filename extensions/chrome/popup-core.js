@@ -114,11 +114,17 @@ export function capturePresentation(snapshot) {
       state: "recording"
     };
   }
-  if (capture.status === "stopping") return { label: "Đang lưu…", detail: "Đang lưu phần audio cuối cùng.", state: "recording" };
+  if (capture.status === "stopping") return { label: "Đang dừng ghi", detail: "Đang hoàn tất việc ghi âm.", state: "recording" };
   if (capture.status === "interrupted") {
     if (session?.upload?.awaitingChoice) return { label: "Bị gián đoạn", detail: "Chọn lưu phần đã ghi hoặc hủy phiên trên server.", state: "warning" };
     if (session?.upload?.recoveryChoice === "save") {
-      if (session.upload.cleaned && session.upload.receipt) return { label: "Đã lưu phần đã ghi", detail: "Server đã lưu phần ghi trước khi gián đoạn.", state: "ready" };
+      if (session.upload.cleaned && session.upload.receipt) return {
+        label: "Server đã lưu phần audio thô",
+        detail: session.upload.meetingUrl
+          ? "Xem trạng thái xử lý trong ASR Studio."
+          : "Server đã lưu phần audio thô.",
+        state: "ready"
+      };
       if (session.upload.error) return { label: "Chưa lưu xong", detail: "Audio vẫn được giữ. Mở thiết lập để xem lỗi và gửi lại.", state: "warning" };
       return { label: "Đang lưu", detail: "Đang gửi phần đã ghi lên server.", state: "uploading" };
     }
@@ -128,7 +134,13 @@ export function capturePresentation(snapshot) {
     return { label: "Bị gián đoạn", detail: "Audio đã giữ lại nhưng chưa hoàn tất.", state: "warning" };
   }
   if (capture.status === "complete") {
-    if (session?.upload?.cleaned && session.upload.receipt) return { label: "Đã gửi xong", detail: "Server đã nhận đủ audio.", state: "ready" };
+    if (session?.upload?.cleaned && session.upload.receipt) return {
+      label: "Server đã lưu audio thô",
+      detail: session.upload.meetingUrl
+        ? "Xem trạng thái xử lý trong ASR Studio."
+        : "Server đã lưu audio thô.",
+      state: "ready"
+    };
     if (session?.upload?.error) return { label: "Chưa gửi xong", detail: "Audio vẫn được giữ. Mở thiết lập để xem lỗi và gửi lại.", state: "warning" };
     return { label: "Đang gửi", detail: "Đang gửi bản ghi lên server.", state: "uploading" };
   }

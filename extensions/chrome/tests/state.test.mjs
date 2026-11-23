@@ -47,11 +47,52 @@ test("receipt presentation uses the current API and web binding", () => {
     upload: { state: "uploaded", receipt: { recording_id: "server-session" }, cleaned: true }
   };
   const base = status("epoch-a", 1, [done]);
-  assert.equal(capturePresentation(base).label, "Đã gửi xong");
+  assert.equal(capturePresentation(base).label, "Server đã lưu audio thô");
+  assert.equal(capturePresentation(base).detail, "Server đã lưu audio thô.");
+  const processing = { ...done, upload: { ...done.upload, meetingUrl: "https://asr.example.test/meetings/server-session" } };
+  assert.equal(
+    capturePresentation(status("epoch-a", 1, [processing])).detail,
+    "Xem trạng thái xử lý trong ASR Studio."
+  );
+  const interrupted = {
+    id: "interrupted-receipt",
+    endpoint: done.endpoint,
+    capture: { sessionId: "interrupted-receipt", startedAt: 90, status: "interrupted" },
+    upload: { state: "uploaded", recoveryChoice: "save", receipt: { recording_id: "server-session" }, cleaned: true }
+  };
+  assert.equal(
+    capturePresentation(status("epoch-a", 1, [interrupted], interrupted.capture)).label,
+    "Server đã lưu phần audio thô"
+  );
+  assert.equal(
+    capturePresentation(status("epoch-a", 1, [interrupted], interrupted.capture)).detail,
+    "Server đã lưu phần audio thô."
+  );
+  const interruptedProcessing = {
+    ...interrupted,
+    upload: { ...interrupted.upload, meetingUrl: "https://asr.example.test/meetings/server-session" }
+  };
+  assert.equal(
+    capturePresentation(status("epoch-a", 1, [interruptedProcessing], interrupted.capture)).detail,
+    "Xem trạng thái xử lý trong ASR Studio."
+  );
   assert.equal(
     capturePresentation(status("epoch-a", 1, [done], null, "https://other.example.test")).label,
     "Sẵn sàng"
   );
+});
+
+test("stopping presentation names capture completion without claiming a save", () => {
+  const capture = { sessionId: "stopping", startedAt: 100, status: "stopping" };
+  const session = {
+    id: "stopping",
+    endpoint: { serverUrl: "https://asr.example.test", webUrl: "https://asr.example.test", backendId: "backend-a" },
+    capture,
+    upload: { state: "waiting_for_stop", cleaned: false, receipt: null }
+  };
+  const presentation = capturePresentation(status("epoch-a", 1, [session], capture));
+  assert.equal(presentation.label, "Đang dừng ghi");
+  assert.equal(presentation.detail, "Đang hoàn tất việc ghi âm.");
 });
 
 test("recording presentation names live upload in both active UI states", () => {

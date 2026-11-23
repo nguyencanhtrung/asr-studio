@@ -1003,15 +1003,16 @@ trang web: state chỉ giữ mã ghép đang hiển thị, không nhận device/
 
 | Sự kiện | Chuyển trạng thái | Hiệu ứng |
 | --- | --- | --- |
-| Mở Cài đặt | Xóa mã cũ, đánh dấu đang tải, tăng định danh lần đọc | Đọc danh sách thiết bị bằng quyền operator |
+| Mở Cài đặt | Xóa mã cũ và feedback copy endpoint, đánh dấu đang tải, tăng định danh lần đọc | Đọc danh sách thiết bị bằng quyền operator |
 | Tạo mã hoặc ghép lại record được chọn | Xóa mã trước, giữ lựa chọn hạn dùng và record đích, đánh dấu đang tạo | POST mã ghép; ghép lại gửi server record ID |
 | Nhận mã đúng lần yêu cầu | Hiển thị mã, hạn mã và hạn thiết bị tách riêng | Focus ô mã; tải lại danh sách |
-| Sao chép | Thông báo thành công hoặc chọn mã để sao chép thủ công | Clipboard chỉ nhận chuỗi mã |
+| Sao chép mã ghép | Thông báo thành công hoặc chọn mã để sao chép thủ công | Clipboard chỉ nhận chuỗi mã ghép một lần |
+| Sao chép endpoint | `endpointCopy` giữ đúng `{index, url, state}` của endpoint hiện có; phản hồi cũ, endpoint ngoài `server_urls` hoặc dialog đã đóng không đổi state; lặp lại cùng request khi đang pending là no-op | Clipboard nhận đúng chuỗi `server_urls[index]`; nút Copy vẫn enabled và giữ focus khi pending/thành công; khi thất bại, báo chọn endpoint rồi nhấn Ctrl+C, còn runner chỉ chọn ô tương ứng nếu người dùng vẫn ở nút; không nhận token/credential |
 | Mở danh sách | Chuẩn hóa theo `created_at` giảm dần, rồi `id` giảm dần; mặc định chỉ hiện record chưa thu hồi | Đọc danh sách server đã sắp thứ tự |
 | Bật/tắt **Hiện thiết bị đã thu hồi** | Core giữ filter; bật lên cho phép xem record đã thu hồi và ghép lại, tắt đi ẩn chúng | Không có effect mạng |
 | Thu hồi | Chờ xác nhận thao tác; chỉ đổi trạng thái sau phản hồi đúng record và `revoked:true`; record biến mất khỏi danh sách mặc định nhưng vẫn giữ trong state | POST thu hồi rồi đọc lại trạng thái chính thức; focus dòng thông báo thành công |
 | Yêu cầu thất bại | Bỏ cờ đang chờ, giữ dữ liệu đã xác nhận, hiện lỗi dịch được | Cho phép thử lại và giữ focus hữu ích |
-| Đóng Cài đặt | Xóa mã, vô hiệu hóa định danh phản hồi đang chờ | Hủy các effect đang chạy |
+| Đóng Cài đặt | Xóa mã và feedback copy endpoint, vô hiệu hóa định danh phản hồi đang chờ | Hủy các effect đang chạy |
 | Phản hồi của lần yêu cầu cũ | Giữ nguyên state hiện tại | Không vẽ lại kết quả cũ |
 
 Record pending có thể chưa có định danh client hoặc địa chỉ đã ghép; giao diện

@@ -102,9 +102,9 @@ function localizedError(error) {
 
 function localizedMessage(message) {
   if (!message) return "";
-  if (message.startsWith("Saved recorded part.")) return t("Server đã lưu phần đã ghi; hãy bắt đầu chép lời trong ASR Studio.");
-  if (message.startsWith("Uploaded.")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
-  if (message.startsWith("The server has the complete audio")) return t("Server đã nhận đủ audio; xử lý tiếp tục trong ASR Studio.");
+  if (message.startsWith("Saved recorded part.")) return t("Server đã lưu phần audio thô.");
+  if (message.startsWith("Uploaded.")) return t("Server đã lưu audio thô.");
+  if (message.startsWith("The server has the complete audio")) return t("Server đã lưu audio thô.");
   return "";
 }
 
@@ -221,7 +221,7 @@ function render() {
   elements.stopButton.hidden = !active;
   elements.startButton.disabled = isPending(state, "start");
   elements.stopButton.disabled = stopping || isPending(state, "stop");
-  setText(elements.stopButton, stopping ? t("Đang lưu…") : t("Dừng và lưu"));
+  setText(elements.stopButton, stopping ? t("Đang dừng ghi…") : t("Dừng và lưu"));
   setText(elements.elapsed, active ? formatElapsed(capture.startedAt) : "00:00");
 
   const recovery = active ? null : pendingRecovery(snapshot);

@@ -465,12 +465,21 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     requests_before_stop = list(requests)
     assert any(method == "PUT" and "/chunks/" in path for method, path in requests_before_stop)
     popup.click("#stop-button")
+    # The popup-core Node test pins the transient stopping wording. Native coverage
+    # waits for durable stop, receipt, cleanup and rendered-row outcomes instead of
+    # racing a paint that may finish before the browser can sample it.
     popup.close()
     control = context.new_page()
     control.goto(f"chrome-extension://{EXTENSION_ID}/control.html")
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         status = _status(control)
+        if status["sessions"] and status["sessions"][0]["upload"]["receipt"] is None:
+            row = control.locator(".session-row").first
+            if row.count():
+                row_text = row.inner_text()
+                assert "Uploaded" not in row_text
+                assert "Saved" not in row_text
         if status["sessions"] and status["sessions"][0]["upload"]["cleaned"]:
             break
         control.wait_for_timeout(150)
@@ -480,6 +489,10 @@ def test_native_capture_keeps_recording_without_controls_and_finishes_at_raw_rec
     session = status["sessions"][0]
     assert session["capture"]["captureComplete"]
     assert session["upload"]["receipt"]["recording_id"] == session["summary"]["recordingId"]
+    receipt_row = control.locator(".session-row").first
+    expect(receipt_row.locator(".session-title")).to_have_text("Server saved the raw audio")
+    expect(receipt_row).to_contain_text("View processing status in ASR Studio.")
+    expect(receipt_row).not_to_contain_text("Uploaded")
     assert (
         sum(method == "PUT" and "/chunks/" in path for method, path in requests)
         == session["capture"]["chunkCount"]
@@ -903,6 +916,10 @@ def test_native_source_end_then_save_creates_labeled_meeting(
         control.wait_for_timeout(200)
     assert saved and saved["upload"]["cleaned"] and saved["upload"]["receipt"], saved
     assert saved["upload"]["receipt"]["chunk_count"] == session["capture"]["chunkCount"]
+    control.reload()
+    partial_row = control.locator(".session-row").first
+    expect(partial_row.locator(".session-title")).to_have_text("Server saved the partial recording")
+    expect(partial_row).to_contain_text("raw audio saved")
     # The receipt follows the raw archive; media normalization finishes afterwards.
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:

@@ -199,6 +199,165 @@ def test_delayed_create_failure_does_not_steal_control_focus(browser_runtime):
     context.close()
 
 
+def test_long_endpoint_copy_fallback_keeps_focus_contract_at_mobile_width(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 390, "height": 844},
+    )
+    long_endpoint = (
+        "https://synthetic.example.test/extension/" + "long-segment/" * 16 + "?mode=mobile"
+    )
+
+    def serve_synthetic_list(route):
+        if route.request.method != "GET":
+            route.fallback()
+            return
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "backend_id": "synthetic-backend",
+                    "extension_id": EXTENSION_ID,
+                    "server_urls": [live.url, long_endpoint],
+                    "devices": [],
+                }
+            ),
+        )
+
+    page.route("**/api/extension/devices", serve_synthetic_list)
+    page.evaluate(
+        """
+        () => {
+          window.__clipboardMode = "pending";
+          window.__clipboardWrites = 0;
+          window.__rejectClipboard = null;
+          Object.defineProperty(navigator, "clipboard", {
+            configurable: true,
+            value: {
+              writeText: (value) => {
+                window.__clipboardWrites += 1;
+                window.__lastClipboardValue = value;
+                if (window.__clipboardMode === "pending") {
+                  return new Promise((_, reject) => { window.__rejectClipboard = reject; });
+                }
+                if (window.__clipboardMode === "success") return Promise.resolve();
+                return Promise.reject(new Error("synthetic clipboard denied"));
+              },
+            },
+          });
+        }
+        """
+    )
+    page.get_by_role("button", name="Cài đặt").click()
+    page.get_by_role("tab", name="Thiết bị").click()
+
+    long_input = page.locator("input[data-endpoint-index='1']")
+    long_copy = page.locator("[data-endpoint-action='copy'][data-endpoint-index='1']")
+    expect(long_input).to_have_value(long_endpoint)
+    expect(long_copy).to_have_attribute("aria-label", f"Sao chép endpoint {long_endpoint}")
+
+    # The focused button stays enabled during an in-flight request; a repeated click is ignored by
+    # the core.
+    long_copy.click()
+    expect(long_copy).to_be_enabled()
+    expect(long_copy).to_be_focused()
+    assert page.evaluate("window.__clipboardWrites") == 1
+    long_copy.click()
+    assert page.evaluate("window.__clipboardWrites") == 1
+
+    # If the user moves away before the rejected promise settles, fallback does not steal that
+    # focus.
+    close = page.locator("#connections-close")
+    close.focus()
+    page.evaluate("window.__rejectClipboard(new Error('synthetic clipboard denied'))")
+    expect(page.locator("[data-endpoint-copy-status='1']")).to_have_text(
+        "Không sao chép được. Chọn endpoint rồi nhấn Ctrl+C."
+    )
+    expect(close).to_be_focused()
+
+    # A fresh rejected copy while its button is focused selects the exact long URL for Ctrl+C.
+    page.evaluate("window.__clipboardMode = 'reject'")
+    long_copy.click()
+    expect(long_input).to_be_focused()
+    selected = long_input.evaluate(
+        "input => ({value: input.value, start: input.selectionStart, end: input.selectionEnd})"
+    )
+    assert selected == {"value": long_endpoint, "start": 0, "end": len(long_endpoint)}
+    metrics = (
+        page.locator(".device-endpoint-row")
+        .nth(1)
+        .evaluate("row => ({client: row.clientWidth, scroll: row.scrollWidth})")
+    )
+    assert metrics["scroll"] <= metrics["client"]
+
+    # A successful copy keeps the focused button in place while copying the exact other server URL.
+    first_copy = page.locator("button[data-endpoint-action='copy'][data-endpoint-index='0']")
+    page.evaluate("window.__clipboardMode = 'success'")
+    first_copy.click()
+    expect(page.locator("[data-endpoint-copy-status='0']")).to_have_text("Đã sao chép endpoint.")
+    expect(first_copy).to_be_focused()
+    assert page.evaluate("window.__lastClipboardValue") == live.url
+    context.close()
+
+
+def test_expiry_labels_and_endpoint_setup_guidance_are_distinct_in_english(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1024, "height": 800},
+    )
+    endpoint = "https://synthetic.example.test/asr"
+
+    def serve_synthetic_list(route):
+        if route.request.method != "GET":
+            route.fallback()
+            return
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "backend_id": "synthetic-backend",
+                    "extension_id": EXTENSION_ID,
+                    "server_urls": [endpoint],
+                    "devices": [
+                        {
+                            "id": "expired-device",
+                            "device_id": "synthetic-client",
+                            "server_url": endpoint,
+                            "device_lifetime": "30d",
+                            "device_expires_at": "2026-11-01T00:00:00+00:00",
+                            "created_at": "2026-10-01T00:00:00+00:00",
+                            "last_seen_at": "2026-10-15T00:00:00+00:00",
+                            "revoked_at": None,
+                            "status": "expired",
+                        }
+                    ],
+                }
+            ),
+        )
+
+    page.route("**/api/extension/devices", serve_synthetic_list)
+    page.evaluate("localStorage.setItem('asr-studio:lang', 'en')")
+    page.reload(wait_until="domcontentloaded")
+    page.get_by_role("button", name="Settings").click()
+    page.get_by_role("tab", name="Devices").click()
+    row = page.locator("#extension-device-list > li[data-device='expired-device']")
+    expect(row.locator(".device-status")).to_have_text("Expired")
+    expect(row.locator(".extension-device-ledger dt").nth(3)).to_have_text("Expires")
+    expect(
+        page.locator("section[aria-labelledby='extension-device-endpoints-title'] .device-help")
+    ).to_have_text(
+        "Copy the exact server URL returned here into Extension Setup. "
+        "HTTP is for loopback only; remote endpoints require HTTPS."
+    )
+    context.close()
+
+
 def test_rendered_device_list_orders_multiple_devices_newest_first(browser_runtime):
     live, browser = browser_runtime
     context, page, _api = signed_in_page(
@@ -358,18 +517,24 @@ def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(
     expect(pending.locator(".extension-device-id")).to_have_text("Đang chờ client")
     expect(pending).to_contain_text("Chưa xác định")
     expect(pending).to_contain_text("Chờ client kích hoạt")
-    expect(page.locator("#extension-device-endpoints")).to_contain_text(live.url)
+    expect(page.locator("#extension-device-endpoints input").first).to_have_value(live.url)
     repair_vi = pending.get_by_role("button", name="Cấp mã ghép lại cho thiết bị Đang chờ client")
     expect(repair_vi).to_have_attribute(
         "aria-label", "Cấp mã ghép lại cho thiết bị Đang chờ client"
     )
     page.get_by_role("button", name="Sao chép mã").focus()
     page.keyboard.press("Tab")
+    expect(page.locator("#extension-device-endpoints input").first).to_be_focused()
+    page.keyboard.press("Tab")
+    expect(
+        page.locator("button[data-endpoint-action='copy'][data-endpoint-index='0']")
+    ).to_be_focused()
+    page.keyboard.press("Tab")
     expect(repair_vi).to_be_focused()
     assert page.evaluate("getComputedStyle(document.activeElement).outlineStyle") == "solid"
 
     # Switch through the real Settings language control, then keep the same pending record
-    # visible and keyboard-addressable in English. No endpoint selector is needed or rendered.
+    # visible and keyboard-addressable in English, including its endpoint copy controls.
     page.get_by_role("tab", name="Giao diện").click()
     with page.expect_navigation():
         page.get_by_role("radio", name="English").check()
@@ -385,11 +550,10 @@ def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(
     )
     assert "[object Object]" not in repair_en.get_attribute("aria-label")
     page.locator("#settings-panel-devices").focus()
-    # The intro link to Automatic processing is the first tab stop in the panel.
-    page.keyboard.press("Tab")
-    page.keyboard.press("Tab")
-    page.keyboard.press("Tab")
-    page.keyboard.press("Tab")
+    # The intro link to Automatic processing is the first tab stop in the panel; the endpoint
+    # field and its Copy button are two additional stops before the device row.
+    for _ in range(6):
+        page.keyboard.press("Tab")
     expect(repair_en).to_be_focused()
     assert page.evaluate("getComputedStyle(document.activeElement).outlineStyle") == "solid"
     assert page.locator("#extension-device-code-form select").count() == 1

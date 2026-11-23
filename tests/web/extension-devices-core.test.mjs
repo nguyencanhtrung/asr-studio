@@ -44,6 +44,20 @@ function loaded() {
   });
 }
 
+const endpointUrls = [
+  "http://127.0.0.1:8765",
+  "https://synthetic.example.test/extension/" + "long-segment/".repeat(12),
+];
+
+function loadedWithEndpoints() {
+  const opened = open();
+  return reduce(opened.state, {
+    type: "extension/devices-loaded",
+    meta: { request: opened.state.request },
+    response: { body: { ...listReply, server_urls: endpointUrls } },
+  });
+}
+
 function record(id, overrides = {}) {
   return { ...listReply.devices[0], id, ...overrides };
 }
@@ -84,6 +98,155 @@ test("list normalization keeps only contract fields and preserves exact endpoint
   assert.deepEqual(view.serverUrls, ["https://studio.example.test"]);
   assert.equal(view.rows[0].device_id, device.device_id);
   assert.equal(view.rows[0].status.text, "Đang hoạt động");
+});
+
+test("endpoint copy allow-lists exact server URLs and excludes credentials", () => {
+  const ready = loadedWithEndpoints();
+  const view = selectDevices(ready.state);
+
+  assert.deepEqual(view.serverUrls, endpointUrls);
+  assert.equal(JSON.stringify(view).includes("device_token"), false);
+  assert.equal(JSON.stringify(view).includes("session_token"), false);
+
+  const unlisted = reduce(ready.state, {
+    type: "extension/devices-endpoint-copy-requested",
+    url: "https://synthetic.example.test/not-server-supplied",
+  });
+  assert.strictEqual(unlisted.state, ready.state);
+  assert.deepEqual(unlisted.effects, []);
+
+  const invalidIndex = reduce(ready.state, {
+    type: "extension/devices-endpoint-copy-requested",
+    index: 99,
+  });
+  assert.strictEqual(invalidIndex.state, ready.state);
+  assert.deepEqual(invalidIndex.effects, []);
+});
+
+test("endpoint copy sends only the selected exact URL and ignores a repeated pending request", () => {
+  const ready = loadedWithEndpoints().state;
+  const requested = reduce(ready, {
+    type: "extension/devices-endpoint-copy-requested",
+    index: 1,
+  });
+  const effect = requested.effects.find((item) => item.key === "extension/devices/endpoint-copy");
+
+  assert.deepEqual(effect.args, [endpointUrls[1]]);
+  assert.deepEqual(effect.meta, { index: 1, url: endpointUrls[1], request: 1 });
+  assert.doesNotMatch(JSON.stringify(effect.args), /token|credential|secret/i);
+  assert.equal(requested.state.endpointCopy.state, "pending");
+
+  const repeated = reduce(requested.state, {
+    type: "extension/devices-endpoint-copy-requested",
+    index: 1,
+  });
+  assert.strictEqual(repeated.state, requested.state);
+  assert.deepEqual(repeated.effects, []);
+
+  const copied = reduce(requested.state, {
+    type: "extension/devices-endpoint-copy-succeeded",
+    meta: effect.meta,
+  });
+  assert.equal(copied.state.endpointCopy.state, "copied");
+  assert.equal(copied.state.endpointCopy.url, endpointUrls[1]);
+  assert.equal(copied.state.ui, null);
+  assert.equal(copied.state.copy, null);
+});
+
+test("endpoint copy failure selects the exact endpoint, while stale and closed replies are ignored", () => {
+  const ready = loadedWithEndpoints().state;
+  const first = reduce(ready, {
+    type: "extension/devices-endpoint-copy-requested",
+    index: 0,
+  });
+  const second = reduce(first.state, {
+    type: "extension/devices-endpoint-copy-requested",
+    index: 1,
+  });
+  const firstReply = first.effects[0].meta;
+  const secondReply = second.effects[0].meta;
+
+  const stale = reduce(second.state, {
+    type: "extension/devices-endpoint-copy-succeeded",
+    meta: firstReply,
+  });
+  assert.strictEqual(stale.state, second.state);
+
+  const staleStamp = reduce(second.state, {
+    type: "extension/devices-endpoint-copy-succeeded",
+    meta: { ...secondReply, request: firstReply.request },
+  });
+  assert.strictEqual(staleStamp.state, second.state);
+
+  const staleFailure = reduce(second.state, {
+    type: "extension/devices-endpoint-copy-failed",
+    meta: firstReply,
+    error: { message: "private stale clipboard details" },
+  });
+  assert.strictEqual(staleFailure.state, second.state);
+
+  const staleFailureStamp = reduce(second.state, {
+    type: "extension/devices-endpoint-copy-failed",
+    meta: { ...secondReply, request: firstReply.request },
+    error: { message: "private stale clipboard details" },
+  });
+  assert.strictEqual(staleFailureStamp.state, second.state);
+
+  const closedPending = { ...first.state, open: false };
+  const closedSuccess = reduce(closedPending, {
+    type: "extension/devices-endpoint-copy-succeeded",
+    meta: firstReply,
+  });
+  assert.strictEqual(closedSuccess.state, closedPending);
+  const closedFailure = reduce(closedPending, {
+    type: "extension/devices-endpoint-copy-failed",
+    meta: firstReply,
+    error: { message: "private closed clipboard details" },
+  });
+  assert.strictEqual(closedFailure.state, closedPending);
+
+  const failed = reduce(second.state, {
+    type: "extension/devices-endpoint-copy-failed",
+    meta: secondReply,
+    error: { message: "private clipboard details" },
+  });
+  assert.equal(failed.state.endpointCopy.state, "selected");
+  assert.equal(failed.state.endpointCopy.index, 1);
+  assert.equal(failed.state.ui, null);
+  assert.deepEqual(failed.effects, [{
+    type: "call",
+    key: "extension/devices/select-endpoint",
+    name: "extension.devices.select-endpoint",
+    args: [1],
+  }]);
+  assert.doesNotMatch(JSON.stringify(failed.state), /private clipboard details/);
+
+  const wrongUrl = reduce(second.state, {
+    type: "extension/devices-endpoint-copy-succeeded",
+    meta: { ...secondReply, url: "https://synthetic.example.test/wrong" },
+  });
+  assert.strictEqual(wrongUrl.state, second.state);
+
+  const wrongIndex = reduce(second.state, {
+    type: "extension/devices-endpoint-copy-succeeded",
+    meta: { ...secondReply, index: 0 },
+  });
+  assert.strictEqual(wrongIndex.state, second.state);
+
+  const closed = reduce(first.state, { type: "provider/dialog-closed" });
+  const closedRequest = reduce(closed.state, {
+    type: "extension/devices-endpoint-copy-requested",
+    index: 0,
+  });
+  assert.strictEqual(closedRequest.state, closed.state);
+  assert.deepEqual(closedRequest.effects, []);
+  const late = reduce(closed.state, {
+    type: "extension/devices-endpoint-copy-failed",
+    meta: firstReply,
+    error: { message: "private clipboard details" },
+  });
+  assert.strictEqual(late.state, closed.state);
+  assert.deepEqual(late.effects, []);
 });
 
 test("a pending server record before pair may omit client id and endpoint", () => {
