@@ -105,6 +105,7 @@ class MockProviderApi:
         self.next_expiry_seconds = 600
         self.login_start_error = None
         self.next_poll_error = None
+        self.next_verification_error = None
         self.next_preference_error = None
         self.next_verification_401 = False
         self.provider_failure_operation = None
@@ -118,9 +119,13 @@ class MockProviderApi:
         self.antigravity_status = "disconnected"
         self.antigravity_session = None
         self.antigravity_polls = ["pending", "connected"]
+        self.next_antigravity_poll_error = None
+        self.next_antigravity_input_error = None
+        self.antigravity_inputs: list[str] = []
         self.antigravity_selected_model = None
         self.antigravity_effort = "high"
         self.antigravity_verification = None
+        self.next_antigravity_verification_error = None
         self.antigravity_failure_operation = None
         self.antigravity_failure_code = "reconnect_required"
         self.antigravity_models = [
@@ -196,9 +201,30 @@ class MockProviderApi:
                 "error": None,
                 "authorization_url": "https://accounts.google.com/o/oauth2/auth?state=test",
                 "instructions": "Continue with Google.",
-                "input_prompt": None,
+                "input_prompt": "Enter the code or redirect URL.",
             }
             self.fulfill(route, self.antigravity_session, status=201)
+            return
+        if (
+            method == "POST"
+            and path == "/api/providers/antigravity/login-sessions/antigravity-session/input"
+        ):
+            if self.antigravity_session is None:
+                self.fulfill(
+                    route,
+                    {"detail": {"code": "login_session_not_found"}},
+                    status=404,
+                )
+                return
+            if self.next_antigravity_input_error:
+                error = self.next_antigravity_input_error
+                self.next_antigravity_input_error = None
+                self.fulfill(route, {"detail": error}, status=error.get("status", 503))
+                return
+            self.antigravity_inputs.append(body["value"])
+            self.antigravity_session["status"] = "pending"
+            self.antigravity_session["input_prompt"] = None
+            self.fulfill(route, self.antigravity_session)
             return
         if path == "/api/providers/antigravity/login-sessions/antigravity-session":
             if self.antigravity_session is None:
@@ -218,6 +244,11 @@ class MockProviderApi:
                 self.fulfill(route, self.antigravity_session)
                 return
             if method == "GET":
+                if self.next_antigravity_poll_error:
+                    error = self.next_antigravity_poll_error
+                    self.next_antigravity_poll_error = None
+                    self.fulfill(route, {"detail": error}, status=error.get("status", 503))
+                    return
                 status = self.antigravity_polls.pop(0) if self.antigravity_polls else "connected"
                 self.antigravity_session["status"] = status
                 if status == "connected":
@@ -273,6 +304,11 @@ class MockProviderApi:
             )
             return
         if method == "POST" and path == "/api/providers/antigravity/verify":
+            if self.next_antigravity_verification_error:
+                error = self.next_antigravity_verification_error
+                self.next_antigravity_verification_error = None
+                self.fulfill(route, {"detail": error}, status=error.get("status", 503))
+                return
             if self.antigravity_failure_operation == "verify":
                 self.antigravity_failure_operation = None
                 self.antigravity_status = "reconnect_required"
@@ -458,6 +494,11 @@ class MockProviderApi:
             return
         if method == "POST" and path == "/api/providers/chatgpt/verify":
             if self.fail_provider_operation(route, "verify"):
+                return
+            if self.next_verification_error:
+                error = self.next_verification_error
+                self.next_verification_error = None
+                self.fulfill(route, {"detail": error}, status=error.get("status", 503))
                 return
             if self.next_verification_401:
                 self.next_verification_401 = False
@@ -725,10 +766,38 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
     assert pasted not in (page.evaluate("sessionStorage.getItem('asr.chatgpt.pendingLogin')") or "")
 
     open_account_details(page)
+    expect(page.locator("#connection-relogin")).to_be_visible()
+    expect(page.locator("#connection-relogin")).to_have_accessible_name(
+        "Đăng nhập lại" if language == "vi" else "Sign in again"
+    )
+    page.locator("#connection-relogin").click()
+    expect(page.locator("#connection-callback")).to_be_visible()
+    assert api.registration_names == []
+    assert any(
+        method == "POST" and path == "/api/providers/chatgpt/login-sessions" and body == {}
+        for method, path, body in api.calls
+    )
+    page.locator("#connection-cancel-sign-in").click()
+    expect(page.locator("#connection-message")).to_have_text(
+        "Đã hủy đăng nhập ChatGPT." if language == "vi" else "ChatGPT sign-in canceled."
+    )
+
+    open_account_details(page)
     page.locator("#connection-registration-trigger").click()
     expect(page.locator("#connection-registration-confirm")).to_be_visible()
+    expect(page.locator("#connection-registration-confirm")).to_contain_text(
+        "xóa kết nối ChatGPT hiện tại và cấu hình provider Notes hiện tại"
+        if language == "vi"
+        else "clears the current ChatGPT connection and current Notes provider configuration"
+    )
     page.locator("#connection-registration-name").fill("My ASR Studio")
-    expect(page.locator("#connection-registration-confirm-button")).to_have_text(
+    expect(page.locator("#connection-registration-confirm-button")).to_have_accessible_name(
+        "Tạo lại đăng ký và đăng nhập" if language == "vi" else "Recreate registration and sign in"
+    )
+    expect(page.locator("#connection-registration-confirm-button")).not_to_have_accessible_name(
+        "Đăng nhập lại" if language == "vi" else "Sign in again"
+    )
+    expect(page.locator("#connection-relogin")).to_have_accessible_name(
         "Đăng nhập lại" if language == "vi" else "Sign in again"
     )
     page.locator("#connection-registration-confirm-button").click()
@@ -736,11 +805,21 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
     expect(page.locator("#connection-status")).to_have_text(
         "Chưa kết nối" if language == "vi" else "Not connected"
     )
+    expect(page.locator("#connection-message")).to_contain_text(
+        "xóa kết nối ChatGPT hiện tại và cấu hình provider Notes hiện tại"
+        if language == "vi"
+        else "current ChatGPT connection and current Notes provider configuration were cleared"
+    )
     second = "http://127.0.0.1:8765/auth/chatgpt/callback?state=ui-recreate-state&code=fake-code-2&client_id=oaiapp_test-123456"
     page.locator("#connection-callback-input").fill(second)
     page.locator("#connection-callback-submit").click()
     expect(page.locator("#connection-status")).to_have_text(
         "Đã kết nối" if language == "vi" else "Connected"
+    )
+    expect(page.locator("#connection-message")).to_contain_text(
+        "xóa kết nối ChatGPT hiện tại và cấu hình provider Notes hiện tại"
+        if language == "vi"
+        else "current ChatGPT connection and current Notes provider configuration were cleared"
     )
     assert page.evaluate("document.activeElement.id") == "connection-message"
     assert api.registration_names == ["My ASR Studio"]
@@ -748,19 +827,59 @@ def test_chatgpt_remote_callback_import_and_explicit_registration_recreation(
     context.close()
 
 
+def test_replayed_chatgpt_callback_is_not_persisted_or_retried(browser_runtime):
+    live, browser = browser_runtime
+    api = MockProviderApi()
+    context, page, _ = signed_in_page(browser, live, api=api)
+    open_connection_dialog(page)
+    page.get_by_role("button", name="Continue with ChatGPT").click()
+    callback = (
+        "http://127.0.0.1:8765/auth/chatgpt/callback?state=ui-test-state&code=replayed-secret"
+    )
+    api.callback_error = "callback_replayed"
+    page.locator("#connection-callback-input").fill(callback)
+    page.locator("#connection-callback-submit").click()
+    expect(page.locator("#connection-error")).to_have_attribute("data-code", "callback_replayed")
+    expect(page.locator("#connection-callback-input")).to_be_focused()
+    assert callback not in (
+        page.evaluate("sessionStorage.getItem('asr.chatgpt.pendingLogin')") or ""
+    )
+    assert sum(path.endswith("/input") for _, path, _ in api.calls) == 1
+    context.close()
+
+
 def assert_launcher_statuses_whole(page, width):
     """At this phone width both launchers are logo buttons with a status LED, with no overflow."""
     page.set_viewport_size({"width": width, "height": 780})
+    page.wait_for_function(
+        """() => [...document.querySelectorAll(".connection-launcher")].every(button => {
+          const box = button.getBoundingClientRect();
+          const dot = button.querySelector(".connection-launcher-dot").getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && dot.width > 0 && dot.height > 0
+            && box.left >= 0 && box.right <= innerWidth;
+        })"""
+    )
+    rectangles = page.locator(".connection-launcher").evaluate_all(
+        """buttons => buttons.map(button => {
+          const box = button.getBoundingClientRect();
+          const dot = button.querySelector(".connection-launcher-dot").getBoundingClientRect();
+          return {
+            box: {x: box.x, y: box.y, width: box.width, height: box.height},
+            dot: {x: dot.x, y: dot.y, width: dot.width, height: dot.height},
+          };
+        })"""
+    )
+    assert len(rectangles) == 2
+    for rectangle in rectangles:
+        box, dot = rectangle["box"], rectangle["dot"]
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width
+        assert box["x"] <= dot["x"] and dot["x"] + dot["width"] <= box["x"] + box["width"]
+        assert box["y"] <= dot["y"] and dot["y"] + dot["height"] <= box["y"] + box["height"]
     for launcher in ("#launcher-chatgpt", "#launcher-antigravity"):
         button = page.locator(launcher)
         expect(button.locator(".connection-launcher-logo")).to_be_visible()
         expect(button.locator(".connection-launcher-dot")).to_be_visible()
         expect(button.locator(".connection-launcher-name")).to_be_hidden()
-        box, dot = button.bounding_box(), button.locator(".connection-launcher-dot").bounding_box()
-        assert box and box["x"] >= 0 and box["x"] + box["width"] <= width
-        assert dot
-        assert box["x"] <= dot["x"] and dot["x"] + dot["width"] <= box["x"] + box["width"]
-        assert box["y"] <= dot["y"] and dot["y"] + dot["height"] <= box["y"] + box["height"]
     assert (
         page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
         == 0
@@ -793,6 +912,60 @@ def test_header_shows_openai_and_google_status_separately(browser_runtime):
     for width in (360, 320):
         assert_launcher_statuses_whole(page, width)
         expect(page.locator("#open-calendar")).to_be_visible()
+    context.close()
+
+
+def test_settings_dialog_focus_boundaries_stay_inside_native_dialog(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _ = signed_in_page(browser, live, viewport={"width": 390, "height": 780})
+    opener = page.locator("#launcher-chatgpt")
+    open_connection_dialog(page)
+    focusables = """() => {
+      const selector = [
+        "#connections-dialog button",
+        "#connections-dialog input",
+        "#connections-dialog select",
+        "#connections-dialog textarea",
+        "#connections-dialog a[href]",
+        "#connections-dialog [tabindex]",
+      ].join(", ");
+      return [...document.querySelectorAll(selector)].filter(element => {
+      const style = getComputedStyle(element);
+      return !element.disabled && element.tabIndex >= 0
+        && style.display !== "none" && style.visibility !== "hidden";
+      });
+    }"""
+    assert page.evaluate(f"({focusables})().length") > 2
+    boundary = """(expected) => {
+      const dialog = document.querySelector("#connections-dialog");
+      const selector = [
+        "#connections-dialog button",
+        "#connections-dialog input",
+        "#connections-dialog select",
+        "#connections-dialog textarea",
+        "#connections-dialog a[href]",
+        "#connections-dialog [tabindex]",
+      ].join(", ");
+      const candidates = [...document.querySelectorAll(selector)].filter(element => {
+        const style = getComputedStyle(element);
+        return !element.disabled && element.tabIndex >= 0
+          && style.display !== "none" && style.visibility !== "hidden";
+      });
+      const active = document.activeElement;
+      const nativeRoot = active === dialog
+        || (active === document.body && dialog.matches(":modal"));
+      return (dialog.contains(active) || nativeRoot)
+        && (nativeRoot || active === (expected === "first" ? candidates[0] : candidates.at(-1)));
+    }"""
+    page.evaluate(f"({focusables})()[0].focus()")
+    page.keyboard.press("Shift+Tab")
+    assert page.evaluate(f'({boundary})("last")')
+    page.evaluate(f"({focusables})().at(-1).focus()")
+    page.keyboard.press("Tab")
+    assert page.evaluate(f'({boundary})("first")')
+    page.keyboard.press("Escape")
+    expect(page.locator("#connections-dialog")).to_be_hidden()
+    expect(opener).to_be_focused()
     context.close()
 
 
@@ -1018,6 +1191,8 @@ def test_antigravity_login_catalog_verification_and_disconnect(browser_runtime):
     expect(page.locator("#antigravity-login-link")).to_have_attribute(
         "href", "https://accounts.google.com/o/oauth2/auth?state=test"
     )
+    expect(page.locator("#antigravity-input-form")).to_be_visible()
+    expect(page.locator("#antigravity-input")).to_be_focused()
     expect(page.locator("#antigravity-status")).to_have_text("Đã kết nối", timeout=8000)
     expect(page.locator("#antigravity-account")).to_have_text("Google Antigravity")
     expect(page.locator("#launcher-antigravity")).to_have_attribute("data-state", "connected")
@@ -1052,6 +1227,118 @@ def test_antigravity_login_catalog_verification_and_disconnect(browser_runtime):
     page.locator("#antigravity-disconnect-confirm-button").click()
     expect(page.locator("#antigravity-status")).to_have_text("Chưa kết nối")
     expect(page.locator("#antigravity-message")).to_contain_text("vô hiệu hóa credential OMP")
+    context.close()
+
+
+def test_antigravity_status_poll_recovers_after_status_only_get_failure(browser_runtime):
+    live, browser = browser_runtime
+    context, page, api = signed_in_page(browser, live)
+    api.next_antigravity_poll_error = {"code": "provider_timeout", "status": 503}
+    open_connection_dialog(page, "#launcher-antigravity")
+    page.get_by_role("button", name="Kết nối Google Antigravity").click()
+    expect(page.locator("#antigravity-login-link")).to_have_attribute(
+        "href", "https://accounts.google.com/o/oauth2/auth?state=test"
+    )
+    expect(page.locator("#antigravity-error")).to_be_visible(timeout=6000)
+    assert page.locator("#antigravity-retry-poll").count() == 0
+    assert (
+        sum(
+            method == "GET" and path.endswith("/antigravity-session")
+            for method, path, _ in api.calls
+        )
+        == 1
+    )
+    page.wait_for_timeout(2200)
+    assert (
+        sum(
+            method == "GET" and path.endswith("/antigravity-session")
+            for method, path, _ in api.calls
+        )
+        >= 2
+    )
+    expect(page.locator("#antigravity-status")).to_have_text("Đã kết nối", timeout=5000)
+    context.close()
+
+
+def test_antigravity_input_is_trimmed_transient_and_not_retried(browser_runtime):
+    live, browser = browser_runtime
+    context, page, api = signed_in_page(browser, live)
+    api.antigravity_polls = ["pending"] * 10
+    api.next_antigravity_input_error = {"code": "provider_busy", "status": 409}
+    open_connection_dialog(page, "#launcher-antigravity")
+    page.get_by_role("button", name="Kết nối Google Antigravity").click()
+    expect(page.locator("#antigravity-input")).to_be_focused()
+    redirect = "https://127.0.0.1/omp/callback?code=omp-secret"
+    page.locator("#antigravity-input").fill(f"  {redirect}  ")
+    page.locator("#antigravity-input-form button[type=submit]").click()
+    expect(page.locator("#antigravity-error")).to_be_visible()
+    input_calls = [
+        call
+        for call in api.calls
+        if call[0] == "POST" and call[1].endswith("/antigravity-session/input")
+    ]
+    assert input_calls == [
+        (
+            "POST",
+            "/api/providers/antigravity/login-sessions/antigravity-session/input",
+            {"value": redirect},
+        )
+    ]
+    page.wait_for_timeout(2200)
+    assert (
+        sum(
+            method == "POST" and path.endswith("/antigravity-session/input")
+            for method, path, _ in api.calls
+        )
+        == 1
+    )
+    assert redirect not in page.evaluate("Object.values(sessionStorage).join('\\n')")
+    expect(page.locator("#antigravity-login-link")).to_have_attribute(
+        "href", "https://accounts.google.com/o/oauth2/auth?state=test"
+    )
+    context.close()
+
+
+@pytest.mark.parametrize(
+    ("provider", "error", "expected"),
+    [
+        (
+            "chatgpt",
+            {"code": "provider_busy", "status": 409},
+            "ChatGPT đang bận với một thao tác kết nối hoặc đăng nhập.",
+        ),
+        (
+            "antigravity",
+            {"code": "provider_quota", "status": 429},
+            "Tài khoản hoặc model Antigravity đã chạm giới hạn hiện tại.",
+        ),
+    ],
+)
+def test_synthetic_verify_quota_and_busy_errors_are_single_mutations(
+    browser_runtime, provider, error, expected
+):
+    live, browser = browser_runtime
+    context, page, api = signed_in_page(browser, live)
+    if provider == "chatgpt":
+        api.status = "connected"
+        api.preferences = {"provider": "chatgpt", "models": {"chatgpt": "gpt-6.1-sol"}}
+        api.next_verification_error = error
+        launcher = "#launcher-chatgpt"
+        verify_path = "/api/providers/chatgpt/verify"
+    else:
+        api.antigravity_status = "connected"
+        api.antigravity_selected_model = "gemini-3-pro-high"
+        api.next_antigravity_verification_error = error
+        launcher = "#launcher-antigravity"
+        verify_path = "/api/providers/antigravity/verify"
+    open_connection_dialog(page, launcher)
+    page.get_by_role("button", name="Kiểm tra").click()
+    error_message = (
+        "#connection-error-message" if provider == "chatgpt" else "#antigravity-error-message"
+    )
+    expect(page.locator(error_message)).to_contain_text(expected)
+    page.wait_for_timeout(500)
+    assert sum(path == verify_path for _, path, _ in api.calls) == 1
     context.close()
 
 

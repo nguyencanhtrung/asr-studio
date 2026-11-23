@@ -90,6 +90,7 @@ const els = {
   errorMessage: document.querySelector("#connection-error-message"),
   mutationReason: document.querySelector("#connection-mutation-reason"),
   retryPoll: document.querySelector("#connection-retry-poll"),
+  relogin: document.querySelector("#connection-relogin"),
   signIn: document.querySelector("#connection-sign-in"),
   pendingActions: document.querySelector("#connection-pending-actions"),
   pendingCopy: document.querySelector("#connection-pending-copy"),
@@ -208,6 +209,10 @@ export function renderSection(section, d, s) {
     setProp(section.registrationTrigger, "disabled", view.registrationDisabled);
     setProp(section.registrationConfirmButton, "disabled", view.registrationDisabled);
     setProp(section.registrationConfirmButton, "textContent", tr(view.registrationSubmitting && s.pending.recreate ? view.registrationSubmitting : view.registrationLabel));
+  }
+  if (section.relogin) {
+    setProp(section.relogin, "hidden", view.reloginHidden);
+    setProp(section.relogin, "disabled", view.reloginDisabled);
   }
   if (section.accountDetails) {
     const focusInside = section.accountDetails.contains(document.activeElement);
@@ -1016,6 +1021,7 @@ els.registrationTrigger.addEventListener("click", () => chatgpt({ type: "provide
 els.registrationKeep.addEventListener("click", () => chatgpt({ type: "provider/registration-recreate-confirm-toggled", open: false }));
 els.registrationConfirmButton.addEventListener("click", () => chatgpt({ type: "provider/registration-recreate-requested", displayName: els.registrationName.value }));
 els.retryPoll.addEventListener("click", () => chatgpt({ type: "provider/poll-retry-requested" }));
+els.relogin.addEventListener("click", () => chatgpt({ type: "provider/login-requested" }));
 els.modelSelect.addEventListener("change", () => chatgpt({ type: "provider/choice-edited", field: "model", value: els.modelSelect.value }));
 els.effortSelect.addEventListener("change", () => chatgpt({ type: "provider/choice-edited", field: "effort", value: els.effortSelect.value }));
 els.modelForm.addEventListener("submit", (event) => {

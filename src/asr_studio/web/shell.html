@@ -803,17 +803,18 @@
                 <div class="connection-registration" id="connection-registration" hidden>
                   <button class="text-button connection-registration-trigger" id="connection-registration-trigger" type="button">Đăng ký lại</button>
                   <div class="connection-registration-confirm" id="connection-registration-confirm" hidden>
-                    <p>Tên đăng ký được lưu tại ChatGPT. Thao tác này thu hồi quyền kết nối hiện tại và yêu cầu đăng nhập lại. Tên gợi ý cho đăng ký mới là ASR Studio; bạn có thể sửa trước khi cấp quyền.</p>
+                    <p>Tên đăng ký được lưu tại ChatGPT. Thao tác này xóa kết nối ChatGPT hiện tại và cấu hình provider Notes hiện tại trước khi yêu cầu đăng nhập mới. Tên gợi ý cho đăng ký mới là ASR Studio; bạn có thể sửa trước khi cấp quyền.</p>
                     <div class="connection-field">
                       <label for="connection-registration-name">Tên đăng ký mới</label>
                       <input id="connection-registration-name" name="registration_name" type="text" value="ASR Studio" maxlength="200" autocomplete="off" />
                     </div>
                     <div class="connection-registration-actions">
                       <button class="secondary-button" id="connection-registration-keep" type="button">Giữ kết nối</button>
-                      <button class="primary-button" id="connection-registration-confirm-button" type="button">Đăng nhập lại</button>
+                      <button class="primary-button" id="connection-registration-confirm-button" type="button">Tạo lại đăng ký và đăng nhập</button>
                     </div>
                   </div>
                 </div>
+                <button class="text-button connection-relogin" id="connection-relogin" type="button" hidden>Đăng nhập lại</button>
                 <div class="connection-disconnect" id="connection-disconnect" hidden>
                   <button class="text-button connection-disconnect-trigger" id="connection-disconnect-trigger" type="button">Ngắt kết nối</button>
                   <div class="connection-disconnect-confirm" id="connection-disconnect-confirm" hidden>

@@ -55,6 +55,7 @@ function render(state) {
       "focus:sign-in": els.signIn,
       "focus:disconnect-confirm": els.disconnectConfirmButton,
       "focus:disconnect-trigger": els.disconnectTrigger,
+      "focus:input": els.input,
     }[s.ui];
     if (focus) focus.focus();
     if (s.ui === "clear-input") els.input.value = "";

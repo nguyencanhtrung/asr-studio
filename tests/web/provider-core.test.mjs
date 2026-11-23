@@ -612,6 +612,24 @@ test("ChatGPT: pasted callback is transient, session-bound and stale replies are
   assert.equal(own(env, CHATGPT).login, null);
 });
 
+test("ChatGPT: ordinary re-login is exposed separately from registration recreation", async () => {
+  const env = setup();
+  await loaded(env);
+  const view = selectView(CHATGPT, own(env, CHATGPT));
+  assert.equal(view.reloginHidden, false);
+  assert.equal(view.registrationHidden, false);
+  assert.equal(view.registrationLabel.text, "Tạo lại đăng ký và đăng nhập");
+
+  dispatch(env, CHATGPT, "login-requested");
+  await env.answer(env.is("POST", "/api/providers/chatgpt/login-sessions"), 200, SESSION);
+  assert.equal(own(env, CHATGPT).recreatingRegistration, false);
+  assert.equal(own(env, CHATGPT).info.status, "connected");
+  assert.equal(env.pending(env.is("POST", "/api/providers/chatgpt/registration/recreate")).length, 0);
+  dispatch(env, CHATGPT, "login-cancel-requested");
+  await env.answer(env.is("DELETE", "/login-sessions/s1"), 200, { status: "cancelled" });
+  assert.equal(own(env, CHATGPT).info.status, "connected");
+});
+
 test("ChatGPT: explicit registration recreation uses its own endpoint and keeps normal login reuse", async () => {
   const env = setup();
   await loaded(env);
@@ -625,10 +643,13 @@ test("ChatGPT: explicit registration recreation uses its own endpoint and keeps 
   assert.equal(own(env, CHATGPT).recreatingRegistration, true);
   assert.equal(own(env, CHATGPT).info.status, "disconnected");
   assert.equal(own(env, CHATGPT).info.account, null);
+  assert.match(own(env, CHATGPT).message.text, /xóa kết nối ChatGPT hiện tại/);
+  assert.match(own(env, CHATGPT).message.text, /cấu hình provider Notes hiện tại/);
   assert.deepEqual(env.events, ["provider.choice-changed"]);
   env.fire(500);
   await env.answer(env.is("GET", "/login-sessions/s1"), 200, { status: "connected" });
-  assert.equal(own(env, CHATGPT).message.text, "Đã tạo lại đăng ký ASR Studio và xác thực tài khoản ChatGPT.");
+  assert.match(own(env, CHATGPT).message.text, /xóa kết nối ChatGPT hiện tại/);
+  assert.match(own(env, CHATGPT).message.text, /cấu hình provider Notes hiện tại/);
   assert.deepEqual(env.events, ["provider.choice-changed", "provider.choice-changed"]);
 });
 
@@ -811,6 +832,7 @@ test("Google: login shows the link and the code input, polls at once and again e
   const s = own(env, ANTIGRAVITY);
   assert.equal(s.loginLink, "https://accounts.example.com/auth");
   assert.equal(s.inputOpen, true);
+  assert.equal(s.ui, "focus:input");
   assert.equal(s.loginCopy, "Mở trang rồi dán mã.");
   assert.equal(s.signInDisabled, false);
   await env.answer(env.is("GET", "/login-sessions/g1"), 200, { ...CODE_SESSION });
@@ -844,6 +866,7 @@ test("Google: submitting the code posts it trimmed, clears the field and applies
   dispatch(env, ANTIGRAVITY, "login-input-submitted", { value: " code-1 " });
   const call = env.pending(env.is("POST", "/login-sessions/g1/input"))[0];
   assert.deepEqual(call.body, { value: "code-1" });
+  assert.equal(JSON.stringify(own(env, ANTIGRAVITY)).includes("code-1"), false);
   await env.answer(env.is("POST", "/input"), 200, { id: "g1", status: "pending", expires_at: SOON });
   const s = own(env, ANTIGRAVITY);
   assert.equal(s.inputOpen, false);
@@ -851,9 +874,10 @@ test("Google: submitting the code posts it trimmed, clears the field and applies
   dispatch(env, ANTIGRAVITY, "login-input-submitted", { value: "x" });
   await env.fail(env.is("POST", "/input"));
   assert.equal(own(env, ANTIGRAVITY).error.code, "NETWORK_ERROR");
+  assert.equal(env.pending(env.is("POST", "/login-sessions/g1/input")).length, 0);
 });
 
-test("Google: a login the server forgot ends as expired; other poll errors retry in two seconds", async () => {
+test("Google: status-only poll recovery expires missing sessions and reschedules other GET errors", async () => {
   const env = setup();
   await googleLogin(env);
   await env.answer(env.is("GET", "/login-sessions/g1"), 404, { detail: { code: "login_session_not_found" } });
@@ -864,6 +888,7 @@ test("Google: a login the server forgot ends as expired; other poll errors retry
   await googleLogin(flaky);
   await flaky.fail(flaky.is("GET", "/login-sessions/g1"));
   assert.notEqual(own(flaky, ANTIGRAVITY).login, null);
+  assert.equal(own(flaky, ANTIGRAVITY).error.retryPoll, false);
   assert.deepEqual(flaky.live(), [2000]);
   flaky.fire(2000);
   assert.equal(flaky.pending(flaky.is("GET", "/login-sessions/g1")).length, 1);
@@ -1058,6 +1083,16 @@ test("Google: 429 reads as quota and a 5xx as the server-error text", async () =
     await env.answer(env.is("POST", "/api/providers/antigravity/verify"), status, {});
     assert.deepEqual(own(env, ANTIGRAVITY).error.text, expected, String(status));
   }
+});
+
+test("provider-busy mutation failures remain errors without replaying the verify request", async () => {
+  const env = setup();
+  await loaded(env);
+  dispatch(env, CHATGPT, "verify-requested");
+  await env.answer(env.is("POST", "/api/providers/chatgpt/verify"), 409, { detail: { code: "provider_busy" } });
+  assert.equal(own(env, CHATGPT).error.code, "provider_busy");
+  assert.equal(env.pending(env.is("POST", "/api/providers/chatgpt/verify")).length, 0);
+  assert.equal(env.live().length, 0);
 });
 
 test("Google: a login-session answer that is not an object ends the start and frees the button", async () => {

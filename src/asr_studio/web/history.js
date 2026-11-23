@@ -2684,6 +2684,7 @@ export const meetingHistory = Object.freeze({
 
 const sidebarHistory = $("#sidebar-history");
 const sidebarSummary = sidebarHistory.querySelector("summary");
+if (window.innerWidth <= 680) sidebarHistory.open = false;
 const compactSidebar = window.matchMedia("(max-width: 680px)");
 
 function syncSidebarHistory() {
