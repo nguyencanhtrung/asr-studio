@@ -887,6 +887,7 @@ a.notes-citation-chip:focus-visible {
   --surface: #fff;
   --surface-subtle: #f7f8fa;
   --surface-raised: #fff;
+  --code-bg: #f2f0eb;
   --ink: #222;
   --ink-2: #535861;
   --ink-3: #60656d;

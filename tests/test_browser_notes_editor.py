@@ -73,7 +73,7 @@ def test_issue_256_visual_evidence(live, signed_in, viewport_name, viewport, sch
         expect(dialog).to_be_visible()
         page.screenshot(
             path=str(destination / "notes-email-desktop-dark.png"),
-            full_page=True,
+            full_page=False,
             animations="disabled",
         )
 
@@ -216,6 +216,29 @@ def test_rich_invalid_code_input_reverts_and_ime_enter_is_allowed(live, signed_i
         }"""
     )
     assert composing is False
+
+
+def test_rejected_rich_input_restores_the_pre_input_caret(live, signed_in):
+    _context, page = signed_in()
+    markdown = "# Notes\n\nUse `npm ci`.\n"
+    _, revision, _, _ = _open_notes(live, page, lambda *_: markdown)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    code = page.locator('#notes-rich-editor code[contenteditable="plaintext-only"]')
+    code.click()
+    page.keyboard.press("Home")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.type("`")
+    expect(code).to_have_text("npm ci")
+    page.keyboard.type("X")
+    expect(code).to_have_text("nXpm ci")
+    with page.expect_response(lambda response: response.request.method == "PATCH") as saved:
+        page.locator("#notes-save").click()
+    assert saved.value.ok
+    assert saved.value.request.post_data_json["markdown"] == "# Notes\n\nUse `nXpm ci`.\n"
+    assert (
+        get_note(live.settings.data_dir, revision["id"])["markdown"]
+        == "# Notes\n\nUse `nXpm ci`.\n"
+    )
 
 
 def test_view_citation_code_boundaries_and_literal_rich_markers(live, signed_in):
@@ -395,6 +418,10 @@ def test_email_preview_pins_saved_revision_and_reports_clipboard_outcomes(live, 
         "element => [getComputedStyle(element).backgroundColor, getComputedStyle(element).color]"
     )
     assert colors == ["rgb(255, 255, 255)", "rgb(34, 34, 34)"]
+    raw_colors = dialog.locator(".notes-markdown-fallback").evaluate(
+        "element => [getComputedStyle(element).backgroundColor, getComputedStyle(element).color]"
+    )
+    assert raw_colors == ["rgb(242, 240, 235)", "rgb(34, 34, 34)"]
     chrome_colors = dialog.locator(
         "#notes-copy-result, #notes-copy-confirm, #notes-copy-close"
     ).evaluate_all(

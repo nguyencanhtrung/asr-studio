@@ -450,7 +450,7 @@ function citedBullets(lines, citations) {
       section = heading[2].trim();
       return;
     }
-    const bullet = line.match(/^ {0,3}[-*] +([^ ].*)$/);
+    const bullet = line.match(/^ {0,3}[-*](?: +|\t+)([^ \t].*)$/);
     if (!bullet) return;
     const key = keyOf(section, bullet[1].trim());
     bullets.push({ index, key });
@@ -479,7 +479,7 @@ function citationChip(revision, source, group = "") {
 
 const escapedPunctuation = /[!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-]/;
 const headingPattern = /^(#{1,6}) +([^ ].*)$/;
-const listPattern = /^( {0,3})([-*+]|\d{1,9}[.)]) +([^ ].*)$/;
+const listPattern = /^( {0,3})([-*+]|\d{1,9}[.)])(?: +|\t+)([^ \t].*)$/;
 const lineEnding = /\r\n?|\n/;
 
 function unescapeMarkdown(value) {
@@ -571,7 +571,7 @@ function inlineNodes(text, offset, revision, origin, presentation) {
       continue;
     }
     if (char === "[") {
-      const match = text.slice(index).match(/^\[((?:\\[^\r\n]|[^\[\]\\])+)\]\(([^()\s]+)\)/);
+      const match = text.slice(index).match(/^\[((?:\\[^\r\n]|[^\[\]\\\r\n])+?)\]\(([^()\s]+)\)/);
       if (!match) {
         addRaw(bracketEnd(text, index));
         continue;
@@ -588,7 +588,9 @@ function inlineNodes(text, offset, revision, origin, presentation) {
         nodes.push({ kind: "source", ...source, text: unescapeMarkdown(label), label: t("Mở nguồn transcript tại {time}", { time: unescapeMarkdown(label) }) });
       } else if (presentation === "clipboard" && source && !invalid) {
         nodes.push({ kind: "link", href: new URL(source.href, origin).href, text: unescapeMarkdown(label) });
-      } else if (href && !source && !invalid && !/(^|[^\\])[*_`<&]/.test(label)) {
+      } else if (href && !source && !invalid
+        && !/(^|[^\\])[*_`\[\]<~]/.test(label)
+        && !/(^|[^\\])&(?!#(?:32|9);)/i.test(label)) {
         nodes.push({ kind: "link", href, text: unescapeMarkdown(label), start: offset + index + 1, end: offset + index + 1 + label.length });
       } else {
         nodes.push({ kind: "raw", text: markup });
@@ -616,7 +618,10 @@ function inlineNodes(text, offset, revision, origin, presentation) {
         end += char !== "`" && text[end] === "\\" && escapedPunctuation.test(text[end + 1] || "") ? 2 : 1;
       }
       const value = text.slice(contentStart, end);
-      if (!value || value !== value.trim() || !text.startsWith(delimiter, end) || text[end + delimiter.length] === char
+      const unrepresentableCodeEdges = char === "`" && value.length > 1
+        && value.startsWith(" ") && value.endsWith(" ") && value.trim();
+      if (!value || (char !== "`" && value !== value.trim()) || unrepresentableCodeEdges
+        || !text.startsWith(delimiter, end) || text[end + delimiter.length] === char
         || (char === "_" && (word.test(text[index - 1] || "") || word.test(text[end + delimiter.length] || "")))
         || (char !== "`" && /(^|[^\\])[*_`\[\]<~]/.test(value))) {
         addRaw(text.startsWith(delimiter, end) ? end + delimiter.length : char === "`" ? text.length : runEnd);
@@ -686,9 +691,17 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
   const citationLines = Array(lines.length).fill("");
   const line = (index) => lines[index]?.text || "";
   const inline = (text, start) => inlineNodes(text, start, revision, origin, presentation);
-  const raw = (start, end, { viewLines = false, citable = false } = {}) => {
+  const raw = (start, end, {
+    viewLines = false, citable = false, citationLineIndexes = null, literalLineIndexes = null,
+  } = {}) => {
     if (citable) {
-      for (let index = start; index < end; index++) citationLines[index] = line(index);
+      for (let index = start; index < end; index++) {
+        if (literalLineIndexes?.has(index) || (citationLineIndexes && !citationLineIndexes.has(index))) {
+          citationLines[index] = citationIgnore;
+        } else {
+          citationLines[index] = line(index);
+        }
+      }
     } else {
       for (let index = start; index < end; index++) {
         if (!citationLines[index]) citationLines[index] = citationIgnore;
@@ -696,7 +709,9 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     }
     const block = { kind: "raw", text: markdown.slice(lines[start].offset, lines[end - 1].offset + line(end - 1).length) };
     if (viewLines && presentation === "view") {
-      block.viewLines = lines.slice(start, end).map(({ text, offset }) => inline(text, offset));
+      block.viewLines = lines.slice(start, end).map(({ text, offset }, relative) => (
+        literalLineIndexes?.has(start + relative) ? [{ kind: "raw", text }] : inline(text, offset)
+      ));
       block.viewLineIndexes = lines.slice(start, end).map((_, index) => start + index);
     }
     return block;
@@ -711,6 +726,35 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     const tag = value.match(/^ {0,3}<(script|style|iframe|object|svg|math|code|pre|textarea)(?:\s|>|$)/i);
     return tag ? new RegExp(`</${tag[1]}\\s*>`, "i") : null;
   };
+  const unquote = (value) => {
+    let rest = value;
+    while (true) {
+      const prefix = rest.match(/^ {0,3}>[ \t]?/);
+      if (!prefix) return rest;
+      rest = rest.slice(prefix[0].length);
+    }
+  };
+  const literalLines = (start, end, baseIndent = 0) => {
+    const literal = new Set();
+    let close = null;
+    for (let index = start; index < end; index++) {
+      const value = unquote(line(index));
+      const trimmed = value.trimStart();
+      if (close) {
+        literal.add(index);
+        if (close.test(trimmed)) close = null;
+        continue;
+      }
+      const opening = fenceEnd(trimmed);
+      if (opening) {
+        literal.add(index);
+        close = opening;
+        continue;
+      }
+      if (value.length - trimmed.length >= baseIndent + 4) literal.add(index);
+    }
+    return literal;
+  };
   const isTableRule = (value) => /\|/.test(value) && /^[\s|:-]+$/.test(value);
   const startsBlock = (value) => headingPattern.test(value) || listPattern.test(value) || startsRaw(value) || fenceEnd(value);
   for (let index = 0; index < lines.length;) {
@@ -719,8 +763,6 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       index++;
       continue;
     }
-    const citationHeading = text.match(/^(#{1,6})\s+(.+)$/);
-    if (citationHeading) citationLines[index] = text;
     const close = fenceEnd(text);
     if (close) {
       // Literal Markdown fences close on a later line. HTML may close on its opening line.
@@ -731,6 +773,8 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       index = end;
       continue;
     }
+    const citationHeading = text.match(/^(#{1,6})\s+(.+)$/);
+    if (citationHeading) citationLines[index] = text;
     if (!startsRaw(text) && (isTableRule(line(index + 1)) || (text.includes("|") && /^\s*[:\-]+\s*$/.test(line(index + 1))))) {
       let end = index + 2;
       while (line(end).includes("|")) end++;
@@ -783,11 +827,52 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       while (continuation < lines.length && !line(continuation).trim()) continuation++;
       if (continuation < lines.length && /^\s/.test(line(continuation))) {
         unsupported = true;
-        end = continuation + 1;
-        while (line(end).trim() && !startsBlock(line(end).trimStart())) end++;
+        let cursor = continuation;
+        let close = null;
+        while (cursor < lines.length) {
+          const value = line(cursor);
+          if (!value.trim()) {
+            if (close) {
+              cursor++;
+              continue;
+            }
+            break;
+          }
+          const logical = unquote(value);
+          const trimmed = logical.trimStart();
+          if (close) {
+            if (close.test(trimmed)) close = null;
+            cursor++;
+            continue;
+          }
+          const opening = fenceEnd(trimmed);
+          if (opening) {
+            close = opening;
+            cursor++;
+            continue;
+          }
+          if (startsBlock(trimmed) && !/^\s/.test(value)) break;
+          cursor++;
+        }
+        end = cursor;
       }
       if (unsupported) {
-        blocks.push(raw(index, end, { viewLines: presentation === "view", citable: presentation === "view" }));
+        const citationLineIndexes = new Set();
+        const literalLineIndexes = literalLines(index, end, indent);
+        for (let rawIndex = index; rawIndex < end; rawIndex++) {
+          if (literalLineIndexes.has(rawIndex)) continue;
+          const value = line(rawIndex);
+          const rawItem = value.match(listPattern);
+          if (rawItem && rawItem[1].length <= indent && rawItem[2].at(-1) === marker) {
+            citationLineIndexes.add(rawIndex);
+          }
+        }
+        blocks.push(raw(index, end, {
+          viewLines: presentation === "view",
+          citable: presentation === "view",
+          citationLineIndexes,
+          literalLineIndexes,
+        }));
       } else {
         for (const item of items) citationLines[item.index] = line(item.index);
         blocks.push({ kind: "list", start, items });
@@ -797,7 +882,8 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     }
     let end = index + 1;
     const unsupported = startsRaw(text) || Boolean(heading) || /^ {0,3}[=\-]+ *$/.test(line(end));
-    while (line(end).trim() && !fenceEnd(line(end)) && (unsupported || !startsBlock(line(end)))) end++;
+    while (line(end).trim() && !fenceEnd(line(end))
+      && (unsupported ? !(startsBlock(line(end)) && !/^\s/.test(line(end))) : !startsBlock(line(end)))) end++;
     // Keep setext headings, reference definitions, HTML, multiline hard breaks and
     // GFM syntax outside the supported profile visible in their original spelling.
     const paragraph = lines.slice(index, end);
@@ -807,7 +893,10 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       return backslashes.length % 2 === 1;
     });
     if (unsupported || hardBreak || paragraph.some(({ text: value }) => /^ {0,3}[=-]+ *$/.test(value))) {
-      blocks.push(raw(index, end, { viewLines: !unsupported && hardBreak }));
+      blocks.push(raw(index, end, {
+        viewLines: presentation === "view" && (hardBreak || paragraph.some(({ text: value }) => /^ {0,3}>/.test(value))),
+        literalLineIndexes: literalLines(index, end),
+      }));
     } else {
       blocks.push({ kind: "paragraph", lines: paragraph.map(({ text: value, offset: start }) => inline(value, start)) });
     }
@@ -874,7 +963,10 @@ function normalizeInteriorTrailingSpaces(source, raw, offsets, display, appended
   if (!appended.trim()) return source;
   const trailing = display.match(/[ \t]+$/)?.[0] || "";
   if (!trailing) return source;
-  const first = display.length - trailing.length;
+  const trailingStart = display.length - trailing.length;
+  let first = display.length;
+  while (first > trailingStart && /^(?:&#32;|&#9;)$/.test(raw.slice(offsets[first - 1], offsets[first]))) first--;
+  if (first === display.length) return source;
   const encodedStart = offsets[first];
   const encodedEnd = offsets[display.length];
   const encoded = raw.slice(encodedStart, encodedEnd);
@@ -925,7 +1017,7 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
   let escaped = value
     .replace(/\\/g, "\\\\")
     .replace(/([`*_\[\]<>])/g, "\\$1")
-    .replace(/&(?=(?:#\w+|[a-z]+);)/gi, "\\&")
+    .replace(/&/g, "\\&")
     .replace(/\t/g, "&#9;");
   if (value.includes("~~")) escaped = escaped.replace(/~/g, "\\~");
   if (tableCell) escaped = escaped.replace(/\|/g, "\\|");
@@ -933,7 +1025,7 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
   const lineStart = Math.max(markdown.lastIndexOf("\n", node.start - 1), markdown.lastIndexOf("\r", node.start - 1)) + 1;
   const linePrefix = markdown.slice(lineStart, node.start);
   const atLineStart = linePrefix === "";
-  const atListItemStart = /^ {0,3}(?:[-*+]|\d{1,9}[.)]) +$/.test(linePrefix);
+  const atListItemStart = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?: +|\t+)$/.test(linePrefix);
   if (node.kind === "text" && edgeStart && (atLineStart || atListItemStart)) {
     const ordered = value.match(/^\d{1,9}([.)]) /);
     if (ordered) {
@@ -949,6 +1041,24 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
     if (edgeEnd) escaped = escaped.replace(/ +$/g, (spaces) => spaces.replace(/ /g, "&#32;"));
   }
   return escaped;
+}
+
+function protectRichMarker(source, value, node, markdown) {
+  if (node.kind !== "text") return source;
+  const lineStart = Math.max(markdown.lastIndexOf("\n", node.start - 1), markdown.lastIndexOf("\r", node.start - 1)) + 1;
+  const linePrefix = markdown.slice(lineStart, node.start);
+  const atContentStart = linePrefix === "" || /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?: +|\t+)$/.test(linePrefix);
+  if (!atContentStart) return source;
+  // Protect the prefix as soon as it could become a block marker.  A first
+  // `#`, `+`, or `-` is already parsed as raw Markdown, and an ordered
+  // delimiter becomes raw before its following space is typed.  Looking at
+  // the whole proposed run keeps the first keystroke in the same paragraph.
+  const ordered = value.match(/^\d+([.)])(?: |$)/);
+  const marker = ordered
+    ? { offset: ordered[0].indexOf(ordered[1]) }
+    : value.match(/^(?:#{1,6}|[-*+>])(?: |$)/) ? { offset: 0 } : null;
+  if (!marker || source[marker.offset] === "\\") return source;
+  return source.slice(0, marker.offset) + "\\" + source.slice(marker.offset);
 }
 
 function richMarkdownEdit(state, action, revision, draft) {
@@ -982,7 +1092,8 @@ function richMarkdownEdit(state, action, revision, draft) {
     + draft.value.slice(node.start + offsets[node.text.length - tail], node.end);
   const normalizedSource = first === node.text.length && tail === 0 && action.value.length > first
     ? normalizeInteriorTrailingSpaces(nodeSource, raw, offsets, node.text, action.value.slice(first)) : nodeSource;
-  const candidate = draft.value.slice(0, node.start) + normalizedSource
+  const protectedSource = protectRichMarker(normalizedSource, action.value, node, draft.value);
+  const candidate = draft.value.slice(0, node.start) + protectedSource
     + draft.value.slice(node.end);
   const reparsed = markdownBlocks(candidate, revision, state.origin);
   if (!canEditRich(reparsed) || !richStructureMatches(blocks, reparsed, action.index, action.value)) return null;
@@ -2066,6 +2177,9 @@ function meetingContext(state, action) {
     speakerNames: Array.isArray(action.speakerNames) ? action.speakerNames : [],
   };
   const previewEffects = leavingNotes ? [{ type: "cancel", key: PREVIEW_READ }] : [];
+  if (leavingNotes && state.meetingId) {
+    next = patchNotes(next, state.meetingId, { actionMessage: "" });
+  }
   if (leavingNotes) {
     next = { ...next, previewContextId: state.previewContextId + 1, copyPreview: null, previewLoading: false };
   }
@@ -2079,6 +2193,7 @@ function meetingContext(state, action) {
   next = { ...next, meetingId };
   let result = out(next, previewEffects);
   if (changed) {
+    if (state.meetingId) result = then(result, (s) => out(patchNotes(s, state.meetingId, { actionMessage: "" })));
     result = then(result, stopPolling);
     result = then(result, (s) => out(patchChoice(s, { open: false })));
     result = then(result, (s) => out(patchNotes(s, meetingId, { sourceLockKnown: false, known: false })));
@@ -2255,7 +2370,14 @@ function transition(state, action) {
       const value = action.type === "notes/rich-edited"
         ? richMarkdownEdit(state, action, revision, draft)
         : rawTextareaEdit(draft.value, action.value);
-      if (value === null || value === draft.value) return out(state);
+      if (value === null || value === draft.value) {
+        if (action.type === "notes/rich-edited" && value === null && action.value !== action.before) {
+          return out(patchNotes(state, state.meetingId, {
+            actionMessage: t("Không thể giữ nguyên cấu trúc Markdown trong Viết; hãy chỉnh sửa nội dung này bằng Markdown."),
+          }));
+        }
+        return out(state);
+      }
       const conflict = draft.expectedEditVersion === revision.edit_version
         ? null
         : { markdown: revision.markdown, editVersion: revision.edit_version };

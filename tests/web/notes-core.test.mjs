@@ -1649,6 +1649,36 @@ test("View keeps citation parity for unsupported lists and raw heading scope", a
   assert.equal(lists[1].items[0].chips[0].segmentId, "seg-a");
 });
 
+test("View keeps source and citation parity through quote, tab-list and nested code boundaries", async () => {
+  const env = setup();
+  const href = "/meetings/m1?notes_source=s1&segment=seg-a#transcript";
+  const bullet = "The team reviewed its launch plan.";
+  const markdown = "# Notes\n\n"
+    + "> [Before](" + href + ")\n\n"
+    + "## Overview\n\n"
+    + "- Other bullet.\n\n"
+    + "  ```text\n\n"
+    + "  - " + bullet + "\n  [In code](" + href + ")\n"
+    + "  ```\n\n"
+    + "-\t" + bullet + "\n";
+  await opened(env, { revisions: [revision({
+    markdown,
+    citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg-a", start_seconds: 1 }] }],
+  })] });
+  const view = selectView(env.state()).savedWork;
+  const source = view.blocks
+    .filter((block) => block.kind === "raw" && block.viewLines)
+    .flatMap((block) => block.viewLines)
+    .flatMap((line) => line.nodes)
+    .find((node) => node.kind === "source");
+  assert.equal(source.text, "Before");
+  const codeRaw = view.blocks.find((block) => block.kind === "raw" && block.text.includes("[In code]"));
+  assert.ok(codeRaw);
+  assert.equal(codeRaw.viewLines.flatMap(({ nodes }) => nodes).filter((node) => node.kind === "source").length, 0);
+  const list = view.blocks.find((block) => block.kind === "list");
+  assert.equal(list.items[0].chips[0].segmentId, "seg-a");
+});
+
 test("View skips code for citation matching and rich text keeps heading markers literal", async () => {
   const env = setup();
   const bullet = "The team reviewed its launch plan.";
@@ -1691,6 +1721,72 @@ test("View skips code for citation matching and rich text keeps heading markers 
   });
   assert.equal(saved(crEnv).value, "# Notes\r\r\\> Literal\r");
   assert.equal(selectView(crEnv.state()).savedWork.blocks[1].kind, "paragraph");
+});
+
+test("rich marker prefixes stay literal when typed incrementally", async () => {
+  const expected = new Map([
+    ["## Literal", "\\## Literal"],
+    ["1. Literal", "1\\. Literal"],
+    ["+ Literal", "\\+ Literal"],
+    ["> Literal", "\\> Literal"],
+  ]);
+  for (const value of expected.keys()) {
+    const env = setup();
+    const markdown = "# Notes\n\nOriginal paragraph\n";
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    let before = "Original paragraph";
+    let current = "";
+    for (const character of value) {
+      current += character;
+      const index = selectView(env.state()).savedWork.blocks.flatMap(blockRuns)
+        .findIndex((node) => node.text === before);
+      env.dispatch("rich-edited", { index, before, value: current });
+      const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+      assert.equal(runs[index].text, current);
+      before = current;
+    }
+    assert.equal(saved(env).value, `${markdown.slice(0, -"Original paragraph\n".length)}${expected.get(value)}\n`);
+  }
+});
+
+test("rich boundary spaces stay editable in links and code", async () => {
+  const env = setup();
+  const href = "https://example.invalid/agenda";
+  const markdown = "# Notes\n\n[Open](" + href + ") and `npm`.\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  let runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const linkIndex = runs.findIndex((node) => node.kind === "link" && node.text === "Open");
+  env.dispatch("rich-edited", { index: linkIndex, before: "Open", value: "Open " });
+  assert.equal(saved(env).value, "# Notes\n\n[Open&#32;](" + href + ") and `npm`.\n");
+  runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const linkWithSpace = runs.findIndex((node) => node.kind === "link" && node.text === "Open ");
+  env.dispatch("rich-edited", { index: linkWithSpace, before: "Open ", value: "Open agenda" });
+  assert.equal(saved(env).value, "# Notes\n\n[Open agenda](" + href + ") and `npm`.\n");
+  runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const codeIndex = runs.findIndex((node) => node.kind === "code" && node.text === "npm");
+  env.dispatch("rich-edited", { index: codeIndex, before: "npm", value: "npm " });
+  assert.equal(saved(env).value, "# Notes\n\n[Open agenda](" + href + ") and `npm `.\n");
+  runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const codeWithSpace = runs.findIndex((node) => node.kind === "code" && node.text === "npm ");
+  env.dispatch("rich-edited", { index: codeWithSpace, before: "npm ", value: "npm ci" });
+  assert.equal(saved(env).value, "# Notes\n\n[Open agenda](" + href + ") and `npm ci`.\n");
+});
+
+test("rich marker protection applies at list-item content starts", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\n- one\n3. two\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  let runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const bulletIndex = runs.findIndex((node) => node.text === "one");
+  env.dispatch("rich-edited", { index: bulletIndex, before: "one", value: "## one" });
+  assert.equal(saved(env).value, "# Notes\n\n- \\## one\n3. two\n");
+  runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const orderedIndex = runs.findIndex((node) => node.text === "two");
+  env.dispatch("rich-edited", { index: orderedIndex, before: "two", value: "1. two" });
+  assert.equal(saved(env).value, "# Notes\n\n- \\## one\n3. 1\\. two\n");
 });
 
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {

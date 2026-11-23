@@ -372,6 +372,7 @@ const { t, UI_LOCALE } = (() => {
       "Không thể hoàn tất thao tác. Hãy kiểm tra trạng thái rồi thử lại.": "Could not complete the action. Check the status, then try again.",
       "Không thể hoàn tất đăng nhập ChatGPT.": "Could not complete the ChatGPT sign-in.",
       "Không thể lưu Markdown.": "Could not save the Markdown.",
+      "Không thể giữ nguyên cấu trúc Markdown trong Viết; hãy chỉnh sửa nội dung này bằng Markdown.": "The Markdown structure could not be preserved in Write; edit this content in Markdown.",
       "Không thể lưu người nói.": "Could not save the speaker.",
       "Không thể lưu thay đổi.": "Could not save the changes.",
       "Không thể lưu transcript hoàn chỉnh. Kiểm tra bộ nhớ lưu trữ rồi thử lại.": "Could not save the complete transcript. Check storage, then try again.",
