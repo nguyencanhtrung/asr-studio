@@ -241,6 +241,108 @@ def test_rejected_rich_input_restores_the_pre_input_caret(live, signed_in):
     )
 
 
+def test_rejected_rich_paste_restores_the_pre_input_caret(live, signed_in):
+    _context, page = signed_in()
+    markdown = "# Notes\n\nUse `abcd`.\n"
+    _, revision, _, _ = _open_notes(live, page, lambda *_: markdown)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    code = page.locator('#notes-rich-editor code[contenteditable="plaintext-only"]')
+    code.click()
+    page.keyboard.press("Home")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    before = code.evaluate(
+        """element => {
+            const selection = getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            range.setEnd(selection.focusNode, selection.focusOffset);
+            return range.toString().length;
+        }"""
+    )
+    code.evaluate(
+        """element => {
+            const data = new DataTransfer();
+            data.setData("text/plain", "x`y");
+            element.dispatchEvent(new ClipboardEvent("paste", {
+                clipboardData: data, bubbles: true, cancelable: true,
+            }));
+        }"""
+    )
+    after = code.evaluate(
+        """element => {
+            const selection = getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            range.setEnd(selection.focusNode, selection.focusOffset);
+            return range.toString().length;
+        }"""
+    )
+    expect(code).to_have_text("abcd")
+    assert after == before == 2
+    page.keyboard.type("X")
+    expect(code).to_have_text("abXcd")
+    with page.expect_response(lambda response: response.request.method == "PATCH") as saved:
+        page.locator("#notes-save").click()
+    assert saved.value.ok
+    assert saved.value.request.post_data_json["markdown"] == "# Notes\n\nUse `abXcd`.\n"
+    assert (
+        get_note(live.settings.data_dir, revision["id"])["markdown"] == "# Notes\n\nUse `abXcd`.\n"
+    )
+
+
+def test_rich_deletion_preserves_supported_runs_when_a_boundary_space_is_exposed(live, signed_in):
+    _context, page = signed_in()
+    markdown = (
+        "# Plan A\n\n- one two\n3. one two\n\n"
+        "| A | B |\n|---|---|\n| x y | z |\n\n"
+        "**a b**\n\nab words here.\n"
+    )
+    _, revision, _, _ = _open_notes(live, page, lambda *_: markdown)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    editor = page.locator("#notes-rich-editor")
+
+    def backspace_to_space(locator, count=1):
+        locator.click()
+        page.keyboard.press("End")
+        for _ in range(count):
+            page.keyboard.press("Backspace")
+
+    heading = editor.locator("h4 [contenteditable='plaintext-only']")
+    bullet = editor.locator("ul [contenteditable='plaintext-only']")
+    ordered = editor.locator("ol [contenteditable='plaintext-only']")
+    cell = editor.locator("tbody td [contenteditable='plaintext-only']").first
+    strong = editor.locator("strong[contenteditable='plaintext-only']")
+    paragraph = editor.locator("p [contenteditable='plaintext-only']").last
+
+    backspace_to_space(heading)
+    backspace_to_space(bullet, 3)
+    backspace_to_space(ordered, 3)
+    backspace_to_space(cell)
+    backspace_to_space(strong)
+    paragraph.click()
+    page.keyboard.press("Home")
+    page.keyboard.press("Delete")
+    page.keyboard.press("Delete")
+
+    expect(heading).to_have_text("Plan ")
+    expect(bullet).to_have_text("one ")
+    expect(ordered).to_have_text("one ")
+    expect(cell).to_have_text("x ")
+    expect(strong).to_have_text("a ")
+    expect(paragraph).to_have_text(" words here.")
+    expected = (
+        "# Plan&#32;\n\n- one&#32;\n3. one&#32;\n\n"
+        "| A | B |\n|---|---|\n| x&#32; | z |\n\n"
+        "**a&#32;**\n\n&#32;words here.\n"
+    )
+    with page.expect_response(lambda response: response.request.method == "PATCH") as saved:
+        page.locator("#notes-save").click()
+    assert saved.value.ok
+    assert saved.value.request.post_data_json["markdown"] == expected
+    assert get_note(live.settings.data_dir, revision["id"])["markdown"] == expected
+
+
 def test_view_citation_code_boundaries_and_literal_rich_markers(live, signed_in):
     _context, page = signed_in()
     fence = "`" * 3

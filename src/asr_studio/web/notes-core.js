@@ -1043,6 +1043,34 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
   return escaped;
 }
 
+function encodeRichBoundarySpaces(source, value, node, { edgeStart = false, edgeEnd = false } = {}) {
+  if (node.kind === "code") return source;
+  const offsets = sourceOffsets(node, source);
+  if (offsets.length !== value.length + 1) return source;
+  const ranges = [];
+  const add = (start, end) => {
+    if (end > start) ranges.push([start, end]);
+  };
+  const leading = edgeStart ? value.match(/^[ \t]+/) : null;
+  const trailing = edgeEnd ? value.match(/[ \t]+$/) : null;
+  if (leading) add(0, offsets[leading[0].length]);
+  if (trailing) add(offsets[value.length - trailing[0].length], offsets[value.length]);
+  if (!ranges.length) return source;
+  ranges.sort((left, right) => left[0] - right[0]);
+  const merged = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range[0] <= previous[1]) previous[1] = Math.max(previous[1], range[1]);
+    else merged.push(range);
+  }
+  const encode = (value) => value.replace(/ /g, "&#32;").replace(/\t/g, "&#9;");
+  let next = source;
+  for (const [start, end] of merged.toReversed()) {
+    next = next.slice(0, start) + encode(next.slice(start, end)) + next.slice(end);
+  }
+  return next;
+}
+
 function protectRichMarker(source, value, node, markdown) {
   if (node.kind !== "text") return source;
   const lineStart = Math.max(markdown.lastIndexOf("\n", node.start - 1), markdown.lastIndexOf("\r", node.start - 1)) + 1;
@@ -1092,7 +1120,11 @@ function richMarkdownEdit(state, action, revision, draft) {
     + draft.value.slice(node.start + offsets[node.text.length - tail], node.end);
   const normalizedSource = first === node.text.length && tail === 0 && action.value.length > first
     ? normalizeInteriorTrailingSpaces(nodeSource, raw, offsets, node.text, action.value.slice(first)) : nodeSource;
-  const protectedSource = protectRichMarker(normalizedSource, action.value, node, draft.value);
+  const boundarySource = encodeRichBoundarySpaces(normalizedSource, action.value, node, {
+    edgeStart: first === 0,
+    edgeEnd: tail === 0,
+  });
+  const protectedSource = protectRichMarker(boundarySource, action.value, node, draft.value);
   const candidate = draft.value.slice(0, node.start) + protectedSource
     + draft.value.slice(node.end);
   const reparsed = markdownBlocks(candidate, revision, state.origin);

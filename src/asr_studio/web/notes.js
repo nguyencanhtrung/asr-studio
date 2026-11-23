@@ -722,7 +722,7 @@ function updateRichRun(element, value, rejectedSelection = null) {
   else if (!element.isConnected) focusEditor();
 }
 
-function insertRichText(element, text) {
+function insertRichText(element, text, rejectedSelection = null) {
   const selection = window.getSelection();
   if (!selection.rangeCount || !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return;
   const range = selection.getRangeAt(0);
@@ -732,7 +732,7 @@ function insertRichText(element, text) {
   const start = prefix.toString().length;
   const value = element.textContent;
   const proposed = value.slice(0, start) + text + value.slice(start + range.toString().length);
-  updateRichRun(element, proposed);
+  updateRichRun(element, proposed, rejectedSelection);
   if (element.textContent !== proposed) return;
   if (element.isConnected && !els.rich.hidden && element.firstChild) {
     selection.collapse(element.firstChild, Math.min(start + text.length, element.textContent.length));
@@ -748,12 +748,21 @@ els.rich.addEventListener("keydown", (event) => {
   saveShortcut(event);
 });
 els.rich.addEventListener("compositionstart", (event) => {
+  const offsets = richSelectionOffsets(event.target);
+  if (offsets) setData(event.target, "richSelectionComposition", JSON.stringify(offsets));
   event.target.setAttribute("data-composing", "");
 });
 els.rich.addEventListener("compositionend", (event) => {
+  let rejectedSelection = null;
+  try {
+    rejectedSelection = JSON.parse(event.target.dataset.richSelectionComposition || "null");
+  } catch {
+    rejectedSelection = null;
+  }
   event.target.removeAttribute("data-composing");
   delete event.target.dataset.richSelectionBefore;
-  updateRichRun(event.target, event.target.textContent);
+  delete event.target.dataset.richSelectionComposition;
+  updateRichRun(event.target, event.target.textContent, rejectedSelection);
 });
 els.rich.addEventListener("input", (event) => {
   if (!event.isComposing && !event.target.hasAttribute("data-composing")) {
@@ -779,8 +788,15 @@ els.rich.addEventListener("beforeinput", (event) => {
 });
 els.rich.addEventListener("paste", (event) => {
   event.preventDefault();
+  let rejectedSelection = null;
+  try {
+    rejectedSelection = JSON.parse(event.target.dataset.richSelectionBefore || "null");
+  } catch {
+    rejectedSelection = null;
+  }
+  rejectedSelection ||= richSelectionOffsets(event.target);
   delete event.target.dataset.richSelectionBefore;
-  insertRichText(event.target, event.clipboardData.getData("text/plain").replace(/\r\n?|\n/g, " "));
+  insertRichText(event.target, event.clipboardData.getData("text/plain").replace(/\r\n?|\n/g, " "), rejectedSelection);
 });
 els.rich.addEventListener("drop", (event) => event.preventDefault());
 for (const [button, mode] of [[els.modeView, "view"], [els.modeRich, "rich"], [els.modeWrite, "write"]]) {

@@ -1774,6 +1774,30 @@ test("rich boundary spaces stay editable in links and code", async () => {
   assert.equal(saved(env).value, "# Notes\n\n[Open agenda](" + href + ") and `npm ci`.\n");
 });
 
+test("rich deletion encodes newly exposed boundary spaces without rewriting other bytes", async () => {
+  const env = setup();
+  const markdown = "# Plan A\n\n- one two\n3. one two\n\n| A | B |\n|---|---|\n| x y | z |\n\n**a b**\n\nab words here.\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const edit = (before, value) => {
+    const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => node.text === before);
+    assert.notEqual(index, -1, `missing run ${before}`);
+    env.dispatch("rich-edited", { index, before, value });
+    assert.equal(selectView(env.state()).savedWork.blocks.flatMap(blockRuns)[index].text, value);
+  };
+  edit("Plan A", "Plan ");
+  edit("one two", "one ");
+  edit("one two", "one ");
+  edit("x y", "x ");
+  edit("a b", "a ");
+  edit("ab words here.", " words here.");
+  assert.equal(
+    saved(env).value,
+    "# Plan&#32;\n\n- one&#32;\n3. one&#32;\n\n| A | B |\n|---|---|\n| x&#32; | z |\n\n**a&#32;**\n\n&#32;words here.\n",
+  );
+});
+
 test("rich marker protection applies at list-item content starts", async () => {
   const env = setup();
   const markdown = "# Notes\n\n- one\n3. two\n";
