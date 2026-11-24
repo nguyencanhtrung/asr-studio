@@ -2971,8 +2971,11 @@ lifetime than an ordinary copy or download because it belongs to the Notes tab.
 **Design.** View, direct editing and formatted copy share a bounded Markdown
 projection. Direct editing patches the changed source range in canonical
 Markdown. Raw editing remains available for structural changes and unsupported
-syntax. Historical source links and stored proof still bind by revision and
-bullet. A preview pins its saved revision, renders independently of the draft,
+syntax. The fallback holds focus for the current revision and edit session,
+even if the draft becomes eligible for direct editing. Draft offsets track
+whitespace entities generated during direct editing so that normalization
+preserves the original spelling of saved entities. Historical source links
+and stored proof still bind by revision and bullet. A preview pins its saved revision, renders independently of the draft,
 and copies only after confirmation. Email sections come from headings in the
 saved Markdown. The meeting context carries the active tab so leaving Notes can
 cancel a preview independently of plain copy and export.
