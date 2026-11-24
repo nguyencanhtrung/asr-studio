@@ -1471,10 +1471,9 @@ function reduceAsr(state, action) {
       if (mutation !== state.latest?.[id] || !pendingInstall(state, id)) return done(state);
       const { [id]: settled, ...pendingInstalls } = state.pendingInstalls;
       const install = isObject(action.response.body?.install) ? action.response.body.install : { state: "queued" };
-      const next = withInstall({ ...state, pendingInstalls }, id, install);
-      if (next.summaryStatus !== "loading") return withPoll(next);
       const request = state.request + 1;
-      return done({ ...next, request }, [asrFetch(request)]);
+      const next = withInstall({ ...state, pendingInstalls, request }, id, install);
+      return next.summaryStatus === "loading" ? done(next, [asrFetch(request)]) : withPoll(next);
     }
     // The server said no (no installer, no GPU, already prepared, nothing to cancel): say why, then read the truth.
     case "provider/asr-install-refused": {

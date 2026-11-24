@@ -2045,3 +2045,39 @@ for (const method of ["POST", "DELETE"]) {
     });
   }
 }
+
+for (const method of ["POST", "DELETE"]) {
+  test(`conductor R8 ${method} acknowledgement supersedes a poll already reading the old catalog`, async () => {
+    const creating = method === "POST";
+    const stale = creating ? catalog() : catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+    const installed = creating ? { state: "queued" } : { state: "cancelling" };
+    const type = creating ? "provider/asr-install-requested" : "provider/asr-cancel-requested";
+    const env = await openedWith(stale);
+    const writeKey = env.is(method, "/install");
+    const readKey = env.is("GET", "/api/asr-models");
+    env.store.dispatch({ type, id: PHO });
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+    await env.answer(readKey, 200, stale);
+    assert.equal(env.state().asr.summaryStatus, null);
+    assert.equal(phoRow(env).install.cancelDisabled, true);
+
+    env.fire(1000);
+    assert.equal(env.pending(readKey).length, 1);
+    await env.answer(writeKey, 202, { install: installed });
+    await env.answer(readKey, 200, stale);
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "asr", previousSection: "processing" });
+
+    const visibleInstall = phoRow(env).install;
+    env.store.dispatch({ type, id: PHO });
+    assert.equal(env.calls.filter(writeKey).length, 1);
+    assert.equal(visibleInstall.kind, "progress");
+    assert.equal(visibleInstall.cancelDisabled, !creating);
+    assert.equal(visibleInstall.phase.text, creating ? "Đang chờ cài đặt…" : "Đang hủy…");
+
+    env.fire(1000);
+    const fresh = creating ? catalog({ pho: { install: { state: "running", phase: "downloading" } } }) : catalog();
+    await env.answer(readKey, 200, fresh);
+    assert.equal(phoRow(env).install.kind, creating ? "progress" : "offer");
+    if (creating) assert.equal(phoRow(env).install.cancelDisabled, false);
+  });
+}

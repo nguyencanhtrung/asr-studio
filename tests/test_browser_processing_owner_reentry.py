@@ -90,7 +90,9 @@ def test_automation_owner_refresh_waits_for_held_workflow_version_before_claimin
     _, owner = signed_in()
     _, reader = signed_in(viewport={"width": 1280, "height": 860}, reduced_motion="reduce")
     _processing_request(
-        owner, "/api/notes-preferences", "PUT",
+        owner,
+        "/api/notes-preferences",
+        "PUT",
         {"provider": "chatgpt", "model": "gpt-6.1-sol", "reasoning_effort": "low"},
     )
     _open_automatic_processing(reader)
@@ -101,7 +103,9 @@ def test_automation_owner_refresh_waits_for_held_workflow_version_before_claimin
     reader.get_by_role("tab", name="Thiết bị").click()
 
     _processing_request(
-        owner, "/api/notes-preferences", "PUT",
+        owner,
+        "/api/notes-preferences",
+        "PUT",
         {"provider": "chatgpt", "model": "gpt-5.6-luna", "reasoning_effort": "high"},
     )
     _processing_request(owner, "/api/asr-models/default", "PUT", {"asr_model": "whisper-large-v3"})

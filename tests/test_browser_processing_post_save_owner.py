@@ -59,8 +59,10 @@ def test_confirmed_automation_save_reconciles_an_owner_changed_in_another_client
     new_language = "vi" if language.input_value() == "en" else "en"
     language.select_option(new_language)
     with reader.expect_response(
-        lambda response: response.request.method == "PATCH"
-        and response.url.endswith("/api/processing-preferences")
+        lambda response: (
+            response.request.method == "PATCH"
+            and response.url.endswith("/api/processing-preferences")
+        )
     ) as saved:
         save.click()
     outcome = saved.value.json()

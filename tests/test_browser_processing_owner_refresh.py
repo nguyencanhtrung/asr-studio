@@ -171,8 +171,10 @@ def test_processing_reentry_shows_real_antigravity_drift_until_explicit_adoption
     expect(save).to_be_enabled()
 
     with reader.expect_response(
-        lambda response: response.url.endswith("/api/processing-preferences")
-        and response.request.method == "PATCH"
+        lambda response: (
+            response.url.endswith("/api/processing-preferences")
+            and response.request.method == "PATCH"
+        )
     ) as adopted:
         save.click()
     assert adopted.value.status == 200
@@ -181,9 +183,7 @@ def test_processing_reentry_shows_real_antigravity_drift_until_explicit_adoption
     expect(save).to_be_disabled()
 
 
-def test_processing_reentry_blocks_false_save_while_local_owner_read_is_pending(
-    live, signed_in
-):
+def test_processing_reentry_blocks_false_save_while_local_owner_read_is_pending(live, signed_in):
     _, owner = signed_in()
     _, reader = signed_in(viewport={"width": 1280, "height": 860}, reduced_motion="reduce")
     _owner_save(owner, OLD_MODEL, "low")
@@ -201,9 +201,10 @@ def test_processing_reentry_blocks_false_save_while_local_owner_read_is_pending(
     workflows_url = f"{live.url}/api/processing-preferences"
     held = []
     reader.route(owners_url, lambda route: held.append(route))
-    with reader.expect_request(owners_url, timeout=3000), reader.expect_response(
-        workflows_url, timeout=3000
-    ) as workflow_response:
+    with (
+        reader.expect_request(owners_url, timeout=3000),
+        reader.expect_response(workflows_url, timeout=3000) as workflow_response,
+    ):
         reader.get_by_role("tab", name="Xử lý tự động").click()
     assert len(held) == 1
     assert workflow_response.value.json()["notes"]["model"] == NEW_MODEL
@@ -217,9 +218,7 @@ def test_processing_reentry_blocks_false_save_while_local_owner_read_is_pending(
     assert len(catalog_calls) == catalog_count
 
 
-def test_in_flight_automation_owner_read_is_overtaken_by_confirmed_owner_save(
-    live, signed_in
-):
+def test_in_flight_automation_owner_read_is_overtaken_by_confirmed_owner_save(live, signed_in):
     _, reader = signed_in(viewport={"width": 1280, "height": 860}, reduced_motion="reduce")
     _owner_save(reader, OLD_MODEL, "low")
     _, catalog_calls = _enable_local_catalog(reader, live)
