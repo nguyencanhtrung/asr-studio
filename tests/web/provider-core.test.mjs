@@ -423,6 +423,34 @@ test("ChatGPT owner save installs the exact returned model and effort as the com
   assert.equal(saved.preferences.reasoning_efforts.chatgpt, "high");
 });
 
+test("an OpenAI catalog reply cannot replace an explicit unconfigured owner snapshot", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: "chatgpt" });
+  await env.answer(env.is("GET", "/api/providers"), 200, LIST);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, {
+    provider: null,
+    models: {},
+    reasoning_effort: "default",
+    reasoning_efforts: { chatgpt: "default", antigravity: "medium" },
+  });
+  assert.equal(own(env, CHATGPT).ownerModel, null);
+  assert.equal(own(env, CHATGPT).ownerEffort, "default");
+  assert.equal(own(env, CHATGPT).ownerKnown, true);
+
+  // A first owner save can land after preferences and before the held catalog
+  // reply. The catalog may fill historical form fields, but not the committed pair.
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, {
+    models: [{ id: "m2", display_name: "M2", reasoning_efforts: ["low", "high"] }],
+    selected_model: "m2",
+  });
+  const chatgpt = own(env, CHATGPT);
+  assert.equal(chatgpt.selectedModel, "m2");
+  assert.equal(chatgpt.savedModel, "m2");
+  assert.equal(chatgpt.ownerModel, null);
+  assert.equal(chatgpt.ownerEffort, "default");
+  assert.equal(chatgpt.ownerKnown, true);
+});
+
 test("a read that started before an owner save cannot restore either provider's old pair", () => {
   for (const { d, other, save } of CASES) {
     const providerModels = d === CHATGPT

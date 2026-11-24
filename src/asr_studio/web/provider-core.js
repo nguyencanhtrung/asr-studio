@@ -587,9 +587,11 @@ function renderModels(d, s, catalog, { ownerAuthority = true } = {}) {
       savedModel: selectedModel,
       selectedModel,
       savedEffort,
-      ownerModel: selectedModel || null,
-      ownerEffort: savedEffort,
-      ownerKnown: true,
+      ...(d.catalog === "preferences" ? {} : {
+        ownerModel: selectedModel || null,
+        ownerEffort: savedEffort,
+        ownerKnown: true,
+      }),
       selectedEffort: effortValue(d, next, selectedModel, savedEffort),
     };
     if (selectedModel && !available) {

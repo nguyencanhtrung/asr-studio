@@ -136,7 +136,7 @@ def test_older_openai_preferences_read_cannot_undo_new_owner_choice(live, signed
         route.fulfill(response=response, json=data)
 
     def preference_read(route):
-        if hold_read and route.request.method == "GET":
+        if hold_read and not paused_reads and route.request.method == "GET":
             paused_reads.append(route)
         else:
             route.continue_()

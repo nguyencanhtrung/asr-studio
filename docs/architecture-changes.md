@@ -6,42 +6,13 @@
 
 ## #258 — Separate Auto Processing workflow settings from owner defaults
 
-**Problem; measured cause.** Auto Processing exposed three owner mirrors—one ASR
-choice and two Notes selectors—beside the workflow language/provider/output controls.
-Those mirrors could become stale relative to the committed ASR and provider stores,
-and a same-dialog owner save could advance the workflow-preferences revision behind
-an open Automation form. The focused browser fixture now asserts that each of the
-three duplicate element IDs is absent (`tests/test_browser_automatic_processing.py`),
-and the reducer fixture asserts the Automation write has exactly four JSON fields
-(`tests/web/processing-preferences-core.test.mjs`).
+**Problem.** Auto Processing exposed three owner mirrors beside its workflow controls. Those mirrors could lag the committed ASR and provider settings, and saving an owner value with the dialog open could advance the workflow-preferences revision. The Chromium fixture verifies exactly three rendered comboboxes by accessible role and name—`Ngôn ngữ transcript`, `Provider notes`, and `Ngôn ngữ đầu ra notes`—and verifies the owner links are visible. The Node fixture verifies that the workflow PATCH sends exactly four fields.
 
-**Design or architecture change.** Keep the legacy six-field `PUT /api/processing-preferences`
-contract unchanged. Add a four-field, expected-version
-`PATCH` for workflow-owned language/provider/output values; the server reads the
-selected provider's committed model/effort under one owner-store snapshot and
-materializes those values atomically into the workflow row. ASR default persistence
-updates only its ASR column and revision. The UI links to the ASR and AI Provider
-owner panels, reports readiness and divergence, and reconciles the current revision
-on owner-save/re-entry with a three-way draft merge. Pinned workflow snapshots and
-provider stores are not rewritten by reads or unset operations.
+**Design.** The legacy six-field `PUT /api/processing-preferences` remains available. A four-field, version-checked `PATCH` writes the workflow language, provider, and output language. The server reads the selected provider's committed model and effort together and passes them to one workflow-row update. ASR owner persistence updates its ASR choice and version in one transaction. The Automation panel links to the provider and ASR owner panels and reports model availability separately from the saved owner pair. Re-entering Automation refreshes the committed pair through the existing local `GET /api/notes-preferences`, which reads each provider store separately. The workflow read reconciles the revision while preserving local edits.
 
-**Before and after numbers, with conditions.** Before: 3 duplicate owner selectors
-were rendered in the Automation form. After: 0 duplicate selectors and 4 PATCH
-fields; the focused Chromium and Node assertions above pass on the candidate.
-Legacy PUT remains 6 fields, covered by `tests/test_processing.py` and the
-conductor API probe.
+**Owner saves.** Saving the ASR default updates the next workflow's ASR selection and revision. OpenAI's ordinary `PUT /api/notes-preferences` also updates the next workflow's Notes provider, model, effort, and revision. Antigravity's provider-specific save commits the owner pair. To adopt that pair in a configured workflow, save from Automation. Existing runs retain their pinned recipes and source revisions. Version conflicts return 409 for explicit recovery.
 
-**Trade-offs and rejected options.** The workflow row retains its saved recipe so
-old clients and pinned runs remain stable; owner changes are adopted only by an
-authorized version-checked Automation save. The form does not infer a provider or
-model when an owner is missing, and a real concurrent revision conflict remains an
-explicit 409. No migration or credential/provider activity is introduced.
-
-**Follow-ups.** Full issue acceptance and upstream CI remain with the conductor;
-the implementation evidence is recorded in the issue-258 coder report. Issue
-[#258](https://github.com/nguyencanhtrung/asr-studio/issues/258).
-
-Tag: architecture, design. Target document: `docs/architecture-changes.md`.
+**Evidence.** `tests/test_browser_automatic_processing.py` covers the rendered controls and settings flow. `tests/test_browser_processing_repair.py` and `tests/test_browser_processing_owner_refresh.py` exercise ordered provider responses, local owner reads, and saved workflow state. `tests/web/processing-preferences-core.test.mjs` covers the owner-read and versioned workflow transitions. `tests/test_processing.py` verifies legacy API and pinned snapshot compatibility. [Issue #258](https://github.com/nguyencanhtrung/asr-studio/issues/258).
 
 ## #257 — Filter transcript without changing source or draft identity
 

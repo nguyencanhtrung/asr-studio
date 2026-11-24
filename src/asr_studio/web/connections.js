@@ -610,6 +610,19 @@ function renderDevices(state) {
 }
 
 function processingCatalogs(state) {
+  const ownerSnapshot = state.processingPreferences?.ownerSnapshot;
+  const ownerView = (provider, providerState) => {
+    const overlayActive = ownerSnapshot && ownerSnapshot.status !== "idle";
+    const pair = ownerSnapshot?.pairs?.[provider];
+    return {
+      ownerModel: overlayActive ? pair?.model ?? null : providerState.ownerModel,
+      ownerEffort: overlayActive ? pair?.effort ?? null : providerState.ownerEffort,
+      ownerKnown: overlayActive ? true : providerState.ownerKnown,
+      ...(overlayActive ? { ownerStatus: ownerSnapshot.status } : {}),
+    };
+  };
+  const chatgptOwner = ownerView("chatgpt", state.chatgpt);
+  const antigravityOwner = ownerView("antigravity", state.antigravity);
   return {
     asr: {
       status: state.asr.status,
@@ -623,9 +636,7 @@ function processingCatalogs(state) {
         status: state.chatgpt.info?.status,
         account: state.chatgpt.info?.account?.label || null,
         models: state.chatgpt.models,
-        ownerModel: state.chatgpt.ownerModel,
-        ownerEffort: state.chatgpt.ownerEffort,
-        ownerKnown: state.chatgpt.ownerKnown,
+        ...chatgptOwner,
         catalogStatus: state.chatgpt.catalogStatus,
         effortOptions: selectView(CHATGPT, state.chatgpt).effortOptions || [],
       },
@@ -633,9 +644,7 @@ function processingCatalogs(state) {
         status: state.antigravity.info?.status,
         account: state.antigravity.info?.account?.label || null,
         models: state.antigravity.models,
-        ownerModel: state.antigravity.ownerModel,
-        ownerEffort: state.antigravity.ownerEffort,
-        ownerKnown: state.antigravity.ownerKnown,
+        ...antigravityOwner,
         catalogStatus: state.antigravity.catalogStatus,
         effortOptions: selectView(ANTIGRAVITY, state.antigravity).effortOptions || [],
       },

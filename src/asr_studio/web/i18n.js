@@ -1188,6 +1188,7 @@ const { t, UI_LOCALE } = (() => {
       "Không tải được catalog. Model đã lưu {owner} vẫn được giữ; hãy thử lại trong panel sở hữu.": "Could not load the catalog. The saved model {owner} is kept; try again in the owner panel.",
       "Không tải được catalog của {name}. Hãy thử lại trong panel sở hữu.": "Could not load {name}'s catalog. Try again in the owner panel.",
       "Không đọc được trạng thái của {name}. Hãy thử lại trong panel sở hữu.": "Could not read {name}'s status. Try again in the owner panel.",
+      "Không đọc được lựa chọn sở hữu của {name}.": "Could not read {name}'s saved owner choice.",
       "Mặc định ASR đã commit là {owner}.": "The committed ASR default is {owner}.",
       "Không thể hoàn tất thao tác xử lý. Hãy tải lại trạng thái rồi thử lại.": "Could not complete the processing action. Reload the status and try again.",
       "Không thể đọc cài đặt xử lý tự động. Hãy thử lại.": "Could not read automatic-processing settings. Try again.",

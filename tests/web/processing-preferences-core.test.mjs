@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { initialState, normalizePreferences, reduce, selectEligibility, selectPreferences } from "../../src/asr_studio/web/processing-preferences-core.js";
+import { initialState, normalizeOwnerSnapshot, normalizePreferences, reduce, selectEligibility, selectPreferences } from "../../src/asr_studio/web/processing-preferences-core.js";
 
 const PREFS = {
   asr: { choice: "auto", language: "vi" },
@@ -36,6 +36,13 @@ const CATALOGS = {
       effortOptions: [],
     },
   },
+};
+
+const OWNER_GET = {
+  provider: "chatgpt",
+  models: { chatgpt: "gpt-5.6-luna", antigravity: "gemini-3.1-flash" },
+  reasoning_effort: "high",
+  reasoning_efforts: { chatgpt: "high", antigravity: "medium" },
 };
 
 const saveAction = (state, catalogs = CATALOGS) => ({
@@ -93,6 +100,105 @@ test("preference normalization requires JSON types but accepts future legacy own
     { ...PREFS, notes: { ...PREFS.notes, reasoning_effort: {} } },
   ];
   for (const payload of invalid) assert.equal(normalizePreferences(payload), null);
+});
+
+test("owner snapshots require the real local-store maps and keep model and effort together", () => {
+  assert.deepEqual(normalizeOwnerSnapshot(OWNER_GET), {
+    chatgpt: { model: "gpt-5.6-luna", effort: "high" },
+    antigravity: { model: "gemini-3.1-flash", effort: "medium" },
+  });
+  assert.deepEqual(normalizeOwnerSnapshot({
+    provider: null,
+    models: {},
+    reasoning_effort: "default",
+    reasoning_efforts: { chatgpt: "default", antigravity: "high" },
+  }), {
+    chatgpt: { model: null, effort: null },
+    antigravity: { model: null, effort: null },
+  });
+  for (const malformed of [
+    {},
+    { models: {} },
+    { reasoning_efforts: {} },
+    { models: { chatgpt: "gpt-5.6-luna" }, reasoning_efforts: {} },
+    { models: { chatgpt: [] }, reasoning_efforts: { chatgpt: "high" } },
+  ]) assert.equal(normalizeOwnerSnapshot(malformed), null);
+});
+
+test("Automation owner reads are fenced, preserve the draft, and reject stale or invalid replies", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: PREFS },
+  }).state;
+  const drafted = reduce(loaded, {
+    type: "provider/processing-preference-edited",
+    field: "notes_output_language",
+    value: "vi",
+  }).state;
+  const entered = reduce(drafted, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "devices",
+  });
+  const ownerEffect = entered.effects.find((effect) => effect.key === "provider/processing-owner-preferences");
+  assert.ok(ownerEffect);
+  assert.equal(entered.state.ownerSnapshot.status, "loading");
+  assert.equal(entered.state.draft.notes.output_language, "vi");
+
+  const workflow = reduce(entered.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: entered.state.request, reconcile: true },
+    response: { body: {
+      ...PREFS,
+      notes: { provider: "chatgpt", model: "old-model", reasoning_effort: "low", output_language: "en" },
+      version: 5,
+    } },
+  }).state;
+  assert.equal(workflow.draft.notes.output_language, "vi");
+
+  const queued = reduce(workflow, { type: "provider/notes-owner-changed" });
+  assert.equal(queued.state.ownerSnapshot.refreshPending, true);
+  const restarted = reduce(queued.state, {
+    type: "provider/processing-owner-preferences-loaded",
+    meta: ownerEffect.meta,
+    response: { body: { ...OWNER_GET, models: { chatgpt: "old-model" }, reasoning_effort: "low", reasoning_efforts: { chatgpt: "low", antigravity: "medium" } } },
+  });
+  const currentOwnerEffect = restarted.effects.find((effect) => effect.key === "provider/processing-owner-preferences");
+  assert.ok(currentOwnerEffect);
+  assert.notEqual(currentOwnerEffect.meta.request, ownerEffect.meta.request);
+  assert.equal(restarted.state.ownerSnapshot.pairs.chatgpt.model, null);
+
+  const stale = reduce(restarted.state, {
+    type: "provider/processing-owner-preferences-loaded",
+    meta: ownerEffect.meta,
+    response: { body: OWNER_GET },
+  });
+  assert.deepEqual(stale.state, restarted.state);
+
+  const fresh = reduce(restarted.state, {
+    type: "provider/processing-owner-preferences-loaded",
+    meta: currentOwnerEffect.meta,
+    response: { body: OWNER_GET },
+  }).state;
+  assert.equal(fresh.ownerSnapshot.status, "ready");
+  assert.deepEqual(fresh.ownerSnapshot.pairs.chatgpt, { model: "gpt-5.6-luna", effort: "high" });
+  assert.equal(fresh.draft.notes.output_language, "vi");
+
+  const invalid = reduce(entered.state, {
+    type: "provider/processing-owner-preferences-loaded",
+    meta: ownerEffect.meta,
+    response: { body: {} },
+  }).state;
+  assert.equal(invalid.ownerSnapshot.status, "error");
+  assert.equal(invalid.ownerSnapshot.pairs.chatgpt.model, null);
+  const failed = reduce(entered.state, {
+    type: "provider/processing-owner-preferences-failed",
+    meta: ownerEffect.meta,
+    error: { status: 503, body: { detail: { code: "unavailable" } } },
+  }).state;
+  assert.equal(failed.ownerSnapshot.status, "error");
 });
 
 test("changing provider never silently chooses its first account or model", () => {

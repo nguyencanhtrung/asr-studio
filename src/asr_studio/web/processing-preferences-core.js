@@ -19,6 +19,17 @@ const GET = {
 
 const cancelRead = { type: "cancel", key: "provider/processing-preferences" };
 const cancelSave = { type: "cancel", key: "provider/processing-preferences-save" };
+const OWNER_READ_KEY = "provider/processing-owner-preferences";
+const EMPTY_OWNER_SNAPSHOT = {
+  status: "idle",
+  request: 0,
+  refreshPending: false,
+  pairs: {
+    chatgpt: { model: null, effort: null },
+    antigravity: { model: null, effort: null },
+  },
+  error: null,
+};
 const SETTINGS_CHANGED = {
   type: "call",
   key: "provider/processing-preferences-changed",
@@ -37,6 +48,7 @@ export const initialState = {
   draft: null,
   error: null,
   notice: null,
+  ownerSnapshot: EMPTY_OWNER_SNAPSHOT,
 };
 
 function validChoice(value) {
@@ -73,6 +85,27 @@ export function normalizePreferences(payload) {
     },
     version: payload.version,
   };
+}
+
+// /api/notes-preferences reads each provider's committed local store separately
+// and presents those results as one UI snapshot. Keep each pair together and
+// make an unset provider explicit rather than allowing a catalog reply or a
+// form value to supply half of it.
+export function normalizeOwnerSnapshot(payload) {
+  if (!isObject(payload) || !isObject(payload.models) || !isObject(payload.reasoning_efforts)) return null;
+  const models = payload.models;
+  const efforts = payload.reasoning_efforts;
+  const pair = (provider) => {
+    const rawModel = models[provider];
+    if (rawModel !== undefined && rawModel !== null && !validChoice(rawModel)) return null;
+    const model = validChoice(rawModel) ? rawModel : null;
+    const effort = model ? efforts[provider] : null;
+    if (model && !validChoice(effort)) return null;
+    return { model, effort: validChoice(effort) ? effort : null };
+  };
+  const chatgpt = pair("chatgpt");
+  const antigravity = pair("antigravity");
+  return chatgpt && antigravity ? { chatgpt, antigravity } : null;
 }
 
 const clone = (value) => ({
@@ -118,6 +151,54 @@ function readEffect(request, reconcile = false) {
     error: "provider/processing-preferences-failed",
     meta: { request, reconcile },
   };
+}
+
+function resetOwnerRead(state) {
+  return { ...EMPTY_OWNER_SNAPSHOT, request: state.ownerSnapshot.request + 1 };
+}
+
+function readOwners(state) {
+  const owners = state.ownerSnapshot;
+  const request = owners.request + 1;
+  return done({
+    ...state,
+    ownerSnapshot: { ...owners, status: "loading", request, refreshPending: false, error: null },
+  }, [{
+    type: "fetch",
+    key: OWNER_READ_KEY,
+    url: "/api/notes-preferences",
+    init: GET,
+    ok: "provider/processing-owner-preferences-loaded",
+    error: "provider/processing-owner-preferences-failed",
+    meta: { request },
+  }]);
+}
+
+function withOwnerRead(workflow, { activeOnly = false } = {}) {
+  const { state } = workflow;
+  const owners = state.ownerSnapshot;
+  if (!state.open || activeOnly && owners.status === "idle") return workflow;
+  if (owners.status === "loading") {
+    return done({ ...state, ownerSnapshot: { ...owners, refreshPending: true } }, workflow.effects);
+  }
+  const next = readOwners(state);
+  return done(next.state, [...workflow.effects, ...next.effects]);
+}
+
+function settleOwnerRead(state, action) {
+  const owners = state.ownerSnapshot;
+  if (!state.open || action.meta?.request !== owners.request) return done(state);
+  if (owners.refreshPending) return readOwners(state);
+  const pairs = normalizeOwnerSnapshot(action.response?.body);
+  const error = action.type.endsWith("-failed")
+    ? requestError(action.error, state.draft?.notes.provider)
+    : !pairs
+      ? { code: "invalid_response", text: t("Máy chủ trả về cài đặt xử lý tự động không hợp lệ.") }
+      : null;
+  return done({
+    ...state,
+    ownerSnapshot: { ...owners, status: error ? "error" : "ready", pairs: pairs || owners.pairs, error },
+  });
 }
 
 function startInitialRead(state, { retry = false } = {}) {
@@ -263,6 +344,7 @@ export function reduce(state, action) {
           draft: null,
           error: null,
           notice: null,
+          ownerSnapshot: resetOwnerRead(state),
         },
         [readEffect(request)],
       );
@@ -281,19 +363,23 @@ export function reduce(state, action) {
           draft: null,
           error: null,
           notice: null,
+          ownerSnapshot: resetOwnerRead(state),
         },
-        [cancelRead, cancelSave],
+        [cancelRead, cancelSave, { type: "cancel", key: OWNER_READ_KEY }],
       );
     case "provider/settings-section-selected":
       return action.section === "processing" && action.previousSection !== "processing"
-        ? queueReconcile(state, { retryInitial: true })
+        ? withOwnerRead(queueReconcile(state, { retryInitial: true }))
         : done(state);
     case "provider/asr-settings-changed":
       // The successful Automation PATCH broadcasts its own source-tagged event.
       // It must keep the success notice and must not issue a redundant GET.
       return action.source === "processing-preferences-save" ? done(state) : queueReconcile(state);
     case "provider/notes-owner-changed":
-      return queueReconcile(state);
+      return withOwnerRead(queueReconcile(state), { activeOnly: true });
+    case "provider/processing-owner-preferences-loaded":
+    case "provider/processing-owner-preferences-failed":
+      return settleOwnerRead(state, action);
     case "provider/processing-preferences-reconcile-requested":
       return queueReconcile(state);
     case "provider/processing-preferences-loaded": {
@@ -458,6 +544,30 @@ function providerOwnerView(provider, catalog, saved) {
   if (!catalog) return { state: "loading", text: t("Đang kiểm tra"), discrepancy: false, ownerConfigured: false };
   const pair = ownerPair(catalog);
   const owner = ownerLabel(catalog, pair);
+  if (catalog.ownerStatus === "loading") {
+    return {
+      state: "loading",
+      model: pair.model,
+      effort: pair.effort,
+      discrepancy: false,
+      ownerConfigured: false,
+      text: pair.model
+        ? t("Đang kiểm tra. Model đã lưu {owner} vẫn được giữ.", { owner })
+        : t("Đang kiểm tra"),
+    };
+  }
+  if (catalog.ownerStatus === "error") {
+    return {
+      state: "error",
+      model: pair.model,
+      effort: pair.effort,
+      discrepancy: false,
+      ownerConfigured: false,
+      text: pair.model
+        ? [t("Không đọc được lựa chọn sở hữu của {name}.", { name }), " ", t("Model đã lưu {owner} vẫn được giữ.", { owner })]
+        : t("Không đọc được lựa chọn sở hữu của {name}.", { name }),
+    };
+  }
   const ownerConfigured = Boolean(pair.model && pair.effort);
   const discrepancy = ownerConfigured
     && saved?.provider === provider
@@ -667,7 +777,7 @@ export function selectPreferences(state, catalogs = {}) {
       { value: "en", label: "English", disabled: false },
       { value: "vi", label: t("Tiếng Việt"), disabled: false },
     ],
-    message: state.error?.text || providerStatusText(draft.notes.provider, catalog),
+    message: state.error?.text || state.ownerSnapshot.error?.text || providerStatusText(draft.notes.provider, catalog),
     providerStatus: providerStatusText(draft.notes.provider, catalog),
     providerConnected: draft.notes.provider === null || catalog?.status === "connected",
     waiting: draft.notes.provider === null,
