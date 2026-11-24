@@ -1186,3 +1186,54 @@ def test_closing_notes_source_clears_source_owned_hidden_reveal(live, signed_in,
     page.locator("#notes-source-close").click()
     expect(reveal).to_be_hidden()
     expect(reveal).to_have_attribute("data-segment-id", "")
+
+
+def test_closing_notes_during_trusted_source_seeking_dismisses_reveal(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.locator("#meeting-audio").evaluate("""node => {
+      window.sourceSeekTrace = [];
+      node.addEventListener('seeking', () => {
+        window.sourceSeekTrace.push('seeking');
+        document.querySelector('#notes-source-close')?.click();
+      }, {once: true});
+      node.addEventListener('seeked', () => window.sourceSeekTrace.push('seeked'));
+    }""")
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.wait_for_function(
+        "() => window.sourceSeekTrace.includes('seeking') "
+        "&& window.sourceSeekTrace.includes('seeked')"
+    )
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no source row")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_be_hidden()
+    expect(reveal).to_have_attribute("data-segment-id", "")
+    assert segment_ids[25]
+
+
+def test_newer_timestamp_wins_when_notes_seek_is_waiting_for_metadata(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.evaluate(
+        """() => Object.defineProperty(document.querySelector('#meeting-audio'), 'readyState', {
+          configurable: true, get: () => 0,
+        })"""
+    )
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.locator(
+        f'.transcript-segment[data-segment-id="{segment_ids[20]}"] .segment-timestamp'
+    ).click()
+    page.locator("#notes-source-close").click()
+    page.evaluate(
+        """() => {
+          const audio = document.querySelector('#meeting-audio');
+          delete audio.readyState;
+          audio.dispatchEvent(new Event('loadedmetadata'));
+        }"""
+    )
+    page.locator("#transcript-search").fill("nothing matches this")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
