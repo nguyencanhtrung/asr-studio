@@ -845,6 +845,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       const start = ordered ? Number(list[2].slice(0, -1)) : null;
       let indent = list[1].length;
       const items = [];
+      const itemIndexes = new Set();
       let end = index;
       let unsupported = false;
       while (end < lines.length && trimMarkdownWhitespace(line(end))) {
@@ -854,6 +855,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
           unsupported ||= listMarkerPadding(line(end), item) > 4
             || /^\[[ xX]\](?: |$)/.test(item[3]) || /[ \t]$/.test(item[3]);
           items.push({ index: end, nodes: inline(item[3], lines[end].offset + line(end).length - item[3].length), chips: [] });
+          itemIndexes.add(end);
         } else if (startsBlock(line(end)) && !indentedLinePattern.test(line(end))) {
           break;
         } else {
@@ -901,7 +903,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
           if (literalLineIndexes.has(rawIndex)) continue;
           const value = line(rawIndex);
           const rawItem = value.match(listPattern);
-          if (rawItem && rawItem[1].length <= indent && rawItem[2].at(-1) === marker) {
+          if (itemIndexes.has(rawIndex) && rawItem && rawItem[2].at(-1) === marker) {
             if (listMarkerPadding(value, rawItem) > 4) literalLineIndexes.add(rawIndex);
             else citationLineIndexes.add(rawIndex);
           }
@@ -920,9 +922,13 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       continue;
     }
     let end = index + 1;
+    const startsIndentedCode = /^(?: {0,3}\t| {4})/.test(text);
     const unsupported = startsRaw(text) || Boolean(heading) || /^ {0,3}[=\-]+ *$/.test(line(end));
     while (trimMarkdownWhitespace(line(end)) && !fenceEnd(line(end))
-      && (unsupported ? !(startsBlock(line(end)) && !indentedLinePattern.test(line(end))) : !startsBlock(line(end)))) end++;
+      && (unsupported
+        ? !((startsBlock(line(end)) && !indentedLinePattern.test(line(end)))
+          || (startsIndentedCode && headingPattern.test(line(end))))
+        : !startsBlock(line(end)))) end++;
     // Keep setext headings, reference definitions, HTML, multiline hard breaks and
     // GFM syntax outside the supported profile visible in their original spelling.
     const paragraph = lines.slice(index, end);

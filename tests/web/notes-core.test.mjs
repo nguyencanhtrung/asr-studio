@@ -2050,6 +2050,29 @@ test("list padding beyond four columns stays literal and out of citation scope",
   assert.equal(saved(env).value, markdown);
 });
 
+test("raw boundaries reset heading scope and keep decreasing-indent code literal", async () => {
+  const bullet = "The team reviewed its launch plan.";
+  const scoped = setup();
+  const scopedMarkdown = `# Notes\n\n## Overview\n\n    Indented log entry.\n  ## Other\u2028 topic\n\n- ${bullet}\n`;
+  await opened(scoped, { revisions: [revision({
+    markdown: scopedMarkdown,
+    citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg-a", start_seconds: 1 }] }],
+  })] });
+  const scopedList = selectView(scoped.state()).savedWork.blocks.find((block) => block.kind === "list");
+  assert.equal(scopedList.items[0].chips.length, 0);
+
+  const literal = setup();
+  const literalMarkdown = `# Notes\n\n## Overview\n\n  - \t    **literal**\n- ${bullet}\n`;
+  await opened(literal, { revisions: [revision({
+    markdown: literalMarkdown,
+    citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg-a", start_seconds: 1 }] }],
+  })] });
+  const raw = selectView(literal.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.deepEqual(raw.viewLines[0].nodes, [{ kind: "raw", text: "  - \t    **literal**" }]);
+  assert.equal(raw.viewLines[0].chips.length, 0);
+  assert.equal(raw.viewLines[1].chips[0].segmentId, "seg-a");
+});
+
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {
   const env = setup();
   await opened(env, { revisions: [revision(), revision({ id: "r2" })] });
