@@ -1043,24 +1043,40 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
   return escaped;
 }
 
-function isMarkdownWord(value) {
-  return Boolean(value && /[\p{L}\p{N}]/u.test(value));
+const ASCII_MARKDOWN_PUNCTUATION = "!\\\"#$%&'()*+,-./:;<=>?@[\\\\]^_`{|}~";
+
+function isMarkdownWhitespace(value) {
+  return !value || /^\s$/u.test(value);
 }
 
-// CommonMark does not open/close an intraword `*`/`_` delimiter run. An encoded
-// boundary space is still parsed by the browser as text, but the delimiter
-// scanner sees the surrounding source bytes. Refuse the edit when the new
-// boundary would be adjacent to an ordinary word character, keeping the
-// existing mark intact in standard Markdown renderers.
-function richEdgeWhitespaceIsFlanking(markdown, node, { edgeStart = false, edgeEnd = false } = {}) {
+function isMarkdownPunctuation(value) {
+  return Boolean(value && (ASCII_MARKDOWN_PUNCTUATION.includes(value) || /\p{P}/u.test(value)));
+}
+
+function markdownLeftFlanking(before, first) {
+  return !isMarkdownWhitespace(first)
+    && (!isMarkdownPunctuation(first) || isMarkdownWhitespace(before) || isMarkdownPunctuation(before));
+}
+
+function markdownRightFlanking(last, after) {
+  return !isMarkdownWhitespace(last)
+    && (!isMarkdownPunctuation(last) || isMarkdownWhitespace(after) || isMarkdownPunctuation(after));
+}
+
+// CommonMark delimiter runs need a left-flanking opening edge and a
+// right-flanking closing edge. Check all edited run edges, not only spaces:
+// punctuation beside an ordinary surrounding letter can otherwise leave the
+// app's rich parser styled while standard Markdown renders literal markers.
+function richEdgesAreFlanking(markdown, node, source, { edgeStart = false, edgeEnd = false } = {}) {
   if (!edgeStart && !edgeEnd || !["strong", "em"].includes(node.kind)) return true;
   const opening = markdown.slice(0, node.start).match(/[*_]+$/)?.[0] || "";
   const closing = markdown.slice(node.end).match(/^[*_]+/)?.[0] || "";
   if (!opening || !closing) return true;
-  const beforeOpening = markdown[node.start - opening.length - 1] || "";
-  const afterClosing = markdown[node.end + closing.length] || "";
-  return (!edgeStart || !isMarkdownWord(beforeOpening))
-    && (!edgeEnd || !isMarkdownWord(afterClosing));
+  const beforeOpening = Array.from(markdown.slice(0, node.start - opening.length)).at(-1) || "";
+  const afterClosing = Array.from(markdown.slice(node.end + closing.length))[0] || "";
+  const characters = Array.from(source);
+  return (!edgeStart || markdownLeftFlanking(beforeOpening, characters[0] || ""))
+    && (!edgeEnd || markdownRightFlanking(characters.at(-1) || "", afterClosing));
 }
 
 function encodeRichBoundarySpaces(source, value, node, { edgeStart = false, edgeEnd = false } = {}) {
@@ -1129,9 +1145,10 @@ function richMarkdownEdit(state, action, revision, draft) {
   const offsets = sourceOffsets(node, raw);
   if (offsets.length !== node.text.length + 1) return null;
   const [first, tail] = sharedEdges(node.text, action.value);
-  const edgeStart = first === 0 && /^[ \t]/.test(action.value);
-  const edgeEnd = tail === 0 && /[ \t]$/.test(action.value);
-  if (!richEdgeWhitespaceIsFlanking(draft.value, node, { edgeStart, edgeEnd })) return null;
+  const changedAtStart = first === 0;
+  const changedAtEnd = tail === 0;
+  const edgeStart = changedAtStart && /^[ \t]/.test(action.value);
+  const edgeEnd = changedAtEnd && /[ \t]$/.test(action.value);
   const changed = action.value.slice(first, action.value.length - tail);
   const escaped = escapeRichValue(changed, node, draft.value, {
     edgeStart,
@@ -1147,6 +1164,10 @@ function richMarkdownEdit(state, action, revision, draft) {
     edgeStart,
     edgeEnd,
   });
+  if (!richEdgesAreFlanking(draft.value, node, boundarySource, {
+    edgeStart: changedAtStart,
+    edgeEnd: changedAtEnd,
+  })) return null;
   const protectedSource = protectRichMarker(boundarySource, action.value, node, draft.value);
   const candidate = draft.value.slice(0, node.start) + protectedSource
     + draft.value.slice(node.end);
