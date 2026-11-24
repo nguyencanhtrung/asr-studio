@@ -1113,6 +1113,28 @@ def test_playing_timestamp_click_keeps_target_through_delayed_trusted_seeked(
         expect(earlier).to_have_class(re.compile(r"(?:^|\s)is-notes-source(?:\s|$)"))
 
 
+def test_new_player_seek_supersedes_outstanding_row_seek(live, signed_in, tmp_path):
+    page, _ = real_recording_page(live, signed_in, tmp_path, reduced_motion="reduce")
+    row = page.locator(".transcript-segment").nth(4)
+    new_target = page.locator(".transcript-segment").nth(5)
+    target_id = new_target.get_attribute("data-segment-id")
+    audio = page.locator("#meeting-audio")
+    audio.evaluate("""node => {
+      window.actualSeekTrace = [];
+      for (const type of ['seeking', 'seeked']) {
+        node.addEventListener(type, event => window.actualSeekTrace.push([type, event.isTrusted, node.currentTime]));
+      }
+      node.addEventListener('seeking', () => { node.currentTime = 10.5; }, {once: true});
+    }""")
+    row.locator(".segment-timestamp").click()
+    page.wait_for_function(
+        "() => window.actualSeekTrace.some(([type, trusted, time]) => type === 'seeked' && trusted && time >= 10.5)"
+    )
+    audio.evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no matching sources")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute("data-segment-id", target_id)
+
+
 def test_closing_older_notes_source_keeps_newer_hidden_seek_recovery(live, signed_in, tmp_path):
     meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
     _, page = signed_in(viewport={"width": 1280, "height": 844})

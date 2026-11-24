@@ -29,7 +29,7 @@ export const initialState = {
   ownUntil: 0, // a scroll event up to this clock is ours, not the user's
   target: null, // real row of the last explicit source jump or seek, even when filtered out
   targetOwner: null, // source | timestamp | time: why target is still the reveal target
-  pendingTarget: null, // { id, owner, meetingId, generationId, nativeSeeking }: one native seeked acknowledgement
+  pendingTarget: null, // { id, owner, meetingId, generationId, seekingSeen }: one native seeked acknowledgement
   mark: null, // id of the row the open notes source names
   seek: null, // the seek waiting for the audio metadata: { id, ids, meetingId, startSeconds, generationId }; ids: every seek joined to it
   seekDone: null, // { id, ids, ok }: how the last seek ended; ok holds for every id in ids
@@ -109,9 +109,9 @@ function sameNativeTarget(target, action) {
   return target
     && target.meetingId === action.shown?.id
     && target.generationId === action.shown?.generationId
-    // In production this is set by the real `seeking` transition. Undefined keeps the pure
-    // reducer contract usable by synthetic callers that model only the final acknowledgement.
-    && (target.nativeSeeking || action.seeking === undefined);
+    // Undefined keeps the pure reducer contract usable by synthetic callers that model only
+    // the final acknowledgement; real media requires its first `seeking` notification.
+    && (target.seekingSeen || action.seeking === undefined);
 }
 
 const finishSeek = (state, ok) => ({ ...state, seek: null, seekDone: { id: state.seek.id, ids: state.seek.ids, ok } });
@@ -166,7 +166,11 @@ function step(state, action) {
       if (!state.pendingTarget
         || state.pendingTarget.meetingId !== action.shown?.id
         || state.pendingTarget.generationId !== action.shown?.generationId) return out(state);
-      return out({ ...state, pendingTarget: { ...state.pendingTarget, nativeSeeking: true } });
+      // A second seeking before seeked means the browser superseded the app-owned request.
+      // Its later seeked must resolve by time, not resurrect the old row identity.
+      return out(state.pendingTarget.seekingSeen
+        ? { ...state, pendingTarget: null }
+        : { ...state, pendingTarget: { ...state.pendingTarget, seekingSeen: true } });
     }
     case "playback/target-requested": {
       const id = sourceRow(rowsOf(action.shown), action.segmentId, action.startSeconds);
@@ -180,7 +184,7 @@ function step(state, action) {
           meetingId: action.shown?.id,
           generationId: action.shown?.generationId,
           startSeconds: action.startSeconds,
-          nativeSeeking: true,
+          seekingSeen: false,
         } : null,
       }));
     }
@@ -219,7 +223,7 @@ function step(state, action) {
           meetingId: seek.meetingId,
           generationId: seek.generationId,
           startSeconds: seek.startSeconds,
-          nativeSeeking: true,
+          seekingSeen: false,
         } : null,
       });
     }

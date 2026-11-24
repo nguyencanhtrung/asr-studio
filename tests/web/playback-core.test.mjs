@@ -672,10 +672,24 @@ test("the latest explicit timestamp target wins over an older Notes mark", () =>
 test("a delayed native acknowledgement belongs to its outstanding explicit target", () => {
   const shown = { id: "m1", view: "meeting", generationId: "g1", rows: [row("first", 0, 5), row("short", 3, 3.08)] };
   let state = reduce(initialState, { type: "playback/target-requested", segmentId: "short", startSeconds: 3, shown }).state;
+  state = reduce(state, { type: "playback/seeking", shown }).state;
   state = reduce(state, { type: "playback/seeked", time: 3.25, paused: false, seeking: false, shown }).state;
   assert.equal(state.target, "short");
   assert.equal(state.targetOwner, "timestamp");
   assert.equal(state.pendingTarget, null);
+});
+
+test("a superseding native seek cancels the older pending target", () => {
+  const rows = [row("old", 8, 10), row("new", 10, 12)];
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows };
+  let state = reduce(initialState, { type: "playback/target-requested", segmentId: "old", startSeconds: 8, shown }).state;
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.ok(state.pendingTarget);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.equal(state.pendingTarget, null);
+  state = reduce(state, { type: "playback/seeked", time: 10.5, paused: true, seeking: false, shown }).state;
+  assert.equal(state.target, "new");
+  assert.equal(state.targetOwner, "time");
 });
 
 test("a native time-only seek still resolves the current row without an explicit target", () => {
