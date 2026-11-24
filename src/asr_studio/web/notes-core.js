@@ -429,8 +429,9 @@ const citationIgnore = "\u0001";
 // Markdown lines are split only on CR/LF. Keep the marker grammar shared by
 // rendering, citation scope and rich marker protection; JS `.` and `\s` both
 // classify U+2028/U+2029 differently from CommonMark inline content.
-const headingPattern = /^(#{1,6})[ \t]+([^ \t][^]*)$/;
-const headingMarkerPattern = /^#{1,6}[ \t]*$/;
+const headingPattern = /^(?: {0,3})(#{1,6})(?:[ \t]+([^ \t][^]*)|[ \t]*)$/;
+const headingMarkerPattern = /^ {0,3}#{1,6}[ \t]*$/;
+const headingClosingPattern = /[ \t]+#{1,}[ \t]*$/;
 const listMarkerSource = "[-*+]|\\d{1,9}[.)]";
 const listPrefixPattern = new RegExp(`^ {0,3}(?:${listMarkerSource})[ \\t]+$`);
 const listMarkerLinePattern = new RegExp(`^ {0,3}(?:${listMarkerSource})[ \\t]*$`);
@@ -469,7 +470,7 @@ function citedBullets(lines, citations) {
     }
     const heading = line.match(headingPattern);
     if (heading) {
-      section = trimMarkdownWhitespace(heading[2]);
+      section = trimMarkdownWhitespace(heading[2] || "");
       return;
     }
     const bullet = line.match(listPattern);
@@ -815,7 +816,8 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       continue;
     }
     const heading = text.match(headingPattern);
-    if (heading && !/ +#+ *$/.test(text) && !/[ \t]$/.test(text)) {
+    if (heading && heading[2] !== undefined && !/^ /.test(text)
+      && !headingClosingPattern.test(text) && !/[ \t]$/.test(text)) {
       citationLines[index] = text;
       blocks.push({ kind: "heading", level: heading[1].length, nodes: inline(heading[2], lines[index].offset + text.length - heading[2].length) });
       index++;

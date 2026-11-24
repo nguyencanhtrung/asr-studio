@@ -1685,6 +1685,28 @@ test("shared marker grammar keeps tab-delimited blocks rich and preserves unsupp
   ]);
 });
 
+test("ATX scope resets for unsupported headings and closing hashes stay raw", async () => {
+  const bullet = "The team reviewed its launch plan.";
+  for (const boundary of ["  ## \tOther\u2028 topic", "##\t"]) {
+    const env = setup();
+    const markdown = `# Notes\n\n## Overview\n\n${boundary}\n\n- ${bullet}\n`;
+    await opened(env, { revisions: [revision({
+      markdown,
+      citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg-a", start_seconds: 1 }] }],
+    })] });
+    const list = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "list");
+    assert.equal(list.items[0].chips.length, 0);
+  }
+
+  const env = setup();
+  const markdown = "# Notes\n\n##\tTopic\u2029 end\t##\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  assert.ok(selectView(env.state()).savedWork.blocks.some((block) => block.kind === "raw" && block.text === "##\tTopic\u2029 end\t##"));
+  env.dispatch("mode-chosen", { mode: "rich" });
+  assert.equal(selectView(env.state()).savedWork.richFallback, true);
+  assert.equal(saved(env).value, markdown);
+});
+
 test("View keeps source and citation parity through quote, tab-list and nested code boundaries", async () => {
   const env = setup();
   const href = "/meetings/m1?notes_source=s1&segment=seg-a#transcript";
