@@ -699,9 +699,12 @@ function renderProcessingPreferences(state, rootState) {
     delete form.dataset.focusMutation;
     const active = document.activeElement;
     if (matches && state.open && form.getClientRects().length
-      && (!active || active === document.body || active === processingPreferenceEls.save)) {
-      const target = view.error ? processingPreferenceEls.save : processingPreferenceEls.title;
-      target.focus({ preventScroll: true });
+      && (!active || active === document.body || active === document.documentElement
+        || active === processingPreferenceEls.save)) {
+      const target = view.error && !processingPreferenceEls.save.disabled
+        ? processingPreferenceEls.save
+        : processingPreferenceEls.title;
+      target?.focus({ preventScroll: true });
     }
   }
 }
@@ -1053,6 +1056,12 @@ els.dialog.addEventListener("click", (event) => {
 // A pending save may restore lost button focus only while the user stays here.
 function forgetPreferenceFocusOnMovement(event) {
   if (event.target !== processingPreferenceEls.save) {
+    const processing = store.getState().processingPreferences;
+    const focusWasMovedByDisabledSave = event.type === "focusin"
+      && (event.target === document.body || event.target === document.documentElement)
+      && ["saving", "loading"].includes(processing.status)
+      && processingPreferenceEls.form.dataset.focusMutation;
+    if (focusWasMovedByDisabledSave) return;
     delete processingPreferenceEls.form.dataset.focusMutation;
   }
 }

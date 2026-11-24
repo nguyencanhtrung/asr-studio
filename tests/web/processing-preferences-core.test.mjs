@@ -64,6 +64,37 @@ test("automatic preference reads preserve the server version and explain an unse
   assert.equal(view.asrOwner.discrepancy, false);
 });
 
+test("preference normalization requires JSON types but accepts future legacy owner strings", () => {
+  const futureOwner = {
+    ...PREFS,
+    notes: {
+      provider: "chatgpt",
+      model: "future-provider-model-id",
+      reasoning_effort: "future-effort-name",
+      output_language: "en",
+    },
+  };
+  assert.deepEqual(normalizePreferences(futureOwner), futureOwner);
+
+  const legalDormant = {
+    ...PREFS,
+    notes: { ...PREFS.notes, model: "legacy-model-id", reasoning_effort: "legacy-effort" },
+  };
+  assert.deepEqual(normalizePreferences(legalDormant), PREFS);
+
+  const invalid = [
+    { ...PREFS, version: "4" },
+    { ...PREFS, version: true },
+    { ...PREFS, version: 4.5 },
+    { ...PREFS, asr: [] },
+    { ...PREFS, notes: [] },
+    { ...PREFS, notes: { ...PREFS.notes, model: [] } },
+    { ...PREFS, notes: { ...PREFS.notes, model: "" } },
+    { ...PREFS, notes: { ...PREFS.notes, reasoning_effort: {} } },
+  ];
+  for (const payload of invalid) assert.equal(normalizePreferences(payload), null);
+});
+
 test("changing provider never silently chooses its first account or model", () => {
   const opened = reduce(initialState, { type: "provider/dialog-opened" });
   const loaded = reduce(opened.state, {
@@ -108,16 +139,22 @@ test("saving sends only workflow fields and ignores stale replies", () => {
     notes_provider: "chatgpt",
     notes_output_language: "en",
   });
+  assert.equal(effect.meta.expectedVersion, 4);
+  assert.deepEqual(effect.meta.submitted, {
+    asr_language: "en",
+    notes_provider: "chatgpt",
+    notes_output_language: "en",
+  });
   const stale = reduce(saving.state, {
     type: "provider/processing-preferences-saved",
-    meta: { mutation: saving.state.mutation - 1 },
+    meta: { ...effect.meta, mutation: saving.state.mutation - 1 },
     response: { body: { ...PREFS, version: 5 } },
   }).state;
   assert.equal(stale.status, "saving");
 
   const confirmed = reduce(saving.state, {
     type: "provider/processing-preferences-saved",
-    meta: { mutation: saving.state.mutation },
+    meta: effect.meta,
     response: { body: {
       asr: { choice: "auto", language: "en" },
       notes: { provider: "chatgpt", model: "m1", reasoning_effort: "high", output_language: "en" },
@@ -131,6 +168,56 @@ test("saving sends only workflow fields and ignores stale replies", () => {
     type: "provider/processing-preferences-reconcile-requested",
   }).state;
   assert.equal(refreshedAfterSave.notice.text, "Đã lưu cài đặt xử lý tự động.");
+});
+
+test("typed but stale or contradictory PATCH acknowledgements reconcile without success", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: PREFS },
+  }).state;
+  let edited = reduce(loaded, {
+    type: "provider/processing-preference-edited",
+    field: "notes_provider",
+    value: "chatgpt",
+  }).state;
+  edited = reduce(edited, {
+    type: "provider/processing-preference-edited",
+    field: "asr_language",
+    value: "en",
+  }).state;
+  const saving = reduce(edited, saveAction(edited));
+  const saveMeta = saving.effects.find((effect) => effect.type === "fetch").meta;
+  const valid = {
+    asr: { choice: "auto", language: "en" },
+    notes: { provider: "chatgpt", model: "future-model", reasoning_effort: "future-effort", output_language: "en" },
+    version: 5,
+  };
+  const variants = [
+    { name: "boolean version", body: { ...valid, version: true } },
+    { name: "string version", body: { ...valid, version: "5" } },
+    { name: "older version", body: { ...valid, version: 4 } },
+    { name: "wrong language", body: { ...valid, asr: { ...valid.asr, language: "vi" } } },
+    { name: "wrong provider", body: { ...valid, notes: { ...valid.notes, provider: "antigravity" } } },
+    { name: "wrong output language", body: { ...valid, notes: { ...valid.notes, output_language: "vi" } } },
+    { name: "dormant array", body: { ...valid, notes: { ...valid.notes, provider: null, model: ["bad"] } } },
+  ];
+  for (const { name, body } of variants) {
+    const result = reduce(saving.state, {
+      type: "provider/processing-preferences-saved",
+      meta: saveMeta,
+      response: { body },
+    });
+    assert.equal(result.state.status, "loading", name);
+    assert.deepEqual(result.state.saved, PREFS, name);
+    assert.equal(result.state.draft.asr.language, "en", name);
+    assert.equal(result.state.error.source, "mutation", name);
+    assert.equal(result.state.error.code, "invalid_response", name);
+    assert.equal(result.effects.filter((effect) => effect.type === "fetch").length, 1, name);
+    assert.equal(result.effects[0].meta.reconcile, true, name);
+    assert.equal(result.effects.some((effect) => effect.name === "asr.settings-changed"), false, name);
+  }
 });
 
 test("reconciling after an owner save refreshes the version without discarding a draft", () => {
@@ -435,11 +522,12 @@ test("owner and re-entry notifications are retained and coalesced by origin", ()
     value: "en",
   }).state;
   const saving = reduce(edited, saveAction(edited));
+  const saveMeta = saving.effects[0].meta;
   const duringSave = reduce(saving.state, { type: "provider/asr-settings-changed", source: "asr-owner-save" });
   assert.equal(duringSave.state.refreshPending, true);
   const saved = reduce(duringSave.state, {
     type: "provider/processing-preferences-saved",
-    meta: { mutation: duringSave.state.mutation },
+    meta: { ...saveMeta, mutation: duringSave.state.mutation },
     response: { body: { ...PREFS, asr: { ...PREFS.asr, language: "en" }, version: 5 } },
   });
   assert.equal(saved.effects[0].name, "asr.settings-changed");

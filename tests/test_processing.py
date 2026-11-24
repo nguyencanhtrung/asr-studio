@@ -360,20 +360,19 @@ def test_workflow_patch_acknowledges_its_transaction_snapshot_under_concurrency(
     class ObservedTransaction:
         def __init__(self, connection):
             self.connection = connection
-            self.wrote_preferences = False
+            self.changes_before = None
 
         def execute(self, statement, values=()):
-            if statement.startswith("UPDATE processing_preferences"):
-                self.wrote_preferences = True
             return self.connection.execute(statement, values)
 
         def __enter__(self):
             self.connection.__enter__()
+            self.changes_before = self.connection.total_changes
             return self
 
         def __exit__(self, exc_type, exc, traceback):
             result = self.connection.__exit__(exc_type, exc, traceback)
-            if self.wrote_preferences and exc_type is None:
+            if exc_type is None and self.connection.total_changes > self.changes_before:
                 committed.set()
                 assert second_finished.wait(5)
             return result
@@ -430,20 +429,19 @@ def test_asr_only_acknowledges_its_transaction_snapshot_under_concurrency(tmp_pa
     class ObservedTransaction:
         def __init__(self, connection):
             self.connection = connection
-            self.wrote_preferences = False
+            self.changes_before = None
 
         def execute(self, statement, values=()):
-            if statement.startswith("UPDATE processing_preferences"):
-                self.wrote_preferences = True
             return self.connection.execute(statement, values)
 
         def __enter__(self):
             self.connection.__enter__()
+            self.changes_before = self.connection.total_changes
             return self
 
         def __exit__(self, exc_type, exc, traceback):
             result = self.connection.__exit__(exc_type, exc, traceback)
-            if self.wrote_preferences and exc_type is None:
+            if exc_type is None and self.connection.total_changes > self.changes_before:
                 committed.set()
                 assert second_finished.wait(5)
             return result

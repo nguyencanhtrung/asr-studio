@@ -43,6 +43,10 @@ function validChoice(value) {
   return typeof value === "string" && value.length > 0;
 }
 
+function validLegacyMirror(value) {
+  return value === null || validChoice(value);
+}
+
 export function normalizePreferences(payload) {
   if (!isObject(payload) || !isObject(payload.asr) || !isObject(payload.notes)) return null;
   const { asr, notes } = payload;
@@ -51,11 +55,12 @@ export function normalizePreferences(payload) {
     !validChoice(asr.choice)
     || !LANGUAGES.includes(asr.language)
     || notes.provider !== null && !PROVIDERS.includes(notes.provider)
+    || !validLegacyMirror(notes.model)
+    || !validLegacyMirror(notes.reasoning_effort)
     || provider !== null && (!validChoice(notes.model) || !validChoice(notes.reasoning_effort))
     || !LANGUAGES.includes(notes.output_language)
   ) return null;
-  const version = Number(payload.version);
-  if (!Number.isSafeInteger(version) || version < 1) return null;
+  if (typeof payload.version !== "number" || !Number.isSafeInteger(payload.version) || payload.version < 1) return null;
   // A legacy PUT may retain dormant model/effort mirrors while its provider is
   // unset. They remain in GET storage, but the UI has no owner recipe to show.
   return {
@@ -66,7 +71,7 @@ export function normalizePreferences(payload) {
       reasoning_effort: provider === null ? null : notes.reasoning_effort,
       output_language: notes.output_language,
     },
-    version,
+    version: payload.version,
   };
 }
 
@@ -147,6 +152,12 @@ function reconciledDraft(server, draft, baseline) {
 
 function saveEffect(state, mutation) {
   const { asr, notes } = state.draft;
+  const expectedVersion = state.saved.version;
+  const submitted = {
+    asr_language: asr.language,
+    notes_provider: notes.provider,
+    notes_output_language: notes.output_language,
+  };
   return {
     type: "fetch",
     key: "provider/processing-preferences-save",
@@ -157,16 +168,26 @@ function saveEffect(state, mutation) {
       credentials: "same-origin",
       cache: "no-store",
       body: JSON.stringify({
-        expected_version: state.saved.version,
-        asr_language: asr.language,
-        notes_provider: notes.provider,
-        notes_output_language: notes.output_language,
+        expected_version: expectedVersion,
+        ...submitted,
       }),
     },
     ok: "provider/processing-preferences-saved",
     error: "provider/processing-preferences-save-failed",
-    meta: { mutation },
+    meta: { mutation, expectedVersion, submitted },
   };
+}
+
+function acknowledgesSave(preferences, meta) {
+  const submitted = meta?.submitted;
+  const expectedVersion = meta?.expectedVersion;
+  return isObject(submitted)
+    && Number.isSafeInteger(expectedVersion)
+    && Number.isSafeInteger(expectedVersion + 1)
+    && preferences.version === expectedVersion + 1
+    && preferences.asr.language === submitted.asr_language
+    && preferences.notes.provider === submitted.notes_provider
+    && preferences.notes.output_language === submitted.notes_output_language;
 }
 
 function fieldEdited(state, action) {
@@ -306,7 +327,7 @@ export function reduce(state, action) {
     case "provider/processing-preferences-saved": {
       if (action.meta?.mutation !== state.mutation || !state.open) return done(state);
       const preferences = normalizePreferences(action.response?.body);
-      if (!preferences) {
+      if (!preferences || !acknowledgesSave(preferences, action.meta)) {
         const next = {
           ...state,
           error: { code: "invalid_response", source: "mutation", text: t("Máy chủ chưa xác nhận cài đặt xử lý tự động.") },

@@ -439,7 +439,6 @@ test("a read that started before an owner save cannot restore either provider's 
       [d.id]: {
         ...initialState[d.id],
         info: { id: d.id, status: "connected", account: { label: "fixture" } },
-        loadId: 7,
         models: providerModels,
         modelOptions: providerModels.map((model) => ({ value: model.id, label: model.display_name, disabled: false })),
         selectedModel: initialModel,
@@ -449,22 +448,39 @@ test("a read that started before an owner save cannot restore either provider's 
         ownerModel: initialModel,
         ownerEffort: initialEffort,
         ownerKnown: true,
-        ownerFence: 0,
         catalogStatus: "loading",
         preferences: d === CHATGPT ? PREFS : initialState[d.id].preferences,
       },
     };
+
+    const started = reduce(state, { type: "provider/dialog-opened", launcher: d.id });
+    const providerRead = started.effects.find(
+      (effect) => effect.meta?.provider === d.id && effect.meta.op === "providers",
+    );
+    assert.ok(providerRead);
+    const afterProviderRead = reduce(started.state, {
+      type: "provider/response",
+      meta: providerRead.meta,
+      response: { body: LIST },
+    });
+    const ownerRead = afterProviderRead.effects.find(
+      (effect) => effect.meta?.provider === d.id && ["preferences", "models"].includes(effect.meta.op),
+    );
+    assert.ok(ownerRead);
+    state = afterProviderRead.state;
 
     state = reduce(state, { type: "provider/choice-edited", provider: d.id, field: "model", value: next }).state;
     if (d === ANTIGRAVITY) {
       state = reduce(state, { type: "provider/choice-edited", provider: d.id, field: "effort", value: "medium" }).state;
     }
     const requested = reduce(state, { type: "provider/save-requested", provider: d.id });
-    assert.equal(requested.effects[0].url, save[1]);
+    const saveEffect = requested.effects.find((effect) => effect.meta?.provider === d.id && effect.meta.op === "save");
+    assert.ok(saveEffect);
+    assert.equal(saveEffect.url, save[1]);
     state = requested.state;
     const acknowledged = reduce(state, {
       type: "provider/response",
-      meta: { provider: d.id, op: "save", model: next, effort: d === CHATGPT ? "high" : "medium" },
+      meta: saveEffect.meta,
       response: {
         body: d === CHATGPT
           ? { models: { chatgpt: next }, reasoning_effort: "high", reasoning_efforts: { chatgpt: "high" } }
@@ -478,22 +494,24 @@ test("a read that started before an owner save cannot restore either provider's 
       : { models: [{ id: "g1", display_name: "G1" }, { id: "g2", display_name: "G2" }], selected_model: initialModel, reasoning_effort: initialEffort };
     const stalePreferences = reduce(acknowledged, {
       type: "provider/response",
-      meta: { provider: d.id, op: d === CHATGPT ? "preferences" : "models", id: 7, ownerFence: 0 },
+      meta: ownerRead.meta,
       response: { body: staleBody },
     });
     state = stalePreferences.state;
-    if (stalePreferences.effects.length) {
+    for (const effect of stalePreferences.effects.filter((item) => item.meta?.provider === d.id && item.meta.op === "models")) {
       state = reduce(state, {
         type: "provider/response",
-        meta: { provider: d.id, op: "models", id: 7, ownerFence: 0 },
+        meta: effect.meta,
         response: { body: { models: providerModels, selected_model: initialModel, reasoning_effort: initialEffort } },
       }).state;
     }
     const result = state[d.id];
+    assert.equal(result.loading, false);
     assert.equal(result.ownerModel, next);
     assert.equal(result.ownerEffort, d === CHATGPT ? "high" : "medium");
     assert.equal(result.savedModel, next);
     assert.equal(result.selectedModel, next);
+    assert.equal(result.selectedEffort, d === CHATGPT ? "high" : "medium");
   }
 });
 

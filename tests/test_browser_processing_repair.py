@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from contextlib import suppress
+from copy import deepcopy
 
 import pytest
 from playwright.sync_api import Error as PlaywrightError
@@ -348,3 +349,148 @@ def test_invalid_patch_acknowledgement_refreshes_without_replaying_the_write(
     expect(page.locator("#automatic-preferences-notice")).not_to_contain_text("Đã lưu")
     assert len(patches) == 1
     assert _processing_request(page, "/api/processing-preferences")["version"] == 3
+
+
+@pytest.mark.parametrize(
+    "bad_reply",
+    [
+        "boolean_version",
+        "string_version",
+        "older_version",
+        "wrong_language",
+        "wrong_provider",
+        "wrong_output_language",
+        "dormant_array",
+    ],
+)
+def test_corrupt_patch_reply_never_reports_success_or_drops_local_language(
+    live, signed_in, bad_reply
+):
+    _, page = signed_in(viewport={"width": 1280, "height": 860}, reduced_motion="reduce")
+    page.set_default_timeout(5000)
+    baseline = _processing_request(page, "/api/processing-preferences")
+    _open_automatic_processing(page)
+    change = deepcopy(baseline)
+    change["version"] += 1
+    change["asr"]["language"] = "en"
+    if bad_reply == "boolean_version":
+        change["version"] = True
+    elif bad_reply == "string_version":
+        change["version"] = str(change["version"])
+    elif bad_reply == "older_version":
+        change["version"] = baseline["version"]
+    elif bad_reply == "wrong_language":
+        change["asr"]["language"] = "vi"
+    elif bad_reply == "wrong_provider":
+        change["notes"].update(
+            provider="antigravity", model="synthetic-model", reasoning_effort="medium"
+        )
+    elif bad_reply == "wrong_output_language":
+        change["notes"]["output_language"] = "vi"
+    else:
+        change["notes"]["model"] = ["bad dormant owner value"]
+
+    url = f"{live.url}/api/processing-preferences"
+    held_patch = []
+
+    def hold_patch(route):
+        if route.request.method == "PATCH":
+            held_patch.append(route)
+        else:
+            route.continue_()
+
+    page.route(url, hold_patch)
+    language = page.locator("#automatic-preferences-asr-language")
+    language.select_option("en")
+    with page.expect_request(lambda request: request.url == url and request.method == "PATCH"):
+        page.locator("#automatic-preferences-save").click()
+    assert len(held_patch) == 1
+    page.get_by_role("tab", name="ASR Model").click()
+    page.get_by_role("tab", name="Xử lý tự động").click()
+    held_patch[0].fulfill(status=200, json=change)
+    expect(page.locator("#automatic-preferences-error")).to_be_visible(timeout=2000)
+    expect(page.locator("#automatic-preferences-form")).to_have_attribute("aria-busy", "false")
+    expect(page.locator("#automatic-preferences-version")).to_have_text(f"v{baseline['version']}")
+    expect(language).to_have_value("en")
+    expect(page.locator("#automatic-preferences-save")).to_be_enabled()
+    expect(page.locator("#automatic-preferences-notice")).not_to_contain_text("Đã lưu")
+    assert len(held_patch) == 1
+    assert _processing_request(page, "/api/processing-preferences") == baseline
+
+
+@pytest.mark.parametrize("malformed_followup", [False, True])
+def test_invalid_ack_keeps_focus_in_dialog_when_save_cannot_be_focused(
+    live,
+    signed_in,
+    worker,  # noqa: F811
+    malformed_followup,
+):
+    _, page = signed_in(viewport={"width": 1280, "height": 860}, reduced_motion="reduce")
+    page.set_default_timeout(5000)
+    _open_automatic_processing(page)
+    url = f"{live.url}/api/processing-preferences"
+    held = []
+    next_read_invalid = False
+
+    def hold_patch(route):
+        nonlocal next_read_invalid
+        if route.request.method == "PATCH":
+            held.append(route)
+        elif next_read_invalid:
+            next_read_invalid = False
+            route.fulfill(status=200, json={"unexpected": "unreadable reconciliation"})
+        else:
+            route.continue_()
+
+    page.route(url, hold_patch)
+    language = page.locator("#automatic-preferences-asr-language")
+    save = page.locator("#automatic-preferences-save")
+    language.select_option("en")
+    save.focus()
+    with page.expect_request(lambda request: request.url == url and request.method == "PATCH"):
+        page.keyboard.press("Enter")
+    assert len(held) == 1
+    committed = page.request.patch(
+        url,
+        headers={"Origin": live.settings.public_url},
+        data=held[0].request.post_data_json,
+    )
+    assert committed.status == 200 and committed.json()["version"] == 2
+    assert page.evaluate("document.activeElement === document.body")
+
+    page.get_by_role("tab", name="ASR Model").evaluate("tab => tab.click()")
+    asr_default = page.locator("#asr-default-select")
+    expect(asr_default.locator('option[value="whisper-large-v3"]')).to_have_count(1)
+    with page.expect_response(
+        lambda response: (
+            response.url.endswith("/api/asr-models/default") and response.request.method == "PUT"
+        )
+    ) as owner:
+        asr_default.evaluate(
+            "select => { select.value = 'whisper-large-v3'; "
+            "select.dispatchEvent(new Event('change')); }"
+        )
+    assert owner.value.status == 200
+    page.get_by_role("tab", name="Xử lý tự động").evaluate("tab => tab.click()")
+    assert page.evaluate("document.activeElement === document.body")
+    next_read_invalid = malformed_followup
+    with page.expect_response(
+        lambda response: response.url == url and response.request.method == "GET"
+    ):
+        held[0].fulfill(
+            status=200,
+            json={"unexpected": "write committed but acknowledgement is unreadable"},
+        )
+    expect(page.locator("#automatic-preferences-form")).to_have_attribute("aria-busy", "false")
+    expect(page.locator("#automatic-preferences-error")).to_be_visible()
+    expect(save).to_be_disabled()
+    page.wait_for_function(
+        """() => {
+            const panel = document.getElementById('settings-panel-processing');
+            return panel.contains(document.activeElement);
+        }""",
+        timeout=2500,
+    )
+    assert len(held) == 1
+    current = _processing_request(page, "/api/processing-preferences")
+    assert current["version"] == 3 and current["asr"]["language"] == "en"
