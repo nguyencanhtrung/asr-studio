@@ -423,6 +423,114 @@ test("ChatGPT owner save installs the exact returned model and effort as the com
   assert.equal(saved.preferences.reasoning_efforts.chatgpt, "high");
 });
 
+test("a read that started before an owner save cannot restore either provider's old pair", () => {
+  for (const { d, other, save } of CASES) {
+    const providerModels = d === CHATGPT
+      ? [
+        { id: "m1", display_name: "M1", reasoning_efforts: ["low", "high"] },
+        { id: "m2", display_name: "M2", reasoning_efforts: ["low", "high"] },
+      ]
+      : [{ id: "g1", display_name: "G1" }, { id: "g2", display_name: "G2" }];
+    const initialModel = d === CHATGPT ? "m1" : "g1";
+    const initialEffort = d === CHATGPT ? "low" : "high";
+    const next = d === CHATGPT ? "m2" : "g2";
+    let state = {
+      ...initialState,
+      [d.id]: {
+        ...initialState[d.id],
+        info: { id: d.id, status: "connected", account: { label: "fixture" } },
+        loadId: 7,
+        models: providerModels,
+        modelOptions: providerModels.map((model) => ({ value: model.id, label: model.display_name, disabled: false })),
+        selectedModel: initialModel,
+        savedModel: initialModel,
+        selectedEffort: initialEffort,
+        savedEffort: initialEffort,
+        ownerModel: initialModel,
+        ownerEffort: initialEffort,
+        ownerKnown: true,
+        ownerFence: 0,
+        catalogStatus: "loading",
+        preferences: d === CHATGPT ? PREFS : initialState[d.id].preferences,
+      },
+    };
+
+    state = reduce(state, { type: "provider/choice-edited", provider: d.id, field: "model", value: next }).state;
+    if (d === ANTIGRAVITY) {
+      state = reduce(state, { type: "provider/choice-edited", provider: d.id, field: "effort", value: "medium" }).state;
+    }
+    const requested = reduce(state, { type: "provider/save-requested", provider: d.id });
+    assert.equal(requested.effects[0].url, save[1]);
+    state = requested.state;
+    const acknowledged = reduce(state, {
+      type: "provider/response",
+      meta: { provider: d.id, op: "save", model: next, effort: d === CHATGPT ? "high" : "medium" },
+      response: {
+        body: d === CHATGPT
+          ? { models: { chatgpt: next }, reasoning_effort: "high", reasoning_efforts: { chatgpt: "high" } }
+          : { model: next, reasoning_effort: "medium" },
+      },
+    }).state;
+    assert.equal(acknowledged[d.id].ownerFence, 1);
+
+    const staleBody = d === CHATGPT
+      ? { ...PREFS, models: { chatgpt: initialModel }, reasoning_effort: initialEffort, reasoning_efforts: { chatgpt: initialEffort } }
+      : { models: [{ id: "g1", display_name: "G1" }, { id: "g2", display_name: "G2" }], selected_model: initialModel, reasoning_effort: initialEffort };
+    const stalePreferences = reduce(acknowledged, {
+      type: "provider/response",
+      meta: { provider: d.id, op: d === CHATGPT ? "preferences" : "models", id: 7, ownerFence: 0 },
+      response: { body: staleBody },
+    });
+    state = stalePreferences.state;
+    if (stalePreferences.effects.length) {
+      state = reduce(state, {
+        type: "provider/response",
+        meta: { provider: d.id, op: "models", id: 7, ownerFence: 0 },
+        response: { body: { models: providerModels, selected_model: initialModel, reasoning_effort: initialEffort } },
+      }).state;
+    }
+    const result = state[d.id];
+    assert.equal(result.ownerModel, next);
+    assert.equal(result.ownerEffort, d === CHATGPT ? "high" : "medium");
+    assert.equal(result.savedModel, next);
+    assert.equal(result.selectedModel, next);
+  }
+});
+
+test("a reconnect recovery failure settles the original catalog read and keeps the confirmed owner", () => {
+  const env = setup();
+  let state = env.state();
+  const opened = reduce(state, { type: "provider/dialog-opened", launcher: "chatgpt" });
+  state = opened.state;
+  const loadId = state.chatgpt.loadId;
+  state = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "chatgpt", op: "providers", id: loadId, ownerFence: state.chatgpt.ownerFence },
+    response: { body: LIST },
+  }).state;
+  state = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "chatgpt", op: "preferences", id: loadId, ownerFence: state.chatgpt.ownerFence },
+    response: { body: PREFS },
+  }).state;
+  const failedCatalog = reduce(state, {
+    type: "provider/request-failed",
+    meta: { provider: "chatgpt", op: "models", id: loadId, ownerFence: state.chatgpt.ownerFence },
+    error: { status: 409, body: { detail: { code: "reconnect_required" } } },
+  });
+  assert.equal(failedCatalog.effects[0].meta.operation, "models");
+  const recoveryFailed = reduce(failedCatalog.state, {
+    type: "provider/request-failed",
+    meta: failedCatalog.effects[0].meta,
+    error: { status: 503, body: { detail: { code: "unavailable" } } },
+  }).state.chatgpt;
+  assert.equal(recoveryFailed.loading, false);
+  assert.equal(recoveryFailed.catalogStatus, "error");
+  assert.equal(recoveryFailed.info.status, "connected");
+  assert.equal(recoveryFailed.ownerModel, "m1");
+  assert.equal(recoveryFailed.ownerEffort, "low");
+});
+
 test("a verification reply updates only verification and cannot revert a newer owner pair", async () => {
   const env = setup();
   await loaded(env);

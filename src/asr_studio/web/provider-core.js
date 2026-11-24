@@ -348,6 +348,7 @@ function initial(d) {
     ownerModel: null,
     ownerEffort: d.effort.initial,
     ownerKnown: false,
+    ownerFence: 0, // successful owner saves fence owner-bearing reads already in flight
     catalogStatus: "idle", // idle | loading | ready | error
     preferences: { provider: null, models: {}, reasoning_effort: "default", reasoning_efforts: {} },
     modelStatus: { state: "", text: null },
@@ -495,14 +496,22 @@ function placeholderOptions(label) {
   return [{ value: "", label, disabled: false }];
 }
 
-function clearModels(d, s) {
-  return { ...s, models: [], selectedModel: "", modelOptions: placeholderOptions(d.copy.connectToLoad) };
+function clearModels(d, s, { preserveForm = false } = {}) {
+  return {
+    ...s,
+    models: [],
+    modelOptions: placeholderOptions(d.copy.connectToLoad),
+    // Keep the historical Settings form behavior for ordinary disconnects:
+    // clearing the live selection must not erase the last saved label. A
+    // fenced stale owner read preserves both values explicitly.
+    ...(preserveForm ? {} : { selectedModel: "" }),
+  };
 }
 
-function localReconnect(d, s, error) {
+function localReconnect(d, s, error, { preserveForm = false } = {}) {
   const status = error.code === "provider_disconnected" ? "disconnected" : "reconnect_required";
   const info = { id: d.id, connection_version: 0, ...s.info, status, account: null, verification: null };
-  return applyProvider(d, clearModels(d, s), info);
+  return applyProvider(d, clearModels(d, s, { preserveForm }), info);
 }
 
 // ---- load: providers -> (preferences) -> models ----
@@ -511,7 +520,7 @@ function startLoad(d, s) {
   const loadId = s.loadId + 1;
   let next = { ...s, loadId, loading: true, catalogStatus: "loading", error: null };
   if (d.loadFailure === "keep-last") next = { ...next, badge: { state: "loading", text: d.copy.loading }, launcher: { status: "loading", account: "" } };
-  return done(next, [call(d, "load", "providers", d.endpoints.providers, { id: loadId })]);
+  return done(next, [call(d, "load", "providers", d.endpoints.providers, { id: loadId, extra: { ownerFence: s.ownerFence } })]);
 }
 
 function settle(d, s) {
@@ -542,21 +551,21 @@ function supportedEfforts(s, modelId) {
 
 const effortValue = (d, s, modelId, wanted) => (d.effort.kind === "per-model" ? (supportedEfforts(s, modelId).includes(wanted) ? wanted : "default") : wanted);
 
-function renderModels(d, s, catalog) {
+function renderModels(d, s, catalog, { ownerAuthority = true } = {}) {
   const models = (Array.isArray(catalog.models) ? catalog.models : []).filter(
     (model) => model && typeof model.id === "string" && typeof model.display_name === "string",
   );
   let next = { ...s, models };
-  let selectedModel;
-  let savedEffort;
-  if (d.catalog === "preferences") {
+  let selectedModel = s.selectedModel;
+  let savedEffort = s.savedEffort;
+  if (ownerAuthority && d.catalog === "preferences") {
     const preferred = s.preferences.models[d.id];
     const fromCatalog = typeof catalog.selected_model === "string" ? catalog.selected_model : "";
     selectedModel = typeof preferred === "string" && preferred ? preferred : fromCatalog;
     savedEffort = typeof s.preferences.reasoning_efforts[d.id] === "string"
       ? s.preferences.reasoning_efforts[d.id]
       : s.preferences.reasoning_effort;
-  } else {
+  } else if (ownerAuthority) {
     selectedModel = typeof catalog.selected_model === "string"
       ? catalog.selected_model
       : (s.ownerModel || "");
@@ -570,35 +579,46 @@ function renderModels(d, s, catalog) {
   next = {
     ...next,
     modelOptions: options,
-    savedModel: selectedModel,
-    selectedModel,
-    savedEffort,
-    ownerModel: selectedModel || null,
-    ownerEffort: savedEffort,
-    ownerKnown: true,
     catalogStatus: "ready",
   };
-  next.selectedEffort = effortValue(d, next, selectedModel, savedEffort);
-  if (selectedModel && !available) {
-    next.modelStatus = { state: "error", text: fill(d.copy.unavailableSaved, { model: selectedModel }) };
-  } else if (d.catalog === "preferences") {
-    next.modelStatus = { state: "", text: selectedModel ? null : d.copy.chooseToSave };
+  if (ownerAuthority) {
+    next = {
+      ...next,
+      savedModel: selectedModel,
+      selectedModel,
+      savedEffort,
+      ownerModel: selectedModel || null,
+      ownerEffort: savedEffort,
+      ownerKnown: true,
+      selectedEffort: effortValue(d, next, selectedModel, savedEffort),
+    };
+    if (selectedModel && !available) {
+      next.modelStatus = { state: "error", text: fill(d.copy.unavailableSaved, { model: selectedModel }) };
+    } else if (d.catalog === "preferences") {
+      next.modelStatus = { state: "", text: selectedModel ? null : d.copy.chooseToSave };
+    }
   }
   return next;
 }
 
+function ownerReadIsCurrent(s, meta) {
+  return meta?.ownerFence === undefined || meta.ownerFence === s.ownerFence;
+}
+
 function loadOk(d, s, meta, body) {
   if (meta.id !== s.loadId) return done(s);
-  if (!isObject(body)) return loadFailed(d, s, GENERIC_ERROR, meta.op);
+  if (!isObject(body)) return loadFailed(d, s, GENERIC_ERROR, meta.op, meta.ownerFence);
+  const ownerAuthority = ownerReadIsCurrent(s, meta);
   if (meta.op === "providers") {
     const info = (Array.isArray(body.providers) ? body.providers : []).find((item) => item && item.id === d.id);
     if (!info || (d.strictStatus && !KNOWN.includes(info.status))) {
-      return loadFailed(d, s, { code: "INVALID_PROVIDER_STATUS", message: d.copy.invalidStatus }, meta.op);
+      return loadFailed(d, s, { code: "INVALID_PROVIDER_STATUS", message: d.copy.invalidStatus }, meta.op, meta.ownerFence);
     }
-    const next = applyProvider(d, s, info, { ownerAuthority: true });
-    if (d.endpoints.preferences) return done(next, [call(d, "load", "preferences", d.endpoints.preferences, { id: meta.id })]);
-    if (info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id })]);
-    const cleared = clearModels(d, next);
+    const next = applyProvider(d, s, info, { ownerAuthority });
+    if (d.endpoints.preferences) return done(next, [call(d, "load", "preferences", d.endpoints.preferences, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
+    if (info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
+    const cleared = clearModels(d, next, { preserveForm: !ownerAuthority });
+    if (!ownerAuthority) return settle(d, { ...cleared, catalogStatus: "ready" });
     if (d.id !== "antigravity") return settle(d, cleared);
     const savedModel = next.ownerKnown && next.ownerModel ? next.ownerModel : "";
     const savedEffort = next.ownerKnown ? next.ownerEffort : d.effort.initial;
@@ -606,6 +626,10 @@ function loadOk(d, s, meta, body) {
   }
   if (meta.op === "preferences") {
     const preferences = normalizePreferences(body);
+    if (!ownerAuthority) {
+      if (s.info?.status === "connected") return done(s, [call(d, "load", "models", d.endpoints.models, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
+      return settle(d, { ...s, catalogStatus: "ready" });
+    }
     const ownerModel = typeof preferences.models[d.id] === "string" && preferences.models[d.id]
       ? preferences.models[d.id]
       : null;
@@ -613,7 +637,7 @@ function loadOk(d, s, meta, body) {
       ? preferences.reasoning_efforts[d.id]
       : preferences.reasoning_effort;
     const next = { ...s, preferences, ownerModel, ownerEffort, ownerKnown: true };
-    if (s.info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id })]);
+    if (s.info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
     const selectedModel = preferences.models[d.id] || "";
     return settle(d, {
       ...next,
@@ -627,29 +651,37 @@ function loadOk(d, s, meta, body) {
       modelStatus: { state: "", text: null },
     });
   }
-  return settle(d, renderModels(d, s, body)); // models
+  return settle(d, renderModels(d, s, body, { ownerAuthority })); // models
 }
 
-function loadFailed(d, s, error, operation = "load") {
-  return fail(d, s, error, "load", operation);
+function loadFailed(d, s, error, operation = "load", ownerFence) {
+  return fail(d, s, error, "load", operation, ownerFence);
 }
 
 // A failed call that may mean the provider needs a new sign-in: re-read the status, then finish the operation.
-function fail(d, s, error, after, operation = after) {
+function fail(d, s, error, after, operation = after, ownerFence) {
   if (!needsReconnect(d, error)) return resume(d, s, error, after, operation);
-  const next = d.reconnect.local ? localReconnect(d, s, error) : s;
-  return done(next, [call(d, `refresh-${after}`, "refresh", d.endpoints.providers, { extra: { after, error, loadId: s.loadId } })]);
+  const ownerAuthority = ownerReadIsCurrent(s, { ownerFence });
+  const next = d.reconnect.local ? localReconnect(d, s, error, { preserveForm: !ownerAuthority }) : s;
+  return done(next, [call(d, `refresh-${after}`, "refresh", d.endpoints.providers, { extra: { after, error, operation, loadId: s.loadId, ownerFence } })]);
 }
 
-function refreshed(d, s, meta, body) {
+function refreshed(d, s, meta, body, recoveryError = null) {
   if (meta.after === "load" && meta.loadId !== s.loadId) return done(s); // a newer load owns the page now
   let next = s;
   const info = isObject(body) && Array.isArray(body.providers) ? body.providers.find((item) => item && item.id === d.id) : null;
   if (info && (!d.strictStatus || KNOWN.includes(info.status))) {
-    next = applyProvider(d, s, info, { ownerAuthority: true });
-    if (!d.strictStatus && info.status !== "connected") next = clearModels(d, next);
+    const ownerAuthority = ownerReadIsCurrent(s, meta);
+    next = applyProvider(d, s, info, { ownerAuthority });
+    if (!d.strictStatus && info.status !== "connected") next = clearModels(d, next, { preserveForm: !ownerAuthority });
   }
-  return resume(d, next, meta.error, meta.after, meta.after);
+  const operation = meta.operation ?? meta.after;
+  const isCatalogRecovery = meta.after === "load" && ["providers", "preferences", "models"].includes(operation);
+  // A failed follow-up status read is a catalog/status failure only when the
+  // original operation was the catalog load. Save/verify/disconnect recovery
+  // must retain the original refusal/reconnect error and its existing copy.
+  const resumeError = isCatalogRecovery && recoveryError ? recoveryError : meta.error;
+  return resume(d, next, resumeError, meta.after, operation);
 }
 
 function setPending(s, op, value) {
@@ -1027,7 +1059,7 @@ function saveChoice(d, s) {
 
 function saveOk(d, s, meta, body) {
   const { model, effort } = meta;
-  let next = setPending(s, "save", false);
+  let next = { ...setPending(s, "save", false), ownerFence: s.ownerFence + 1 };
   if (d.catalog === "preferences") {
     const reply = isObject(body) ? body : {};
     const reasoningEfforts = isObject(reply.reasoning_efforts) ? reply.reasoning_efforts : {};
@@ -1142,7 +1174,7 @@ function headerLoaded(d, s, body) {
   if (d.loadFailure === "keep-last") {
     // A dialog or login read that started meanwhile is newer than this slower page-load answer.
     if (s.headerGen !== s.loadId) return done(s);
-    return done(known ? applyProvider(d, s, entry, { ownerAuthority: true }) : { ...s, launcher: { status: "error", account: "" } });
+    return done(known ? applyProvider(d, s, entry) : { ...s, launcher: { status: "error", account: "" } });
   }
   if (s.launcher) return done(s); // a status already shown by the dialog read is newer
   return done({ ...s, launcher: launcherOf(known ? entry.status : "error", entry?.account?.label) });
@@ -1266,9 +1298,9 @@ function onFailure(d, s, meta, error) {
     case "providers":
     case "preferences":
     case "models":
-      return meta.id === s.loadId ? loadFailed(d, s, error, meta.op) : done(s);
+      return meta.id === s.loadId ? loadFailed(d, s, error, meta.op, meta.ownerFence) : done(s);
     case "refresh":
-      return refreshed(d, s, meta, null);
+      return refreshed(d, s, meta, null, error);
     case "login-start":
       return loginStartFailed(d, s, error, meta.recreation === true);
     case "registration-recreate":

@@ -1183,6 +1183,7 @@ const { t, UI_LOCALE } = (() => {
       "{model} · effort {effort}": "{model} · effort {effort}",
       "Chưa có model notes đã lưu. Hãy kết nối lại trong panel sở hữu để chọn model.": "No saved notes model is configured. Reconnect in the owner panel to choose a model.",
       "Model đã lưu {owner} vẫn được giữ.": "The saved model {owner} is kept.",
+      "Đang kiểm tra. Model đã lưu {owner} vẫn được giữ.": "Checking. The saved model {owner} is kept.",
       "Đang tải catalog. Model đã lưu {owner} vẫn được giữ; hãy đợi hoặc thử lại.": "Loading the catalog. The saved model {owner} is kept; wait or try again.",
       "Không tải được catalog. Model đã lưu {owner} vẫn được giữ; hãy thử lại trong panel sở hữu.": "Could not load the catalog. The saved model {owner} is kept; try again in the owner panel.",
       "Không tải được catalog của {name}. Hãy thử lại trong panel sở hữu.": "Could not load {name}'s catalog. Try again in the owner panel.",

@@ -629,6 +629,89 @@ test("a failed initial read retries once on same-dialog re-entry and coalesces a
   assert.deepEqual(recovered.effects, []);
 });
 
+test("an invalid initial response consumes one queued retry and then settles", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const queued = reduce(opened.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "ai",
+  });
+  const retried = reduce(queued.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: { malformed: true } },
+  });
+  assert.equal(retried.state.status, "loading");
+  assert.equal(retried.state.refreshPending, false);
+  assert.equal(retried.effects.length, 1);
+  assert.equal(retried.effects[0].meta.reconcile, false);
+
+  const settled = reduce(retried.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: retried.state.request },
+    response: { body: { malformed: true } },
+  });
+  assert.equal(settled.state.status, "error");
+  assert.equal(settled.state.refreshPending, false);
+  assert.equal(settled.state.error.code, "invalid_response");
+  assert.deepEqual(settled.effects, []);
+});
+
+test("an invalid save acknowledgement refreshes once without acknowledging the write or losing its draft error", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: PREFS },
+  }).state;
+  const edited = reduce(loaded, {
+    type: "provider/processing-preference-edited",
+    field: "asr_language",
+    value: "en",
+  }).state;
+  const saving = reduce(edited, saveAction(edited));
+  const malformed = reduce(saving.state, {
+    type: "provider/processing-preferences-saved",
+    meta: { mutation: saving.state.mutation },
+    response: { body: { malformed: true } },
+  });
+  assert.equal(malformed.state.status, "loading");
+  assert.equal(malformed.state.saved.version, PREFS.version);
+  assert.equal(malformed.state.draft.asr.language, "en");
+  assert.equal(malformed.state.error.code, "invalid_response");
+  assert.equal(malformed.state.error.source, "mutation");
+  assert.equal(malformed.effects[0].meta.reconcile, true);
+  assert.equal(malformed.effects.some((effect) => effect.name === "asr.settings-changed"), false);
+
+  const malformedRefresh = reduce(malformed.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: malformed.state.request, reconcile: true },
+    response: { body: { malformed: true } },
+  });
+  assert.equal(malformedRefresh.state.status, "error");
+  assert.equal(malformedRefresh.state.refreshPending, false);
+  assert.equal(malformedRefresh.state.error.source, "mutation");
+  assert.equal(malformedRefresh.state.draft.asr.language, "en");
+
+  const recovery = reduce(malformedRefresh.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "asr",
+  });
+  assert.equal(recovery.state.status, "loading");
+  assert.equal(recovery.effects[0].meta.reconcile, true);
+  const recovered = reduce(recovery.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: recovery.state.request, reconcile: true },
+    response: { body: { ...PREFS, version: 5, asr: { ...PREFS.asr, language: "vi" } } },
+  }).state;
+  assert.equal(recovered.status, "ready");
+  assert.equal(recovered.saved.version, 5);
+  assert.equal(recovered.draft.asr.language, "en");
+  assert.equal(recovered.error.source, "mutation");
+  assert.equal(recovered.refreshPending, false);
+});
+
 for (const code of ["notes_owner_unconfigured", "preferences_changed"]) {
   test(`a ${code} mutation error survives the queued owner refresh until edit or save`, () => {
     const opened = reduce(initialState, { type: "provider/dialog-opened" });
@@ -720,4 +803,16 @@ test("settled provider read failures are explicit and do not invent an owner pai
   assert.doesNotMatch(JSON.stringify(catalogFailed.notesOwner.text), /Đang kiểm tra/);
   assert.match(JSON.stringify(catalogFailed.providerStatus), /Đã kết nối với|test@example\.com/);
   assert.doesNotMatch(JSON.stringify(catalogFailed.providerStatus), /Không tải được catalog/);
+
+  const pendingFirstRead = selectPreferences(loaded, {
+    ...CATALOGS,
+    providers: {
+      ...CATALOGS.providers,
+      chatgpt: { ...CATALOGS.providers.chatgpt, status: undefined, catalogStatus: "loading", ownerModel: null, ownerEffort: "default", ownerKnown: false },
+    },
+  });
+  assert.equal(pendingFirstRead.notesOwner.state, "loading");
+  assert.equal(pendingFirstRead.notesOwner.ownerConfigured, false);
+  assert.doesNotMatch(JSON.stringify(pendingFirstRead.notesOwner.text), /kết nối lại|chưa có model/);
+  assert.match(JSON.stringify(pendingFirstRead.providerStatus), /Đang kiểm tra/);
 });

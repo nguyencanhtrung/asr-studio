@@ -214,6 +214,18 @@ function continuePendingRefresh(state) {
   return done({ ...state, refreshPending: false });
 }
 
+function invalidResponse(state) {
+  const error = state.error?.source === "mutation" ? state.error : {
+    code: "invalid_response",
+    text: t("Máy chủ trả về cài đặt xử lý tự động không hợp lệ."),
+  };
+  return continuePendingRefresh({
+    ...state,
+    status: "error",
+    error,
+  });
+}
+
 export function reduce(state, action) {
   switch (action.type) {
     case "provider/dialog-opened": {
@@ -266,9 +278,7 @@ export function reduce(state, action) {
     case "provider/processing-preferences-loaded": {
       if (action.meta?.request !== state.request || !state.open) return done(state);
       const preferences = normalizePreferences(action.response?.body);
-      if (!preferences) {
-        return done({ ...state, status: "error", error: { code: "invalid_response", text: t("Máy chủ trả về cài đặt xử lý tự động không hợp lệ.") } });
-      }
+      if (!preferences) return invalidResponse(state);
       const reconciled = action.meta?.reconcile === true && state.draft && state.saved
         ? reconciledDraft(preferences, state.draft, state.saved)
         : clone(preferences);
@@ -297,7 +307,13 @@ export function reduce(state, action) {
       if (action.meta?.mutation !== state.mutation || !state.open) return done(state);
       const preferences = normalizePreferences(action.response?.body);
       if (!preferences) {
-        return done({ ...state, status: "ready", error: { code: "invalid_response", source: "mutation", text: t("Máy chủ chưa xác nhận cài đặt xử lý tự động.") } });
+        const next = {
+          ...state,
+          error: { code: "invalid_response", source: "mutation", text: t("Máy chủ chưa xác nhận cài đặt xử lý tự động.") },
+          refreshPending: true,
+          notice: null,
+        };
+        return continuePendingRefresh(next);
       }
       const confirmed = { ...state, status: "ready", saved: preferences, draft: clone(preferences), error: null, notice: t("Đã lưu cài đặt xử lý tự động.") };
       const pending = continuePendingRefresh(confirmed);
@@ -429,6 +445,28 @@ function providerOwnerView(provider, catalog, saved) {
     ? [message, " ", t("Cài đặt sở hữu khác recipe workflow đã lưu. Lưu để áp dụng cài đặt sở hữu.")]
     : message;
   const catalogStatus = catalog.catalogStatus || "ready";
+  if (!catalog.status) {
+    if (catalogStatus === "error") {
+      return {
+        state: "error",
+        model: pair.model,
+        effort: pair.effort,
+        discrepancy,
+        ownerConfigured,
+        text: ownerMessage(t("Không đọc được trạng thái của {name}. Hãy thử lại trong panel sở hữu.", { name })),
+      };
+    }
+    return {
+      state: "loading",
+      model: pair.model,
+      effort: pair.effort,
+      discrepancy,
+      ownerConfigured,
+      text: pair.model
+        ? t("Đang kiểm tra. Model đã lưu {owner} vẫn được giữ.", { owner })
+        : t("Đang kiểm tra"),
+    };
+  }
   if (catalogStatus === "error") {
     const message = catalog.status
       ? t("Không tải được catalog của {name}. Hãy thử lại trong panel sở hữu.", { name })
