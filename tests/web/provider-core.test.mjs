@@ -1997,3 +1997,51 @@ test("ChatGPT: closing Settings clears an unsubmitted callback without cancellin
   assert.equal(closed.state.chatgpt.ui, "clear-callback-input");
   assert.equal(closed.state.chatgpt.login.id, "s1");
 });
+
+for (const method of ["POST", "DELETE"]) {
+  for (const ackFirst of [false, true]) {
+    test(`an outstanding ASR ${method === "POST" ? "install" : "cancel"} survives an Automation refresh (ACK first=${ackFirst})`, async () => {
+      const creation = method === "POST";
+      const stale = creation ? catalog() : catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+      const confirmed = creation
+        ? { state: "queued" }
+        : { state: "cancelling" };
+      const requestType = creation ? "provider/asr-install-requested" : "provider/asr-cancel-requested";
+      const env = await openedWith(stale);
+      env.store.dispatch({ type: requestType, id: PHO });
+      const writeKey = env.is(method, "/install");
+      const writes = () => env.calls.filter(call => writeKey(call)).length;
+      assert.equal(writes(), 1);
+      env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+      const firstRead = env.pending(env.is("GET", "/api/asr-models"))[0];
+      assert.ok(firstRead);
+      const readId = env.state().asr.request;
+
+      if (ackFirst) {
+        await env.answer(writeKey, 202, { install: confirmed });
+        // Deliver the recorded callback even if the keyed runner canceled its old HTTP effect.
+        env.store.dispatch({ type: "provider/asr-loaded", response: { body: stale }, meta: { id: readId } });
+        await env.answer(env.is("GET", "/api/asr-models"), 200, stale);
+      } else {
+        await env.answer(env.is("GET", "/api/asr-models"), 200, stale);
+      }
+
+      env.store.dispatch({ type: "provider/settings-section-selected", section: "asr", previousSection: "processing" });
+      const row = phoRow(env);
+      env.store.dispatch({ type: requestType, id: PHO });
+      assert.equal(writes(), 1, "stale catalog read cannot emit a duplicate mutation");
+      assert.equal(row.install?.kind, "progress");
+      assert.equal(row.install.cancelDisabled, !(creation && ackFirst));
+
+      if (!ackFirst) await env.answer(writeKey, 202, { install: confirmed });
+      assert.equal(phoRow(env).install.phase.text, creation ? "Đang chờ cài đặt…" : "Đang hủy…");
+      const after = creation ? catalog({ pho: { install: { state: "running", phase: "downloading" } } }) : catalog();
+      const readKey = env.is("GET", "/api/asr-models");
+      if (!env.pending(readKey).length) env.fire(1000);
+      await env.answer(readKey, 200, after);
+      assert.equal(phoRow(env).install?.kind, creation ? "progress" : "offer");
+      env.store.dispatch({ type: creation ? "provider/asr-cancel-requested" : "provider/asr-install-requested", id: PHO });
+      assert.equal(env.pending(env.is(creation ? "DELETE" : "POST", "/install")).length, 1, "genuine next action works after reconciliation");
+    });
+  }
+}

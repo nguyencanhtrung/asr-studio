@@ -1368,6 +1368,10 @@ const installerUsable = (installer) => installer.available && installer.models_w
 const asrPolling = (state) => state.open && state.installer.available && state.models.some(jobActive);
 const withPoll = (state) => done(state, asrPolling(state) ? [ASR_POLL] : []);
 const withInstall = (state, id, install) => ({ ...state, models: state.models.map((choice) => (choice.id === id ? { ...choice, install } : choice)) });
+const pendingInstall = (state, id) => {
+  const pending = state.pendingInstalls;
+  return pending && Object.hasOwn(pending, id) ? pending[id] : null;
+};
 const DEFINITIVE_INSTALL_REFUSALS = new Set(["gpu_required", "installer_unavailable", "models_not_writable", "model_ready", "install_not_active", "unknown_model", "worker_unavailable"]);
 const PREPARE_FALLBACK_REFUSALS = new Set(["installer_unavailable", "models_not_writable"]);
 const rawModelName = (choice) => typeof choice?.model_name === "string" ? choice.model_name : null;
@@ -1375,6 +1379,8 @@ const isDefinitiveInstallRefusal = (code) => DEFINITIVE_INSTALL_REFUSALS.has(cod
 
 function asrInstallCall(state, action, method, optimistic) {
   if (!isAsrModelId(action.id)) return done(state);
+  const pending = pendingInstall(state, action.id);
+  if (pending && (method === "POST" || pending.method === "DELETE")) return done(state);
   const choice = state.models.find((item) => item.id === action.id && item.id !== "auto");
   // A second click on a job that is already going asks for nothing; Cancel is the only click that does.
   if (!choice || (method === "POST" && jobActive(choice))) return done(state);
@@ -1384,7 +1390,7 @@ function asrInstallCall(state, action, method, optimistic) {
   // A new request id drops a catalog read that was already in flight: its answer predates this click.
   // Only the newest create or cancel of a model may answer: a late reply must not undo a later click.
   const mutation = (state.mutation ?? 0) + 1;
-  const next = withInstall({ ...state, request: state.request + 1, notice: null, mutation, latest: { ...state.latest, [action.id]: mutation } }, action.id, optimistic);
+  const next = withInstall({ ...state, request: state.request + 1, notice: null, mutation, latest: { ...state.latest, [action.id]: mutation }, pendingInstalls: { ...state.pendingInstalls, [action.id]: { method, optimistic } } }, action.id, optimistic);
   return done(next, [{ type: "fetch", key: `provider/asr-install/${method}/${action.id}`, url: `/api/asr-models/${encodeURIComponent(action.id)}/install`, init, ok: "provider/asr-install-sent", error: "provider/asr-install-refused", meta: { id: action.id, method, mutation } }]);
 }
 
@@ -1416,7 +1422,12 @@ function reduceAsr(state, action) {
       if (action.meta.id !== state.request) return done(state);
       const list = action.response.body?.asr_models;
       if (!Array.isArray(list)) return done({ ...state, status: "error", summaryStatus: null });
-      const models = list.filter(isAsrModelRow);
+      const models = list.filter(isAsrModelRow).map((row) => {
+        const pending = pendingInstall(state, row.id);
+        // A catalog-confirmed job can be canceled while its create response is on the way.
+        if (!pending || pending.method === "POST" && (jobActive(row) || row.ready === true)) return row;
+        return { ...row, install: pending.optimistic };
+      });
       const installer = action.response.body?.installer;
       const { default_model: saved, hardware_model: hardware } = action.response.body;
       const defaultModel = isAsrModelId(saved) && saved !== "auto" ? saved : null;
@@ -1456,20 +1467,27 @@ function reduceAsr(state, action) {
     case "provider/asr-cancel-requested":
       return asrInstallCall(state, action, "DELETE", { state: "cancelling" });
     case "provider/asr-install-sent": {
-      if (action.meta.mutation !== state.latest?.[action.meta.id]) return done(state);
+      const { id, mutation } = action.meta;
+      if (mutation !== state.latest?.[id] || !pendingInstall(state, id)) return done(state);
+      const { [id]: settled, ...pendingInstalls } = state.pendingInstalls;
       const install = isObject(action.response.body?.install) ? action.response.body.install : { state: "queued" };
-      return withPoll(withInstall(state, action.meta.id, install));
+      const next = withInstall({ ...state, pendingInstalls }, id, install);
+      if (next.summaryStatus !== "loading") return withPoll(next);
+      const request = state.request + 1;
+      return done({ ...next, request }, [asrFetch(request)]);
     }
     // The server said no (no installer, no GPU, already prepared, nothing to cancel): say why, then read the truth.
     case "provider/asr-install-refused": {
-      if (action.meta.mutation !== state.latest?.[action.meta.id]) return done(state);
+      const { id, mutation } = action.meta;
+      if (mutation !== state.latest?.[id] || !pendingInstall(state, id)) return done(state);
+      const { [id]: settled, ...pendingInstalls } = state.pendingInstalls;
       const code = action.error?.body?.detail?.code ?? "request_failed";
       const request = state.request + 1;
       const fallback = action.meta.method !== "DELETE" && isDefinitiveInstallRefusal(code);
       const next = fallback
         ? withInstall(state, action.meta.id, { state: "refused", error: code, fallback: true, showPrepare: PREPARE_FALLBACK_REFUSALS.has(code) })
         : state;
-      return done({ ...next, request, notice: { id: action.meta.id, code } }, [asrFetch(request)]);
+      return done({ ...next, pendingInstalls, request, notice: { id, code } }, [asrFetch(request)]);
     }
     // The copy button: the clipboard is a call effect; the feedback line is state. A refused clipboard selects the command.
     case "provider/asr-copy-requested": {
