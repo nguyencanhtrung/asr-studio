@@ -1043,6 +1043,26 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
   return escaped;
 }
 
+function isMarkdownWord(value) {
+  return Boolean(value && /[\p{L}\p{N}]/u.test(value));
+}
+
+// CommonMark does not open/close an intraword `*`/`_` delimiter run. An encoded
+// boundary space is still parsed by the browser as text, but the delimiter
+// scanner sees the surrounding source bytes. Refuse the edit when the new
+// boundary would be adjacent to an ordinary word character, keeping the
+// existing mark intact in standard Markdown renderers.
+function richEdgeWhitespaceIsFlanking(markdown, node, { edgeStart = false, edgeEnd = false } = {}) {
+  if (!edgeStart && !edgeEnd || !["strong", "em"].includes(node.kind)) return true;
+  const opening = markdown.slice(0, node.start).match(/[*_]+$/)?.[0] || "";
+  const closing = markdown.slice(node.end).match(/^[*_]+/)?.[0] || "";
+  if (!opening || !closing) return true;
+  const beforeOpening = markdown[node.start - opening.length - 1] || "";
+  const afterClosing = markdown[node.end + closing.length] || "";
+  return (!edgeStart || !isMarkdownWord(beforeOpening))
+    && (!edgeEnd || !isMarkdownWord(afterClosing));
+}
+
 function encodeRichBoundarySpaces(source, value, node, { edgeStart = false, edgeEnd = false } = {}) {
   if (node.kind === "code") return source;
   const offsets = sourceOffsets(node, source);
@@ -1109,10 +1129,13 @@ function richMarkdownEdit(state, action, revision, draft) {
   const offsets = sourceOffsets(node, raw);
   if (offsets.length !== node.text.length + 1) return null;
   const [first, tail] = sharedEdges(node.text, action.value);
+  const edgeStart = first === 0;
+  const edgeEnd = tail === 0;
+  if (!richEdgeWhitespaceIsFlanking(draft.value, node, { edgeStart, edgeEnd })) return null;
   const changed = action.value.slice(first, action.value.length - tail);
   const escaped = escapeRichValue(changed, node, draft.value, {
-    edgeStart: first === 0,
-    edgeEnd: tail === 0,
+    edgeStart,
+    edgeEnd,
     tableCell: targetBlock?.kind === "table",
   });
   if (escaped === null) return null;
@@ -1121,8 +1144,8 @@ function richMarkdownEdit(state, action, revision, draft) {
   const normalizedSource = first === node.text.length && tail === 0 && action.value.length > first
     ? normalizeInteriorTrailingSpaces(nodeSource, raw, offsets, node.text, action.value.slice(first)) : nodeSource;
   const boundarySource = encodeRichBoundarySpaces(normalizedSource, action.value, node, {
-    edgeStart: first === 0,
-    edgeEnd: tail === 0,
+    edgeStart,
+    edgeEnd,
   });
   const protectedSource = protectRichMarker(boundarySource, action.value, node, draft.value);
   const candidate = draft.value.slice(0, node.start) + protectedSource

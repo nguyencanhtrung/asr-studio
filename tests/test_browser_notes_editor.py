@@ -249,6 +249,7 @@ def test_rejected_rich_paste_restores_the_pre_input_caret(live, signed_in):
     code = page.locator('#notes-rich-editor code[contenteditable="plaintext-only"]')
     code.click()
     page.keyboard.press("Home")
+    page.keyboard.press("Backspace")
     page.keyboard.press("ArrowRight")
     page.keyboard.press("ArrowRight")
     before = code.evaluate(

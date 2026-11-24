@@ -1774,6 +1774,18 @@ test("rich boundary spaces stay editable in links and code", async () => {
   assert.equal(saved(env).value, "# Notes\n\n[Open agenda](" + href + ") and `npm ci`.\n");
 });
 
+test("rich intraword emphasis rejects boundary whitespace that breaks CommonMark", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\nHello**a b**world.\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const index = runs.findIndex((node) => node.kind === "strong" && node.text === "a b");
+  env.dispatch("rich-edited", { index, before: "a b", value: " b" });
+  assert.equal(saved(env).value, markdown);
+  assert.equal(selectView(env.state()).savedWork.blocks.flatMap(blockRuns)[index].text, "a b");
+});
+
 test("rich deletion encodes newly exposed boundary spaces without rewriting other bytes", async () => {
   const env = setup();
   const markdown = "# Plan A\n\n- one two\n3. one two\n\n| A | B |\n|---|---|\n| x y | z |\n\n**a b**\n\nab words here.\n";

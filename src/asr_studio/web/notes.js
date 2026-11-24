@@ -788,13 +788,12 @@ els.rich.addEventListener("beforeinput", (event) => {
 });
 els.rich.addEventListener("paste", (event) => {
   event.preventDefault();
-  let rejectedSelection = null;
+  let rejectedSelection = richSelectionOffsets(event.target);
   try {
-    rejectedSelection = JSON.parse(event.target.dataset.richSelectionBefore || "null");
+    rejectedSelection ||= JSON.parse(event.target.dataset.richSelectionBefore || "null");
   } catch {
-    rejectedSelection = null;
+    // A live selection is authoritative; a malformed cached selection is only a fallback.
   }
-  rejectedSelection ||= richSelectionOffsets(event.target);
   delete event.target.dataset.richSelectionBefore;
   insertRichText(event.target, event.clipboardData.getData("text/plain").replace(/\r\n?|\n/g, " "), rejectedSelection);
 });
