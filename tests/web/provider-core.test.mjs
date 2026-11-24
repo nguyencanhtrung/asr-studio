@@ -2081,3 +2081,49 @@ for (const method of ["POST", "DELETE"]) {
     if (creating) assert.equal(phoRow(env).install.cancelDisabled, false);
   });
 }
+
+test("conductor R9 terminal cancel acknowledges while a reopened catalog is loading", async () => {
+  const running = catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+  const env = await openedWith(running);
+  const readKey = env.is("GET", "/api/asr-models");
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  env.store.dispatch({ type: "provider/dialog-closed" });
+  assert.deepEqual(env.live(), []);
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  const oldRequest = env.state().asr.request;
+  assert.equal(env.state().asr.status, "loading");
+  assert.equal(env.pending(readKey).length, 1);
+
+  await env.answer(env.is("DELETE", "/install"), 202, { install: { state: "idle" } });
+  assert.ok(env.state().asr.request > oldRequest);
+  env.store.dispatch({ type: "provider/asr-loaded", response: { body: running }, meta: { id: oldRequest } });
+  await env.answer(readKey, 200, running);
+  assert.equal(env.state().asr.status, "loading");
+  assert.equal(env.pending(readKey).length, 1, "an open catalog must have a replacement read after the ACK invalidates the old one");
+  const pending = env.pending(readKey)[0];
+
+  env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "ai" });
+  assert.equal(env.pending(readKey).length, 1);
+  assert.equal(env.pending(readKey)[0], pending, "first Automation visit shares the replacement read");
+  await env.answer(readKey, 200, catalog());
+  assert.equal(env.state().asr.status, "ready");
+  assert.equal(env.state().asr.summaryStatus, null);
+  assert.equal(selectAsr(env.state().asr).text, null);
+  assert.equal(phoRow(env).install.kind, "offer");
+});
+
+test("conductor R9 terminal cancel stays settled when its acknowledgement arrives after closing Settings", async () => {
+  const running = catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+  const env = await openedWith(running);
+  const readKey = env.is("GET", "/api/asr-models");
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+  const beforeClose = catalogCalls(env).length;
+  env.store.dispatch({ type: "provider/dialog-closed" });
+  await env.answer(env.is("DELETE", "/install"), 202, { install: { state: "idle" } });
+  assert.equal(catalogCalls(env).length, beforeClose, "closing Settings cancels background polling and starts no replacement read");
+  await env.answer(readKey, 200, running);
+  assert.equal(env.state().asr.open, false);
+  assert.deepEqual(env.live(), []);
+  assert.equal(phoRow(env).install.kind, "offer");
+});
