@@ -89,6 +89,53 @@ async def test_processing_preferences_route_validates_before_provider_mutation(c
 
 
 @pytest.mark.anyio
+async def test_legacy_put_accepts_dormant_notes_mirrors_and_get_preserves_them(client, settings):
+    token = AuthStore(settings.auth_dir).load().token
+    origin = {"Origin": settings.public_url}
+    assert (
+        await client.post("/api/access/session", headers=origin, json={"token": token})
+    ).status_code == 204
+    legacy = await client.put(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "asr_choice": "auto",
+            "asr_language": "vi",
+            "notes_provider": None,
+            "notes_model": "dormant-legacy-model",
+            "notes_reasoning_effort": "high",
+            "notes_output_language": "en",
+        },
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["notes"] == {
+        "provider": None,
+        "model": "dormant-legacy-model",
+        "reasoning_effort": "high",
+        "output_language": "en",
+    }
+    assert (await client.get("/api/processing-preferences")).json() == legacy.json()
+
+    cleared = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": legacy.json()["version"],
+            "asr_language": "vi",
+            "notes_provider": None,
+            "notes_output_language": "en",
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["notes"] == {
+        "provider": None,
+        "model": None,
+        "reasoning_effort": None,
+        "output_language": "en",
+    }
+
+
+@pytest.mark.anyio
 async def test_processing_preferences_patch_materializes_owner_pair_without_mutating_owner_stores(
     client, settings
 ):
@@ -136,11 +183,29 @@ async def test_processing_preferences_patch_materializes_owner_pair_without_muta
     }
     assert (await client.get("/api/notes-preferences")).json() == owner_before
 
-    language_only = await client.patch(
+    switched_back = await client.patch(
         "/api/processing-preferences",
         headers=origin,
         json={
             "expected_version": switched.json()["version"],
+            "asr_language": "en",
+            "notes_provider": "chatgpt",
+            "notes_output_language": "en",
+        },
+    )
+    assert switched_back.status_code == 200, switched_back.text
+    assert switched_back.json()["notes"] == {
+        "provider": "chatgpt",
+        "model": "gpt-5",
+        "reasoning_effort": "default",
+        "output_language": "en",
+    }
+
+    language_only = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": switched_back.json()["version"],
             "asr_language": "vi",
             "notes_provider": "antigravity",
             "notes_output_language": "en",
@@ -261,6 +326,10 @@ def test_save_asr_preference_updates_only_asr_when_file_metadata_diverges(tmp_pa
     after = save_asr_preference(settings.data_dir, "whisper-large-v3")
 
     assert read_default_model(settings) == "whisper-small"
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        stored_updated_at = connection.execute(
+            "SELECT updated_at FROM processing_preferences WHERE id = 1"
+        ).fetchone()[0]
     assert after == {
         "asr": {"choice": "whisper-large-v3", "language": "vi"},
         "notes": {
@@ -270,8 +339,144 @@ def test_save_asr_preference_updates_only_asr_when_file_metadata_diverges(tmp_pa
             "output_language": "en",
         },
         "version": before["version"] + 1,
-        "updated_at": after["updated_at"],
+        "updated_at": stored_updated_at,
     }
+    assert isinstance(after["updated_at"], str)
+    assert after["updated_at"] == stored_updated_at
+
+
+def test_workflow_patch_acknowledges_its_transaction_snapshot_under_concurrency(
+    tmp_path, monkeypatch
+):
+    from contextlib import contextmanager
+    from threading import Event
+
+    initialize(tmp_path)
+    connect = processing_module._connect
+    before = processing_module.processing_preferences(tmp_path)
+    committed = Event()
+    second_finished = Event()
+
+    class ObservedTransaction:
+        def __init__(self, connection):
+            self.connection = connection
+            self.wrote_preferences = False
+
+        def execute(self, statement, values=()):
+            if statement.startswith("UPDATE processing_preferences"):
+                self.wrote_preferences = True
+            return self.connection.execute(statement, values)
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            result = self.connection.__exit__(exc_type, exc, traceback)
+            if self.wrote_preferences and exc_type is None:
+                committed.set()
+                assert second_finished.wait(5)
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    @contextmanager
+    def observed_connect(directory):
+        with connect(directory) as connection:
+            yield ObservedTransaction(connection)
+
+    def commit_later_change():
+        assert committed.wait(5)
+        with connect(tmp_path) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE processing_preferences SET asr_language = 'vi', "
+                "notes_output_language = 'vi', version = version + 1 WHERE id = 1"
+            )
+        second_finished.set()
+
+    monkeypatch.setattr(processing_module, "_connect", observed_connect)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        later = pool.submit(commit_later_change)
+        saved = processing_module.save_workflow_preferences(
+            tmp_path,
+            expected_version=before["version"],
+            asr_language="en",
+            notes_provider=None,
+            notes_output_language="en",
+        )
+        later.result(timeout=5)
+
+    current = processing_module.processing_preferences(tmp_path)
+    assert current["version"] == before["version"] + 2
+    assert current["asr"]["language"] == "vi"
+    assert current["notes"]["output_language"] == "vi"
+    assert saved["version"] == before["version"] + 1
+    assert saved["asr"]["language"] == "en"
+    assert saved["notes"]["output_language"] == "en"
+
+
+def test_asr_only_acknowledges_its_transaction_snapshot_under_concurrency(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from threading import Event
+
+    initialize(tmp_path)
+    connect = processing_module._connect
+    before = processing_module.processing_preferences(tmp_path)
+    committed = Event()
+    second_finished = Event()
+
+    class ObservedTransaction:
+        def __init__(self, connection):
+            self.connection = connection
+            self.wrote_preferences = False
+
+        def execute(self, statement, values=()):
+            if statement.startswith("UPDATE processing_preferences"):
+                self.wrote_preferences = True
+            return self.connection.execute(statement, values)
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            result = self.connection.__exit__(exc_type, exc, traceback)
+            if self.wrote_preferences and exc_type is None:
+                committed.set()
+                assert second_finished.wait(5)
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    @contextmanager
+    def observed_connect(directory):
+        with connect(directory) as connection:
+            yield ObservedTransaction(connection)
+
+    def commit_later_change():
+        assert committed.wait(5)
+        with connect(tmp_path) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE processing_preferences SET asr_language = 'en', "
+                "version = version + 1 WHERE id = 1"
+            )
+        second_finished.set()
+
+    monkeypatch.setattr(processing_module, "_connect", observed_connect)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        later = pool.submit(commit_later_change)
+        saved = processing_module.save_asr_preference(tmp_path, "whisper-large-v3")
+        later.result(timeout=5)
+
+    current = processing_module.processing_preferences(tmp_path)
+    assert current["version"] == before["version"] + 2
+    assert current["asr"] == {"choice": "whisper-large-v3", "language": "en"}
+    assert saved["version"] == before["version"] + 1
+    assert saved["asr"] == {"choice": "whisper-large-v3", "language": "vi"}
 
 
 def _ready_source(tmp_path: Path, label: str = "0") -> tuple[Path, str, str]:

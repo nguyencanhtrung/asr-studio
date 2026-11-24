@@ -124,9 +124,7 @@ def _prefs_row(connection: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
-def processing_preferences(data_dir: Path) -> dict[str, object]:
-    with _connect(data_dir) as connection:
-        row = _prefs_row(connection)
+def _preferences_payload(row: sqlite3.Row) -> dict[str, object]:
     return {
         "asr": {"choice": row["asr_choice"], "language": row["asr_language"]},
         "notes": {
@@ -138,6 +136,11 @@ def processing_preferences(data_dir: Path) -> dict[str, object]:
         "version": row["version"],
         "updated_at": row["updated_at"],
     }
+
+
+def processing_preferences(data_dir: Path) -> dict[str, object]:
+    with _connect(data_dir) as connection:
+        return _preferences_payload(_prefs_row(connection))
 
 
 def validate_processing_preferences(
@@ -274,7 +277,7 @@ def save_processing_preferences(
                 notes_output_language,
             ),
         )
-    return processing_preferences(data_dir)
+        return _preferences_payload(_prefs_row(connection))
 
 
 def save_workflow_preferences(
@@ -314,7 +317,7 @@ def save_workflow_preferences(
                 "preferences_changed",
                 "Processing preferences changed; reload and try again.",
             )
-    return processing_preferences(data_dir)
+        return _preferences_payload(_prefs_row(connection))
 
 
 def save_asr_preference(data_dir: Path, asr_choice: object) -> dict[str, object]:
@@ -329,7 +332,7 @@ def save_asr_preference(data_dir: Path, asr_choice: object) -> dict[str, object]
         )
         if updated.rowcount != 1:
             raise RuntimeError("processing preferences are not initialized")
-    return processing_preferences(data_dir)
+        return _preferences_payload(_prefs_row(connection))
 
 
 def _queue_event(

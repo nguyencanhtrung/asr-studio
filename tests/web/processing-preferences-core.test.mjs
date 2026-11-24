@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { initialState, normalizePreferences, reduce, selectPreferences } from "../../src/asr_studio/web/processing-preferences-core.js";
+import { initialState, normalizePreferences, reduce, selectEligibility, selectPreferences } from "../../src/asr_studio/web/processing-preferences-core.js";
 
 const PREFS = {
   asr: { choice: "auto", language: "vi" },
@@ -35,6 +35,12 @@ const CATALOGS = {
     },
   },
 };
+
+const saveAction = (state, catalogs = CATALOGS) => ({
+  type: "provider/processing-preferences-save-requested",
+  ownerDrift: selectEligibility(state, catalogs).ownerDrift,
+  eligibility: selectEligibility(state, catalogs),
+});
 
 test("automatic preference reads preserve the server version and explain an unset provider", () => {
   assert.deepEqual(normalizePreferences(PREFS), PREFS);
@@ -73,8 +79,9 @@ test("changing provider never silently chooses its first account or model", () =
   assert.equal(view.notesOwner.state, "ready");
   assert.equal(view.notesOwner.model, "m1");
   assert.equal(view.notesOwner.effort, "high");
-  assert.equal(view.notesOwner.discrepancy, true);
-  assert.equal(view.notesOwner.text[2].text, "Cài đặt sở hữu khác recipe workflow đã lưu. Lưu để áp dụng cài đặt sở hữu.");
+  assert.equal(view.notesOwner.discrepancy, false);
+  assert.equal(view.notesOwner.text.text, "Đã lưu {model} · effort {effort} cho notes.");
+  assert.deepEqual(view.notesOwner.text.params, { model: "Model 1", effort: "high" });
   assert.equal(reduce(selected, { type: "provider/processing-preference-edited", field: "notes_model", value: "stale" }).state.draft.notes.model, null);
 });
 
@@ -90,7 +97,7 @@ test("saving sends only workflow fields and ignores stale replies", () => {
   state = reduce(state, { type: "provider/processing-preference-edited", field: "asr_language", value: "en" }).state;
   const view = selectPreferences(state, CATALOGS);
   assert.equal(view.canSave, true);
-  const saving = reduce(state, { type: "provider/processing-preferences-save-requested" });
+  const saving = reduce(state, saveAction(state));
   const effect = saving.effects.find((item) => item.type === "fetch");
   assert.equal(effect.init.method, "PATCH");
   assert.deepEqual(JSON.parse(effect.init.body), {
@@ -160,7 +167,7 @@ test("reconciling after an owner save refreshes the version without discarding a
   assert.equal(reconciled.draft.asr.language, "en");
   assert.equal(reconciled.draft.notes.output_language, "vi");
 
-  const saving = reduce(reconciled, { type: "provider/processing-preferences-save-requested" });
+  const saving = reduce(reconciled, saveAction(reconciled));
   assert.equal(JSON.parse(saving.effects[0].init.body).expected_version, 5);
 });
 
@@ -215,7 +222,7 @@ test("a genuine concurrent save remains an explicit preferences-changed error", 
     field: "asr_language",
     value: "en",
   }).state;
-  const saving = reduce(edited, { type: "provider/processing-preferences-save-requested" });
+  const saving = reduce(edited, saveAction(edited));
   const failed = reduce(saving.state, {
     type: "provider/processing-preferences-save-failed",
     meta: { mutation: saving.state.mutation },
@@ -244,7 +251,22 @@ test("owner divergence is visible and provider readiness blocks an unconfigured 
   };
   const view = selectPreferences(loaded, catalogs);
   assert.equal(view.notesOwner.discrepancy, true);
+  assert.equal(view.workflowDirty, false);
+  assert.equal(view.ownerDrift, true);
+  assert.equal(view.canSave, true);
   assert.equal(view.notesOwner.text[2].text, "Cài đặt sở hữu khác recipe workflow đã lưu. Lưu để áp dụng cài đặt sở hữu.");
+  const ownerSave = reduce(loaded, {
+    type: "provider/processing-preferences-save-requested",
+    ownerDrift: view.ownerDrift,
+    eligibility: view.eligibility,
+  });
+  assert.equal(ownerSave.state.status, "saving");
+  assert.deepEqual(JSON.parse(ownerSave.effects[0].init.body), {
+    expected_version: 4,
+    asr_language: "vi",
+    notes_provider: "chatgpt",
+    notes_output_language: "en",
+  });
 
   const missingDraft = reduce(loaded, {
     type: "provider/processing-preference-edited",
@@ -257,6 +279,13 @@ test("owner divergence is visible and provider readiness blocks an unconfigured 
   });
   assert.equal(missing.notesOwner.state, "missing");
   assert.equal(missing.canSave, false);
+  const rejected = reduce(missingDraft, {
+    type: "provider/processing-preferences-save-requested",
+    ownerDrift: false,
+    eligibility: missing.eligibility,
+  });
+  assert.equal(rejected.state.status, "ready");
+  assert.deepEqual(rejected.effects, []);
 
   const asrDivergence = selectPreferences(loaded, {
     ...catalogs,
@@ -267,5 +296,197 @@ test("owner divergence is visible and provider readiness blocks an unconfigured 
     },
   });
   assert.equal(asrDivergence.asrOwner.discrepancy, true);
-  assert.equal(asrDivergence.asrOwner.text[2].text, "Model ASR sở hữu khác lựa chọn workflow đã lưu. Mở Cài đặt → ASR Model để đồng bộ.");
+  assert.equal(asrDivergence.asrOwner.text[2].text, "Mở Cài đặt → ASR Model để đồng bộ nếu muốn.");
+});
+
+test("a committed owner pair remains eligible while disconnected or its catalog is unavailable", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: {
+      ...PREFS,
+      notes: { provider: "antigravity", model: "old-model", reasoning_effort: "default", output_language: "en" },
+    } },
+  }).state;
+  const edited = reduce(loaded, {
+    type: "provider/processing-preference-edited",
+    field: "notes_output_language",
+    value: "vi",
+  }).state;
+  const disconnected = selectPreferences(edited, {
+    ...CATALOGS,
+    providers: { ...CATALOGS.providers, antigravity: { ...CATALOGS.providers.antigravity, catalogStatus: "ready" } },
+  });
+  assert.equal(disconnected.notesOwner.state, "disconnected");
+  assert.equal(disconnected.notesOwner.ownerConfigured, true);
+  assert.equal(disconnected.canSave, true);
+  assert.equal(reduce(edited, {
+    type: "provider/processing-preferences-save-requested",
+    ownerDrift: disconnected.ownerDrift,
+    eligibility: disconnected.eligibility,
+  }).state.status, "saving");
+
+  const failedCatalog = selectPreferences(edited, {
+    ...CATALOGS,
+    providers: { ...CATALOGS.providers, antigravity: { ...CATALOGS.providers.antigravity, status: "connected", catalogStatus: "error" } },
+  });
+  assert.equal(failedCatalog.notesOwner.state, "error");
+  assert.equal(failedCatalog.notesOwner.ownerConfigured, true);
+  assert.equal(failedCatalog.canSave, true);
+});
+
+test("committed provider summaries keep the saved effort through every catalog state", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: {
+      ...PREFS,
+      notes: { provider: "antigravity", model: "old-model", reasoning_effort: "default", output_language: "en" },
+    } },
+  }).state;
+  const states = [
+    { status: "disconnected", catalogStatus: "ready", models: [] },
+    { status: "connected", catalogStatus: "loading", models: [] },
+    { status: "connected", catalogStatus: "error", models: [] },
+    { status: "connected", catalogStatus: "ready", models: [{ id: "g1", display_name: "G1", ready: false }] },
+  ];
+  for (const provider of states) {
+    const view = selectPreferences(loaded, {
+      ...CATALOGS,
+      providers: { ...CATALOGS.providers, antigravity: { ...CATALOGS.providers.antigravity, ...provider } },
+    });
+    assert.equal(view.notesOwner.effort, "high");
+    assert.match(JSON.stringify(view.notesOwner.text), /high/);
+  }
+  const disconnected = selectPreferences(loaded, {
+    ...CATALOGS,
+    providers: { ...CATALOGS.providers, antigravity: { ...CATALOGS.providers.antigravity, status: "disconnected" } },
+  });
+  assert.doesNotMatch(JSON.stringify(disconnected.notesOwner.text), /chưa được kết nối/);
+
+  const noSavedModel = selectPreferences(loaded, {
+    ...CATALOGS,
+    providers: {
+      ...CATALOGS.providers,
+      antigravity: { ...CATALOGS.providers.antigravity, ownerModel: null, ownerEffort: "high", status: "disconnected" },
+    },
+  });
+  assert.equal(noSavedModel.notesOwner.ownerConfigured, false);
+  assert.doesNotMatch(JSON.stringify(noSavedModel.notesOwner.text), /high/);
+  assert.match(JSON.stringify(noSavedModel.notesOwner.text), /Chưa có model notes đã lưu/);
+});
+
+test("initial-load and re-entry refreshes are queued, then the newest version wins", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const queued = reduce(opened.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "ai",
+  });
+  assert.equal(queued.state.refreshPending, true);
+  const first = reduce(queued.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: PREFS },
+  });
+  assert.equal(first.state.status, "loading");
+  assert.equal(first.effects[0].meta.reconcile, true);
+  const second = reduce(first.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: first.state.request, reconcile: true },
+    response: { body: { ...PREFS, version: 5, asr: { ...PREFS.asr, language: "en" } } },
+  }).state;
+  assert.equal(second.status, "ready");
+  assert.equal(second.saved.version, 5);
+  assert.equal(second.draft.asr.language, "en");
+
+  const closed = reduce(second, { type: "provider/dialog-closed" });
+  assert.equal(closed.state.saved, null);
+  assert.equal(closed.state.draft, null);
+  const reopened = reduce(closed.state, { type: "provider/dialog-opened" });
+  assert.notEqual(reopened.state.request, first.state.request);
+  const stale = reduce(reopened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: reopened.state.request - 1 },
+    response: { body: { ...PREFS, asr: { ...PREFS.asr, language: "en" } } },
+  }).state;
+  assert.equal(stale.draft, null);
+  assert.equal(stale.status, "loading");
+});
+
+test("owner and re-entry notifications are retained and coalesced by origin", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: PREFS },
+  }).state;
+  const external = reduce(loaded, { type: "provider/notes-owner-changed", source: "provider-owner-changed" });
+  assert.equal(external.state.status, "loading");
+  assert.equal(external.effects[0].meta.reconcile, true);
+
+  const edited = reduce(loaded, {
+    type: "provider/processing-preference-edited",
+    field: "asr_language",
+    value: "en",
+  }).state;
+  const saving = reduce(edited, saveAction(edited));
+  const duringSave = reduce(saving.state, { type: "provider/asr-settings-changed", source: "asr-owner-save" });
+  assert.equal(duringSave.state.refreshPending, true);
+  const saved = reduce(duringSave.state, {
+    type: "provider/processing-preferences-saved",
+    meta: { mutation: duringSave.state.mutation },
+    response: { body: { ...PREFS, asr: { ...PREFS.asr, language: "en" }, version: 5 } },
+  });
+  assert.equal(saved.effects[0].name, "asr.settings-changed");
+  assert.equal(saved.effects[0].args[0], "processing-preferences-save");
+  assert.equal(saved.effects[1].meta.reconcile, true);
+  assert.equal(saved.state.notice.text, "Đã lưu cài đặt xử lý tự động.");
+
+  const echoed = reduce(saved.state, { type: "provider/asr-settings-changed", source: "processing-preferences-save" });
+  assert.deepEqual(echoed.effects, []);
+  assert.equal(echoed.state.notice.text, "Đã lưu cài đặt xử lý tự động.");
+});
+
+test("ASR owner and workflow choices stay distinct, including Auto readiness", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: {
+      ...PREFS,
+      asr: { choice: "qwen3-asr-1.7b", language: "vi" },
+    } },
+  }).state;
+  const catalog = {
+    ...CATALOGS,
+    asr: {
+      status: "ready",
+      models: [
+        { id: "auto", label: "Auto", ready: true },
+        { id: "whisper-small", label: "Whisper", ready: true },
+        { id: "qwen3-asr-1.7b", label: "Qwen", ready: true },
+      ],
+      defaultModel: "whisper-small",
+      hardwareModel: "whisper-small",
+    },
+  };
+  const qwen = selectPreferences(loaded, catalog);
+  assert.equal(qwen.asrOwner.model, "whisper-small");
+  assert.equal(qwen.asrOwner.workflow, "qwen3-asr-1.7b");
+  assert.equal(qwen.asrOwner.discrepancy, true);
+  assert.deepEqual(qwen.asrOwner.text[0].params, { workflow: "Qwen3-ASR-1.7B", owner: "Whisper small" });
+
+  const auto = selectPreferences({
+    ...loaded,
+    draft: { ...loaded.draft, asr: { choice: "auto", language: "vi" } },
+  }, {
+    ...catalog,
+    asr: { ...catalog.asr, models: catalog.asr.models.map((model) => model.id === "auto" ? { ...model, ready: false, reason: "worker_unavailable" } : model) },
+  });
+  assert.equal(auto.asrOwner.workflow, "auto");
+  assert.equal(auto.asrOwner.state, "warning");
+  assert.match(auto.asrOwner.text.text, /worker/);
 });

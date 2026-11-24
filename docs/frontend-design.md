@@ -1109,17 +1109,19 @@ bản người dùng đã thấy trước khi bấm. Server vẫn kiểm tra epo
 
 Core sở hữu lát `processingPreferences` trong store provider. State có
 `idle|loading|ready|saving|error`, `open`, bản `saved`, bản `draft`, định danh
-`request`/`mutation`, lỗi và thông báo. Catalog chỉ cung cấp lựa chọn để vẽ;
-đổi provider không tự chọn model hoặc account khác.
+`request`/`mutation`, `refreshPending`, lỗi và thông báo. Catalog chỉ cung cấp
+lựa chọn để vẽ; cặp owner đã commit và recipe workflow đã lưu là hai nguồn dữ
+liệu khác nhau. Đổi provider không tự chọn model hoặc account khác.
 
 | Sự kiện | Chuyển trạng thái | Hiệu ứng |
 | --- | --- | --- |
-| `provider/dialog-opened` | `open=true`, `loading`, tăng request, xóa lỗi/thông báo | GET processing preferences |
-| `provider/processing-preferences-loaded` đúng request khi đang mở | Hợp lệ: `ready`, thay saved/draft bằng bản server; sai: `error`, hiện `invalid_response` | Không tự lưu |
-| `provider/processing-preferences-failed` đúng request khi đang mở | `error`, hiện lỗi, xóa thông báo | Không ghi đè saved/draft |
+| `provider/dialog-opened` | `open=true`, `loading`, tăng request, reset saved/draft của phiên dialog, xóa lỗi/thông báo | GET processing preferences |
+| `provider/settings-section-selected` vào `processing`, hoặc `provider/notes-owner-changed` / `provider/asr-settings-changed` từ nguồn ngoài | Nếu GET chưa có hoặc đang chạy: giữ `refreshPending`; nếu đã `ready`: `loading` và tăng request | GET reconciliation, không rơi notification |
+| `provider/processing-preferences-loaded` đúng request khi đang mở | Lượt đầu: `ready`, baseline=saved=draft. Reconciliation: cập nhật baseline/version, rồi merge ba chiều chỉ giữ field local đã sửa; nếu `refreshPending` thì đọc tiếp | Không tự lưu; response cũ bị bỏ theo request |
+| `provider/processing-preferences-failed` đúng request khi đang mở | Lỗi hiển thị; nếu còn refresh pending thì xếp lại GET sau khi giữ thông tin owner đã biết | Không ghi đè saved/draft |
 | `provider/processing-preference-edited` có draft và chưa saving | Sửa ngôn ngữ, provider hoặc ngôn ngữ đầu ra trong draft. Đổi hoặc bỏ provider chỉ xóa bản sao model/effort trong draft. Selector owner không còn trong form | Không request mạng |
-| `provider/processing-preferences-save-requested` đang mở, có draft khác saved, chưa saving | `saving`, tăng mutation, xóa lỗi/thông báo | PATCH `/api/processing-preferences` với `expected_version`, `asr_language`, `notes_provider` và `notes_output_language`. Không gửi bản sao ASR/model/effort. Server materialize cặp owner đã commit hoặc trả conflict |
-| `provider/processing-preferences-saved` đúng mutation khi đang mở | Hợp lệ: `ready`, thay saved/draft, hiện thông báo; sai: `ready`, giữ dữ liệu, hiện `invalid_response` | Chỉ phản hồi hợp lệ gọi `asr.settings-changed` qua runner |
-| `provider/processing-preferences-save-failed` đúng mutation khi đang mở | `ready`, giữ draft để sửa/thử lại, hiện lỗi, xóa thông báo | Không thông báo đã lưu |
-| `provider/dialog-closed` | `open=false`, về ready nếu có saved hoặc idle; tăng cả request và mutation | Hủy read/save; phản hồi muộn không đổi state |
-| Save khi đang saving, draft không đổi/không có, dialog đóng; edit khi saving/không draft; response sai định danh hoặc dialog đã đóng | Giữ state | Không effect |
+| `provider/processing-preferences-save-requested` đang mở, draft dirty và pure eligibility cho biết owner pair đã commit hợp lệ (kể cả disconnected/catalog error), chưa saving | `saving`, tăng mutation, xóa lỗi/thông báo; eligibility sai thì giữ state | PATCH `/api/processing-preferences` với `expected_version`, `asr_language`, `notes_provider` và `notes_output_language`. Không gửi bản sao ASR/model/effort. Server materialize cặp owner đã commit hoặc trả conflict |
+| `provider/processing-preferences-saved` đúng mutation khi đang mở | Hợp lệ: `ready`, thay saved/draft, hiện thông báo; nếu owner/re-entry đã tới trong lúc save thì chuyển ngay sang reconciliation; sai: `ready`, giữ dữ liệu, hiện `invalid_response` | Chỉ phản hồi hợp lệ gọi `asr.settings-changed` với source `processing-preferences-save` qua runner |
+| `provider/processing-preferences-save-failed` đúng mutation khi đang mở | `ready`, giữ draft để sửa/thử lại, hiện lỗi; refresh pending vẫn được xếp lại | Không thông báo đã lưu |
+| `provider/dialog-closed` | `open=false`, `idle`, reset draft/baseline/notification và tăng cả request/mutation | Hủy read/save; phản hồi muộn không đổi state; cùng dialog vẫn giữ edit qua section switch |
+| Save khi đang saving, draft không đổi/không có, owner pair chưa xác nhận, dialog đóng; edit khi saving/không draft; response sai định danh hoặc dialog đã đóng | Giữ state | Không effect |

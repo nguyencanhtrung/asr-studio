@@ -23,7 +23,12 @@ export const timestamp = (value) => ({ fmt: "timestamp", value });
 const KNOWN = ["connected", "disconnected", "reconnect_required"];
 const SESSION_DONE = ["connected", "cancelled", "expired", "failed"];
 const VIETNAMESE = /[À-ỹ]/u;
-const CHOICE_CHANGED = { type: "call", key: "provider/choice-changed", name: "provider.choice-changed" };
+const CHOICE_CHANGED = {
+  type: "call",
+  key: "provider/choice-changed",
+  name: "provider.choice-changed",
+  args: ["provider-owner-changed"],
+};
 
 const EFFORT_LABELS = {
   none: t("Không suy luận (none)"),
@@ -337,7 +342,14 @@ function initial(d) {
     savedModel: "",
     selectedEffort: d.effort.initial,
     savedEffort: d.effort.initial,
-    preferences: { provider: null, models: {}, reasoning_effort: "default" },
+    // The owner pair is the provider's committed setting, separate from the
+    // workflow draft shown in Automatic processing. Keep it while a catalog
+    // read is loading or fails; never borrow it from the other provider.
+    ownerModel: null,
+    ownerEffort: d.effort.initial,
+    ownerKnown: false,
+    catalogStatus: "idle", // idle | loading | ready | error
+    preferences: { provider: null, models: {}, reasoning_effort: "default", reasoning_efforts: {} },
     modelStatus: { state: "", text: null },
     verifyResult: { state: "", text: null },
     message: null,
@@ -438,17 +450,44 @@ function summaryOf(d, s, verification) {
   return [name, " · effort ", verification.reasoning_effort || "default", " · ", timestamp(verification.verified_at)];
 }
 
+function applyVerification(d, s, verification) {
+  if (!s.info) return s;
+  return { ...s, info: { ...s.info, verification }, summary: summaryOf(d, s, verification) };
+}
+
 // The old renderProvider: the new status reaches the badge, the ledger, the verification row and the header button.
-function applyProvider(d, s, info) {
-  const status = info.status;
+// Only a full provider response is allowed to replace the committed owner pair. Cached or synthetic status
+// objects are normalized back to the reducer's owner fields so a stale info object cannot undo a newer save.
+function applyProvider(d, s, info, { ownerAuthority = false } = {}) {
+  const nextInfo = { ...info };
+  if (!ownerAuthority) {
+    if (s.ownerKnown) {
+      nextInfo.saved_model = s.ownerModel;
+      nextInfo.reasoning_effort = s.ownerEffort;
+    } else {
+      delete nextInfo.saved_model;
+      delete nextInfo.reasoning_effort;
+    }
+  }
+  const status = nextInfo.status;
   const text = KNOWN.includes(status) ? d.copy.status[status] : d.copy.status.other;
+  const hasOwnerModel = ownerAuthority && Object.hasOwn(info, "saved_model");
+  const hasOwnerEffort = ownerAuthority && Object.hasOwn(info, "reasoning_effort");
+  const owner = ownerAuthority && (hasOwnerModel || hasOwnerEffort)
+    ? {
+      ownerModel: typeof info.saved_model === "string" && info.saved_model ? info.saved_model : null,
+      ownerEffort: typeof info.reasoning_effort === "string" && info.reasoning_effort ? info.reasoning_effort : d.effort.initial,
+      ownerKnown: true,
+    }
+    : {};
   return {
     ...s,
-    info,
+    ...owner,
+    info: nextInfo,
     badge: { state: KNOWN.includes(status) ? status : "error", text },
     statusText: text,
-    summary: summaryOf(d, s, info.verification),
-    launcher: launcherOf(status, info.account?.label),
+    summary: summaryOf(d, s, nextInfo.verification),
+    launcher: launcherOf(status, nextInfo.account?.label),
   };
 }
 
@@ -457,7 +496,7 @@ function placeholderOptions(label) {
 }
 
 function clearModels(d, s) {
-  return { ...s, models: [], selectedModel: "", savedModel: "", modelOptions: placeholderOptions(d.copy.connectToLoad) };
+  return { ...s, models: [], selectedModel: "", modelOptions: placeholderOptions(d.copy.connectToLoad) };
 }
 
 function localReconnect(d, s, error) {
@@ -470,7 +509,7 @@ function localReconnect(d, s, error) {
 
 function startLoad(d, s) {
   const loadId = s.loadId + 1;
-  let next = { ...s, loadId, loading: true, error: null };
+  let next = { ...s, loadId, loading: true, catalogStatus: "loading", error: null };
   if (d.loadFailure === "keep-last") next = { ...next, badge: { state: "loading", text: d.copy.loading }, launcher: { status: "loading", account: "" } };
   return done(next, [call(d, "load", "providers", d.endpoints.providers, { id: loadId })]);
 }
@@ -490,6 +529,7 @@ function normalizePreferences(payload) {
     provider: ["chatgpt", "antigravity"].includes(payload.provider) ? payload.provider : null,
     models: isObject(payload.models) ? payload.models : {},
     reasoning_effort: typeof payload.reasoning_effort === "string" ? payload.reasoning_effort : "default",
+    reasoning_efforts: isObject(payload.reasoning_efforts) ? payload.reasoning_efforts : {},
   };
 }
 
@@ -513,9 +553,13 @@ function renderModels(d, s, catalog) {
     const preferred = s.preferences.models[d.id];
     const fromCatalog = typeof catalog.selected_model === "string" ? catalog.selected_model : "";
     selectedModel = typeof preferred === "string" && preferred ? preferred : fromCatalog;
-    savedEffort = s.preferences.reasoning_effort;
+    savedEffort = typeof s.preferences.reasoning_efforts[d.id] === "string"
+      ? s.preferences.reasoning_efforts[d.id]
+      : s.preferences.reasoning_effort;
   } else {
-    selectedModel = typeof catalog.selected_model === "string" ? catalog.selected_model : "";
+    selectedModel = typeof catalog.selected_model === "string"
+      ? catalog.selected_model
+      : (s.ownerModel || "");
     savedEffort = catalog.reasoning_effort === "medium" ? "medium" : "high";
   }
   const options = [];
@@ -523,7 +567,17 @@ function renderModels(d, s, catalog) {
   if (!selectedModel) options.push(...placeholderOptions(models.length ? d.copy.choose : d.copy.noModels));
   else if (!available) options.push({ value: selectedModel, label: fill(d.copy.unavailableOption, { model: selectedModel }), disabled: true });
   for (const model of models) options.push({ value: model.id, label: model.display_name, disabled: false });
-  next = { ...next, modelOptions: options, savedModel: selectedModel, selectedModel, savedEffort };
+  next = {
+    ...next,
+    modelOptions: options,
+    savedModel: selectedModel,
+    selectedModel,
+    savedEffort,
+    ownerModel: selectedModel || null,
+    ownerEffort: savedEffort,
+    ownerKnown: true,
+    catalogStatus: "ready",
+  };
   next.selectedEffort = effortValue(d, next, selectedModel, savedEffort);
   if (selectedModel && !available) {
     next.modelStatus = { state: "error", text: fill(d.copy.unavailableSaved, { model: selectedModel }) };
@@ -535,24 +589,30 @@ function renderModels(d, s, catalog) {
 
 function loadOk(d, s, meta, body) {
   if (meta.id !== s.loadId) return done(s);
-  if (!isObject(body)) return loadFailed(d, s, GENERIC_ERROR);
+  if (!isObject(body)) return loadFailed(d, s, GENERIC_ERROR, meta.op);
   if (meta.op === "providers") {
     const info = (Array.isArray(body.providers) ? body.providers : []).find((item) => item && item.id === d.id);
     if (!info || (d.strictStatus && !KNOWN.includes(info.status))) {
-      return loadFailed(d, s, { code: "INVALID_PROVIDER_STATUS", message: d.copy.invalidStatus });
+      return loadFailed(d, s, { code: "INVALID_PROVIDER_STATUS", message: d.copy.invalidStatus }, meta.op);
     }
-    const next = applyProvider(d, s, info);
+    const next = applyProvider(d, s, info, { ownerAuthority: true });
     if (d.endpoints.preferences) return done(next, [call(d, "load", "preferences", d.endpoints.preferences, { id: meta.id })]);
     if (info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id })]);
     const cleared = clearModels(d, next);
     if (d.id !== "antigravity") return settle(d, cleared);
-    const savedModel = typeof info.saved_model === "string" ? info.saved_model : "";
-    const savedEffort = typeof info.reasoning_effort === "string" ? info.reasoning_effort : d.effort.initial;
-    return settle(d, { ...cleared, selectedModel: savedModel, savedModel, selectedEffort: savedEffort, savedEffort });
+    const savedModel = next.ownerKnown && next.ownerModel ? next.ownerModel : "";
+    const savedEffort = next.ownerKnown ? next.ownerEffort : d.effort.initial;
+    return settle(d, { ...cleared, selectedModel: savedModel, savedModel, selectedEffort: savedEffort, savedEffort, catalogStatus: "ready" });
   }
   if (meta.op === "preferences") {
     const preferences = normalizePreferences(body);
-    const next = { ...s, preferences };
+    const ownerModel = typeof preferences.models[d.id] === "string" && preferences.models[d.id]
+      ? preferences.models[d.id]
+      : null;
+    const ownerEffort = typeof preferences.reasoning_efforts[d.id] === "string"
+      ? preferences.reasoning_efforts[d.id]
+      : preferences.reasoning_effort;
+    const next = { ...s, preferences, ownerModel, ownerEffort, ownerKnown: true };
     if (s.info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id })]);
     const selectedModel = preferences.models[d.id] || "";
     return settle(d, {
@@ -560,22 +620,23 @@ function loadOk(d, s, meta, body) {
       models: [],
       selectedModel,
       savedModel: selectedModel,
-      savedEffort: preferences.reasoning_effort,
-      selectedEffort: "default",
+      savedEffort: ownerEffort,
+      selectedEffort: ownerEffort,
       modelOptions: placeholderOptions(d.copy.connectToLoad),
+      catalogStatus: "ready",
       modelStatus: { state: "", text: null },
     });
   }
   return settle(d, renderModels(d, s, body)); // models
 }
 
-function loadFailed(d, s, error) {
-  return fail(d, s, error, "load");
+function loadFailed(d, s, error, operation = "load") {
+  return fail(d, s, error, "load", operation);
 }
 
 // A failed call that may mean the provider needs a new sign-in: re-read the status, then finish the operation.
-function fail(d, s, error, after) {
-  if (!needsReconnect(d, error)) return resume(d, s, error, after);
+function fail(d, s, error, after, operation = after) {
+  if (!needsReconnect(d, error)) return resume(d, s, error, after, operation);
   const next = d.reconnect.local ? localReconnect(d, s, error) : s;
   return done(next, [call(d, `refresh-${after}`, "refresh", d.endpoints.providers, { extra: { after, error, loadId: s.loadId } })]);
 }
@@ -585,20 +646,23 @@ function refreshed(d, s, meta, body) {
   let next = s;
   const info = isObject(body) && Array.isArray(body.providers) ? body.providers.find((item) => item && item.id === d.id) : null;
   if (info && (!d.strictStatus || KNOWN.includes(info.status))) {
-    next = applyProvider(d, s, info);
+    next = applyProvider(d, s, info, { ownerAuthority: true });
     if (!d.strictStatus && info.status !== "connected") next = clearModels(d, next);
   }
-  return resume(d, next, meta.error, meta.after);
+  return resume(d, next, meta.error, meta.after, meta.after);
 }
 
 function setPending(s, op, value) {
   return { ...s, pending: { ...s.pending, [op]: value } };
 }
 
-function resume(d, s, error, after) {
+function resume(d, s, error, after, operation = after) {
   if (after === "load") {
+    const catalogError = operation === "providers" || operation === "preferences" || operation === "models"
+      ? { catalogStatus: "error" }
+      : {};
     if (error?.code === "provider_in_use" && s.info?.status === "connected") {
-      return settle(d, showError(d, s, error));
+      return settle(d, showError(d, { ...s, ...catalogError }, error));
     }
     let next = s;
     if (d.loadFailure === "keep-last") {
@@ -607,7 +671,7 @@ function resume(d, s, error, after) {
     } else if (!needsReconnect(d, error)) {
       next = { ...s, launcher: { status: "error", account: "" }, badge: { state: "error", text: d.copy.unavailable } };
     }
-    return settle(d, showError(d, next, error));
+    return settle(d, showError(d, { ...next, ...catalogError }, error));
   }
   if (after === "save") {
     const next = setPending(s, "save", false);
@@ -966,16 +1030,42 @@ function saveOk(d, s, meta, body) {
   let next = setPending(s, "save", false);
   if (d.catalog === "preferences") {
     const reply = isObject(body) ? body : {};
+    const reasoningEfforts = isObject(reply.reasoning_efforts) ? reply.reasoning_efforts : {};
+    const savedEffort = typeof reasoningEfforts[d.id] === "string"
+      ? reasoningEfforts[d.id]
+      : typeof reply.reasoning_effort === "string" ? reply.reasoning_effort : effort;
     const preferences = {
       provider: d.id,
       models: isObject(reply.models) ? reply.models : { [d.id]: model },
-      reasoning_effort: typeof reply.reasoning_effort === "string" ? reply.reasoning_effort : effort,
+      reasoning_effort: savedEffort,
+      reasoning_efforts: reasoningEfforts,
     };
     const savedModel = preferences.models[d.id] || model;
-    next = { ...next, preferences, savedModel, selectedModel: savedModel, savedEffort: preferences.reasoning_effort };
+    next = {
+      ...next,
+      preferences,
+      savedModel,
+      selectedModel: savedModel,
+      savedEffort,
+      ownerModel: savedModel,
+      ownerEffort: savedEffort,
+      ownerKnown: true,
+    };
     next.selectedEffort = effortValue(d, next, savedModel, preferences.reasoning_effort);
   } else {
-    next = { ...next, savedModel: model, savedEffort: effort };
+    const reply = isObject(body) ? body : {};
+    const savedModel = typeof reply.model === "string" && reply.model ? reply.model : model;
+    const savedEffort = typeof reply.reasoning_effort === "string" && reply.reasoning_effort ? reply.reasoning_effort : effort;
+    next = {
+      ...next,
+      savedModel,
+      savedEffort,
+      selectedModel: savedModel,
+      selectedEffort: savedEffort,
+      ownerModel: savedModel,
+      ownerEffort: savedEffort,
+      ownerKnown: true,
+    };
   }
   const label = d.effortLabels ? d.effortLabels[next.savedEffort] ?? next.savedEffort : next.savedEffort;
   next = { ...next, modelStatus: { state: "saved", text: fill(d.copy.saved, { model: modelName(next, next.selectedModel), effort: label }) } };
@@ -1001,11 +1091,11 @@ function verifyOk(d, s, meta, result) {
       ...next,
       verifyResult: { state: "success", text: fill(d.copy.verified, { model: modelName(next, reply.model), effort, time: timestamp(reply.verified_at) }) },
     };
-    if (next.info) next = applyProvider(d, next, { ...next.info, verification: { model: reply.model, reasoning_effort: effort, verified_at: reply.verified_at } });
+    next = applyVerification(d, next, { model: reply.model, reasoning_effort: effort, verified_at: reply.verified_at });
     return done(next);
   }
   next = { ...next, verifyResult: { state: "success", text: fill(d.copy.verified, { model: modelName(next, meta.model), time: timestamp(reply.verified_at) }) } };
-  if (next.info) next = applyProvider(d, next, { ...next.info, verification: reply });
+  next = applyVerification(d, next, reply);
   return done(next);
 }
 
@@ -1052,7 +1142,7 @@ function headerLoaded(d, s, body) {
   if (d.loadFailure === "keep-last") {
     // A dialog or login read that started meanwhile is newer than this slower page-load answer.
     if (s.headerGen !== s.loadId) return done(s);
-    return done(known ? applyProvider(d, s, entry) : { ...s, launcher: { status: "error", account: "" } });
+    return done(known ? applyProvider(d, s, entry, { ownerAuthority: true }) : { ...s, launcher: { status: "error", account: "" } });
   }
   if (s.launcher) return done(s); // a status already shown by the dialog read is newer
   return done({ ...s, launcher: launcherOf(known ? entry.status : "error", entry?.account?.label) });
@@ -1176,7 +1266,7 @@ function onFailure(d, s, meta, error) {
     case "providers":
     case "preferences":
     case "models":
-      return meta.id === s.loadId ? loadFailed(d, s, error) : done(s);
+      return meta.id === s.loadId ? loadFailed(d, s, error, meta.op) : done(s);
     case "refresh":
       return refreshed(d, s, meta, null);
     case "login-start":
@@ -1394,7 +1484,7 @@ export function selectProviderOverview(state) {
     overviewProvider(CHATGPT, state.chatgpt, "openai"),
     overviewProvider(ANTIGRAVITY, state.antigravity, "antigravity"),
     { id: "local", name: "Local AI", status: t("Sắp hỗ trợ"), model: null, disabled: true },
-    { id: "processing", name: t("Xử lý tự động"), status: t("Chọn rõ model chép lời, ngôn ngữ và công thức notes cho các bản ghi mới từ extension."), model: null, disabled: false },
+    { id: "processing", name: t("Xử lý tự động"), status: t("Chọn ngôn ngữ transcript và provider notes cho các bản ghi mới từ extension. Model ASR và model/effort notes lấy từ panel sở hữu. Không chọn provider nghĩa là transcript vẫn có thể hoàn tất nhưng notes sẽ chờ."), model: null, disabled: false },
   ];
 }
 

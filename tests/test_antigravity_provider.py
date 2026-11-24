@@ -796,27 +796,35 @@ def test_antigravity_effort_is_saved_with_the_model_and_legacy_default_reads_hig
     assert provider.saved_notes_effort() == "high"
 
 
-def test_saved_notes_settings_reads_model_and_effort_under_one_store_lock(tmp_path, monkeypatch):
+def test_saved_notes_settings_returns_one_committed_owner_pair_during_interleaved_write(
+    tmp_path, monkeypatch
+):
     provider = AntigravityProvider(tmp_path / "provider", adapter=FakeAntigravityAdapter())
     provider.ensure()
-    provider.save_notes_preference("gemini-test", "medium")
-    original_locked = provider.store.locked
-    lock_count = 0
+    committed = {"selected_model": "pair-a", "reasoning_effort": "medium"}
+    reader_entered = threading.Event()
+    writer_finished = threading.Event()
+    first_read = True
 
     @contextmanager
-    def counted_locked(*, write=False):
-        nonlocal lock_count
-        lock_count += 1
-        with original_locked(write=write) as state:
-            yield state
+    def interleaved_locked(*, write=False):
+        nonlocal first_read
+        snapshot = dict(committed)
+        if first_read and not write:
+            first_read = False
+            reader_entered.set()
+            assert writer_finished.wait(5)
+        yield snapshot
 
-    monkeypatch.setattr(provider.store, "locked", counted_locked)
-    assert provider.saved_notes_settings() == ("gemini-test", "medium")
-    assert lock_count == 1
+    monkeypatch.setattr(provider.store, "locked", interleaved_locked)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        read = pool.submit(provider.saved_notes_settings)
+        assert reader_entered.wait(5)
+        committed.update(selected_model="pair-b", reasoning_effort="high")
+        writer_finished.set()
+        assert read.result(timeout=5) == ("pair-a", "medium")
     view = provider.provider_view()
-    assert view["saved_model"] == "gemini-test"
-    assert view["reasoning_effort"] == "medium"
-    assert lock_count == 2
+    assert (view["saved_model"], view["reasoning_effort"]) == ("pair-b", "high")
 
 
 def test_generate_notes_document_runs_with_the_pinned_level(tmp_path):

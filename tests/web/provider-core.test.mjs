@@ -387,6 +387,8 @@ for (const { d, other, save } of CASES) {
     assert.equal(selectView(d, own(env, d)).saveDisabled, true);
     await env.answer(env.is(...save), 200, d === CHATGPT ? { models: { chatgpt: other }, reasoning_effort: "default" } : {});
     assert.equal(own(env, d).savedModel, other);
+    assert.equal(own(env, d).ownerModel, other);
+    assert.equal(own(env, d).ownerEffort, own(env, d).savedEffort);
     assert.deepEqual(env.events, ["provider.choice-changed"]);
 
     dispatch(env, d, "verify-requested");
@@ -402,6 +404,55 @@ for (const { d, other, save } of CASES) {
     assert.equal(env.pending(env.is("DELETE", "/connection")).length, 1);
   });
 }
+
+test("ChatGPT owner save installs the exact returned model and effort as the committed pair", async () => {
+  const env = setup();
+  await loaded(env);
+  dispatch(env, CHATGPT, "choice-edited", { field: "model", value: "m2" });
+  dispatch(env, CHATGPT, "save-requested");
+  await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+    models: { chatgpt: "gpt-5.5" },
+    reasoning_effort: "high",
+    reasoning_efforts: { chatgpt: "high" },
+  });
+  const saved = own(env, CHATGPT);
+  assert.equal(saved.ownerModel, "gpt-5.5");
+  assert.equal(saved.ownerEffort, "high");
+  assert.equal(saved.savedModel, "gpt-5.5");
+  assert.equal(saved.savedEffort, "high");
+  assert.equal(saved.preferences.reasoning_efforts.chatgpt, "high");
+});
+
+test("a verification reply updates only verification and cannot revert a newer owner pair", async () => {
+  const env = setup();
+  await loaded(env);
+  const before = own(env, ANTIGRAVITY);
+  const state = {
+    ...env.state(),
+    antigravity: {
+      ...before,
+      info: { ...before.info, saved_model: "older-model", reasoning_effort: "high" },
+      ownerModel: "committed-new-model",
+      ownerEffort: "medium",
+      ownerKnown: true,
+      savedModel: "committed-new-model",
+      savedEffort: "medium",
+      selectedModel: "committed-new-model",
+      selectedEffort: "medium",
+      pending: { ...before.pending, verify: true },
+    },
+  };
+  const next = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "antigravity", op: "verify", model: "committed-new-model", effort: "medium" },
+    response: { body: { model: "committed-new-model", verified_at: LATER } },
+  }).state.antigravity;
+  assert.equal(next.ownerModel, "committed-new-model");
+  assert.equal(next.ownerEffort, "medium");
+  assert.equal(next.savedModel, "committed-new-model");
+  assert.equal(next.savedEffort, "medium");
+  assert.equal(next.info.verification.model, "committed-new-model");
+});
 
 test("Google runs one operation at a time; ChatGPT lets save and verify overlap", async () => {
   const env = setup();
@@ -546,6 +597,39 @@ test("Google: disconnect confirms locally, then tells notes.js; the busy flag ho
   assert.equal(s.pending.disconnect, false);
   assert.equal(s.ui, "focus:sign-in");
   assert.deepEqual(env.events, ["provider.choice-changed"]);
+});
+
+test("a cached disconnect status cannot restore a stale Antigravity owner pair", () => {
+  const env = setup();
+  const current = own(env, ANTIGRAVITY);
+  const state = {
+    ...env.state(),
+    antigravity: {
+      ...current,
+      ownerModel: "new-model",
+      ownerEffort: "medium",
+      ownerKnown: true,
+      savedModel: "new-model",
+      savedEffort: "medium",
+      pending: { ...current.pending, disconnect: true },
+      info: {
+        ...current.info,
+        status: "connected",
+        saved_model: "old-model",
+        reasoning_effort: "high",
+      },
+    },
+  };
+  const next = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "antigravity", op: "disconnect" },
+    response: { body: { status: "disconnected" } },
+  }).state.antigravity;
+  assert.equal(next.ownerModel, "new-model");
+  assert.equal(next.ownerEffort, "medium");
+  assert.equal(next.info.saved_model, "new-model");
+  assert.equal(next.info.reasoning_effort, "medium");
+  assert.equal(next.info.status, "disconnected");
 });
 
 test("a failed disconnect keeps the connection and frees the button", async () => {

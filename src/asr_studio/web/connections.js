@@ -623,16 +623,20 @@ function processingCatalogs(state) {
         status: state.chatgpt.info?.status,
         account: state.chatgpt.info?.account?.label || null,
         models: state.chatgpt.models,
-        ownerModel: state.chatgpt.savedModel,
-        ownerEffort: state.chatgpt.savedEffort,
+        ownerModel: state.chatgpt.ownerModel,
+        ownerEffort: state.chatgpt.ownerEffort,
+        ownerKnown: state.chatgpt.ownerKnown,
+        catalogStatus: state.chatgpt.catalogStatus,
         effortOptions: selectView(CHATGPT, state.chatgpt).effortOptions || [],
       },
       antigravity: {
         status: state.antigravity.info?.status,
         account: state.antigravity.info?.account?.label || null,
         models: state.antigravity.models,
-        ownerModel: state.antigravity.savedModel,
-        ownerEffort: state.antigravity.savedEffort,
+        ownerModel: state.antigravity.ownerModel,
+        ownerEffort: state.antigravity.ownerEffort,
+        ownerKnown: state.antigravity.ownerKnown,
+        catalogStatus: state.antigravity.catalogStatus,
         effortOptions: selectView(ANTIGRAVITY, state.antigravity).effortOptions || [],
       },
     },
@@ -650,10 +654,22 @@ function renderProcessingPreferences(state, rootState) {
   setAttr(processingPreferenceEls.version, "data-state", view.status === "error" ? "error" : view.status);
   if (!draft) {
     setAttr(processingPreferenceEls.form, "aria-busy", view.loading ? "true" : "false");
+    // A reopened dialog deliberately has no draft until its new GET confirms
+    // the baseline. Do not leave the old controls looking editable while that
+    // boundary read is held.
+    for (const control of [processingPreferenceEls.asrLanguage, processingPreferenceEls.provider, processingPreferenceEls.outputLanguage]) {
+      setProp(control, "disabled", true);
+      setProp(control, "value", "");
+    }
+    for (const summary of [processingPreferenceEls.asrOwner, processingPreferenceEls.providerHelp, processingPreferenceEls.notesOwner]) {
+      setProp(summary, "textContent", "");
+      setAttr(summary, "data-state", "loading");
+    }
     setProp(processingPreferenceEls.notice, "textContent", view.message ? tr(view.message) : "");
     setProp(processingPreferenceEls.error, "hidden", !view.error);
     setProp(processingPreferenceEls.error, "textContent", view.error ? tr(view.error.text) : "");
     setProp(processingPreferenceEls.save, "disabled", true);
+    setProp(processingPreferenceEls.save, "textContent", t("Lưu cài đặt xử lý"));
     return;
   }
   setProp(processingPreferenceEls.asrOwner, "textContent", view.asrOwner ? tr(view.asrOwner.text) : "");
@@ -885,12 +901,13 @@ const base = createRunner({
   navigate: (url) => window.location.assign(url),
   open: (url, target) => window.open(url, target),
   calls: {
-    "provider.choice-changed": () => providerChoice.dispatch({ type: "channel/provider-choice-changed" }),
+    "provider.choice-changed": (source) => {
+      providerChoice.dispatch({ type: "channel/provider-choice-changed" });
+      dispatch({ type: "provider/notes-owner-changed", source });
+    },
     "asr.settings-changed": (source) => {
       asrSettings.dispatch({ type: "channel/asr-settings-changed" });
-      if (source !== "processing-preferences-save") {
-        dispatch({ type: "provider/processing-preferences-reconcile-requested" });
-      }
+      dispatch({ type: "provider/asr-settings-changed", source });
     },
     "clipboard.write": (text) => {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
@@ -968,10 +985,7 @@ for (const provider of [CHATGPT.id, ANTIGRAVITY.id]) {
 
 function selectSection(section, focus = false) {
   const previous = store.getState().launcher.section;
-  dispatch({ type: "provider/settings-section-selected", section });
-  if (section === "processing" && previous !== "processing") {
-    dispatch({ type: "provider/processing-preferences-reconcile-requested" });
-  }
+  dispatch({ type: "provider/settings-section-selected", section, previousSection: previous });
   settingsBody.scrollTop = 0;
   if (focus) focusSettingsDestination(store.getState().launcher.section);
 }
@@ -1046,7 +1060,12 @@ document.addEventListener("pointerdown", forgetDeviceFocusOnMovement, true);
 asrEls.select.addEventListener("change", () => dispatch({ type: "provider/asr-default-chosen", value: asrEls.select.value }));
 processingPreferenceEls.form.addEventListener("submit", (event) => {
   event.preventDefault();
-  dispatch({ type: "provider/processing-preferences-save-requested" });
+  const view = selectPreferences(store.getState().processingPreferences, processingCatalogs(store.getState()));
+  dispatch({
+    type: "provider/processing-preferences-save-requested",
+    ownerDrift: view.ownerDrift,
+    eligibility: view.eligibility,
+  });
 });
 processingPreferenceEls.asrLanguage.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "asr_language", value: processingPreferenceEls.asrLanguage.value }));
 processingPreferenceEls.provider.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_provider", value: processingPreferenceEls.provider.value || null }));

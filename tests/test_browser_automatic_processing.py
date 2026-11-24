@@ -127,7 +127,12 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
     assert page.locator("#automatic-preferences-effort").count() == 0
     expect(page.locator("#automatic-preferences-asr-owner")).to_be_visible()
     expect(page.locator("#automatic-preferences-asr-owner")).not_to_have_text("")
-    expect(page.locator("#automatic-preferences-asr-owner + a")).to_have_text("ASR Model")
+    asr_link = page.get_by_role("link", name="ASR Model")
+    expect(asr_link).to_have_count(1)
+    expect(asr_link).to_have_attribute("href", "#settings-panel-asr")
+    provider_link = page.get_by_role("link", name="AI Provider")
+    expect(provider_link).to_have_count(1)
+    expect(provider_link).to_have_attribute("href", "#settings-panel-ai")
 
     page.get_by_role("tab", name="Giao diện").click()
     with page.expect_navigation():
