@@ -1074,11 +1074,13 @@ function markdownRightFlanking(last, after) {
 // app's rich parser styled while standard Markdown renders literal markers.
 function richEdgesAreFlanking(markdown, node, source, { edgeStart = false, edgeEnd = false } = {}) {
   if (!edgeStart && !edgeEnd || !["strong", "em"].includes(node.kind)) return true;
-  const opening = markdown.slice(0, node.start).match(/([*_])\1*$/)?.[0] || "";
-  const closing = markdown.slice(node.end).match(/^([*_])\1*/)?.[0] || "";
+  const prefix = markdown.slice(Math.max(0, node.start - 16), node.start);
+  const suffix = markdown.slice(node.end, node.end + 16);
+  const opening = prefix.match(/([*_])\1*$/)?.[0] || "";
+  const closing = suffix.match(/^([*_])\1*/)?.[0] || "";
   if (!opening || !closing) return true;
-  const beforeOpening = Array.from(markdown.slice(0, node.start - opening.length)).at(-1) || "";
-  const afterClosing = Array.from(markdown.slice(node.end + closing.length))[0] || "";
+  const beforeOpening = Array.from(prefix.slice(0, prefix.length - opening.length)).at(-1) || "";
+  const afterClosing = Array.from(suffix.slice(closing.length))[0] || "";
   const characters = Array.from(source);
   const first = characters[0] || "";
   const last = characters.at(-1) || "";
@@ -1096,14 +1098,16 @@ function richEdgesAreFlanking(markdown, node, source, { edgeStart = false, edgeE
 
 function richEmphasisContext(markdown, node) {
   if (!node || !["strong", "em"].includes(node.kind)) return null;
-  const opening = markdown.slice(0, node.start).match(/[*_]+$/)?.[0] || "";
-  const closing = markdown.slice(node.end).match(/^[*_]+/)?.[0] || "";
+  const prefix = markdown.slice(Math.max(0, node.start - 16), node.start);
+  const suffix = markdown.slice(node.end, node.end + 16);
+  const opening = prefix.match(/([*_])\1*$/)?.[0] || "";
+  const closing = suffix.match(/^([*_])\1*/)?.[0] || "";
   if (!opening || !closing) return null;
   return {
     opening,
     closing,
-    beforeOpening: Array.from(markdown.slice(0, node.start - opening.length)).at(-1) || "",
-    afterClosing: Array.from(markdown.slice(node.end + closing.length))[0] || "",
+    beforeOpening: Array.from(prefix.slice(0, prefix.length - opening.length)).at(-1) || "",
+    afterClosing: Array.from(suffix.slice(closing.length))[0] || "",
     source: markdown.slice(node.start, node.end),
   };
 }
