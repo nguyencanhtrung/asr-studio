@@ -12,7 +12,10 @@ import pytest
 from notes_helpers import StubNotesProvider
 
 from asr_studio import processing as processing_module
+from asr_studio.antigravity import AntigravityProvider
+from asr_studio.asr_models import read_default_model, write_default_model
 from asr_studio.auth import AuthStore
+from asr_studio.chatgpt import ChatGPTProvider
 from asr_studio.config import Settings
 from asr_studio.extension_ingest import publish_ready_derivative
 from asr_studio.meeting_deletion import _mark_meeting_for_deletion
@@ -29,6 +32,7 @@ from asr_studio.processing import (
     processing_state,
     ready_handoff_tx,
     retry_notes,
+    save_asr_preference,
     save_processing_preferences,
     use_current_source,
 )
@@ -82,6 +86,192 @@ async def test_processing_preferences_route_validates_before_provider_mutation(c
     assert invalid.status_code == 400
     after = await client.get("/api/processing-preferences")
     assert after.json()["version"] == valid.json()["version"]
+
+
+@pytest.mark.anyio
+async def test_processing_preferences_patch_materializes_owner_pair_without_mutating_owner_stores(
+    client, settings
+):
+    token = AuthStore(settings.auth_dir).load().token
+    origin = {"Origin": settings.public_url}
+    login = await client.post("/api/access/session", headers=origin, json={"token": token})
+    assert login.status_code == 204
+
+    chatgpt = ChatGPTProvider(settings.provider_dir, callback_url="")
+    antigravity = AntigravityProvider(settings.provider_dir)
+    chatgpt.save_notes_preference(model="gpt-5", reasoning_effort="default")
+    antigravity.save_notes_preference("gemini-3.1-pro", "default")
+    legacy = await client.put(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "asr_choice": "whisper-small",
+            "asr_language": "vi",
+            "notes_provider": "chatgpt",
+            "notes_model": "gpt-5",
+            "notes_reasoning_effort": "default",
+            "notes_output_language": "en",
+        },
+    )
+    assert legacy.status_code == 200, legacy.text
+    owner_before = (await client.get("/api/notes-preferences")).json()
+
+    switched = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": legacy.json()["version"],
+            "asr_language": "en",
+            "notes_provider": "antigravity",
+            "notes_output_language": "vi",
+        },
+    )
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["asr"] == {"choice": "whisper-small", "language": "en"}
+    assert switched.json()["notes"] == {
+        "provider": "antigravity",
+        "model": "gemini-3.1-pro",
+        "reasoning_effort": "high",
+        "output_language": "vi",
+    }
+    assert (await client.get("/api/notes-preferences")).json() == owner_before
+
+    language_only = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": switched.json()["version"],
+            "asr_language": "vi",
+            "notes_provider": "antigravity",
+            "notes_output_language": "en",
+        },
+    )
+    assert language_only.status_code == 200, language_only.text
+    assert language_only.json()["notes"]["model"] == "gemini-3.1-pro"
+    assert language_only.json()["notes"]["reasoning_effort"] == "high"
+
+    unset = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": language_only.json()["version"],
+            "asr_language": "vi",
+            "notes_provider": None,
+            "notes_output_language": "en",
+        },
+    )
+    assert unset.status_code == 200, unset.text
+    assert unset.json()["notes"] == {
+        "provider": None,
+        "model": None,
+        "reasoning_effort": None,
+        "output_language": "en",
+    }
+    assert (await client.get("/api/notes-preferences")).json() == owner_before
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("provider", [[], {}])
+async def test_processing_preferences_patch_rejects_unstructured_provider_without_write(
+    client, settings, provider
+):
+    token = AuthStore(settings.auth_dir).load().token
+    origin = {"Origin": settings.public_url}
+    assert (
+        await client.post("/api/access/session", headers=origin, json={"token": token})
+    ).status_code == 204
+    before = (await client.get("/api/processing-preferences")).json()
+    reply = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": before["version"],
+            "asr_language": "vi",
+            "notes_provider": provider,
+            "notes_output_language": "en",
+        },
+    )
+    assert reply.status_code == 400
+    assert reply.json()["detail"]["code"] == "invalid_notes_provider"
+    assert (await client.get("/api/processing-preferences")).json() == before
+
+
+@pytest.mark.anyio
+async def test_processing_preferences_patch_requires_selected_owner_without_write(client, settings):
+    token = AuthStore(settings.auth_dir).load().token
+    origin = {"Origin": settings.public_url}
+    assert (
+        await client.post("/api/access/session", headers=origin, json={"token": token})
+    ).status_code == 204
+    before = (await client.get("/api/processing-preferences")).json()
+    reply = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": before["version"],
+            "asr_language": "vi",
+            "notes_provider": "chatgpt",
+            "notes_output_language": "en",
+        },
+    )
+    assert reply.status_code == 409
+    assert reply.json()["detail"]["code"] == "notes_owner_unconfigured"
+    assert (await client.get("/api/processing-preferences")).json() == before
+
+
+@pytest.mark.anyio
+async def test_processing_preferences_patch_rejects_unrepresentable_version_without_write(
+    client, settings
+):
+    token = AuthStore(settings.auth_dir).load().token
+    origin = {"Origin": settings.public_url}
+    assert (
+        await client.post("/api/access/session", headers=origin, json={"token": token})
+    ).status_code == 204
+    before = (await client.get("/api/processing-preferences")).json()
+    reply = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": 2**64,
+            "asr_language": "vi",
+            "notes_provider": None,
+            "notes_output_language": "en",
+        },
+    )
+    assert reply.status_code == 400
+    assert reply.json()["detail"]["code"] == "invalid_preferences_version"
+    assert (await client.get("/api/processing-preferences")).json() == before
+
+
+def test_save_asr_preference_updates_only_asr_when_file_metadata_diverges(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", auth_dir=tmp_path / "auth")
+    initialize(settings.data_dir)
+    write_default_model(settings, "whisper-small")
+    before = save_processing_preferences(
+        settings.data_dir,
+        asr_choice="auto",
+        asr_language="vi",
+        notes_provider="chatgpt",
+        notes_model="committed-owner-model",
+        notes_reasoning_effort="default",
+        notes_output_language="en",
+    )
+
+    after = save_asr_preference(settings.data_dir, "whisper-large-v3")
+
+    assert read_default_model(settings) == "whisper-small"
+    assert after == {
+        "asr": {"choice": "whisper-large-v3", "language": "vi"},
+        "notes": {
+            "provider": "chatgpt",
+            "model": "committed-owner-model",
+            "reasoning_effort": "default",
+            "output_language": "en",
+        },
+        "version": before["version"] + 1,
+        "updated_at": after["updated_at"],
+    }
 
 
 def _ready_source(tmp_path: Path, label: str = "0") -> tuple[Path, str, str]:

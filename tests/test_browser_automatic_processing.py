@@ -17,6 +17,36 @@ from asr_studio.processing import cancel_workflow
 from asr_studio.storage import database_path, initialize
 
 pytestmark = pytest.mark.browser
+pytest_plugins = ("test_browser_asr_model",)
+
+
+def _processing_request(page, path, method="GET", payload=None):
+    outcome = page.evaluate(
+        """async ({path, method, payload}) => {
+            const options = {method};
+            if (payload !== null) {
+                options.headers = {'Content-Type': 'application/json'};
+                options.body = JSON.stringify(payload);
+            }
+            const response = await fetch(path, options);
+            return [response.status, await response.json()];
+        }""",
+        {"path": path, "method": method, "payload": payload},
+    )
+    assert outcome[0] == 200, outcome
+    return outcome[1]
+
+
+def _open_automatic_processing(page, language="vi"):
+    page.locator("#settings-open").click()
+    label = "Xử lý tự động" if language == "vi" else "Automatic processing"
+    tab = page.get_by_role("tab", name=label)
+    if tab.is_visible():
+        tab.click()
+    else:
+        page.locator("#settings-tab-ai").click()
+        page.locator("[data-settings-overview='processing'] .provider-overview-row").click()
+    expect(page.locator("#automatic-preferences-form")).to_have_attribute("aria-busy", "false")
 
 
 def _seed_ready_processing_meeting(
@@ -92,7 +122,12 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
     expect(page.locator("#automatic-preferences-provider")).to_have_value("")
     expect(page.locator("#automatic-preferences-provider-help")).to_contain_text("Transcript")
     expect(page.locator("#automatic-preferences-save")).to_be_disabled()
-    assert page.locator("#automatic-preferences-asr-choice option").count() >= 1
+    assert page.locator("#automatic-preferences-asr-choice").count() == 0
+    assert page.locator("#automatic-preferences-model").count() == 0
+    assert page.locator("#automatic-preferences-effort").count() == 0
+    expect(page.locator("#automatic-preferences-asr-owner")).to_be_visible()
+    expect(page.locator("#automatic-preferences-asr-owner")).not_to_have_text("")
+    expect(page.locator("#automatic-preferences-asr-owner + a")).to_have_text("ASR Model")
 
     page.get_by_role("tab", name="Giao diện").click()
     with page.expect_navigation():
@@ -101,6 +136,89 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
     expect(page.locator("#automatic-preferences-provider-help")).to_contain_text("The transcript")
     expect(page.locator("#automatic-preferences-save")).to_be_disabled()
     context.close()
+
+
+@pytest.mark.parametrize("draft_before_leaving", [False, True])
+def test_switching_back_after_own_asr_default_save_uses_the_new_version(
+    live, signed_in, worker, draft_before_leaving
+):
+    _, page = signed_in(viewport={"width": 1280, "height": 860}, reduced_motion="reduce")
+    page.set_default_timeout(8000)
+    _open_automatic_processing(page)
+    before = _processing_request(page, "/api/processing-preferences")
+    version = page.locator("#automatic-preferences-version")
+    expect(version).to_have_text(f"v{before['version']}")
+    language = page.locator("#automatic-preferences-asr-language")
+    if draft_before_leaving:
+        language.select_option("en")
+
+    page.locator("#settings-panel-processing [data-settings-tab='asr']").click()
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PUT" and response.url.endswith("/api/asr-models/default")
+        )
+    ) as changed:
+        page.locator("#asr-default-select").select_option("whisper-large-v3")
+    assert changed.value.status == 200, changed.value.text()
+    after = _processing_request(page, "/api/processing-preferences")
+    assert after["version"] == before["version"] + 1
+    assert after["asr"]["choice"] == "whisper-large-v3"
+
+    page.get_by_role("tab", name="Xử lý tự động").click()
+    expect(page.locator("#automatic-preferences-form")).to_have_attribute("aria-busy", "false")
+    if draft_before_leaving:
+        expect(language).to_have_value("en")
+    else:
+        language.select_option("en")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PATCH"
+            and response.url.endswith("/api/processing-preferences")
+        )
+    ) as next_save:
+        page.locator("#automatic-preferences-save").click()
+    observed = next_save.value
+    assert observed.status == 200, (observed.request.post_data_json, observed.json())
+    assert observed.request.post_data_json["expected_version"] == after["version"]
+    expect(version).to_have_text(f"v{after['version'] + 1}")
+
+
+def test_owner_refresh_adopts_untouched_output_language_and_keeps_local_language_draft(
+    live, signed_in, worker
+):
+    _, page = signed_in(viewport={"width": 1280, "height": 860}, reduced_motion="reduce")
+    page.set_default_timeout(8000)
+    _open_automatic_processing(page)
+    before = _processing_request(page, "/api/processing-preferences")
+    page.locator("#automatic-preferences-asr-language").select_option("en")
+
+    changed_elsewhere = page.request.patch(
+        f"{live.url}/api/processing-preferences",
+        headers={"Origin": live.settings.public_url},
+        data={
+            "expected_version": before["version"],
+            "asr_language": "vi",
+            "notes_provider": None,
+            "notes_output_language": "vi",
+        },
+    )
+    assert changed_elsewhere.status == 200, changed_elsewhere.text()
+
+    page.locator("#settings-panel-processing [data-settings-tab='asr']").click()
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PUT" and response.url.endswith("/api/asr-models/default")
+        )
+    ) as changed:
+        page.locator("#asr-default-select").select_option("whisper-large-v3")
+    assert changed.value.status == 200, changed.value.text()
+    latest = _processing_request(page, "/api/processing-preferences")
+    assert latest["notes"]["output_language"] == "vi"
+
+    page.get_by_role("tab", name="Xử lý tự động").click()
+    expect(page.locator("#automatic-preferences-version")).to_have_text(f"v{latest['version']}")
+    expect(page.locator("#automatic-preferences-asr-language")).to_have_value("en")
+    expect(page.locator("#automatic-preferences-output-language")).to_have_value("vi")
 
 
 def test_cancel_success_restores_focus_and_cannot_resurrect_workflow(live, signed_in):
@@ -231,7 +349,7 @@ def test_preference_save_failure_then_success_preserves_focus_and_status(
         held = []
 
         def hold_save(route):
-            if route.request.method == "PUT":
+            if route.request.method == "PATCH":
                 held.append(route)
             else:
                 route.continue_()
@@ -249,12 +367,20 @@ def test_preference_save_failure_then_success_preserves_focus_and_status(
         expect(form).to_have_attribute("aria-busy", "false")
         expect(notice).not_to_contain_text("[object Object]")
         page.unroute("**/api/processing-preferences", hold_save)
+        processing_reads = []
+
+        def record_processing_read(request):
+            if request.method == "GET" and request.url.endswith("/api/processing-preferences"):
+                processing_reads.append(request)
+
+        page.on("request", record_processing_read)
         page.keyboard.press("Enter")
         expect(notice).to_have_text(
             "Đã lưu cài đặt xử lý tự động."
             if language == "vi"
             else "Automatic-processing settings saved."
         )
+        assert processing_reads == []
         expect(page.locator("#automatic-preferences-title")).to_be_focused()
         expect(save).to_be_disabled()
         saved = page.evaluate(

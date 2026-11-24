@@ -23,6 +23,12 @@ const LIST_IN_USE = {
   ],
 };
 const LIST_OUT = { providers: [{ id: "chatgpt", status: "disconnected" }, { id: "antigravity", status: "disconnected" }] };
+const LIST_OUT_WITH_OWNER = {
+  providers: [
+    { id: "chatgpt", status: "disconnected" },
+    { id: "antigravity", status: "disconnected", saved_model: "g-saved", reasoning_effort: "medium" },
+  ],
+};
 const MODELS = {
   chatgpt: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["low", "high"] }, { id: "m2", display_name: "M2" }], selected_model: "m1" },
   antigravity: { models: [{ id: "g1", display_name: "G1" }, { id: "g2", display_name: "G2" }], selected_model: "g1", reasoning_effort: "medium" },
@@ -338,6 +344,17 @@ test("the page-load status read failing sets both buttons to error", async () =>
   await env.fail(env.is("GET", "/api/providers"));
   assert.equal(own(env, CHATGPT).launcher.status, "error");
   assert.equal(own(env, ANTIGRAVITY).launcher.status, "error");
+});
+
+test("a disconnected Antigravity load keeps its committed owner pair", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: "antigravity" });
+  await env.answer(env.is("GET", "/api/providers"), 200, LIST_OUT_WITH_OWNER);
+  await env.answer(env.is("GET", "/api/providers"), 200, LIST_OUT_WITH_OWNER);
+  assert.equal(own(env, ANTIGRAVITY).savedModel, "g-saved");
+  assert.equal(own(env, ANTIGRAVITY).savedEffort, "medium");
+  assert.equal(own(env, ANTIGRAVITY).selectedModel, "g-saved");
+  assert.equal(own(env, ANTIGRAVITY).selectedEffort, "medium");
 });
 
 test("a page-load answer does not overwrite a Google status the dialog already showed", async () => {

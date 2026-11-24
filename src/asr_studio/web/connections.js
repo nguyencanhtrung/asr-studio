@@ -60,14 +60,11 @@ const processingPreferenceEls = {
   title: document.querySelector("#automatic-preferences-title"),
   form: document.querySelector("#automatic-preferences-form"),
   version: document.querySelector("#automatic-preferences-version"),
-  asrChoice: document.querySelector("#automatic-preferences-asr-choice"),
+  asrOwner: document.querySelector("#automatic-preferences-asr-owner"),
   asrLanguage: document.querySelector("#automatic-preferences-asr-language"),
   provider: document.querySelector("#automatic-preferences-provider"),
   providerHelp: document.querySelector("#automatic-preferences-provider-help"),
-  modelField: document.querySelector("#automatic-preferences-model-field"),
-  model: document.querySelector("#automatic-preferences-model"),
-  effortField: document.querySelector("#automatic-preferences-effort-field"),
-  effort: document.querySelector("#automatic-preferences-effort"),
+  notesOwner: document.querySelector("#automatic-preferences-notes-owner"),
   outputLanguage: document.querySelector("#automatic-preferences-output-language"),
   notice: document.querySelector("#automatic-preferences-notice"),
   error: document.querySelector("#automatic-preferences-error"),
@@ -614,18 +611,28 @@ function renderDevices(state) {
 
 function processingCatalogs(state) {
   return {
-    asrModels: state.asr.models,
+    asr: {
+      status: state.asr.status,
+      models: state.asr.models,
+      defaultModel: state.asr.defaultModel,
+      defaultDamaged: state.asr.defaultDamaged,
+      hardwareModel: state.asr.hardwareModel,
+    },
     providers: {
       chatgpt: {
         status: state.chatgpt.info?.status,
         account: state.chatgpt.info?.account?.label || null,
         models: state.chatgpt.models,
+        ownerModel: state.chatgpt.savedModel,
+        ownerEffort: state.chatgpt.savedEffort,
         effortOptions: selectView(CHATGPT, state.chatgpt).effortOptions || [],
       },
       antigravity: {
         status: state.antigravity.info?.status,
         account: state.antigravity.info?.account?.label || null,
         models: state.antigravity.models,
+        ownerModel: state.antigravity.savedModel,
+        ownerEffort: state.antigravity.savedEffort,
         effortOptions: selectView(ANTIGRAVITY, state.antigravity).effortOptions || [],
       },
     },
@@ -649,18 +656,17 @@ function renderProcessingPreferences(state, rootState) {
     setProp(processingPreferenceEls.save, "disabled", true);
     return;
   }
-  renderOptions(processingPreferenceEls.asrChoice, view.asrOptions, draft.asr.choice);
+  setProp(processingPreferenceEls.asrOwner, "textContent", view.asrOwner ? tr(view.asrOwner.text) : "");
+  setAttr(processingPreferenceEls.asrOwner, "data-state", view.asrOwner?.state || "");
   setProp(processingPreferenceEls.asrLanguage, "value", draft.asr.language);
   renderOptions(processingPreferenceEls.provider, view.providerOptions, view.providerValue);
-  renderOptions(processingPreferenceEls.model, view.modelOptions, view.modelValue);
-  renderOptions(processingPreferenceEls.effort, view.effortOptions, view.effortValue);
   setProp(processingPreferenceEls.outputLanguage, "value", draft.notes.output_language);
-  setProp(processingPreferenceEls.modelField, "hidden", view.waiting);
-  setProp(processingPreferenceEls.effortField, "hidden", view.waiting);
   setProp(processingPreferenceEls.providerHelp, "textContent", tr(view.providerStatus));
+  setProp(processingPreferenceEls.notesOwner, "textContent", view.notesOwner ? tr(view.notesOwner.text) : "");
+  setAttr(processingPreferenceEls.notesOwner, "data-state", view.notesOwner?.state || "");
   const disabled = view.loading || view.saving;
-  for (const control of [processingPreferenceEls.asrChoice, processingPreferenceEls.asrLanguage, processingPreferenceEls.provider, processingPreferenceEls.model, processingPreferenceEls.effort, processingPreferenceEls.outputLanguage]) {
-    setProp(control, "disabled", disabled || (view.waiting && (control === processingPreferenceEls.model || control === processingPreferenceEls.effort)));
+  for (const control of [processingPreferenceEls.asrLanguage, processingPreferenceEls.provider, processingPreferenceEls.outputLanguage]) {
+    setProp(control, "disabled", disabled);
   }
   setProp(processingPreferenceEls.save, "disabled", !view.canSave);
   setProp(processingPreferenceEls.save, "textContent", view.saving ? t("Đang lưu cài đặt…") : t("Lưu cài đặt xử lý"));
@@ -880,7 +886,12 @@ const base = createRunner({
   open: (url, target) => window.open(url, target),
   calls: {
     "provider.choice-changed": () => providerChoice.dispatch({ type: "channel/provider-choice-changed" }),
-    "asr.settings-changed": () => asrSettings.dispatch({ type: "channel/asr-settings-changed" }),
+    "asr.settings-changed": (source) => {
+      asrSettings.dispatch({ type: "channel/asr-settings-changed" });
+      if (source !== "processing-preferences-save") {
+        dispatch({ type: "provider/processing-preferences-reconcile-requested" });
+      }
+    },
     "clipboard.write": (text) => {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       return navigator.clipboard.writeText(text);
@@ -956,7 +967,11 @@ for (const provider of [CHATGPT.id, ANTIGRAVITY.id]) {
 }
 
 function selectSection(section, focus = false) {
+  const previous = store.getState().launcher.section;
   dispatch({ type: "provider/settings-section-selected", section });
+  if (section === "processing" && previous !== "processing") {
+    dispatch({ type: "provider/processing-preferences-reconcile-requested" });
+  }
   settingsBody.scrollTop = 0;
   if (focus) focusSettingsDestination(store.getState().launcher.section);
 }
@@ -1033,11 +1048,8 @@ processingPreferenceEls.form.addEventListener("submit", (event) => {
   event.preventDefault();
   dispatch({ type: "provider/processing-preferences-save-requested" });
 });
-processingPreferenceEls.asrChoice.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "asr_choice", value: processingPreferenceEls.asrChoice.value }));
 processingPreferenceEls.asrLanguage.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "asr_language", value: processingPreferenceEls.asrLanguage.value }));
 processingPreferenceEls.provider.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_provider", value: processingPreferenceEls.provider.value || null }));
-processingPreferenceEls.model.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_model", value: processingPreferenceEls.model.value || null }));
-processingPreferenceEls.effort.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_reasoning_effort", value: processingPreferenceEls.effort.value || null }));
 processingPreferenceEls.outputLanguage.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_output_language", value: processingPreferenceEls.outputLanguage.value }));
 deviceEls.form.addEventListener("submit", (event) => {
   event.preventDefault();

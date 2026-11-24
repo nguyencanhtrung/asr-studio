@@ -204,7 +204,7 @@ def test_settings_uses_the_intentional_type_roles(live, signed_in):
             label: style("label[for='connection-model']"),
             fieldLabels: {
               openai: style("label[for='connection-model']"),
-              processing: style("label[for='automatic-preferences-asr-choice']"),
+              processing: style("label[for='automatic-preferences-asr-language']"),
               asr: style("label[for='asr-default-select']"),
               deviceExpiry: style("label[for='extension-device-lifetime']"),
               pairingCode: style("#extension-device-code-output label"),

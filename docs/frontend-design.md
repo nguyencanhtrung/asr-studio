@@ -1117,8 +1117,8 @@ Core sở hữu lát `processingPreferences` trong store provider. State có
 | `provider/dialog-opened` | `open=true`, `loading`, tăng request, xóa lỗi/thông báo | GET processing preferences |
 | `provider/processing-preferences-loaded` đúng request khi đang mở | Hợp lệ: `ready`, thay saved/draft bằng bản server; sai: `error`, hiện `invalid_response` | Không tự lưu |
 | `provider/processing-preferences-failed` đúng request khi đang mở | `error`, hiện lỗi, xóa thông báo | Không ghi đè saved/draft |
-| `provider/processing-preference-edited` có draft và chưa saving | Sửa trường hợp lệ trong draft, xóa lỗi/thông báo. Đổi hoặc bỏ provider xóa model/effort | Không request mạng |
-| `provider/processing-preferences-save-requested` đang mở, có draft khác saved, chưa saving | `saving`, tăng mutation, xóa lỗi/thông báo | PUT `/api/processing-preferences` với 6 trường của draft; không gửi version, server trả version mới (save đồng thời dùng bản ghi cuối) |
+| `provider/processing-preference-edited` có draft và chưa saving | Sửa ngôn ngữ, provider hoặc ngôn ngữ đầu ra trong draft. Đổi hoặc bỏ provider chỉ xóa bản sao model/effort trong draft. Selector owner không còn trong form | Không request mạng |
+| `provider/processing-preferences-save-requested` đang mở, có draft khác saved, chưa saving | `saving`, tăng mutation, xóa lỗi/thông báo | PATCH `/api/processing-preferences` với `expected_version`, `asr_language`, `notes_provider` và `notes_output_language`. Không gửi bản sao ASR/model/effort. Server materialize cặp owner đã commit hoặc trả conflict |
 | `provider/processing-preferences-saved` đúng mutation khi đang mở | Hợp lệ: `ready`, thay saved/draft, hiện thông báo; sai: `ready`, giữ dữ liệu, hiện `invalid_response` | Chỉ phản hồi hợp lệ gọi `asr.settings-changed` qua runner |
 | `provider/processing-preferences-save-failed` đúng mutation khi đang mở | `ready`, giữ draft để sửa/thử lại, hiện lỗi, xóa thông báo | Không thông báo đã lưu |
 | `provider/dialog-closed` | `open=false`, về ready nếu có saved hoặc idle; tăng cả request và mutation | Hủy read/save; phản hồi muộn không đổi state |

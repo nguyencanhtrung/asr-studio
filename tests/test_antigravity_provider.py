@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,7 @@ def test_login_catalog_preference_verification_restart_and_disconnect(tmp_path):
         "account": {"label": "Google Antigravity"},
         "connection_version": 1,
         "verification": None,
+        "saved_model": None,
         "reasoning_effort": "high",
     }
 
@@ -792,6 +794,29 @@ def test_antigravity_effort_is_saved_with_the_model_and_legacy_default_reads_hig
             provider.save_notes_preference("gemini-test", bad)
         assert failure.value.code == "invalid_reasoning_effort"
     assert provider.saved_notes_effort() == "high"
+
+
+def test_saved_notes_settings_reads_model_and_effort_under_one_store_lock(tmp_path, monkeypatch):
+    provider = AntigravityProvider(tmp_path / "provider", adapter=FakeAntigravityAdapter())
+    provider.ensure()
+    provider.save_notes_preference("gemini-test", "medium")
+    original_locked = provider.store.locked
+    lock_count = 0
+
+    @contextmanager
+    def counted_locked(*, write=False):
+        nonlocal lock_count
+        lock_count += 1
+        with original_locked(write=write) as state:
+            yield state
+
+    monkeypatch.setattr(provider.store, "locked", counted_locked)
+    assert provider.saved_notes_settings() == ("gemini-test", "medium")
+    assert lock_count == 1
+    view = provider.provider_view()
+    assert view["saved_model"] == "gemini-test"
+    assert view["reasoning_effort"] == "medium"
+    assert lock_count == 2
 
 
 def test_generate_notes_document_runs_with_the_pinned_level(tmp_path):

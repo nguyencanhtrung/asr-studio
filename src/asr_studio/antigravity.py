@@ -1059,12 +1059,16 @@ class AntigravityProvider:
                 if state.get("connection_status") != "disconnected"
                 else None
             )
+            saved_model = state.get("selected_model")
             return {
                 "id": "antigravity",
                 "status": state.get("connection_status", "disconnected"),
                 "account": account,
                 "connection_version": state.get("connection_version", 0),
                 "verification": state.get("verification"),
+                "saved_model": (
+                    saved_model if isinstance(saved_model, str) and saved_model else None
+                ),
                 "reasoning_effort": _saved_effort(state),
             }
 
@@ -1317,13 +1321,19 @@ class AntigravityProvider:
 
     def saved_notes_model(self) -> str | None:
         """Return the saved notes model, whatever the connection state."""
-        with self.store.locked() as state:
-            model = state.get("selected_model")
-            return model if isinstance(model, str) and model else None
+        return self.saved_notes_settings()[0]
 
     def saved_notes_effort(self) -> str:
+        return self.saved_notes_settings()[1]
+
+    def saved_notes_settings(self) -> tuple[str | None, str]:
+        """Return the committed model and effort from one provider-store snapshot."""
         with self.store.locked() as state:
-            return _saved_effort(state)
+            model = state.get("selected_model")
+            return (
+                model if isinstance(model, str) and model else None,
+                _saved_effort(state),
+            )
 
     def save_notes_preference(self, model: str, reasoning_effort: str = "default") -> None:
         """Save the next-run model after static validation only; never touches OMP."""

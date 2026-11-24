@@ -23,7 +23,7 @@ const SETTINGS_CHANGED = {
   type: "call",
   key: "provider/processing-preferences-changed",
   name: "asr.settings-changed",
-  args: [],
+  args: ["processing-preferences-save"],
 };
 
 export const initialState = {
@@ -74,8 +74,12 @@ const clone = (value) => ({
 });
 
 function equalPreferences(left, right) {
-  return Boolean(left && right) && JSON.stringify(left.asr) === JSON.stringify(right.asr)
-    && JSON.stringify(left.notes) === JSON.stringify(right.notes);
+  if (!left || !right) return false;
+  return left.asr.language === right.asr.language
+    && left.notes.provider === right.notes.provider
+    && left.notes.model === right.notes.model
+    && left.notes.reasoning_effort === right.notes.reasoning_effort
+    && left.notes.output_language === right.notes.output_language;
 }
 
 function requestError(error) {
@@ -91,7 +95,7 @@ function requestError(error) {
   };
 }
 
-function readEffect(request) {
+function readEffect(request, reconcile = false) {
   return {
     type: "fetch",
     key: "provider/processing-preferences",
@@ -99,7 +103,28 @@ function readEffect(request) {
     init: GET,
     ok: "provider/processing-preferences-loaded",
     error: "provider/processing-preferences-failed",
-    meta: { request },
+    meta: { request, reconcile },
+  };
+}
+
+function reconciledDraft(server, draft, baseline) {
+  const localLanguage = draft.asr.language !== baseline.asr.language;
+  const localProvider = draft.notes.provider !== baseline.notes.provider;
+  const localOutputLanguage = draft.notes.output_language !== baseline.notes.output_language;
+  const provider = localProvider ? draft.notes.provider : server.notes.provider;
+  return {
+    asr: {
+      choice: server.asr.choice,
+      language: localLanguage ? draft.asr.language : server.asr.language,
+    },
+    notes: {
+      ...draft.notes,
+      provider,
+      model: localProvider ? draft.notes.model : server.notes.model,
+      reasoning_effort: localProvider ? draft.notes.reasoning_effort : server.notes.reasoning_effort,
+      output_language: localOutputLanguage ? draft.notes.output_language : server.notes.output_language,
+    },
+    version: server.version,
   };
 }
 
@@ -110,16 +135,14 @@ function saveEffect(state, mutation) {
     key: "provider/processing-preferences-save",
     url: "/api/processing-preferences",
     init: {
-      method: "PUT",
+      method: "PATCH",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
       body: JSON.stringify({
-        asr_choice: asr.choice,
+        expected_version: state.saved.version,
         asr_language: asr.language,
         notes_provider: notes.provider,
-        notes_model: notes.model,
-        notes_reasoning_effort: notes.reasoning_effort,
         notes_output_language: notes.output_language,
       }),
     },
@@ -132,21 +155,15 @@ function saveEffect(state, mutation) {
 function fieldEdited(state, action) {
   if (!state.draft || state.status === "saving") return done(state);
   const draft = clone(state.draft);
-  if (action.field === "asr_choice" && validChoice(action.value)) draft.asr.choice = action.value;
   if (action.field === "asr_language" && LANGUAGES.includes(action.value)) draft.asr.language = action.value;
   if (action.field === "notes_provider" && (action.value === null || PROVIDERS.includes(action.value))) {
     draft.notes.provider = action.value;
-    // Changing the provider never silently selects its catalog's first model or account.
-    if (action.value === null) {
-      draft.notes.model = null;
-      draft.notes.reasoning_effort = null;
-    } else if (action.value !== state.draft.notes.provider) {
+    // Clear only the local workflow mirror. The PATCH body never sends these owner fields.
+    if (action.value !== state.draft.notes.provider) {
       draft.notes.model = null;
       draft.notes.reasoning_effort = null;
     }
   }
-  if (action.field === "notes_model" && (action.value === null || validChoice(action.value))) draft.notes.model = action.value;
-  if (action.field === "notes_reasoning_effort" && (action.value === null || validChoice(action.value))) draft.notes.reasoning_effort = action.value;
   if (action.field === "notes_output_language" && LANGUAGES.includes(action.value)) draft.notes.output_language = action.value;
   return done({ ...state, draft, error: null, notice: null });
 }
@@ -160,6 +177,14 @@ export function reduce(state, action) {
         [readEffect(request)],
       );
     }
+    case "provider/processing-preferences-reconcile-requested": {
+      if (!state.open || !state.saved || state.status === "saving") return done(state);
+      const request = state.request + 1;
+      return done(
+        { ...state, status: "loading", request, error: null },
+        [readEffect(request, true)],
+      );
+    }
     case "provider/dialog-closed":
       return done(
         { ...state, open: false, status: state.saved ? "ready" : "idle", request: state.request + 1, mutation: state.mutation + 1 },
@@ -171,7 +196,10 @@ export function reduce(state, action) {
       if (!preferences) {
         return done({ ...state, status: "error", error: { code: "invalid_response", text: t("Máy chủ trả về cài đặt xử lý tự động không hợp lệ.") } });
       }
-      return done({ ...state, status: "ready", saved: preferences, draft: clone(preferences), error: null, notice: null });
+      const reconciled = action.meta?.reconcile === true && state.draft && state.saved
+        ? reconciledDraft(preferences, state.draft, state.saved)
+        : clone(preferences);
+      return done({ ...state, status: "ready", saved: preferences, draft: reconciled, error: null });
     }
     case "provider/processing-preferences-failed":
       if (action.meta?.request !== state.request || !state.open) return done(state);
@@ -202,48 +230,122 @@ export function reduce(state, action) {
   }
 }
 
-function choiceLabel(choice) {
-  return ASR_MODEL_TEXT[choice.id]?.label || choice.model_name || choice.id;
-}
-
-function asrOptions(draft, asrModels) {
-  const options = [];
-  const choices = Array.isArray(asrModels) ? asrModels.filter((choice) => isObject(choice) && validChoice(choice.id)) : [];
-  const known = choices.some((choice) => choice.id === draft.asr.choice);
-  if (!known) options.push({ value: draft.asr.choice, label: t("{model} — không còn trong catalog", { model: draft.asr.choice }), disabled: true });
-  for (const choice of choices) options.push({ value: choice.id, label: choiceLabel(choice), disabled: false, ready: choice.ready === true });
-  if (!options.length) options.push({ value: draft.asr.choice, label: t("Đang tải catalog ASR…"), disabled: true });
-  return options;
-}
-
 function selectedProviderCatalog(draft, providers) {
   const catalog = providers?.[draft.notes.provider];
   return catalog && typeof catalog === "object" ? catalog : null;
 }
 
-function modelOptions(draft, catalog) {
-  if (!catalog) return [];
-  const models = Array.isArray(catalog.models) ? catalog.models.filter((model) => isObject(model) && validChoice(model.id)) : [];
-  const known = models.some((model) => model.id === draft.notes.model);
-  const options = [];
-  if (!known && draft.notes.model) options.push({ value: draft.notes.model, label: t("{model} — không còn trong catalog", { model: draft.notes.model }), disabled: true });
-  for (const model of models) options.push({ value: model.id, label: model.display_name || model.id, disabled: false });
-  if (!options.length) options.push({ value: "", label: t("Chưa có model khả dụng"), disabled: true });
-  return options;
+function choiceLabel(choice) {
+  return ASR_MODEL_TEXT[choice.id]?.label || choice.label || choice.model_name || choice.id;
 }
 
 function providerStatusText(provider, catalog) {
   if (!provider) return t("Không chọn provider notes. Transcript có thể hoàn tất; notes sẽ chờ đến khi bạn chọn provider.");
+  if (!catalog || !catalog.status) return t("Đang kiểm tra");
   if (catalog?.status === "connected") return catalog.account ? t("Đã kết nối với {account}", { account: catalog.account }) : t("Đã kết nối");
   return provider === "chatgpt"
     ? t("ChatGPT chưa được kết nối. Không tự chuyển sang provider khác.")
     : t("Google Antigravity chưa được kết nối. Không tự chuyển sang provider khác.");
 }
 
+function withAsrDiscrepancy(message, discrepancy) {
+  return discrepancy
+    ? [message, " ", t("Model ASR sở hữu khác lựa chọn workflow đã lưu. Mở Cài đặt → ASR Model để đồng bộ.")]
+    : message;
+}
+
+function withOwnerDiscrepancy(message, discrepancy) {
+  return discrepancy
+    ? [message, " ", t("Cài đặt sở hữu khác recipe workflow đã lưu. Lưu để áp dụng cài đặt sở hữu.")]
+    : message;
+}
+
+function asrOwnerView(catalog, savedChoice) {
+  const asr = catalog && typeof catalog === "object" ? catalog : {};
+  if (asr.status === "loading" || !asr.status) {
+    return { state: "loading", text: t("Đang tải danh sách model…"), discrepancy: false };
+  }
+  if (asr.status === "error") {
+    return { state: "error", text: t("Không tải được danh sách model. Mở lại Cài đặt để thử lại."), discrepancy: false };
+  }
+  if (asr.status === "empty") {
+    return { state: "error", text: t("Máy chủ không trả về model nào. Mở lại Cài đặt để thử lại."), discrepancy: false };
+  }
+  const models = Array.isArray(asr.models) ? asr.models.filter((choice) => isObject(choice) && validChoice(choice.id)) : [];
+  const selected = validChoice(asr.defaultModel) ? asr.defaultModel : null;
+  const selectedRow = selected ? models.find((choice) => choice.id === selected) : null;
+  const hardware = typeof asr.hardwareModel === "string" && asr.hardwareModel ? asr.hardwareModel : null;
+  const ownerChoice = selected || "auto";
+  const discrepancy = validChoice(savedChoice) && savedChoice !== ownerChoice;
+  let message;
+  let state = "ready";
+  if (asr.defaultDamaged && !selected) {
+    state = "warning";
+    message = t("Không đọc được model mặc định đã lưu, nên đang dùng theo phần cứng của máy. Hãy chọn lại.");
+  } else if (selected) {
+    const name = selectedRow ? choiceLabel(selectedRow) : selected;
+    if (selectedRow && selectedRow.ready === false) {
+      state = "warning";
+      message = t("Model mặc định {model} chưa chạy được trên máy này. Lần chép lời Tự động sẽ bị từ chối cho đến khi bạn cài lại hoặc chọn mặc định khác.", { model: name });
+    } else {
+      message = t("Lần chép lời Tự động dùng {model}. Mỗi lần chạy vẫn chọn được model khác.", { model: name });
+    }
+  } else if (hardware) {
+    message = t("Mặc định theo phần cứng của máy: {model}.", { model: hardware });
+  } else {
+    message = t("Mặc định theo phần cứng của máy.");
+  }
+  return {
+    state,
+    text: withAsrDiscrepancy(message, discrepancy),
+    model: selected,
+    discrepancy,
+  };
+}
+
+function providerOwnerView(provider, catalog, saved) {
+  if (!provider) return null;
+  const name = provider === "chatgpt" ? "ChatGPT" : "Google Antigravity";
+  if (!catalog || !catalog.status) return { state: "loading", text: t("Đang kiểm tra"), discrepancy: false };
+  const model = validChoice(catalog.ownerModel) ? catalog.ownerModel : null;
+  const effort = validChoice(catalog.ownerEffort) ? catalog.ownerEffort : null;
+  const discrepancy = saved?.provider === provider
+    && (saved.model !== model || saved.reasoning_effort !== effort);
+  const message = model && effort
+    ? t("Đã lưu {model} · effort {effort} cho notes.", { model: modelLabel(catalog, model), effort })
+    : t("Chưa chọn model cho {name}. Hãy chọn một model trước khi tạo notes.", { name });
+  return {
+    state: model && effort ? "ready" : "missing",
+    model,
+    effort,
+    discrepancy,
+    text: withOwnerDiscrepancy(message, discrepancy),
+  };
+}
+
+function modelLabel(catalog, model) {
+  const row = Array.isArray(catalog?.models) ? catalog.models.find((item) => item?.id === model) : null;
+  return row?.display_name || model;
+}
+
 export function selectPreferences(state, catalogs = {}) {
   const draft = state.draft;
   if (!draft) {
-    return { status: state.status, loading: state.status === "loading", draft: null, asrOptions: [], providerOptions: [], modelOptions: [], effortOptions: [], canSave: false, dirty: false, waiting: false, message: state.error?.text || null, error: state.error, notice: state.notice };
+    return {
+      status: state.status,
+      loading: state.status === "loading",
+      draft: null,
+      asrOwner: null,
+      notesOwner: null,
+      providerOptions: [],
+      outputLanguageOptions: [],
+      canSave: false,
+      dirty: false,
+      waiting: false,
+      message: state.error?.text || null,
+      error: state.error,
+      notice: state.notice,
+    };
   }
   const providers = catalogs.providers || {};
   const catalog = selectedProviderCatalog(draft, providers);
@@ -253,17 +355,16 @@ export function selectPreferences(state, catalogs = {}) {
     { value: "antigravity", label: "Google Antigravity", disabled: false },
   ];
   const providerValue = draft.notes.provider || "";
-  const effortOptions = catalog?.effortOptions || [];
-  const knownEffort = effortOptions.some((option) => option.value === draft.notes.reasoning_effort);
-  const effortValue = knownEffort ? draft.notes.reasoning_effort : "";
+  const asrCatalog = catalogs.asr || { status: catalogs.asrModels?.length ? "ready" : "loading", models: catalogs.asrModels };
+  const asrOwner = asrOwnerView(asrCatalog, draft.asr.choice);
+  const notesOwner = providerOwnerView(draft.notes.provider, catalog, draft.notes);
   const providerReady = draft.notes.provider === null
-    || catalog?.status === "connected" && modelOptions(draft, catalog).some((option) => option.value === draft.notes.model && !option.disabled) && knownEffort;
-  const asrReady = asrOptions(draft, catalogs.asrModels).some((option) => option.value === draft.asr.choice && !option.disabled);
-  const valid = asrReady
-    && LANGUAGES.includes(draft.asr.language)
+    || Boolean(notesOwner?.model && notesOwner.effort);
+  const valid = LANGUAGES.includes(draft.asr.language)
     && LANGUAGES.includes(draft.notes.output_language)
     && providerReady
-    && (draft.notes.provider !== null ? validChoice(draft.notes.model) && validChoice(draft.notes.reasoning_effort) : draft.notes.model === null && draft.notes.reasoning_effort === null);
+    && (draft.notes.provider === null || PROVIDERS.includes(draft.notes.provider));
+  const dirty = !equalPreferences(state.saved, draft);
   return {
     status: state.status,
     loading: state.status === "loading",
@@ -271,15 +372,12 @@ export function selectPreferences(state, catalogs = {}) {
     draft,
     saved: state.saved,
     version: draft.version,
-    dirty: !equalPreferences(state.saved, draft),
-    canSave: valid && !equalPreferences(state.saved, draft) && state.status !== "saving",
-    asrOptions: asrOptions(draft, catalogs.asrModels),
+    dirty,
+    canSave: valid && dirty && state.status === "ready",
+    asrOwner,
+    notesOwner,
     providerOptions,
     providerValue,
-    modelOptions: modelOptions(draft, catalog),
-    modelValue: draft.notes.model || "",
-    effortOptions,
-    effortValue,
     outputLanguageOptions: [
       { value: "en", label: "English", disabled: false },
       { value: "vi", label: t("Tiếng Việt"), disabled: false },

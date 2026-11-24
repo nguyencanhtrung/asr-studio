@@ -544,7 +544,11 @@ function loadOk(d, s, meta, body) {
     const next = applyProvider(d, s, info);
     if (d.endpoints.preferences) return done(next, [call(d, "load", "preferences", d.endpoints.preferences, { id: meta.id })]);
     if (info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id })]);
-    return settle(d, clearModels(d, next));
+    const cleared = clearModels(d, next);
+    if (d.id !== "antigravity") return settle(d, cleared);
+    const savedModel = typeof info.saved_model === "string" ? info.saved_model : "";
+    const savedEffort = typeof info.reasoning_effort === "string" ? info.reasoning_effort : d.effort.initial;
+    return settle(d, { ...cleared, selectedModel: savedModel, savedModel, selectedEffort: savedEffort, savedEffort });
   }
   if (meta.op === "preferences") {
     const preferences = normalizePreferences(body);

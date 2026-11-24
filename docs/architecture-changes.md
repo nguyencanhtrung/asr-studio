@@ -4,6 +4,45 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #258 — Separate Auto Processing workflow settings from owner defaults
+
+**Problem; measured cause.** Auto Processing exposed three owner mirrors—one ASR
+choice and two Notes selectors—beside the workflow language/provider/output controls.
+Those mirrors could become stale relative to the committed ASR and provider stores,
+and a same-dialog owner save could advance the workflow-preferences revision behind
+an open Automation form. The focused browser fixture now asserts that each of the
+three duplicate element IDs is absent (`tests/test_browser_automatic_processing.py`),
+and the reducer fixture asserts the Automation write has exactly four JSON fields
+(`tests/web/processing-preferences-core.test.mjs`).
+
+**Design or architecture change.** Keep the legacy six-field `PUT /api/processing-preferences`
+contract unchanged. Add a four-field, expected-version
+`PATCH` for workflow-owned language/provider/output values; the server reads the
+selected provider's committed model/effort under one owner-store snapshot and
+materializes those values atomically into the workflow row. ASR default persistence
+updates only its ASR column and revision. The UI links to the ASR and AI Provider
+owner panels, reports readiness and divergence, and reconciles the current revision
+on owner-save/re-entry with a three-way draft merge. Pinned workflow snapshots and
+provider stores are not rewritten by reads or unset operations.
+
+**Before and after numbers, with conditions.** Before: 3 duplicate owner selectors
+were rendered in the Automation form. After: 0 duplicate selectors and 4 PATCH
+fields; the focused Chromium and Node assertions above pass on the candidate.
+Legacy PUT remains 6 fields, covered by `tests/test_processing.py` and the
+conductor API probe.
+
+**Trade-offs and rejected options.** The workflow row retains its saved recipe so
+old clients and pinned runs remain stable; owner changes are adopted only by an
+authorized version-checked Automation save. The form does not infer a provider or
+model when an owner is missing, and a real concurrent revision conflict remains an
+explicit 409. No migration or credential/provider activity is introduced.
+
+**Follow-ups.** Full issue acceptance and upstream CI remain with the conductor;
+the implementation evidence is recorded in the issue-258 coder report. Issue
+[#258](https://github.com/nguyencanhtrung/asr-studio/issues/258).
+
+Tag: architecture, design. Target document: `docs/architecture-changes.md`.
+
 ## #257 — Filter transcript without changing source or draft identity
 
 Transcript search and review navigation belong to the existing `transcript-core` slice.

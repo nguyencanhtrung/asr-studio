@@ -149,11 +149,12 @@ def validate_processing_preferences(
     notes_reasoning_effort: object,
     notes_output_language: object,
 ) -> dict[str, object]:
-    if not isinstance(asr_choice, str) or asr_choice not in selectable_models():
-        raise ProcessingError(400, "invalid_asr_choice", "Choose a supported ASR model or auto.")
+    _validate_asr_choice(asr_choice)
     if not isinstance(asr_language, str) or asr_language not in {"en", "vi"}:
         raise ProcessingError(400, "invalid_asr_language", "Choose en or vi for ASR language.")
-    if notes_provider is not None and notes_provider not in {"chatgpt", "antigravity"}:
+    if notes_provider is not None and (
+        not isinstance(notes_provider, str) or notes_provider not in {"chatgpt", "antigravity"}
+    ):
         raise ProcessingError(
             400, "invalid_notes_provider", "Choose chatgpt, antigravity, or unset."
         )
@@ -181,6 +182,62 @@ def validate_processing_preferences(
         "notes_reasoning_effort": notes_reasoning_effort,
         "notes_output_language": notes_output_language,
     }
+
+
+def _validate_asr_choice(asr_choice: object) -> None:
+    if not isinstance(asr_choice, str) or asr_choice not in selectable_models():
+        raise ProcessingError(400, "invalid_asr_choice", "Choose a supported ASR model or auto.")
+
+
+def _validate_workflow_preferences(
+    *, asr_language: object, notes_provider: object, notes_output_language: object
+) -> None:
+    if not isinstance(asr_language, str) or asr_language not in {"en", "vi"}:
+        raise ProcessingError(400, "invalid_asr_language", "Choose en or vi for ASR language.")
+    if notes_provider is not None and (
+        not isinstance(notes_provider, str) or notes_provider not in {"chatgpt", "antigravity"}
+    ):
+        raise ProcessingError(
+            400, "invalid_notes_provider", "Choose chatgpt, antigravity, or unset."
+        )
+    if not isinstance(notes_output_language, str) or notes_output_language not in {"en", "vi"}:
+        raise ProcessingError(
+            400, "invalid_notes_output_language", "Choose en or vi for notes output."
+        )
+
+
+def _validate_notes_owner(
+    *, notes_provider: object, notes_model: object, notes_reasoning_effort: object
+) -> tuple[str | None, str | None]:
+    if notes_provider is None:
+        return None, None
+    if not isinstance(notes_model, str) or not notes_model or len(notes_model) > 200:
+        raise ProcessingError(
+            409,
+            "notes_owner_unconfigured",
+            "Choose a model in the selected provider settings before saving automatic processing.",
+        )
+    if (
+        not isinstance(notes_reasoning_effort, str)
+        or not notes_reasoning_effort
+        or len(notes_reasoning_effort) > 200
+    ):
+        raise ProcessingError(
+            409,
+            "notes_owner_unconfigured",
+            "Choose a model in the selected provider settings before saving automatic processing.",
+        )
+    return notes_model, notes_reasoning_effort
+
+
+def _validate_preferences_version(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2**63 - 1:
+        raise ProcessingError(
+            400,
+            "invalid_preferences_version",
+            "Provide the current processing preferences version.",
+        )
+    return value
 
 
 def save_processing_preferences(
@@ -220,18 +277,59 @@ def save_processing_preferences(
     return processing_preferences(data_dir)
 
 
-def save_asr_preference(data_dir: Path, asr_choice: object) -> dict[str, object]:
-    with _connect(data_dir) as connection:
-        row = _prefs_row(connection)
-    return save_processing_preferences(
-        data_dir,
-        asr_choice=asr_choice,
-        asr_language=row["asr_language"],
-        notes_provider=row["notes_provider"],
-        notes_model=row["notes_model"],
-        notes_reasoning_effort=row["notes_reasoning_effort"],
-        notes_output_language=row["notes_output_language"],
+def save_workflow_preferences(
+    data_dir: Path,
+    *,
+    expected_version: object,
+    asr_language: object,
+    notes_provider: object,
+    notes_output_language: object,
+    notes_model: object = None,
+    notes_reasoning_effort: object = None,
+) -> dict[str, object]:
+    """Save only workflow-owned fields after checking the revision the UI read."""
+    version = _validate_preferences_version(expected_version)
+    _validate_workflow_preferences(
+        asr_language=asr_language,
+        notes_provider=notes_provider,
+        notes_output_language=notes_output_language,
     )
+    model, effort = _validate_notes_owner(
+        notes_provider=notes_provider,
+        notes_model=notes_model,
+        notes_reasoning_effort=notes_reasoning_effort,
+    )
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        updated = connection.execute(
+            "UPDATE processing_preferences SET asr_language = ?, notes_provider = ?, "
+            "notes_model = ?, notes_reasoning_effort = ?, notes_output_language = ?, "
+            "version = version + 1, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = 1 AND version = ?",
+            (asr_language, notes_provider, model, effort, notes_output_language, version),
+        )
+        if updated.rowcount != 1:
+            raise ProcessingError(
+                409,
+                "preferences_changed",
+                "Processing preferences changed; reload and try again.",
+            )
+    return processing_preferences(data_dir)
+
+
+def save_asr_preference(data_dir: Path, asr_choice: object) -> dict[str, object]:
+    """Persist the ASR owner default without rewriting workflow or provider fields."""
+    _validate_asr_choice(asr_choice)
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        updated = connection.execute(
+            "UPDATE processing_preferences SET asr_choice = ?, version = version + 1, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+            (asr_choice,),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("processing preferences are not initialized")
+    return processing_preferences(data_dir)
 
 
 def _queue_event(
