@@ -1933,6 +1933,7 @@ function audioFacts() {
     time: audio.currentTime,
     paused: audio.paused,
     ended: audio.ended,
+    seeking: audio.seeking,
     ready: audio.readyState >= HTMLMediaElement.HAVE_METADATA,
     audioMeetingId: audio.dataset.meetingId ?? null,
     reduced: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -3036,6 +3037,7 @@ $("#transcript-segments").addEventListener("change", (event) => {
 for (const eventName of ["timeupdate", "play"]) {
   $("#meeting-audio").addEventListener(eventName, updateActiveTranscriptIntervals);
 }
+$("#meeting-audio").addEventListener("seeking", () => dispatch({ type: "playback/seeking", ...audioFacts() }));
 $("#meeting-audio").addEventListener("seeked", () => dispatch({ type: "playback/seeked", ...audioFacts() }));
 $("#meeting-audio").addEventListener("loadedmetadata", () => dispatch({ type: "playback/metadata-loaded", ...audioFacts() }));
 $("#meeting-audio").addEventListener("error", () => dispatch({ type: "playback/audio-failed" }));

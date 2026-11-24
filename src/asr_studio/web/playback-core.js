@@ -28,7 +28,8 @@ export const initialState = {
   lastManual: null, // clock of the last scroll the user made (null: none yet)
   ownUntil: 0, // a scroll event up to this clock is ours, not the user's
   target: null, // real row of the last explicit source jump or seek, even when filtered out
-  pendingTarget: null, // { id, meetingId, generationId, startSeconds }: one native seeked acknowledgement
+  targetOwner: null, // source | timestamp | time: why target is still the reveal target
+  pendingTarget: null, // { id, owner, meetingId, generationId, nativeSeeking }: one native seeked acknowledgement
   mark: null, // id of the row the open notes source names
   seek: null, // the seek waiting for the audio metadata: { id, ids, meetingId, startSeconds, generationId }; ids: every seek joined to it
   seekDone: null, // { id, ids, ok }: how the last seek ended; ok holds for every id in ids
@@ -108,7 +109,9 @@ function sameNativeTarget(target, action) {
   return target
     && target.meetingId === action.shown?.id
     && target.generationId === action.shown?.generationId
-    && Math.abs((Number(action.time) || 0) - target.startSeconds) < 0.05;
+    // In production this is set by the real `seeking` transition. Undefined keeps the pure
+    // reducer contract usable by synthetic callers that model only the final acknowledgement.
+    && (target.nativeSeeking || action.seeking === undefined);
 }
 
 const finishSeek = (state, ok) => ({ ...state, seek: null, seekDone: { id: state.seek.id, ids: state.seek.ids, ok } });
@@ -151,17 +154,34 @@ function step(state, action) {
       return out(sample(state, action));
     case "playback/seeked": {
       const next = sample(state, action);
-      const explicit = sameNativeTarget(state.pendingTarget, action) ? state.pendingTarget.id : null;
-      return out({ ...next, target: explicit || next.current, pendingTarget: null });
+      const pending = sameNativeTarget(state.pendingTarget, action) ? state.pendingTarget : null;
+      return out({
+        ...next,
+        target: pending?.id || next.current,
+        targetOwner: pending?.owner || (next.current ? "time" : null),
+        pendingTarget: null,
+      });
+    }
+    case "playback/seeking": {
+      if (!state.pendingTarget
+        || state.pendingTarget.meetingId !== action.shown?.id
+        || state.pendingTarget.generationId !== action.shown?.generationId) return out(state);
+      return out({ ...state, pendingTarget: { ...state.pendingTarget, nativeSeeking: true } });
     }
     case "playback/target-requested": {
       const id = sourceRow(rowsOf(action.shown), action.segmentId, action.startSeconds);
       return out(bumped({
         ...state,
         target: id,
-        pendingTarget: id
-          ? { id, meetingId: action.shown?.id, generationId: action.shown?.generationId, startSeconds: action.startSeconds }
-          : null,
+        targetOwner: id ? "timestamp" : null,
+        pendingTarget: id ? {
+          id,
+          owner: "timestamp",
+          meetingId: action.shown?.id,
+          generationId: action.shown?.generationId,
+          startSeconds: action.startSeconds,
+          nativeSeeking: true,
+        } : null,
       }));
     }
     case "playback/metadata-loaded": {
@@ -192,22 +212,53 @@ function step(state, action) {
       const next = sampleTarget(finishSeek(state, true), { ...action.value, now: action.now, shown: action.shown, targetId: seek.targetId });
       return out({
         ...next,
-        pendingTarget: seek.targetId
-          ? { id: seek.targetId, meetingId: seek.meetingId, generationId: seek.generationId, startSeconds: seek.startSeconds }
-          : null,
+        targetOwner: seek.targetId ? "source" : next.target ? "time" : null,
+        pendingTarget: seek.targetId ? {
+          id: seek.targetId,
+          owner: "source",
+          meetingId: seek.meetingId,
+          generationId: seek.generationId,
+          startSeconds: seek.startSeconds,
+          nativeSeeking: true,
+        } : null,
       });
     }
     case "playback/seek-failed":
       return state.seek && state.seek.id === action.meta.seekId ? out(finishSeek(state, false)) : out(state);
     case "playback/meeting-left": {
       // The seek belongs to the meeting that was left; the mark only to a meeting we switched away from.
-      const next = { ...state, seek: null, seekDone: null, target: null, pendingTarget: null, mark: action.kind === "switch" ? null : state.mark };
+      const next = {
+        ...state,
+        seek: null,
+        seekDone: null,
+        target: null,
+        targetOwner: null,
+        pendingTarget: null,
+        mark: action.kind === "switch" ? null : state.mark,
+      };
       return out(bumped(next), stopWaits(state.seek));
     }
     case "playback/mark-requested": {
       const id = sourceRow(rowsOf(action.shown), action.segmentId, action.startSeconds);
-      const next = bumped({ ...state, mark: id, target: id });
-      return out(id === null ? next : queue(next, { op: "reveal", id, smooth: !action.reduced }));
+      const closingSource = id === null && state.targetOwner === "source";
+      // Closing Notes clears source provenance and source-owned seek recovery. A newer manual
+      // timestamp target remains, including when it intentionally names the same row.
+      const preservesNewerTarget = id === null && !closingSource;
+      const target = preservesNewerTarget ? state.target : id;
+      const targetOwner = preservesNewerTarget ? state.targetOwner : (id ? "source" : null);
+      const next = bumped({
+        ...state,
+        mark: id,
+        target,
+        targetOwner,
+        pendingTarget: closingSource ? null : state.pendingTarget,
+        seek: closingSource ? null : state.seek,
+        seekDone: closingSource && state.seek
+          ? { id: state.seek.id, ids: state.seek.ids, ok: false }
+          : state.seekDone,
+      });
+      const effects = closingSource ? stopWaits(state.seek) : [];
+      return out(id === null ? next : queue(next, { op: "reveal", id, smooth: !action.reduced }), effects);
     }
     case "playback/scroll-started":
       return out({ ...state, ownUntil: action.now + OWN_SCROLL_GAP_MS });

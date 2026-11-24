@@ -287,6 +287,39 @@ test("marking a source repaints the rows", () => {
   assert.equal(env.state().rev, before + 1);
 });
 
+test("closing an older source keeps a newer explicit seek target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  for (const newerId of ["r2", "r4"]) {
+    let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+    state = reduce(state, { type: "playback/target-requested", segmentId: newerId, startSeconds: newerId === "r2" ? 3 : 13, shown }).state;
+    state = reduce(state, { type: "playback/mark-requested", segmentId: null, startSeconds: null, shown }).state;
+    assert.equal(state.mark, null);
+    assert.equal(state.target, newerId);
+    assert.equal(state.targetOwner, "timestamp");
+  }
+});
+
+test("closing Notes clears source-owned reveal and its pending seek", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "source-seek", meetingId: "m1", segmentId: "r2",
+    startSeconds: 3, audioMeetingId: "m1", ready: true, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/seek-applied", meta: { seekId: "source-seek" },
+    value: { time: 3, paused: true }, shown,
+  }).state;
+  assert.equal(state.targetOwner, "source");
+  assert.ok(state.pendingTarget);
+  state = reduce(state, { type: "playback/mark-requested", segmentId: null, startSeconds: null, shown }).state;
+  assert.equal(state.mark, null);
+  assert.equal(state.target, null);
+  assert.equal(state.targetOwner, null);
+  assert.equal(state.pendingTarget, null);
+  assert.equal(state.seek, null);
+});
+
 test("switching meetings clears the mark; going home keeps it", () => {
   const env = setup();
   env.send("playback/mark-requested", { segmentId: "r3", startSeconds: 7 });
@@ -634,6 +667,15 @@ test("the latest explicit timestamp target wins over an older Notes mark", () =>
   state = reduce(state, { type: "playback/seeked", time: 3, paused: true, shown }).state;
   assert.equal(state.target, "r1");
   assert.equal(state.mark, "r2");
+});
+
+test("a delayed native acknowledgement belongs to its outstanding explicit target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: [row("first", 0, 5), row("short", 3, 3.08)] };
+  let state = reduce(initialState, { type: "playback/target-requested", segmentId: "short", startSeconds: 3, shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3.25, paused: false, seeking: false, shown }).state;
+  assert.equal(state.target, "short");
+  assert.equal(state.targetOwner, "timestamp");
+  assert.equal(state.pendingTarget, null);
 });
 
 test("a native time-only seek still resolves the current row without an explicit target", () => {

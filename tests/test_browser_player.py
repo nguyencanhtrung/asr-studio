@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -16,6 +17,7 @@ from playwright.sync_api import expect
 from test_browser_history import FIXED_NOW, show_a_past_generation
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
+from test_browser_notes_citations import CHIP, open_notes, seed_long_cited_notes
 
 from asr_studio.media import normalize_media
 from asr_studio.storage import database_path
@@ -938,7 +940,7 @@ def test_filtered_source_and_saved_seek_reveal_real_row(
     if target_kind in {"seek", "native-seek"}:
         expect(target).to_have_attribute("aria-current", "true")
     else:
-        expect(target).to_have_class("transcript-segment is-notes-source")
+        expect(target).to_have_class(re.compile(r"(?:^|\s)is-notes-source(?:\s|$)"))
         expect(target.locator(".segment-source-mark")).to_have_text("Nguồn của mục notes")
 
 
@@ -1063,3 +1065,91 @@ def test_filtered_timestamp_click_keeps_exact_overlapping_target(
     page.evaluate("window.__player.time = 8.5")
     page.locator("#meeting-audio").dispatch_event("seeked")
     expect(page.locator("#transcript-reveal-target")).to_have_attribute("data-segment-id", later_id)
+
+
+@pytest.mark.parametrize("older_mark", [False, True], ids=["no-older-mark", "older-notes-mark"])
+def test_playing_timestamp_click_keeps_target_through_delayed_trusted_seeked(
+    live, signed_in, tmp_path, older_mark
+):
+    meeting_id = seed_long_transcript(live.settings.data_dir, count=8)
+    write_recording(live.settings.data_dir, meeting_id, tmp_path, 16)
+    with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
+        connection.execute(
+            "UPDATE transcript_segments SET start_seconds = 8, end_seconds = 10 "
+            "WHERE sequence = 3 AND generation_id = "
+            "(SELECT current_generation_id FROM meetings WHERE id = ?)",
+            (meeting_id,),
+        )
+    _, page = signed_in(viewport={"width": 360, "height": 800}, color_scheme="dark")
+    load_meeting(live, page, meeting_id, 8)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').readyState >= 1")
+    earlier = page.locator(".transcript-segment").nth(3)
+    target = page.locator(".transcript-segment").nth(4)
+    earlier_id = earlier.get_attribute("data-segment-id")
+    target_id = target.get_attribute("data-segment-id")
+    assert target.get_attribute("data-start-seconds") == earlier.get_attribute("data-start-seconds") == "8"
+    if older_mark:
+        assert page.evaluate(
+            """async segmentId => {
+              const { meetingHistory } = await import('/assets/history.js');
+              return meetingHistory.markNotesSource(segmentId, 8);
+            }""",
+            earlier_id,
+        )
+    page.locator("#meeting-audio").evaluate("async node => { await node.play(); }")
+    page.locator(".transcript-segments").evaluate(
+        """node => node.addEventListener('click', () => {
+          const end = performance.now() + 250;
+          while (performance.now() < end) {}
+        }, {once: true})"""
+    )
+    target.locator(".segment-timestamp").click()
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 8")
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no matching delayed target")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", target_id)
+    if older_mark:
+        expect(earlier).to_have_class(re.compile(r"(?:^|\s)is-notes-source(?:\s|$)"))
+
+
+def test_closing_older_notes_source_keeps_newer_hidden_seek_recovery(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.wait_for_function(
+        "() => document.querySelector('#meeting-audio').currentTime >= 24.7 "
+        "&& !document.querySelector('#meeting-audio').seeking"
+    )
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    target = page.locator(f'.transcript-segment[data-segment-id="{segment_ids[20]}"]')
+    target.locator(".segment-timestamp").click()
+    page.wait_for_function(
+        "() => !document.querySelector('#meeting-audio').seeking "
+        "&& document.querySelector('#meeting-audio').currentTime < 22"
+    )
+    page.locator("#transcript-search").fill("no result random")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+    page.locator("#notes-source-close").click()
+    expect(reveal).to_be_visible()
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+
+
+def test_closing_notes_source_clears_source_owned_hidden_reveal(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.wait_for_function(
+        "() => document.querySelector('#meeting-audio').currentTime >= 24.7 "
+        "&& !document.querySelector('#meeting-audio').seeking"
+    )
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no source row")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[25])
+    page.locator("#notes-source-close").click()
+    expect(reveal).to_be_hidden()
+    expect(reveal).to_have_attribute("data-segment-id", "")
