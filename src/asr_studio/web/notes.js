@@ -645,6 +645,13 @@ function richSelectionOffsets(element) {
   return Number.isInteger(anchor) && Number.isInteger(focus) ? { anchor, focus } : null;
 }
 
+function validRichSelection(selection, length) {
+  if (!selection || !Number.isInteger(selection.anchor) || !Number.isInteger(selection.focus)
+    || selection.anchor < 0 || selection.focus < 0
+    || selection.anchor > length || selection.focus > length) return null;
+  return { anchor: selection.anchor, focus: selection.focus };
+}
+
 function richCaretOffset(element, fallback) {
   const offsets = richSelectionOffsets(element);
   return offsets && offsets.anchor === offsets.focus ? offsets.anchor : fallback;
@@ -704,11 +711,14 @@ function saveShortcut(event) {
   saveFromEditor();
 }
 
-function updateRichRun(element, value, rejectedSelection = null) {
+function updateRichRun(element, value, rejectedSelection = null, beforeSelection = null) {
   const before = element.dataset.richValue;
   const index = Number(element.dataset.richIndex);
   const caret = richCaretOffset(element, value.length);
-  dispatch({ type: "notes/rich-edited", index, before, value });
+  dispatch({
+    type: "notes/rich-edited", index, before, value,
+    selection: validRichSelection(beforeSelection, before.length),
+  });
   const work = selectView(store.getState()).savedWork;
   const run = work.mode === "rich" && work.blocks.flatMap(blockRuns)[index];
   if (value !== before && run?.text === before) {
@@ -731,8 +741,9 @@ function insertRichText(element, text, rejectedSelection = null) {
   prefix.setEnd(range.startContainer, range.startOffset);
   const start = prefix.toString().length;
   const value = element.textContent;
-  const proposed = value.slice(0, start) + text + value.slice(start + range.toString().length);
-  updateRichRun(element, proposed, rejectedSelection);
+  const selectedLength = range.toString().length;
+  const proposed = value.slice(0, start) + text + value.slice(start + selectedLength);
+  updateRichRun(element, proposed, rejectedSelection, { anchor: start, focus: start + selectedLength });
   if (element.textContent !== proposed) return;
   if (element.isConnected && !els.rich.hidden && element.firstChild) {
     selection.collapse(element.firstChild, Math.min(start + text.length, element.textContent.length));
@@ -762,22 +773,26 @@ els.rich.addEventListener("compositionend", (event) => {
   event.target.removeAttribute("data-composing");
   delete event.target.dataset.richSelectionBefore;
   delete event.target.dataset.richSelectionComposition;
-  updateRichRun(event.target, event.target.textContent, rejectedSelection);
+  updateRichRun(event.target, event.target.textContent, rejectedSelection, rejectedSelection);
 });
 els.rich.addEventListener("input", (event) => {
   if (!event.isComposing && !event.target.hasAttribute("data-composing")) {
     let rejectedSelection = null;
+    let beforeSelection = null;
     try {
-      rejectedSelection = JSON.parse(event.target.dataset.richSelectionBefore || "null");
+      beforeSelection = JSON.parse(event.target.dataset.richSelectionBefore || "null");
+      rejectedSelection = beforeSelection;
     } catch {
       rejectedSelection = null;
+      beforeSelection = null;
     }
     delete event.target.dataset.richSelectionBefore;
-    updateRichRun(event.target, event.target.textContent, rejectedSelection);
+    updateRichRun(event.target, event.target.textContent, rejectedSelection, beforeSelection);
   }
 });
 els.rich.addEventListener("beforeinput", (event) => {
   if (!event.isComposing && !event.target.hasAttribute("data-composing")) {
+    delete event.target.dataset.richSelectionBefore;
     const offsets = richSelectionOffsets(event.target);
     if (offsets) setData(event.target, "richSelectionBefore", JSON.stringify(offsets));
   }

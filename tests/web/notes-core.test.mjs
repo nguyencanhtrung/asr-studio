@@ -1661,6 +1661,37 @@ test("citation matching treats raw headings and indented code as hard boundaries
   assert.equal(selectView(env.state()).savedWork.richFallback, true);
 });
 
+test("a pipe-containing list line interrupts a table and keeps its citation scope", async () => {
+  const env = setup();
+  const bullet = "Follow | now";
+  const markdown = "# Decisions\n\nA | B\n--- | ---\n- Follow | now\n";
+  await opened(env, { revisions: [revision({
+    markdown,
+    display_citations: [{ section: "Decisions", text: bullet, sources: [{ id: "seg2", start_seconds: 10 }] }],
+  })] });
+  const view = selectView(env.state()).savedWork;
+  const table = view.blocks.find((block) => block.kind === "table");
+  const list = view.blocks.find((block) => block.kind === "list");
+  assert.equal(table.rows.length, 1);
+  assert.equal(list.items[0].nodes.map((node) => node.text).join(""), bullet);
+  assert.equal(list.items[0].chips[0].segmentId, "seg2");
+});
+
+test("a non-one ordered marker stays paragraph text unless separated by a blank line", async () => {
+  for (const [separator, expectedKinds] of [["\n", ["heading", "paragraph"]], ["\n\n", ["heading", "paragraph", "list"]]]) {
+    const env = setup();
+    const markdown = `# Notes\n\nSchedule${separator}2. is tentative\n8. is confirmed\n`;
+    await opened(env, { revisions: [revision({ markdown })] });
+    const view = selectView(env.state()).savedWork;
+    assert.deepEqual(view.blocks.map((block) => block.kind), expectedKinds);
+    if (separator === "\n") {
+      assert.match(view.blocks[1].lines.map((line) => line.map((node) => node.text).join("")).join("\n"), /2\. is tentative\n8\. is confirmed/);
+    } else {
+      assert.equal(view.blocks[2].start, 2);
+    }
+  }
+});
+
 test("View keeps a safe authored source link visible through a Markdown hard break", async () => {
   const env = setup();
   const href = "/meetings/m1?notes_source=s1&segment=seg1#transcript";
@@ -1895,6 +1926,36 @@ test("rich projection decodes supported amp entities once and preserves authored
 
   env.dispatch("rich-edited", { index: strongIndex, before: "R&D", value: "R&DX" });
   assert.equal(saved(env).value, markdown.replace("R&amp;D", "R&amp;DX"));
+});
+
+test("rich selection maps deletion to the selected authored entity", async () => {
+  for (const [selected, remaining] of [[1, "&AMP;"], [2, "&amp;"]]) {
+    const env = setup();
+    const markdown = "# Notes\n\nA&amp;&AMP;B\n";
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => node.text === "A&&B");
+    env.dispatch("rich-edited", {
+      index,
+      before: "A&&B",
+      value: "A&B",
+      selection: { anchor: selected, focus: selected + 1 },
+    });
+    assert.equal(saved(env).value, `# Notes\n\nA${remaining}B\n`);
+  }
+});
+
+test("rich edits without a usable selection do not guess between authored entities", async () => {
+  for (const markdown of ["# Notes\n\nA&amp;&AMP;B\n", "# Notes\n\nA&amp;&AMP;&AMP;B\n", "# Notes\n\nA&&amp;B\n"]) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const index = selectView(env.state()).savedWork.blocks.flatMap(blockRuns)
+      .findIndex((node) => node.text === "A&&B");
+    env.dispatch("rich-edited", { index, before: "A&&B", value: "A&B" });
+    assert.equal(saved(env).value, markdown);
+  }
 });
 
 test("unsupported entities stay literal instead of entering rich emphasis or links", async () => {

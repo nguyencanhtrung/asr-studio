@@ -859,6 +859,10 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
   };
   const isTableRule = (value) => /\|/.test(value) && /^[ \t|:-]+$/.test(value);
   const startsBlock = (value) => headingPattern.test(value) || listPattern.test(value) || startsRaw(value) || fenceEnd(value);
+  const startsParagraphBlock = (value) => {
+    const list = value.match(listPattern);
+    return startsBlock(value) && !(list && /^\d/.test(list[2]) && Number(list[2].slice(0, -1)) !== 1);
+  };
   for (let index = 0; index < lines.length;) {
     const text = line(index);
     if (!trimMarkdownWhitespace(text)) {
@@ -879,7 +883,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     if (citationHeading) citationLines[index] = text;
     if (!startsRaw(text) && (isTableRule(line(index + 1)) || (text.includes("|") && /^[ \t]*[:\-]+[ \t]*$/.test(line(index + 1))))) {
       let end = index + 2;
-      while (line(end).includes("|")) end++;
+      while (line(end).includes("|") && !startsBlock(line(end))) end++;
       const headers = tableCells(text);
       const rules = tableCells(line(index + 1));
       const rows = lines.slice(index, end).map((entry) => tableCells(entry.text));
@@ -1014,7 +1018,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       && (unsupported
         ? !((startsBlock(line(end)) && !indentedLinePattern.test(line(end)))
           || (startsIndentedCode && headingPattern.test(line(end))))
-        : !startsBlock(line(end)))) end++;
+        : !startsParagraphBlock(line(end)))) end++;
     // Keep setext headings, reference definitions, HTML, multiline hard breaks and
     // GFM syntax outside the supported profile visible in their original spelling.
     const paragraph = lines.slice(index, end);
@@ -1074,6 +1078,26 @@ function sharedEdges(before, after) {
   return [first, tail];
 }
 
+function selectionRange(selection, length) {
+  if (!selection || !Number.isInteger(selection.anchor) || !Number.isInteger(selection.focus)
+    || selection.anchor < 0 || selection.focus < 0
+    || selection.anchor > length || selection.focus > length) return null;
+  return {
+    start: Math.min(selection.anchor, selection.focus),
+    end: Math.max(selection.anchor, selection.focus),
+  };
+}
+
+function selectedDisplayEdit(before, after, selection) {
+  const range = selectionRange(selection, before.length);
+  if (!range) return null;
+  const prefix = before.slice(0, range.start);
+  const suffix = before.slice(range.end);
+  if (!after.startsWith(prefix) || !after.endsWith(suffix)
+    || after.length < prefix.length + suffix.length) return null;
+  return [range.start, before.length - range.end];
+}
+
 function sourceOffsets(node, source) {
   if (node.kind === "code") return Array.from({ length: source.length + 1 }, (_, index) => index);
   const offsets = [0];
@@ -1088,6 +1112,24 @@ function sourceOffsets(node, source) {
     index = end;
   }
   return offsets;
+}
+
+function ambiguousAuthoredEntityEdit(source, offsets, display, after, first, tail) {
+  const minLength = Math.min(display.length, after.length);
+  let maxSuffix = 0;
+  while (maxSuffix < minLength
+    && display[display.length - maxSuffix - 1] === after[after.length - maxSuffix - 1]) maxSuffix++;
+  const earliestPrefix = minLength - maxSuffix;
+  if (earliestPrefix === first) return false;
+  const contestedStart = Math.min(earliestPrefix, first);
+  const contestedEnd = Math.max(earliestPrefix, display.length - tail);
+  const contestedSource = source.slice(offsets[contestedStart], offsets[contestedEnd]);
+  for (let index = 0; index < contestedSource.length;) {
+    const entity = markdownEntityAt(contestedSource, index);
+    if (entity && supportedMarkdownEntity(entity)) return true;
+    index += entity ? entity.length : 1;
+  }
+  return false;
 }
 
 function encodedEntityRanges(source) {
@@ -1375,7 +1417,7 @@ function encodeRichBoundarySpaces(source, value, node, { edgeStart = false, edge
   return next;
 }
 
-function protectRichMarker(source, value, node, markdown) {
+function protectRichMarker(source, value, node, markdown, originalSource = source, originalDisplay = node.text) {
   if (node.kind !== "text") return source;
   const lineStart = Math.max(markdown.lastIndexOf("\n", node.start - 1), markdown.lastIndexOf("\r", node.start - 1)) + 1;
   const linePrefix = markdown.slice(lineStart, node.start);
@@ -1392,6 +1434,10 @@ function protectRichMarker(source, value, node, markdown) {
       || listPattern.test(value) || listMarkerOnlyPattern.test(value)
       || /^>(?:[ \t]|$)/.test(value) ? { offset: 0 } : null;
   if (!marker || source[marker.offset] === "\\") return source;
+  const markerText = ordered?.[0] || value.match(/^(?: {0,3}(?:#{1,6}|[-*+]))(?=[ \t]|$)/)?.[0].trimStart() || "";
+  if (originalSource[marker.offset] === "\\"
+    || markerText && originalSource.startsWith(markerText) && originalDisplay.startsWith(markerText)
+      && /^[ \t]|$/.test(originalSource.slice(markerText.length))) return source;
   return source.slice(0, marker.offset) + "\\" + source.slice(marker.offset);
 }
 
@@ -1414,7 +1460,9 @@ function richMarkdownEdit(state, action, revision, draft) {
   const raw = draft.value.slice(node.start, node.end);
   const offsets = sourceOffsets(node, raw);
   if (offsets.length !== node.text.length + 1) return null;
-  const [first, tail] = sharedEdges(node.text, action.value);
+  const selected = selectedDisplayEdit(node.text, action.value, action.selection);
+  const [first, tail] = selected || sharedEdges(node.text, action.value);
+  if (!selected && ambiguousAuthoredEntityEdit(raw, offsets, node.text, action.value, first, tail)) return null;
   const changedAtStart = first === 0;
   const changedAtEnd = tail === 0;
   const edgeStart = changedAtStart && /^[ \t]/.test(action.value);
@@ -1446,7 +1494,7 @@ function richMarkdownEdit(state, action, revision, draft) {
     edgeStart: changedAtStart,
     edgeEnd: changedAtEnd,
   })) return null;
-  const protectedSource = protectRichMarker(boundarySource, action.value, node, draft.value);
+  const protectedSource = protectRichMarker(boundarySource, action.value, node, draft.value, raw, node.text);
   const candidate = draft.value.slice(0, node.start) + protectedSource
     + draft.value.slice(node.end);
   const reparsed = markdownBlocks(candidate, revision, state.origin);
