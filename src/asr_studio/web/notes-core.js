@@ -859,10 +859,11 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
   };
   const isTableRule = (value) => /\|/.test(value) && /^[ \t|:-]+$/.test(value);
   const startsBlock = (value) => headingPattern.test(value) || listPattern.test(value) || startsRaw(value) || fenceEnd(value);
-  const startsParagraphBlock = (value) => {
+  const isOrderedParagraphContinuation = (value) => {
     const list = value.match(listPattern);
-    return startsBlock(value) && !(list && /^\d/.test(list[2]) && Number(list[2].slice(0, -1)) !== 1);
+    return Boolean(list && /^\d/.test(list[2]) && Number(list[2].slice(0, -1)) !== 1);
   };
+  const startsParagraphBlock = (value) => startsBlock(value) && !isOrderedParagraphContinuation(value);
   for (let index = 0; index < lines.length;) {
     const text = line(index);
     if (!trimMarkdownWhitespace(text)) {
@@ -1022,14 +1023,16 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     // Keep setext headings, reference definitions, HTML, multiline hard breaks and
     // GFM syntax outside the supported profile visible in their original spelling.
     const paragraph = lines.slice(index, end);
+    const orderedContinuation = !unsupported && paragraph.slice(1).some(({ text: value }) =>
+      isOrderedParagraphContinuation(value));
     const hardBreak = paragraph.some(({ text: value }) => {
       if (/ {2,}$/.test(value)) return true;
       const backslashes = value.match(/\\+$/)?.[0] || "";
       return backslashes.length % 2 === 1;
     });
-    if (unsupported || hardBreak || paragraph.some(({ text: value }) => /^ {0,3}[=-]+ *$/.test(value))) {
+    if (unsupported || orderedContinuation || hardBreak || paragraph.some(({ text: value }) => /^ {0,3}[=-]+ *$/.test(value))) {
       blocks.push(raw(index, end, {
-        viewLines: presentation === "view" && (hardBreak || paragraph.some(({ text: value }) => /^ {0,3}>/.test(value))),
+        viewLines: presentation === "view" && (orderedContinuation || hardBreak || paragraph.some(({ text: value }) => /^ {0,3}>/.test(value))),
         literalLineIndexes: literalLines(index, end),
       }));
     } else {

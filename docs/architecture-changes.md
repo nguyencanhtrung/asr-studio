@@ -2972,8 +2972,10 @@ lifetime than an ordinary copy or download because it belongs to the Notes tab.
 projection. Direct editing maps the selected display range to canonical
 Markdown before replacing it. Ambiguous ranges with different authored entity
 spellings remain available in Markdown. Table and paragraph boundaries keep
-following bullets and literal numbers in their original blocks. Raw editing
-remains available for structural changes and unsupported syntax. The fallback holds focus for the current revision and edit session,
+following bullets and literal numbers in their original blocks. A paragraph
+whose continuation looks like an ordered item uses Markdown for editing and
+keeps its literal numbering in formatted copies. Raw editing remains
+available for structural changes and unsupported syntax. The fallback holds focus for the current revision and edit session,
 even if the draft becomes eligible for direct editing. Draft offsets track
 whitespace entities generated during direct editing so that normalization
 preserves the original spelling of saved entities. Historical source links

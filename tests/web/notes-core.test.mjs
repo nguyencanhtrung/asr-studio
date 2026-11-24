@@ -1678,14 +1678,17 @@ test("a pipe-containing list line interrupts a table and keeps its citation scop
 });
 
 test("a non-one ordered marker stays paragraph text unless separated by a blank line", async () => {
-  for (const [separator, expectedKinds] of [["\n", ["heading", "paragraph"]], ["\n\n", ["heading", "paragraph", "list"]]]) {
+  for (const [separator, expectedKinds] of [["\n", ["heading", "raw"]], ["\n\n", ["heading", "paragraph", "list"]]]) {
     const env = setup();
     const markdown = `# Notes\n\nSchedule${separator}2. is tentative\n8. is confirmed\n`;
     await opened(env, { revisions: [revision({ markdown })] });
     const view = selectView(env.state()).savedWork;
     assert.deepEqual(view.blocks.map((block) => block.kind), expectedKinds);
     if (separator === "\n") {
-      assert.match(view.blocks[1].lines.map((line) => line.map((node) => node.text).join("")).join("\n"), /2\. is tentative\n8\. is confirmed/);
+      assert.equal(view.blocks[1].text, "Schedule\n2. is tentative\n8. is confirmed");
+      env.dispatch("mode-chosen", { mode: "rich" });
+      assert.equal(selectView(env.state()).savedWork.richFallback, true);
+      assert.equal(saved(env).value, markdown);
     } else {
       assert.equal(view.blocks[2].start, 2);
     }
