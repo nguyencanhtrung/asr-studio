@@ -228,6 +228,7 @@ function notifyMeetingContext() {
     detail: {
       meeting: view === "meeting" ? nav().meeting : null,
       view,
+      tab: view === "meeting" ? nav().tab : null,
       "transcriptionRequestInFlight": selectRequestBusy(store.getState().task),
     },
   });
@@ -276,7 +277,7 @@ const render = ((memory) => (root) => {
     const transcription = s.meeting.transcription || {};
     renderMeetingProcessingStatus(transcription.task, transcription.generation, root.processing);
   }
-  if (s.contextRev !== p.contextRev) notifyMeetingContext();
+  if (s.contextRev !== p.contextRev || s.tab !== p.tab) notifyMeetingContext();
   if (s.readyRev !== p.readyRev && s.meeting) meetingReady(s.meeting);
   if (s.focus.rev !== p.focus.rev) focusTarget(s.focus.target);
   if (s.editor && p.editor && s.editor.focusDate !== p.editor.focusDate) $("#edit-date").focus();
@@ -2661,6 +2662,7 @@ export const meetingHistory = Object.freeze({
     return {
       meeting: state.view === "meeting" ? state.meeting : null,
       view: state.view,
+      tab: state.view === "meeting" ? state.tab : null,
       "transcriptionRequestInFlight": selectRequestBusy(store.getState().task),
     };
   },

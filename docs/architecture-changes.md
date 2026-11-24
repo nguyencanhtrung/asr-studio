@@ -2959,3 +2959,57 @@ merges only after the fresh review gate and latest checks are green.
 
 Tag: design, privacy. Target: `src/asr_studio/web/`, targeted browser/reducer tests,
 and `docs/assets/frontend/issue-252/`.
+
+
+## #256 — Meeting Notes editor and clipboard previews
+
+**Problem.** Notes exposed a Markdown textarea and a partial View renderer. Saved
+copy and export re-read the selected revision, but an answer from a selection
+the user had left could update revision state. A preview also has a narrower
+lifetime than an ordinary copy or download because it belongs to the Notes tab.
+
+**Design.** View, direct editing and formatted copy share a bounded Markdown
+projection. Direct editing maps the selected display range to canonical
+Markdown before replacing it. The textarea also tracks the edit range so its
+normalized line breaks do not replace surrounding stored delimiters. Ambiguous
+rich ranges with different authored entity spellings remain available in Markdown. Table and paragraph boundaries keep
+following bullets and literal numbers in their original blocks. A paragraph
+whose continuation looks like an ordered item uses Markdown for editing and
+keeps its literal numbering in formatted copies. Raw editing remains
+available for structural changes and unsupported syntax. The fallback holds focus for the current revision and edit session,
+even if the draft becomes eligible for direct editing. Draft offsets track
+whitespace entities generated during direct editing so that normalization
+preserves the original spelling of saved entities. Historical source links
+and stored proof still bind by revision and bullet. A preview pins its saved revision, renders independently of the draft,
+and copies only after confirmation. Email sections come from headings in the
+saved Markdown. The meeting context carries the active tab so leaving Notes can
+cancel a preview independently of plain copy and export.
+
+View citation matching remains independent of rich-edit eligibility: unsupported
+lists retain safe unchanged generated-bullet chips, while fenced/HTML/indented
+raw blocks remain non-citable. Raw-boundary headings and hard-break paragraphs
+still preserve section scope and safe authored source links in View. Saved rich
+and email previews use the same neutral light document surface as clipboard HTML,
+including when the app shell is dark.
+
+The projection decodes only the supported authored entities (`&amp;`, `&AMP;`,
+`&#32;`, and `&#9;`) in labels, text, and destinations, while preserving their
+source ranges for direct edits. Other entity spellings, delimiter runs whose
+source edges are not CommonMark-flanking, and loose same-delimiter ordered-list
+items remain literal/raw so View does not claim richer structure than the
+authored Markdown supports.
+
+**Verification.** The Notes reducer and Notes editor browser tests cover exact
+source bytes after an edit, tab and revision races, mixed-format source parity,
+and clipboard outcomes. This change adds no runtime library or export format.
+Fixture-only light/dark desktop/mobile captures of the rendered rich editor are
+tracked under `docs/assets/frontend/issue-256/` and are pinned to the reviewed
+commit in the PR evidence.
+
+**Trade-off.** The direct editor exposes editable text inside the supported
+blocks. Changes to list structure, table dimensions, link targets, and
+unsupported syntax use the raw editor. Copy for email places the saved body on
+the clipboard and displays the subject separately.
+
+**Follow-ups.** [Issue #256](https://github.com/nguyencanhtrung/asr-studio/issues/256).
+Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#117-notes-tab-meeting-notes).

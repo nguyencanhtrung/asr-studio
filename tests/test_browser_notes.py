@@ -589,7 +589,7 @@ def test_notes_browser_generation_revisions_conflicts_copy_export_and_markdown_s
         "# Security check\n\n"
         "<script>window.__notesXss = true</script>\n\n"
         "<img src=x onerror=window.__notesXss = true>\n\n"
-        "[foreign](https://attacker.invalid/collect)\n"
+        "[foreign](javascript:alert%281%29)\n"
     )
     update_note(
         live.settings.data_dir,
@@ -602,6 +602,7 @@ def test_notes_browser_generation_revisions_conflicts_copy_export_and_markdown_s
         meeting_id,
     )
     expect(page.locator("#notes-markdown")).to_have_value(hostile_markdown, timeout=10_000)
+    page.locator("#notes-mode-view").click()
     assert page.locator("#notes-preview script, #notes-preview img").count() == 0
     assert page.locator('#notes-preview a[href^="https://"]').count() == 0
     expect(page.locator("#notes-preview")).to_contain_text(
@@ -839,10 +840,11 @@ def test_saved_notes_are_one_full_width_frame_with_a_view_write_group(live, sign
     group = page.get_by_role("group", name="Chế độ notes")
     expect(group).to_have_count(1)
     buttons = group.get_by_role("button")
-    expect(buttons).to_have_count(2)
+    expect(buttons).to_have_count(3)
     expect(buttons.nth(0)).to_have_accessible_name("Xem")
     expect(buttons.nth(1)).to_have_accessible_name("Viết")
-    for index in range(2):
+    expect(buttons.nth(2)).to_have_accessible_name("Markdown")
+    for index in range(3):
         expect(buttons.nth(index)).to_have_attribute("aria-pressed", re.compile("^(true|false)$"))
 
     inner_width = page.evaluate(
@@ -1015,14 +1017,14 @@ def test_unsaved_changes_mark_the_write_button_and_the_view(live, signed_in):
     _context, page = signed_in()
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
     _open_saved_notes(live, page, meeting_id)
-    write, dot = page.locator("#notes-mode-write"), page.locator("#notes-unsaved-dot")
+    write, dot = page.locator("#notes-mode-rich"), page.locator("#notes-unsaved-dot")
     line = page.get_by_text("Đang xem bản nháp chưa lưu", exact=True)
 
     expect(write).to_have_attribute("aria-label", "Viết")
     expect(dot).to_be_hidden()
     expect(line).to_be_hidden()
 
-    write.click()
+    page.locator("#notes-mode-write").click()
     page.locator("#notes-markdown").fill("# Changed\n\nNot saved yet.\n")
     expect(dot).to_be_visible()
     expect(write).to_have_attribute("aria-label", re.compile("chưa lưu"))
@@ -1240,10 +1242,13 @@ def test_source_links_in_the_rendered_view_still_open_the_source_card(live, sign
         "- A foreign link [elsewhere](https://attacker.invalid/x)\n"
     )
     page.locator("#notes-mode-view").click()
-    links = page.locator("#notes-preview a")
-    expect(links).to_have_count(1)
+    source_link = page.locator("#notes-preview a[data-notes-source-link]")
+    expect(source_link).to_have_count(1)
+    expect(page.locator("#notes-preview a").filter(has_text="elsewhere")).to_have_attribute(
+        "href", "https://attacker.invalid/x"
+    )
     expect(page.locator("#notes-source-view")).to_be_hidden()
-    links.click()
+    source_link.click()
     expect(page.locator("#notes-source-view")).to_be_visible()
     expect(page.locator("#notes-source-text")).to_have_text(snapshot["segments"][0]["text"])
     expect(page.locator("#notes-source-time")).to_have_text("00:00:01")
@@ -1251,9 +1256,6 @@ def test_source_links_in_the_rendered_view_still_open_the_source_card(live, sign
         "notes_source": [snapshot["id"]],
         "segment": [segment_ids[0]],
     }
-    expect(page.locator("#notes-preview")).to_contain_text(
-        "[elsewhere](https://attacker.invalid/x)"
-    )
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
@@ -1303,7 +1305,7 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
 
     # The switch sits above the frame, so the notes action's last control comes right before it.
     page.locator("#notes-change").focus()
-    for button in ("view", "write"):
+    for button in ("view", "rich", "write"):
         page.keyboard.press("Tab")
         focused = page.locator(f"#notes-mode-{button}")
         expect(focused).to_be_focused()
@@ -1330,4 +1332,4 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     page.emulate_media(color_scheme=scheme, reduced_motion="no-preference")
     normal = page.evaluate(durations)
     assert normal[:2] == [0, 0]  # Xem and Viết switch instantly whatever the preference
-    assert min(normal[2:]) > 0.001  # the toolbar buttons do animate, so the check above is real
+    assert min(normal[3:]) > 0.001  # the original copy and export icons still animate
