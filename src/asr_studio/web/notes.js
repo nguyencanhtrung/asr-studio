@@ -622,7 +622,28 @@ els.provider.addEventListener("change", (event) => dispatch({ type: "notes/provi
 els.model.addEventListener("change", (event) => dispatch({ type: "notes/model-picked", model: event.currentTarget.value }));
 els.cancel.addEventListener("click", () => dispatch({ type: "notes/cancel-clicked" }));
 els.selector.addEventListener("change", (event) => dispatch({ type: "notes/revision-picked", id: event.currentTarget.value }));
-els.markdown.addEventListener("input", (event) => dispatch({ type: "notes/draft-edited", value: event.currentTarget.value }));
+els.markdown.addEventListener("beforeinput", (event) => {
+  const textarea = event.currentTarget;
+  setData(textarea, "markdownSelectionBefore", JSON.stringify({
+    anchor: textarea.selectionStart,
+    focus: textarea.selectionEnd,
+    length: textarea.value.length,
+  }));
+});
+els.markdown.addEventListener("input", (event) => {
+  const textarea = event.currentTarget;
+  const before = JSON.parse(textarea.dataset.markdownSelectionBefore || "null");
+  delete textarea.dataset.markdownSelectionBefore;
+  let selection = before;
+  if (before && before.anchor === before.focus && event.inputType?.startsWith("delete")) {
+    const start = textarea.selectionStart;
+    const end = start + before.length - textarea.value.length;
+    if (start < end && start <= before.anchor && before.anchor <= end) {
+      selection = { anchor: start, focus: end };
+    }
+  }
+  dispatch({ type: "notes/draft-edited", value: textarea.value, selection });
+});
 function focusEditor() {
   if (!els.markdown.hidden) els.markdown.focus({ preventScroll: true });
   else if (!els.rich.hidden) els.rich.querySelector('[contenteditable="plaintext-only"]')?.focus({ preventScroll: true });

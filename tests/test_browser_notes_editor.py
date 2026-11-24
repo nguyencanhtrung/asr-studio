@@ -501,6 +501,31 @@ def test_unsupported_lists_keep_every_line_and_exact_view_chips(live, signed_in)
     expect(page.locator("#notes-rich-fallback")).to_be_visible()
 
 
+@pytest.mark.parametrize(
+    ("start", "end", "key", "expected"),
+    [
+        (1, 2, "Delete", "A\nB"),
+        (2, 3, "Delete", "A\r\nB"),
+        (2, 2, "Backspace", "A\nB"),
+        (2, 2, "Delete", "A\r\nB"),
+    ],
+)
+def test_markdown_delete_preserves_the_unedited_newline(live, signed_in, start, end, key, expected):
+    _, page = signed_in()
+    _, revision, _, _ = _open_notes(live, page, lambda *_: "A\r\n\nB")
+    page.locator("#notes-mode-write").click()
+    textarea = page.locator("#notes-markdown")
+    expect(textarea).to_have_value("A\n\nB")
+    textarea.evaluate("(element, range) => element.setSelectionRange(...range)", [start, end])
+    textarea.press(key)
+    expect(textarea).to_have_value("A\nB")
+    with page.expect_response(lambda response: response.request.method == "PATCH") as saved:
+        page.locator("#notes-save").click()
+    assert saved.value.ok
+    assert saved.value.request.post_data_json["markdown"] == expected
+    assert get_note(live.settings.data_dir, revision["id"])["markdown"] == expected
+
+
 def _stub_clipboard(page):
     page.evaluate(
         """() => {

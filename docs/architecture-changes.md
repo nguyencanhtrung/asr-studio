@@ -2970,8 +2970,9 @@ lifetime than an ordinary copy or download because it belongs to the Notes tab.
 
 **Design.** View, direct editing and formatted copy share a bounded Markdown
 projection. Direct editing maps the selected display range to canonical
-Markdown before replacing it. Ambiguous ranges with different authored entity
-spellings remain available in Markdown. Table and paragraph boundaries keep
+Markdown before replacing it. The textarea also tracks the edit range so its
+normalized line breaks do not replace surrounding stored delimiters. Ambiguous
+rich ranges with different authored entity spellings remain available in Markdown. Table and paragraph boundaries keep
 following bullets and literal numbers in their original blocks. A paragraph
 whose continuation looks like an ordered item uses Markdown for editing and
 keeps its literal numbering in formatted copies. Raw editing remains

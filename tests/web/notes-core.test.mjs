@@ -1619,6 +1619,17 @@ test("raw edits preserve untouched CRLF and CR delimiters", async () => {
   assert.equal(env.waiting(env.is("PATCH", "/api/notes/r1"))[0].body.markdown, "# A\r\n\r\nEdit this\rKeep me\n");
 });
 
+test("raw deletion keeps the unselected newline spelling when line endings are mixed", async () => {
+  for (const [anchor, expected] of [[1, "A\nB"], [2, "A\r\nB"]]) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown: "A\r\n\nB" })] });
+    env.dispatch("mode-chosen", { mode: "write" });
+    env.dispatch("draft-edited", { value: "A\nB", selection: { anchor, focus: anchor + 1 } });
+    env.dispatch("save-clicked");
+    assert.equal(env.waiting(env.is("PATCH", "/api/notes/r1"))[0].body.markdown, expected);
+  }
+});
+
 test("unsupported inline tokens leave surrounding source links and stored citation proof intact in View", async () => {
   const env = setup();
   const href = "/meetings/m1?notes_source=s1&segment=seg1#transcript";

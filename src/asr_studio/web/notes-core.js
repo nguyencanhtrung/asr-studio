@@ -1238,10 +1238,10 @@ function richStructureMatches(before, after, changedIndex, value) {
 
 // Textareas expose LF even when the server stores CRLF or CR. Keep separators in
 // the untouched prefix and suffix and use the document's separator for inserted lines.
-function rawTextareaEdit(markdown, value) {
+function rawTextareaEdit(markdown, value, selection) {
   const before = markdown.replace(/\r\n?/g, "\n");
   if (markdown === before) return value;
-  const [first, tail] = sharedEdges(before, value);
+  const [first, tail] = selectedDisplayEdit(before, value, selection) || sharedEdges(before, value);
   const offsets = [0];
   for (let index = 0; index < markdown.length; index++) {
     if (markdown[index] === "\r" && markdown[index + 1] === "\n") index++;
@@ -2839,7 +2839,7 @@ function transition(state, action) {
       const editingState = fallback ? { ...state, richFallback: true } : state;
       const edit = action.type === "notes/rich-edited"
         ? richMarkdownEdit(editingState, action, revision, draft)
-        : { value: rawTextareaEdit(draft.value, action.value), generatedEntities: [] };
+        : { value: rawTextareaEdit(draft.value, action.value, action.selection), generatedEntities: [] };
       const value = edit && edit.value;
       if (value === null || value === draft.value) {
         if (action.type === "notes/rich-edited" && value === null && action.value !== action.before) {
