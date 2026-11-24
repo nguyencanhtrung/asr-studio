@@ -1046,11 +1046,11 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
 const ASCII_MARKDOWN_PUNCTUATION = "!\\\"#$%&'()*+,-./:;<=>?@[\\\\]^_`{|}~";
 
 function isMarkdownWhitespace(value) {
-  return !value || /^\s$/u.test(value);
+  return !value || /^[\t\n\f\r\p{Zs}]$/u.test(value);
 }
 
 function isMarkdownPunctuation(value) {
-  return Boolean(value && (ASCII_MARKDOWN_PUNCTUATION.includes(value) || /\p{P}/u.test(value)));
+  return Boolean(value && (ASCII_MARKDOWN_PUNCTUATION.includes(value) || /[\p{P}\p{S}]/u.test(value)));
 }
 
 function markdownLeftFlanking(before, first) {
@@ -1075,8 +1075,48 @@ function richEdgesAreFlanking(markdown, node, source, { edgeStart = false, edgeE
   const beforeOpening = Array.from(markdown.slice(0, node.start - opening.length)).at(-1) || "";
   const afterClosing = Array.from(markdown.slice(node.end + closing.length))[0] || "";
   const characters = Array.from(source);
-  return (!edgeStart || markdownLeftFlanking(beforeOpening, characters[0] || ""))
-    && (!edgeEnd || markdownRightFlanking(characters.at(-1) || "", afterClosing));
+  const first = characters[0] || "";
+  const last = characters.at(-1) || "";
+  const openingLeft = markdownLeftFlanking(beforeOpening, first);
+  const openingRight = markdownRightFlanking(beforeOpening, first);
+  const closingLeft = markdownLeftFlanking(last, afterClosing);
+  const closingRight = markdownRightFlanking(last, afterClosing);
+  const underscoreOpening = opening[0] !== "_"
+    || !openingRight || isMarkdownWhitespace(beforeOpening) || isMarkdownPunctuation(beforeOpening);
+  const underscoreClosing = closing[0] !== "_"
+    || !closingLeft || isMarkdownWhitespace(afterClosing) || isMarkdownPunctuation(afterClosing);
+  return (!edgeStart || openingLeft && underscoreOpening)
+    && (!edgeEnd || closingRight && underscoreClosing);
+}
+
+function richEmphasisContext(markdown, node) {
+  if (!node || !["strong", "em"].includes(node.kind)) return null;
+  const opening = markdown.slice(0, node.start).match(/[*_]+$/)?.[0] || "";
+  const closing = markdown.slice(node.end).match(/^[*_]+/)?.[0] || "";
+  if (!opening || !closing) return null;
+  return {
+    opening,
+    closing,
+    beforeOpening: Array.from(markdown.slice(0, node.start - opening.length)).at(-1) || "",
+    afterClosing: Array.from(markdown.slice(node.end + closing.length))[0] || "",
+    source: markdown.slice(node.start, node.end),
+  };
+}
+
+function richChangedEmphasisEdgesAreFlanking(beforeMarkdown, afterMarkdown, beforeNodes, afterNodes) {
+  return afterNodes.every((afterNode, index) => {
+    const beforeNode = beforeNodes[index];
+    const beforeContext = richEmphasisContext(beforeMarkdown, beforeNode);
+    const afterContext = richEmphasisContext(afterMarkdown, afterNode);
+    if (!beforeContext || !afterContext) return true;
+    const unchanged = ["opening", "closing", "beforeOpening", "afterClosing", "source"]
+      .every((key) => beforeContext[key] === afterContext[key]);
+    if (unchanged) return true;
+    return richEdgesAreFlanking(afterMarkdown, afterNode, afterContext.source, {
+      edgeStart: true,
+      edgeEnd: true,
+    });
+  });
 }
 
 function encodeRichBoundarySpaces(source, value, node, { edgeStart = false, edgeEnd = false } = {}) {
@@ -1173,6 +1213,7 @@ function richMarkdownEdit(state, action, revision, draft) {
     + draft.value.slice(node.end);
   const reparsed = markdownBlocks(candidate, revision, state.origin);
   if (!canEditRich(reparsed) || !richStructureMatches(blocks, reparsed, action.index, action.value)) return null;
+  if (!richChangedEmphasisEdgesAreFlanking(draft.value, candidate, nodes, reparsed.flatMap(blockRuns))) return null;
   return candidate;
 }
 

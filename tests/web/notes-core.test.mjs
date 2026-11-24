@@ -1808,7 +1808,48 @@ test("rich intraword emphasis rejects punctuation at an edited delimiter edge", 
     env.dispatch("rich-edited", { index, before: "bold", value });
     assert.equal(saved(env).value, markdown);
   };
-  for (const value of ["?bold", "bold?", "&bold", "bold&", " bold", "bold "]) edit(value);
+  for (const value of ["?bold", "bold?", "&bold", "bold&", " bold", "bold ", "€bold", "bold€", "→bold", "bold😀"]) edit(value);
+});
+
+test("rich adjacent plain-text edits cannot invalidate emphasis delimiters", async () => {
+  const cases = [
+    ["# Notes\n\nHello **?bold**world.\n", "Hello ", "Hello"],
+    ["# Notes\n\nHello**bold?** world\n", " world", "world"],
+    ["# Notes\n\nHello **&#32;bold**world\n", "Hello ", "Hello"],
+    ["# Notes\n\nHello**bold&#32;** world\n", " world", "world"],
+    ["# Notes\n\nHello _bold_ world\n", "Hello ", "Hello"],
+    ["# Notes\n\nHello _bold_ world\n", " world", "world"],
+    ["# Notes\n\nHello __bold__ world\n", "Hello ", "Hello"],
+    ["# Notes\n\nHello __bold__ world\n", " world", "world"],
+  ];
+  for (const [markdown, before, value] of cases) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => node.kind === "text" && node.text === before);
+    assert.notEqual(index, -1, `missing adjacent run ${before}`);
+    env.dispatch("rich-edited", { index, before, value });
+    assert.equal(saved(env).value, markdown);
+    assert.equal(selectView(env.state()).savedWork.blocks.flatMap(blockRuns)[index].text, before);
+  }
+});
+
+test("rich emphasis accepts encoded boundary spaces beside Unicode symbols", async () => {
+  const cases = [
+    ["# Notes\n\n🦉**bold**world.\n", " bold", "# Notes\n\n🦉**&#32;bold**world.\n"],
+    ["# Notes\n\nHello**bold**🦉.\n", "bold ", "# Notes\n\nHello**bold&#32;**🦉.\n"],
+  ];
+  for (const [markdown, value, expected] of cases) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => ["strong", "em"].includes(node.kind) && node.text === "bold");
+    assert.notEqual(index, -1);
+    env.dispatch("rich-edited", { index, before: "bold", value });
+    assert.equal(saved(env).value, expected);
+  }
 });
 
 test("rich deletion encodes newly exposed boundary spaces without rewriting other bytes", async () => {
