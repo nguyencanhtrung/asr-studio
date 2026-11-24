@@ -324,6 +324,21 @@ test("closing Notes clears source-owned reveal and its pending seek", () => {
   assert.equal(state.target, null);
 });
 
+test("a citation with no current row keeps its source seek alive", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/source-requested", sourceRequestId: 7 }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "source-seek", meetingId: "m1", segmentId: "gone",
+    startSeconds: 25, sourceRequestId: 7, audioMeetingId: "m1", ready: true, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/mark-requested", segmentId: "gone", startSeconds: 25, sourceRequestId: 7, shown,
+  }).state;
+  assert.equal(state.mark, null);
+  assert.equal(state.sourceRequestId, 7);
+  assert.ok(state.seek, "the valid timestamp seek remains in flight");
+});
+
 test("a newer timestamp cancels a source seek waiting for metadata", () => {
   const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
   let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r3", startSeconds: 7, shown }).state;

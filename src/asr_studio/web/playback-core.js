@@ -311,28 +311,30 @@ function step(state, action) {
         // but it must not claim the newer reveal target or enqueue a scroll.
         return out(bumped({ ...state, mark: id }));
       }
-      const closingSource = id === null && state.targetOwner === "source";
+      const explicitDismiss = action.segmentId === null;
+      const closingSource = explicitDismiss && state.targetOwner === "source";
       // Closing Notes clears source provenance and source-owned seek recovery. A newer manual
       // timestamp target remains, including when it intentionally names the same row.
       const preservesNewerTarget = id === null && !closingSource;
       const target = preservesNewerTarget ? state.target : id;
       const targetOwner = preservesNewerTarget ? state.targetOwner : (id ? "source" : null);
-      const sourcePending = closingSource && state.pendingTarget?.owner === "source"
+      const sourcePending = explicitDismiss && state.pendingTarget?.owner === "source"
         ? { ...state.pendingTarget, dismissed: true }
-        : (closingSource ? null : state.pendingTarget);
+        : state.pendingTarget;
+      const sourceSeek = closingSource || sourceSeekOwnsNativeEvent(state);
       const next = bumped({
         ...state,
         mark: id,
         target: closingSource ? null : target,
         targetOwner: closingSource ? null : targetOwner,
-        sourceRequestId: id === null ? null : state.sourceRequestId,
+        sourceRequestId: explicitDismiss ? null : state.sourceRequestId,
         pendingTarget: sourcePending,
-        seek: closingSource ? null : state.seek,
-        seekDone: closingSource && state.seek
+        seek: explicitDismiss && sourceSeek ? null : state.seek,
+        seekDone: explicitDismiss && sourceSeek && state.seek
           ? { id: state.seek.id, ids: state.seek.ids, ok: false }
           : state.seekDone,
       });
-      const effects = closingSource ? stopWaits(state.seek) : [];
+      const effects = explicitDismiss && sourceSeek ? stopWaits(state.seek) : [];
       return out(id === null ? next : queue(next, { op: "reveal", id, smooth: !action.reduced }), effects);
     }
     case "playback/source-requested":
