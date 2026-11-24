@@ -1545,7 +1545,7 @@ test("rich text edits keep ordinary spaces and punctuation canonical", async () 
   assert.doesNotMatch(saved(env).value, /&#32;|\\[().]/);
 });
 
-test("rich appends normalize only the previous encoded trailing-space suffix", async () => {
+test("rich appends preserve authored entities and normalize only generated trailing-space suffixes", async () => {
   const env = setup();
   const markdown = "# Notes\n\nOne&#32;point at noon\n\nPlan&#32;\n";
   await opened(env, { revisions: [revision({ markdown })] });
@@ -1559,7 +1559,56 @@ test("rich appends normalize only the previous encoded trailing-space suffix", a
   runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
   const trailingIndex = runs.findIndex((node) => node.text === "Plan ");
   env.dispatch("rich-edited", { index: trailingIndex, before: "Plan ", value: "Plan three" });
-  assert.equal(saved(env).value, "# Notes\n\nOne&#32;point at noon today\n\nPlan three\n");
+  assert.equal(saved(env).value, "# Notes\n\nOne&#32;point at noon today\n\nPlan&#32;three\n");
+
+  const generated = setup();
+  await opened(generated, { revisions: [revision({ markdown: "# Notes\n\nPlan\n" })] });
+  generated.dispatch("mode-chosen", { mode: "rich" });
+  let generatedRuns = selectView(generated.state()).savedWork.blocks.flatMap(blockRuns);
+  const planIndex = generatedRuns.findIndex((node) => node.text === "Plan");
+  generated.dispatch("rich-edited", { index: planIndex, before: "Plan", value: "Plan " });
+  assert.equal(saved(generated).value, "# Notes\n\nPlan&#32;\n");
+  generatedRuns = selectView(generated.state()).savedWork.blocks.flatMap(blockRuns);
+  const planWithSpaceIndex = generatedRuns.findIndex((node) => node.text === "Plan ");
+  generated.dispatch("rich-edited", { index: planWithSpaceIndex, before: "Plan ", value: "Plan today" });
+  assert.equal(saved(generated).value, "# Notes\n\nPlan today\n");
+});
+
+test("rich appends preserve authored space and tab entities after the prefix changes", async () => {
+  for (const entity of ["&#32;", "&#9;"]) {
+    const env = setup();
+    const markdown = `# Notes\n\nPlan${entity}\n`;
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    let runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const planIndex = runs.findIndex((node) => node.text === `Plan${entity === "&#32;" ? " " : "\t"}`);
+    env.dispatch("rich-edited", {
+      index: planIndex,
+      before: `Plan${entity === "&#32;" ? " " : "\t"}`,
+      value: `Blan${entity === "&#32;" ? " " : "\t"}`,
+    });
+    runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const changedIndex = runs.findIndex((node) => node.text === `Blan${entity === "&#32;" ? " " : "\t"}`);
+    env.dispatch("rich-edited", {
+      index: changedIndex,
+      before: `Blan${entity === "&#32;" ? " " : "\t"}`,
+      value: `Blan${entity === "&#32;" ? " " : "\t"}today`,
+    });
+    assert.equal(saved(env).value, `# Notes\n\nBlan${entity}today\n`);
+  }
+
+  const inserted = setup();
+  const markdown = "# Notes\n\nPlan&#32;\n";
+  await opened(inserted, { revisions: [revision({ markdown })] });
+  inserted.dispatch("mode-chosen", { mode: "rich" });
+  let runs = selectView(inserted.state()).savedWork.blocks.flatMap(blockRuns);
+  const planIndex = runs.findIndex((node) => node.text === "Plan ");
+  inserted.dispatch("rich-edited", { index: planIndex, before: "Plan ", value: " Plan " });
+  assert.equal(saved(inserted).value, "# Notes\n\n&#32;Plan&#32;\n");
+  runs = selectView(inserted.state()).savedWork.blocks.flatMap(blockRuns);
+  const insertedIndex = runs.findIndex((node) => node.text === " Plan ");
+  inserted.dispatch("rich-edited", { index: insertedIndex, before: " Plan ", value: " Plan today" });
+  assert.equal(saved(inserted).value, "# Notes\n\n&#32;Plan&#32;today\n");
 });
 
 test("raw edits preserve untouched CRLF and CR delimiters", async () => {
@@ -2086,6 +2135,47 @@ test("unsupported loose lists keep legacy citation membership", async () => {
   assert.equal(raw.viewLines[2].chips[0].segmentId, "seg-a");
 });
 
+test("unsupported loose lists use the recognized item range for unique and duplicate citation proof", async () => {
+  const citation = { section: "Tasks", text: "Confirm", sources: [{ id: "seg-a", start_seconds: 1 }] };
+  const unique = setup();
+  await opened(unique, { revisions: [revision({
+    markdown: "# Tasks\n - Confirm\n- Review\n  continuation\n",
+    citations: [citation],
+  })] });
+  const uniqueRaw = selectView(unique.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.equal(uniqueRaw.viewLines[0].chips.length, 1);
+  assert.equal(uniqueRaw.viewLines[1].chips.length, 0);
+
+  const duplicate = setup();
+  await opened(duplicate, { revisions: [revision({
+    markdown: "# Tasks\n - Confirm\n- Confirm\n  continuation\n",
+    citations: [citation],
+  })] });
+  const duplicateRaw = selectView(duplicate.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.deepEqual(duplicateRaw.viewLines.slice(0, 2).map((line) => line.chips), [[], []]);
+});
+
+test("a list item containing a heading stays raw for rich editing and formatted clipboard", async () => {
+  const env = setup();
+  const markdown = "- # Agenda\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const work = selectView(env.state()).savedWork;
+  assert.equal(work.mode, "write");
+  assert.equal(work.richFallback, true);
+  assert.equal(work.draftValue, markdown);
+
+  env.dispatch("rich-preview-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1"), 200, revision({ markdown, edit_version: 2 }));
+  env.hostResults.copyFormatted = async () => "html";
+  env.dispatch("preview-copy-clicked");
+  await tick();
+  const copy = env.hostCalls.find(([name]) => name === "copyFormatted");
+  assert.ok(copy);
+  assert.match(copy[1], /<pre[^>]*>- # Agenda<\/pre>/);
+  assert.doesNotMatch(copy[1], /<li># Agenda<\/li>/);
+});
+
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {
   const env = setup();
   await opened(env, { revisions: [revision(), revision({ id: "r2" })] });
@@ -2216,4 +2306,34 @@ test("a literal inline fragment alone forces the raw editor without changing the
   assert.equal(work.mode, "write");
   assert.equal(work.richFallback, true);
   assert.equal(work.draftValue, markdown);
+});
+
+test("rich fallback stays in Write through a repair and resets for a new revision", async () => {
+  const env = setup();
+  const unsupported = "# Plan\n\nSend [literal fragment] **soon**.";
+  await opened(env, { revisions: [
+    revision({ markdown: unsupported }),
+    revision({ id: "r2", markdown: "# Ready" }),
+  ] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  assert.equal(selectView(env.state()).savedWork.mode, "write");
+  assert.equal(env.state().richFallback, true);
+  env.dispatch("draft-edited", { value: "# Plan\n\nRepaired" });
+  assert.equal(selectView(env.state()).savedWork.mode, "write");
+  assert.equal(env.state().richFallback, true);
+
+  env.dispatch("revision-picked", { id: "r2" });
+  assert.equal(env.state().richFallback, false);
+  assert.equal(selectView(env.state()).savedWork.mode, "rich");
+  env.dispatch("revision-picked", { id: "r1" });
+  assert.equal(selectView(env.state()).savedWork.mode, "rich");
+  assert.equal(env.state().richFallback, false);
+
+  env.context(meeting("m2"));
+  assert.equal(env.state().richFallback, false);
+  await env.answer(env.is("GET", "/api/meetings/m2/notes"), 200, notesBody([
+    revision({ id: "r3", meeting_id: "m2", markdown: "# New meeting" }),
+  ]));
+  assert.equal(selectView(env.state()).savedWork.mode, "rich");
+  assert.equal(env.state().richFallback, false);
 });

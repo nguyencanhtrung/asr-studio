@@ -305,11 +305,14 @@ def test_rich_rejects_intraword_emphasis_boundary_that_breaks_commonmark(live, s
     selection = strong.evaluate(
         """element => {
             const current = getSelection();
-            return [current.focusNode === element.firstChild, current.focusOffset,
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            range.setEnd(current.focusNode, current.focusOffset);
+            return [range.toString().length, current.isCollapsed,
                 document.activeElement === element];
         }"""
     )
-    assert selection == [True, 0, True]
+    assert selection == [0, True, True]
     expect(page.locator("#notes-copy-export-status")).to_contain_text(
         "Không thể giữ nguyên cấu trúc Markdown"
     )
