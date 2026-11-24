@@ -517,13 +517,57 @@ function citationChip(revision, source, group = "") {
 
 const escapedPunctuation = /[!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-]/;
 
-function unescapeMarkdown(value) {
-  return value.replace(/\\([!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-])|&#(32|9);/g,
-    (_, punctuation, space) => punctuation || (space === "32" ? " " : "\t"));
+function supportedMarkdownEntity(entity) {
+  return entity === "&amp;" || entity === "&AMP;" || entity === "&#32;" || entity === "&#9;";
 }
 
-function ordinaryHref(raw) {
-  if (!/^https?:\/\//i.test(raw) || /[\s<>"'\\\x00-\x1f\x7f]/u.test(raw)) return null;
+function markdownEntityAt(value, index) {
+  if (value[index] !== "&") return null;
+  const match = value.slice(index).match(/^&(?:#\w+|[a-z][a-z0-9]*);/i);
+  return match ? match[0] : null;
+}
+
+function decodedMarkdownEntity(entity) {
+  if (entity === "&amp;" || entity === "&AMP;") return "&";
+  if (entity === "&#32;") return " ";
+  if (entity === "&#9;") return "\t";
+  return null;
+}
+
+function decodeMarkdownTokens(value, { preserveEscapes = false } = {}) {
+  if (!value.includes("&") && !value.includes("\\")) return { text: value, unsupported: false };
+  const result = [];
+  let unsupported = false;
+  for (let index = 0; index < value.length;) {
+    if (value[index] === "\\" && escapedPunctuation.test(value[index + 1] || "")) {
+      result.push(preserveEscapes ? value.slice(index, index + 2) : value[index + 1]);
+      index += 2;
+      continue;
+    }
+    const entity = markdownEntityAt(value, index);
+    if (!entity) {
+      result.push(value[index++]);
+      continue;
+    }
+    const decoded = decodedMarkdownEntity(entity);
+    if (decoded === null) {
+      unsupported = true;
+      result.push(entity);
+    } else {
+      result.push(decoded);
+    }
+    index += entity.length;
+  }
+  return { text: result.join(""), unsupported };
+}
+
+function unescapeMarkdown(value) {
+  return decodeMarkdownTokens(value).text;
+}
+
+function ordinaryHref(raw, unsupportedEntity = false) {
+  if (!/^https?:\/\//i.test(raw) || unsupportedEntity
+    || /[\s<>"'\\\x00-\x1f\x7f]/u.test(raw)) return null;
   let url;
   try {
     url = new URL(raw);
@@ -613,20 +657,23 @@ function inlineNodes(text, offset, revision, origin, presentation) {
       }
       addText(index);
       const [markup, label, dest] = match;
-      const source = revision.source_snapshot_id && sourceReference(dest, origin, revision.meeting_id, revision.source_snapshot_id);
-      const invalid = revision.warnings.some((warning) => warning.href === dest);
-      const href = ordinaryHref(dest);
+      const labelTokens = decodeMarkdownTokens(label);
+      const destination = decodeMarkdownTokens(dest, { preserveEscapes: true });
+      const source = revision.source_snapshot_id
+        && sourceReference(destination.text, origin, revision.meeting_id, revision.source_snapshot_id);
+      const invalid = revision.warnings.some((warning) => warning.href === dest || warning.href === destination.text);
+      const href = ordinaryHref(destination.text, destination.unsupported);
       // Only View annotates sources. Clipboard can carry safe links the author wrote.
       if (presentation === "view" && invalid) {
-        nodes.push({ kind: "invalid", text: unescapeMarkdown(label), reason: t(" (liên kết nguồn không hợp lệ)") });
+        nodes.push({ kind: "invalid", text: labelTokens.text, reason: t(" (liên kết nguồn không hợp lệ)") });
       } else if (presentation === "view" && source) {
-        nodes.push({ kind: "source", ...source, text: unescapeMarkdown(label), label: t("Mở nguồn transcript tại {time}", { time: unescapeMarkdown(label) }) });
+        nodes.push({ kind: "source", ...source, text: labelTokens.text, label: t("Mở nguồn transcript tại {time}", { time: labelTokens.text }) });
       } else if (presentation === "clipboard" && source && !invalid) {
-        nodes.push({ kind: "link", href: new URL(source.href, origin).href, text: unescapeMarkdown(label) });
+        nodes.push({ kind: "link", href: new URL(source.href, origin).href, text: labelTokens.text });
       } else if (href && !source && !invalid
         && !/(^|[^\\])[*_`\[\]<~]/.test(label)
-        && !/(^|[^\\])&(?!#(?:32|9);)/i.test(label)) {
-        nodes.push({ kind: "link", href, text: unescapeMarkdown(label), start: offset + index + 1, end: offset + index + 1 + label.length });
+        && !labelTokens.unsupported) {
+        nodes.push({ kind: "link", href, text: labelTokens.text, start: offset + index + 1, end: offset + index + 1 + label.length });
       } else {
         nodes.push({ kind: "raw", text: markup });
       }
@@ -653,19 +700,30 @@ function inlineNodes(text, offset, revision, origin, presentation) {
         end += char !== "`" && text[end] === "\\" && escapedPunctuation.test(text[end + 1] || "") ? 2 : 1;
       }
       const value = text.slice(contentStart, end);
+      const valueTokens = char === "`" ? null : decodeMarkdownTokens(value);
       const unrepresentableCodeEdges = char === "`" && value.length > 1
         && value.startsWith(" ") && value.endsWith(" ") && trimMarkdownWhitespace(value);
+      const kind = char === "`" ? "code" : delimiter.length === 2 ? "strong" : "em";
       if (!value || (char !== "`" && value !== trimMarkdownWhitespace(value)) || unrepresentableCodeEdges
         || !text.startsWith(delimiter, end) || text[end + delimiter.length] === char
         || (char === "_" && (word.test(text[index - 1] || "") || word.test(text[end + delimiter.length] || "")))
-        || (char !== "`" && /(^|[^\\])[*_`\[\]<~]/.test(value))) {
+        || (char !== "`" && /(^|[^\\])[*_`\[\]<~]/.test(value))
+        || (char !== "`" && valueTokens.unsupported)
+        || (char !== "`" && !richEdgesAreFlanking(text, { kind, start: contentStart, end }, value, {
+          edgeStart: true,
+          edgeEnd: true,
+          opening: delimiter,
+          closing: delimiter,
+          beforeOpening: previousMarkdownCodePoint(text, index),
+          afterClosing: nextMarkdownCodePoint(text, end + delimiter.length),
+        }))) {
         addRaw(text.startsWith(delimiter, end) ? end + delimiter.length : char === "`" ? text.length : runEnd);
         continue;
       }
       addText(index);
       nodes.push({
-        kind: char === "`" ? "code" : delimiter.length === 2 ? "strong" : "em",
-        text: char === "`" ? value : unescapeMarkdown(value),
+        kind,
+        text: char === "`" ? value : valueTokens.text,
         start: offset + contentStart,
         end: offset + end,
       });
@@ -681,9 +739,17 @@ function inlineNodes(text, offset, revision, origin, presentation) {
       addRaw(close < 0 ? index + 2 : close + 2);
       continue;
     }
-    const entity = char === "&" && text.slice(index).match(/^&(?:#\w+|[a-z]+);/i);
-    if (entity || char === "]") {
-      addRaw(index + (entity ? entity[0].length : 1));
+    const entity = char === "&" ? markdownEntityAt(text, index) : null;
+    if (entity) {
+      if (supportedMarkdownEntity(entity)) {
+        index += entity.length;
+        continue;
+      }
+      addRaw(index + entity.length);
+      continue;
+    }
+    if (char === "]") {
+      addRaw(index + 1);
       continue;
     }
     index++;
@@ -848,7 +914,21 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       const itemIndexes = new Set();
       let end = index;
       let unsupported = false;
-      while (end < lines.length && trimMarkdownWhitespace(line(end))) {
+      while (end < lines.length) {
+        if (!trimMarkdownWhitespace(line(end))) {
+          if (ordered) {
+            let next = end;
+            while (next < lines.length && !trimMarkdownWhitespace(line(next))) next++;
+            const nextItem = line(next).match(listPattern);
+            if (nextItem && !isThematic(line(next)) && nextItem[2].at(-1) === marker
+              && nextItem[1].length <= indent) {
+              unsupported = true;
+              end = next;
+              continue;
+            }
+          }
+          break;
+        }
         const item = line(end).match(listPattern);
         if (item && !isThematic(line(end)) && item[2].at(-1) === marker && item[1].length <= indent) {
           indent = item[1].length;
@@ -1001,8 +1081,8 @@ function sourceOffsets(node, source) {
     let end = index + 1;
     if (source[index] === "\\" && escapedPunctuation.test(source[index + 1] || "")) end += 1;
     else {
-      const space = source.slice(index).match(/^&#(?:32|9);/);
-      if (space) end = index + space[0].length;
+      const entity = markdownEntityAt(source, index);
+      if (entity) end = index + entity.length;
     }
     offsets.push(end);
     index = end;
@@ -1171,6 +1251,22 @@ function isMarkdownPunctuation(value) {
   return Boolean(value && (ASCII_MARKDOWN_PUNCTUATION.includes(value) || /[\p{P}\p{S}]/u.test(value)));
 }
 
+function previousMarkdownCodePoint(value, index) {
+  if (index <= 0) return "";
+  const previous = value.charCodeAt(index - 1);
+  const start = index > 1 && previous >= 0xdc00 && previous <= 0xdfff ? index - 2 : index - 1;
+  return value.slice(start, index);
+}
+
+function nextMarkdownCodePoint(value, index) {
+  if (index >= value.length) return "";
+  const current = value.charCodeAt(index);
+  const next = value.charCodeAt(index + 1);
+  const end = index + 1 < value.length && current >= 0xd800 && current <= 0xdbff
+    && next >= 0xdc00 && next <= 0xdfff ? index + 2 : index + 1;
+  return value.slice(index, end);
+}
+
 function markdownLeftFlanking(before, first) {
   return !isMarkdownWhitespace(first)
     && (!isMarkdownPunctuation(first) || isMarkdownWhitespace(before) || isMarkdownPunctuation(before));
@@ -1185,18 +1281,28 @@ function markdownRightFlanking(last, after) {
 // right-flanking closing edge. Check all edited run edges, not only spaces:
 // punctuation beside an ordinary surrounding letter can otherwise leave the
 // app's rich parser styled while standard Markdown renders literal markers.
-function richEdgesAreFlanking(markdown, node, source, { edgeStart = false, edgeEnd = false } = {}) {
+function richEdgesAreFlanking(markdown, node, source, {
+  edgeStart = false,
+  edgeEnd = false,
+  opening: knownOpening = null,
+  closing: knownClosing = null,
+  beforeOpening: knownBeforeOpening = null,
+  afterClosing: knownAfterClosing = null,
+} = {}) {
   if (!edgeStart && !edgeEnd || !["strong", "em"].includes(node.kind)) return true;
-  const prefix = markdown.slice(Math.max(0, node.start - 16), node.start);
-  const suffix = markdown.slice(node.end, node.end + 16);
-  const opening = prefix.match(/([*_])\1*$/)?.[0] || "";
-  const closing = suffix.match(/^([*_])\1*/)?.[0] || "";
+  const prefix = knownOpening === null ? markdown.slice(Math.max(0, node.start - 16), node.start) : "";
+  const suffix = knownClosing === null ? markdown.slice(node.end, node.end + 16) : "";
+  const opening = knownOpening ?? (prefix.match(/([*_])\1*$/)?.[0] || "");
+  const closing = knownClosing ?? (suffix.match(/^([*_])\1*/)?.[0] || "");
   if (!opening || !closing) return true;
-  const beforeOpening = Array.from(prefix.slice(0, prefix.length - opening.length)).at(-1) || "";
-  const afterClosing = Array.from(suffix.slice(closing.length))[0] || "";
-  const characters = Array.from(source);
-  const first = characters[0] || "";
-  const last = characters.at(-1) || "";
+  const beforeOpening = knownBeforeOpening ?? (Array.from(prefix.slice(0, prefix.length - opening.length)).at(-1) || "");
+  const afterClosing = knownAfterClosing ?? (Array.from(suffix.slice(closing.length))[0] || "");
+  const firstUnit = source.charCodeAt(0);
+  const lastUnit = source.charCodeAt(source.length - 1);
+  const first = firstUnit >= 0xd800 && firstUnit <= 0xdbff
+    ? String.fromCodePoint(source.codePointAt(0)) : source[0] || "";
+  const lastStart = lastUnit >= 0xdc00 && lastUnit <= 0xdfff ? source.length - 2 : source.length - 1;
+  const last = lastStart >= 0 ? String.fromCodePoint(source.codePointAt(lastStart)) : "";
   const openingLeft = markdownLeftFlanking(beforeOpening, first);
   const openingRight = markdownRightFlanking(beforeOpening, first);
   const closingLeft = markdownLeftFlanking(last, afterClosing);

@@ -2987,6 +2987,13 @@ still preserve section scope and safe authored source links in View. Saved rich
 and email previews use the same neutral light document surface as clipboard HTML,
 including when the app shell is dark.
 
+The projection decodes only the supported authored entities (`&amp;`, `&AMP;`,
+`&#32;`, and `&#9;`) in labels, text, and destinations, while preserving their
+source ranges for direct edits. Other entity spellings, delimiter runs whose
+source edges are not CommonMark-flanking, and loose same-delimiter ordered-list
+items remain literal/raw so View does not claim richer structure than the
+authored Markdown supports.
+
 **Verification.** The Notes reducer and Notes editor browser tests cover exact
 source bytes after an edit, tab and revision races, mixed-format source parity,
 and clipboard outcomes. This change adds no runtime library or export format.

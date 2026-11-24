@@ -1881,6 +1881,40 @@ test("rich boundary spaces stay editable in links and code", async () => {
   assert.equal(saved(env).value, "# Notes\n\n[Open agenda](" + href + ") and `npm ci`.\n");
 });
 
+test("rich projection decodes supported amp entities once and preserves authored offsets", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\n[Report](https://example.invalid/?a=1&amp;b=2) and **R&amp;D** and \\&amp;.\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  let runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const link = runs.find((node) => node.kind === "link" && node.text === "Report");
+  assert.equal(link.href, "https://example.invalid/?a=1&b=2");
+  const strongIndex = runs.findIndex((node) => node.kind === "strong" && node.text === "R&D");
+  assert.notEqual(strongIndex, -1);
+  assert.ok(runs.some((node) => node.kind === "text" && node.text.includes("&amp;")));
+
+  env.dispatch("rich-edited", { index: strongIndex, before: "R&D", value: "R&DX" });
+  assert.equal(saved(env).value, markdown.replace("R&amp;D", "R&amp;DX"));
+});
+
+test("unsupported entities stay literal instead of entering rich emphasis or links", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\n**R&#169;D** [link](https://example.invalid/?a=1&copy;b=2)\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const work = selectView(env.state()).savedWork;
+  assert.equal(work.mode, "write");
+  assert.equal(work.richFallback, true);
+  assert.equal(work.draftValue, markdown);
+  assert.ok(work.blocks.some((block) => block.kind === "paragraph"
+    && block.lines.flat().some((node) => node.kind === "raw" && node.text.includes("**R&#169;D**"))));
+
+  const literals = setup();
+  await opened(literals, { revisions: [revision({ markdown: "# Notes\n\n&AMP; &Amp; &frac12;\n" })] });
+  const line = selectView(literals.state()).savedWork.blocks.find((block) => block.kind === "paragraph").lines[0];
+  assert.equal(line.map((node) => node.text).join(""), "& &Amp; &frac12;");
+});
+
 test("rich intraword emphasis rejects boundary whitespace that breaks CommonMark", async () => {
   const env = setup();
   const markdown = "# Notes\n\nHello**a b**world.\n";
@@ -1974,6 +2008,19 @@ test("rich emphasis parsing uses CommonMark whitespace boundaries", async () => 
     env.dispatch("rich-edited", { index, before: "bold", value });
     assert.equal(saved(env).value, markdown.replace("*bold*", `*${value}*`));
   }
+});
+
+test("initial projection keeps intraword punctuation delimiters literal", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\nNet a*.*b\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const work = selectView(env.state()).savedWork;
+  const line = work.blocks.find((block) => block.kind === "paragraph").lines[0];
+  assert.equal(line.map((node) => node.text).join(""), "Net a*.*b");
+  assert.equal(line.filter((node) => ["em", "strong"].includes(node.kind)).length, 0);
+  assert.equal(work.mode, "write");
+  assert.equal(work.richFallback, true);
 });
 
 test("rich emphasis accepts encoded boundary spaces beside Unicode symbols", async () => {
@@ -2120,6 +2167,39 @@ test("raw boundaries reset heading scope and keep decreasing-indent code literal
   assert.deepEqual(raw.viewLines[0].nodes, [{ kind: "raw", text: "  - \t    **literal**" }]);
   assert.equal(raw.viewLines[0].chips.length, 0);
   assert.equal(raw.viewLines[1].chips[0].segmentId, "seg-a");
+});
+
+test("loose ordered lists fall back as one block while other list markers stay stable", async () => {
+  const loose = setup();
+  const looseMarkdown = "# Notes\n\n1. First\n\n1. Second\n";
+  await opened(loose, { revisions: [revision({ markdown: looseMarkdown })] });
+  loose.dispatch("mode-chosen", { mode: "rich" });
+  const looseWork = selectView(loose.state()).savedWork;
+  assert.equal(looseWork.mode, "write");
+  assert.equal(looseWork.richFallback, true);
+  assert.equal(looseWork.blocks.filter((block) => block.kind === "list").length, 0);
+  assert.equal(looseWork.blocks.filter((block) => block.kind === "raw").length, 1);
+  assert.match(looseWork.blocks.find((block) => block.kind === "raw").text, /1\. First\n\n1\. Second/);
+
+  const valid = setup();
+  const validMarkdown = "# Notes\n\n3. First\n4. Second\n";
+  await opened(valid, { revisions: [revision({ markdown: validMarkdown })] });
+  valid.dispatch("mode-chosen", { mode: "rich" });
+  const validList = selectView(valid.state()).savedWork.blocks.find((block) => block.kind === "list");
+  assert.equal(validList.start, 3);
+  assert.deepEqual(validList.items.map((item) => item.nodes.map((node) => node.text).join("")), ["First", "Second"]);
+
+  const distinct = setup();
+  const distinctMarkdown = "# Notes\n\n1. First\n\n1) Second\n";
+  await opened(distinct, { revisions: [revision({ markdown: distinctMarkdown })] });
+  distinct.dispatch("mode-chosen", { mode: "rich" });
+  assert.equal(selectView(distinct.state()).savedWork.blocks.filter((block) => block.kind === "list").length, 2);
+
+  const bullets = setup();
+  const bulletMarkdown = "# Notes\n\n- First\n\n- Second\n";
+  await opened(bullets, { revisions: [revision({ markdown: bulletMarkdown })] });
+  bullets.dispatch("mode-chosen", { mode: "rich" });
+  assert.equal(selectView(bullets.state()).savedWork.blocks.filter((block) => block.kind === "list").length, 2);
 });
 
 test("unsupported loose lists keep legacy citation membership", async () => {
