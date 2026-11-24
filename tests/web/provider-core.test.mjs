@@ -1444,6 +1444,73 @@ test("a model catalog reply of an older read is dropped, and a failed read shows
   assert.deepEqual(selectAsr(env.state().asr).rows, []);
 });
 
+test("Automation shares the initial ASR read, then re-entry fences the held catalog", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened", launcher: null });
+  const firstVisit = reduce(opened.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "devices",
+  });
+  assert.equal(firstVisit.state.asr.summaryStatus, "loading");
+  assert.equal(firstVisit.effects.filter((effect) => effect.url === "/api/asr-models").length, 0);
+
+  const left = reduce(firstVisit.state, {
+    type: "provider/settings-section-selected",
+    section: "devices",
+    previousSection: "processing",
+  });
+  const reentered = reduce(left.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "devices",
+  });
+  const refreshed = reentered.effects.find((effect) => effect.url === "/api/asr-models");
+  assert.ok(refreshed);
+  assert.equal(reentered.state.asr.request, opened.state.asr.request + 1);
+  assert.equal(reentered.state.asr.summaryStatus, "loading");
+
+  const stale = reduce(reentered.state, {
+    type: "provider/asr-loaded",
+    meta: { id: opened.state.asr.request },
+    response: { body: { ...ASR, default_model: null } },
+  });
+  assert.equal(stale.state.asr, reentered.state.asr);
+
+  const failed = reduce(reentered.state, { type: "provider/asr-failed", meta: refreshed.meta });
+  assert.equal(failed.state.asr.summaryStatus, "error");
+  assert.equal(failed.state.asr.status, "error");
+
+  const settled = reduce(reentered.state, {
+    type: "provider/asr-loaded",
+    meta: refreshed.meta,
+    response: { body: { ...ASR, default_model: "whisper-large-v3" } },
+  });
+  assert.equal(settled.state.asr.summaryStatus, null);
+  assert.equal(settled.state.asr.defaultModel, "whisper-large-v3");
+  assert.equal(selectAsr(settled.state.asr).defaultControl.value, "whisper-large-v3");
+});
+
+test("Automation re-entry does not overtake an ASR default save", () => {
+  const state = {
+    ...initialState,
+    asr: {
+      ...initialState.asr,
+      open: true,
+      status: "ready",
+      request: 5,
+      defaultPending: "whisper-large-v3",
+      models: ASR.asr_models,
+    },
+  };
+  const result = reduce(state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "devices",
+  });
+  assert.equal(result.state.asr, state.asr);
+  assert.equal(result.effects.some((effect) => effect.url === "/api/asr-models"), false);
+});
+
 test("the copy button writes the command through the clipboard effect and the reducer owns the feedback", async () => {
   const env = setup();
   env.store.dispatch({ type: "provider/dialog-opened", launcher: null });

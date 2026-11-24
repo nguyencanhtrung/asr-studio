@@ -1125,3 +1125,19 @@ liệu khác nhau. Đổi provider không tự chọn model hoặc account khác
 | `provider/processing-preferences-save-failed` đúng mutation khi đang mở | `ready`, giữ draft để sửa/thử lại, hiện lỗi; refresh pending vẫn được xếp lại và không được xóa lỗi mutation (kể cả `preferences_changed`/`notes_owner_unconfigured`) cho đến khi edit hoặc save thành công | Không thông báo đã lưu |
 | `provider/dialog-closed` | `open=false`, `idle`, reset draft/baseline/notification và tăng cả request/mutation | Hủy read/save; phản hồi muộn không đổi state; cùng dialog vẫn giữ edit qua section switch |
 | Save khi đang saving, draft không đổi/không có, owner pair chưa xác nhận, dialog đóng; edit khi saving/không draft; response sai định danh hoặc dialog đã đóng | Giữ state | Không effect |
+
+#### Đồng bộ cài đặt model khi vào Xử lý tự động
+
+`ownerSnapshot` giữ trạng thái `idle`, `loading`, `ready` hoặc `error`, số thứ tự
+lần đọc, yêu cầu đọc lại đang chờ và hai cặp model/effort cuối cùng đã xác nhận.
+Đọc owner dùng `GET /api/notes-preferences` từ server cục bộ. Catalog và trạng
+thái kết nối cung cấp tên model và khả năng sử dụng. Luồng đọc recipe workflow
+vẫn giữ version và hợp nhất các trường người dùng đã sửa.
+
+| Sự kiện | Chuyển trạng thái | Hiệu ứng |
+| --- | --- | --- |
+| Vào tab Xử lý tự động hoặc nhận thông báo owner đã lưu sau khi phần đồng bộ bắt đầu | Đặt owner Notes ở trạng thái đang đọc. Nếu một lần đọc đang chạy, đánh dấu cần đọc lại và bỏ dữ liệu từ lần đọc đó khi nó về | GET cấu hình Notes cục bộ theo khóa riêng. Gộp các thông báo trùng thành một lần đọc tiếp theo |
+| Phản hồi Notes đúng lần đọc và dialog còn mở | Nếu có yêu cầu mới, bỏ dữ liệu cũ và đọc lại. Dữ liệu đúng cập nhật cặp owner. Lỗi giữ cặp đã xác nhận và hiện trạng thái lỗi | Trong lúc đọc hoặc lỗi, chỉ cho lưu workflow không phụ thuộc vào cặp Notes. Vào lại tab sẽ đọc lại |
+| PATCH workflow hợp lệ xác nhận cặp Notes khác với owner đang hiển thị, hoặc owner đang có lần đọc cũ chưa xong | Giữ thông báo lưu, focus, version và recipe đã xác nhận. Ẩn lời mời đồng bộ dựa trên owner cũ trong lúc đọc | Đồng bộ lại owner Notes theo cùng khóa đọc. Cặp đã khớp giữ trạng thái sẵn sàng |
+| Vào tab Xử lý tự động để đọc ASR | Dùng lần đọc catalog đang tải ở lượt vào đầu tiên. Lượt quay lại phát sinh số thứ tự mới. Trong lúc đang lưu ASR, dùng lần đọc tiếp theo của chính thao tác lưu | GET `/api/asr-models` theo khóa hiện có. Phản hồi lỗi hiện trạng thái lỗi ở tóm tắt. Luồng cài model, poll và form ASR dùng trạng thái hiện có |
+| Đóng dialog | Xóa trạng thái đọc của phiên dialog và tăng số thứ tự lần đọc Notes | Hủy đọc Notes. Phản hồi từ phiên cũ không đổi cài đặt đang hiển thị |

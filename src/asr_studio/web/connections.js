@@ -625,7 +625,7 @@ function processingCatalogs(state) {
   const antigravityOwner = ownerView("antigravity", state.antigravity);
   return {
     asr: {
-      status: state.asr.status,
+      status: state.asr.summaryStatus || state.asr.status,
       models: state.asr.models,
       defaultModel: state.asr.defaultModel,
       defaultDamaged: state.asr.defaultDamaged,

@@ -1392,7 +1392,18 @@ function reduceAsr(state, action) {
   switch (action.type) {
     case "provider/dialog-opened": {
       const request = state.request + 1;
-      return done({ ...state, status: "loading", request, copy: null, notice: null, defaultRefusal: null, open: true }, [asrFetch(request)]);
+      return done({ ...state, status: "loading", summaryStatus: null, request, copy: null, notice: null, defaultRefusal: null, open: true }, [asrFetch(request)]);
+    }
+    case "provider/settings-section-selected": {
+      if (action.section !== "processing" || action.previousSection === "processing" || !state.open
+        || state.defaultPending !== undefined) return done(state);
+      // The first Automation visit can share a catalog already loading at open.
+      // Re-entry requests the current snapshot, superseding any older keyed read.
+      if (state.status === "loading" && state.summaryStatus !== "loading") {
+        return done({ ...state, summaryStatus: "loading" });
+      }
+      const request = state.request + 1;
+      return done({ ...state, request, summaryStatus: "loading" }, [asrFetch(request)]);
     }
     case "provider/dialog-closed":
       return done({ ...state, open: false }, [{ type: "cancel", key: "provider/asr-poll" }, ASR_SETTINGS_CHANGED]);
@@ -1404,13 +1415,13 @@ function reduceAsr(state, action) {
     case "provider/asr-loaded": {
       if (action.meta.id !== state.request) return done(state);
       const list = action.response.body?.asr_models;
-      if (!Array.isArray(list)) return done({ ...state, status: "error" });
+      if (!Array.isArray(list)) return done({ ...state, status: "error", summaryStatus: null });
       const models = list.filter(isAsrModelRow);
       const installer = action.response.body?.installer;
       const { default_model: saved, hardware_model: hardware } = action.response.body;
       const defaultModel = isAsrModelId(saved) && saved !== "auto" ? saved : null;
       const hardwareModel = typeof hardware === "string" ? hardware : null;
-      const next = { ...state, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
+      const next = { ...state, summaryStatus: null, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
         // A reply with no usable model must say so; an empty list would leave the section blank.
         status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
       return withPoll(next);
@@ -1418,7 +1429,8 @@ function reduceAsr(state, action) {
     case "provider/asr-failed":
       // A failed poll keeps the rows: the next tick reads again.
       if (action.meta.id !== state.request) return done(state);
-      return state.status === "ready" ? withPoll(state) : done({ ...state, status: "error" });
+      const next = state.summaryStatus === "loading" ? { ...state, summaryStatus: "error" } : state;
+      return next.status === "ready" ? withPoll(next) : done({ ...next, status: "error" });
     // The new value shows at once. A catalog read already in flight predates it and is dropped.
     case "provider/asr-default-chosen": {
       if (!isAsrModelId(action.value)) return done(state);

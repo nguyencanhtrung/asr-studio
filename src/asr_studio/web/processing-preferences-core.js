@@ -424,7 +424,13 @@ export function reduce(state, action) {
       }
       const confirmed = { ...state, status: "ready", saved: preferences, draft: clone(preferences), error: null, notice: t("Đã lưu cài đặt xử lý tự động.") };
       const pending = continuePendingRefresh(confirmed);
-      return done(pending.state, [SETTINGS_CHANGED, ...pending.effects]);
+      const result = done(pending.state, [SETTINGS_CHANGED, ...pending.effects]);
+      const { provider, model, reasoning_effort: effort } = preferences.notes;
+      const owners = state.ownerSnapshot;
+      const pair = owners.pairs[provider];
+      const refreshOwner = provider && owners.status !== "idle"
+        && (owners.status !== "ready" || pair?.model !== model || pair?.effort !== effort);
+      return refreshOwner ? withOwnerRead(result) : result;
     }
     case "provider/processing-preferences-save-failed":
       if (action.meta?.mutation !== state.mutation || !state.open) return done(state);
@@ -754,8 +760,11 @@ export function selectPreferences(state, catalogs = {}) {
   ];
   const providerValue = draft.notes.provider || "";
   const asrCatalog = catalogs.asr || { status: catalogs.asrModels?.length ? "ready" : "loading", models: catalogs.asrModels };
-  const asrOwner = asrOwnerView(asrCatalog, draft.asr.choice);
-  const notesOwner = providerOwnerView(draft.notes.provider, catalog, state.saved?.notes);
+  const readingWorkflow = state.status === "loading";
+  const asrOwner = readingWorkflow
+    ? { state: "loading", text: t("Đang kiểm tra"), discrepancy: false }
+    : asrOwnerView(asrCatalog, draft.asr.choice);
+  const notesOwner = providerOwnerView(draft.notes.provider, catalog, readingWorkflow ? null : state.saved?.notes);
   const eligibility = selectEligibility(state, catalogs);
   return {
     status: state.status,

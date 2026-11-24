@@ -276,6 +276,143 @@ test("saving sends only workflow fields and ignores stale replies", () => {
   assert.equal(refreshedAfterSave.notice.text, "Đã lưu cài đặt xử lý tự động.");
 });
 
+test("a successful workflow acknowledgement refreshes a mismatched owner pair without offering a second save", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: {
+      ...PREFS,
+      notes: { provider: "antigravity", model: "gemini-3.1-pro", reasoning_effort: "high", output_language: "en" },
+    } },
+  }).state;
+  const withOwner = {
+    ...loaded,
+    ownerSnapshot: {
+      ...loaded.ownerSnapshot,
+      status: "ready",
+      request: 7,
+      pairs: {
+        ...loaded.ownerSnapshot.pairs,
+        antigravity: { model: "gemini-3.1-pro", effort: "high" },
+      },
+    },
+  };
+  const edited = reduce(withOwner, {
+    type: "provider/processing-preference-edited",
+    field: "asr_language",
+    value: "en",
+  }).state;
+  const saving = reduce(edited, saveAction(edited));
+  const save = saving.effects.find((effect) => effect.key === "provider/processing-preferences-save");
+  const acknowledged = reduce(saving.state, {
+    type: "provider/processing-preferences-saved",
+    meta: save.meta,
+    response: { body: {
+      asr: { choice: "auto", language: "en" },
+      notes: { provider: "antigravity", model: "gemini-3.1-flash", reasoning_effort: "medium", output_language: "en" },
+      version: 5,
+    } },
+  });
+  const ownerRead = acknowledged.effects.find((effect) => effect.key === "provider/processing-owner-preferences");
+  assert.ok(ownerRead);
+  assert.equal(acknowledged.state.ownerSnapshot.status, "loading");
+  assert.equal(acknowledged.state.ownerSnapshot.request, 8);
+  assert.equal(acknowledged.state.notice.text, "Đã lưu cài đặt xử lý tự động.");
+
+  const reconciled = reduce(acknowledged.state, {
+    type: "provider/processing-owner-preferences-loaded",
+    meta: ownerRead.meta,
+    response: { body: {
+      models: { chatgpt: null, antigravity: "gemini-3.1-flash" },
+      reasoning_efforts: { chatgpt: null, antigravity: "medium" },
+    } },
+  }).state;
+  const catalogs = {
+    ...CATALOGS,
+    providers: {
+      ...CATALOGS.providers,
+      antigravity: {
+        ...CATALOGS.providers.antigravity,
+        ownerModel: "gemini-3.1-flash",
+        ownerEffort: "medium",
+      },
+    },
+  };
+  const view = selectPreferences(reconciled, catalogs);
+  assert.equal(view.ownerDrift, false);
+  assert.equal(view.canSave, false);
+  assert.equal(view.notice.text, "Đã lưu cài đặt xử lý tự động.");
+  assert.deepEqual(reduce(reconciled, saveAction(reconciled, catalogs)).effects, []);
+});
+
+test("a successful acknowledgement queues exactly one owner refresh behind an older read", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: {
+      ...PREFS,
+      notes: { provider: "antigravity", model: "gemini-3.1-pro", reasoning_effort: "high", output_language: "en" },
+    } },
+  }).state;
+  const withHeldOwner = {
+    ...loaded,
+    ownerSnapshot: {
+      ...loaded.ownerSnapshot,
+      status: "loading",
+      request: 11,
+      pairs: {
+        ...loaded.ownerSnapshot.pairs,
+        antigravity: { model: "gemini-3.1-pro", effort: "high" },
+      },
+    },
+  };
+  const edited = reduce(withHeldOwner, {
+    type: "provider/processing-preference-edited",
+    field: "asr_language",
+    value: "en",
+  }).state;
+  const saving = reduce(edited, saveAction(edited));
+  const save = saving.effects.find((effect) => effect.key === "provider/processing-preferences-save");
+  const acknowledged = reduce(saving.state, {
+    type: "provider/processing-preferences-saved",
+    meta: save.meta,
+    response: { body: {
+      asr: { choice: "auto", language: "en" },
+      notes: { provider: "antigravity", model: "gemini-3.1-flash", reasoning_effort: "medium", output_language: "en" },
+      version: 5,
+    } },
+  });
+  assert.equal(acknowledged.effects.some((effect) => effect.key === "provider/processing-owner-preferences"), false);
+  assert.equal(acknowledged.state.ownerSnapshot.refreshPending, true);
+
+  const restarted = reduce(acknowledged.state, {
+    type: "provider/processing-owner-preferences-loaded",
+    meta: { request: 11 },
+    response: { body: {
+      models: { chatgpt: null, antigravity: "gemini-3.1-pro" },
+      reasoning_efforts: { chatgpt: null, antigravity: "high" },
+    } },
+  });
+  const ownerRead = restarted.effects.find((effect) => effect.key === "provider/processing-owner-preferences");
+  assert.ok(ownerRead);
+  assert.equal(ownerRead.meta.request, 12);
+  assert.equal(restarted.state.ownerSnapshot.status, "loading");
+  assert.equal(restarted.state.ownerSnapshot.refreshPending, false);
+
+  const fresh = reduce(restarted.state, {
+    type: "provider/processing-owner-preferences-loaded",
+    meta: ownerRead.meta,
+    response: { body: {
+      models: { chatgpt: null, antigravity: "gemini-3.1-flash" },
+      reasoning_efforts: { chatgpt: null, antigravity: "medium" },
+    } },
+  }).state;
+  assert.deepEqual(fresh.ownerSnapshot.pairs.antigravity, { model: "gemini-3.1-flash", effort: "medium" });
+  assert.equal(fresh.notice.text, "Đã lưu cài đặt xử lý tự động.");
+});
+
 test("typed but stale or contradictory PATCH acknowledgements reconcile without success", () => {
   const opened = reduce(initialState, { type: "provider/dialog-opened" });
   const loaded = reduce(opened.state, {
@@ -492,6 +629,41 @@ test("owner divergence is visible and provider readiness blocks an unconfigured 
   });
   assert.equal(asrDivergence.asrOwner.discrepancy, true);
   assert.equal(asrDivergence.asrOwner.text[2].text, "Mở Cài đặt → ASR Model để đồng bộ nếu muốn.");
+});
+
+test("workflow reconciliation suppresses stale owner drift while retaining the current owner text", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: {
+      ...PREFS,
+      notes: { provider: "chatgpt", model: "gpt-6.1-sol", reasoning_effort: "low", output_language: "en" },
+    } },
+  }).state;
+  const reconciling = reduce(loaded, { type: "provider/processing-preferences-reconcile-requested" }).state;
+  const view = selectPreferences(reconciling, {
+    ...CATALOGS,
+    asr: {
+      ...CATALOGS.asr,
+      defaultModel: "whisper-small",
+      models: [...CATALOGS.asr.models, { id: "whisper-large-v3", ready: true }],
+    },
+    providers: {
+      ...CATALOGS.providers,
+      chatgpt: {
+        ...CATALOGS.providers.chatgpt,
+        ownerModel: "gpt-5.6-luna",
+        ownerEffort: "high",
+      },
+    },
+  });
+  assert.equal(view.canSave, false);
+  assert.equal(view.asrOwner.state, "loading");
+  assert.equal(view.asrOwner.discrepancy, false);
+  assert.equal(view.notesOwner.discrepancy, false);
+  assert.match(JSON.stringify(view.notesOwner.text), /gpt-5\.6-luna/);
+  assert.doesNotMatch(JSON.stringify(view.notesOwner.text), /Lưu để áp dụng cài đặt sở hữu/);
 });
 
 test("a committed owner pair remains eligible while disconnected or its catalog is unavailable", () => {
