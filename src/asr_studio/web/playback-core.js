@@ -30,7 +30,7 @@ export const initialState = {
   target: null, // real row of the last explicit source jump or seek, even when filtered out
   targetOwner: null, // source | timestamp | time: why target is still the reveal target
   sourceRequestId: null, // Notes source intent reserved before its snapshot fetch; timestamps supersede it
-  pendingTarget: null, // { id, owner, meetingId, generationId, owedStarts, dismissed }: one native seeked acknowledgement
+  pendingTarget: null, // { id, owner, sourceRequestId, meetingId, generationId, owedStarts, dismissed }: one native seeked acknowledgement
   mark: null, // id of the row the open notes source names
   seek: null, // the seek waiting for the audio metadata: { id, ids, meetingId, startSeconds, generationId }; ids: every seek joined to it
   seekDone: null, // { id, ids, ok }: how the last seek ended; ok holds for every id in ids
@@ -110,9 +110,10 @@ function sameNativeTarget(target, action) {
   return target
     && target.meetingId === action.shown?.id
     && target.generationId === action.shown?.generationId
-    // Synthetic reducer callers may model only the final acknowledgement. Real media may
-    // acknowledge only after every programmatic start has emitted its `seeking` event.
-    && (target.owedStarts === 0 || action.seeking === undefined);
+    // The view supplies the native seeking state with every seeked action. A pending target is
+    // acknowledged only by the real-shaped end of that seeking/seeked pair.
+    && target.owedStarts === 0
+    && action.seeking === false;
 }
 
 const sourceSeekOwnsNativeEvent = (state) => state.seek
@@ -123,12 +124,17 @@ function addPendingStart(previous, target) {
   const sameScope = previous
     && previous.meetingId === target.meetingId
     && previous.generationId === target.generationId;
+  const owesNativeStart = target.ready !== false || target.startSeconds !== 0;
   // Before metadata exists, Chromium coalesces repeated currentTime writes and emits one native
   // seeking/seeked pair when it can apply the final position. Once metadata is available, each
   // subsequent write has its own native start and must remain owed.
   return sameScope
-    ? { ...target, owedStarts: target.ready === false ? 1 : previous.owedStarts + 1, dismissed: false }
-    : { ...target, owedStarts: 1, dismissed: false };
+    ? {
+      ...target,
+      owedStarts: owesNativeStart ? (target.ready === false ? 1 : previous.owedStarts + 1) : 0,
+      dismissed: false,
+    }
+    : { ...target, owedStarts: owesNativeStart ? 1 : 0, dismissed: false };
 }
 
 const finishSeek = (state, ok) => ({ ...state, seek: null, seekDone: { id: state.seek.id, ids: state.seek.ids, ok } });
@@ -147,6 +153,7 @@ function startSeek(state, action) {
     startSeconds: action.startSeconds,
     generationId: shown ? shown.generationId : null,
     sourceRequestId: action.sourceRequestId,
+    mediaWriteIssued: Boolean(action.ready),
   };
   const open = state.seek;
   if (!here) return out({ ...state, seek: null, seekDone: { id: action.seekId, ids: [action.seekId], ok: false } }, stopWaits(open));
@@ -158,7 +165,20 @@ function startSeek(state, action) {
     type: "call", key: KEY.seek, name: "playback.seek", args: [action.startSeconds],
     ok: "playback/seek-applied", error: "playback/seek-failed", meta: { seekId: seek.id },
   };
-  if (action.ready) return out({ ...state, seek, seekDone: null }, [...stopWaits(open), apply]);
+  if (action.ready) {
+    const pendingTarget = seek.sourceRequestId !== undefined && seek.sourceRequestId !== null
+      ? addPendingStart(state.pendingTarget, {
+        id: seek.targetId,
+        owner: "source",
+        sourceRequestId: seek.sourceRequestId,
+        meetingId: seek.meetingId,
+        generationId: seek.generationId,
+        startSeconds: seek.startSeconds,
+        ready: true,
+      })
+      : state.pendingTarget;
+    return out({ ...state, seek, pendingTarget, seekDone: null }, [...stopWaits(open), apply]);
+  }
   return out({ ...state, seek, seekDone: null }, [...stopWaits(open), wait(seek.id)]);
 }
 
@@ -251,7 +271,22 @@ function step(state, action) {
       const next = sample(state, action);
       const seek = state.seek;
       if (!seek || action.audioMeetingId !== seek.meetingId) return out(next);
-      return out(next, [
+      const started = {
+        ...seek,
+        mediaWriteIssued: true,
+      };
+      const pendingTarget = started.sourceRequestId !== undefined && started.sourceRequestId !== null
+        ? addPendingStart(state.pendingTarget, {
+          id: started.targetId,
+          owner: "source",
+          sourceRequestId: started.sourceRequestId,
+          meetingId: started.meetingId,
+          generationId: started.generationId,
+          startSeconds: started.startSeconds,
+          ready: true,
+        })
+        : state.pendingTarget;
+      return out({ ...next, seek: started, pendingTarget }, [
         ...stopWaits(seek),
         {
           type: "call", key: KEY.seek, name: "playback.seek", args: [seek.startSeconds],
@@ -273,17 +308,30 @@ function step(state, action) {
       if (!state.seek || state.seek.id !== action.meta.seekId) return out(state); // an answer for a seek that was replaced
       const seek = state.seek;
       const next = sampleTarget(finishSeek(state, true), { ...action.value, now: action.now, shown: action.shown, targetId: seek.targetId });
-      return out({
-        ...next,
-        targetOwner: seek.targetId ? "source" : next.target ? "time" : null,
-        pendingTarget: seek.targetId ? addPendingStart(state.pendingTarget, {
+      const pendingTarget = seek.sourceRequestId !== undefined && seek.sourceRequestId !== null
+        ? (seek.mediaWriteIssued
+          ? state.pendingTarget
+          : addPendingStart(state.pendingTarget, {
+            id: seek.targetId,
+            owner: "source",
+            sourceRequestId: seek.sourceRequestId,
+            meetingId: seek.meetingId,
+            generationId: seek.generationId,
+            startSeconds: seek.startSeconds,
+            ready: action.value?.ready,
+          }))
+        : (seek.targetId ? addPendingStart(state.pendingTarget, {
           id: seek.targetId,
           owner: "source",
           meetingId: seek.meetingId,
           generationId: seek.generationId,
           startSeconds: seek.startSeconds,
-            ready: action.value?.ready,
-        }) : null,
+          ready: action.value?.ready,
+        }) : null);
+      return out({
+        ...next,
+        targetOwner: seek.targetId ? "source" : next.target ? "time" : null,
+        pendingTarget,
       });
     }
     case "playback/seek-failed":
@@ -337,8 +385,28 @@ function step(state, action) {
       const effects = explicitDismiss && sourceSeek ? stopWaits(state.seek) : [];
       return out(id === null ? next : queue(next, { op: "reveal", id, smooth: !action.reduced }), effects);
     }
-    case "playback/source-requested":
-      return out({ ...state, sourceRequestId: action.sourceRequestId ?? null });
+    case "playback/source-requested": {
+      const sourceRequestId = action.sourceRequestId ?? null;
+      const open = state.seek;
+      const superseded = open
+        && open.sourceRequestId !== undefined
+        && open.sourceRequestId !== null
+        && open.sourceRequestId !== sourceRequestId;
+      if (!superseded) return out({ ...state, sourceRequestId });
+      if (open.mediaWriteIssued) {
+        // The request is no longer allowed to resolve its waiter, but its already-issued media
+        // write still owns the native seeking/seeked acknowledgement. Keep that ownership until
+        // seek-applied records the no-row or row target.
+        return out({
+          ...state,
+          sourceRequestId,
+          seek: { ...open, ids: [] },
+          seekDone: { id: open.id, ids: open.ids, ok: false },
+        }, stopWaits(open));
+      }
+      const next = finishSeek({ ...state, sourceRequestId }, false);
+      return out(next, stopWaits(open));
+    }
     case "playback/scroll-started":
       return out({ ...state, ownUntil: action.now + OWN_SCROLL_GAP_MS });
     case "playback/manual-scrolled":
