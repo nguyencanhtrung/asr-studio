@@ -449,6 +449,21 @@ function trimMarkdownStart(value) {
   return value.replace(/^[\t\n\f\r\p{Zs}]+/u, "");
 }
 
+// A list item's content indent is measured from the absolute column after its
+// marker. Tabs advance to the next four-column stop, so a visually generous
+// separator can be an indented-code block even when its source has no leading
+// spaces. Keep that item raw rather than letting rich editing change its block.
+function listMarkerPadding(value, marker) {
+  const markerEnd = marker[1].length + marker[2].length;
+  let column = markerEnd;
+  for (let index = markerEnd; index < value.length; index++) {
+    if (value[index] === " ") column++;
+    else if (value[index] === "\t") column += 4 - (column % 4);
+    else break;
+  }
+  return column - markerEnd;
+}
+
 function citedBullets(lines, citations) {
   const found = new Map();
   if (!citations.length) return found;
@@ -836,7 +851,8 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
         const item = line(end).match(listPattern);
         if (item && !isThematic(line(end)) && item[2].at(-1) === marker && item[1].length <= indent) {
           indent = item[1].length;
-          unsupported ||= /^\[[ xX]\](?: |$)/.test(item[3]) || /[ \t]$/.test(item[3]);
+          unsupported ||= listMarkerPadding(line(end), item) > 4
+            || /^\[[ xX]\](?: |$)/.test(item[3]) || /[ \t]$/.test(item[3]);
           items.push({ index: end, nodes: inline(item[3], lines[end].offset + line(end).length - item[3].length), chips: [] });
         } else if (startsBlock(line(end)) && !indentedLinePattern.test(line(end))) {
           break;
@@ -886,7 +902,8 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
           const value = line(rawIndex);
           const rawItem = value.match(listPattern);
           if (rawItem && rawItem[1].length <= indent && rawItem[2].at(-1) === marker) {
-            citationLineIndexes.add(rawIndex);
+            if (listMarkerPadding(value, rawItem) > 4) literalLineIndexes.add(rawIndex);
+            else citationLineIndexes.add(rawIndex);
           }
         }
         blocks.push(raw(index, end, {

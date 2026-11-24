@@ -2013,6 +2013,7 @@ test("rich edits preserve list blocks with mixed space-tab marker padding", asyn
     "# Notes\n\n- \tfoo\n",
     "# Notes\n\n1. \tfoo\n",
     "# Notes\n\n-  \tfoo\n",
+    "# Notes\n\n-    foo\n",
     "# Notes\n\n+ \tfoo\n",
     "# Notes\n\n1) \tfoo\n",
   ];
@@ -2030,6 +2031,23 @@ test("rich edits preserve list blocks with mixed space-tab marker padding", asyn
     assert.equal(saved(env).value, markdown.replace("foo", "foox"));
     assert.equal(selectView(env.state()).savedWork.blocks.find((block) => block.kind === "list").kind, "list");
   }
+});
+
+test("list padding beyond four columns stays literal and out of citation scope", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\n- \t    The team reviewed its launch plan.\n";
+  await opened(env, { revisions: [revision({
+    markdown,
+    citations: [{ section: "Notes", text: "The team reviewed its launch plan.", sources: [{ id: "seg-a", start_seconds: 1 }] }],
+  })] });
+  const view = selectView(env.state()).savedWork;
+  const raw = view.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.ok(raw);
+  assert.deepEqual(raw.viewLines[0].nodes, [{ kind: "raw", text: "- \t    The team reviewed its launch plan." }]);
+  assert.deepEqual(raw.viewLines[0].chips, []);
+  env.dispatch("mode-chosen", { mode: "rich" });
+  assert.equal(selectView(env.state()).savedWork.richFallback, true);
+  assert.equal(saved(env).value, markdown);
 });
 
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {
