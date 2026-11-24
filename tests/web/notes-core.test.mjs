@@ -2073,6 +2073,19 @@ test("raw boundaries reset heading scope and keep decreasing-indent code literal
   assert.equal(raw.viewLines[1].chips[0].segmentId, "seg-a");
 });
 
+test("unsupported loose lists keep legacy citation membership", async () => {
+  const env = setup();
+  const bullet = "The team reviewed its launch plan.";
+  const markdown = `# Notes\n\n## Overview\n\n  - Context\n\n  - ${bullet}\n`;
+  await opened(env, { revisions: [revision({
+    markdown,
+    citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg-a", start_seconds: 1 }] }],
+  })] });
+  const raw = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.ok(raw);
+  assert.equal(raw.viewLines[2].chips[0].segmentId, "seg-a");
+});
+
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {
   const env = setup();
   await opened(env, { revisions: [revision(), revision({ id: "r2" })] });

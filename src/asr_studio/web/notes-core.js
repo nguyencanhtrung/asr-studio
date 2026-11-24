@@ -903,9 +903,12 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
           if (literalLineIndexes.has(rawIndex)) continue;
           const value = line(rawIndex);
           const rawItem = value.match(listPattern);
-          if (itemIndexes.has(rawIndex) && rawItem && rawItem[2].at(-1) === marker) {
+          const legacyMembership = rawItem
+            && rawItem[1].length <= indent
+            && rawItem[2].at(-1) === marker;
+          if (rawItem && (legacyMembership || itemIndexes.has(rawIndex))) {
             if (listMarkerPadding(value, rawItem) > 4) literalLineIndexes.add(rawIndex);
-            else citationLineIndexes.add(rawIndex);
+            else if (legacyMembership) citationLineIndexes.add(rawIndex);
           }
         }
         blocks.push(raw(index, end, {
