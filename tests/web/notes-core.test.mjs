@@ -1649,6 +1649,42 @@ test("View keeps citation parity for unsupported lists and raw heading scope", a
   assert.equal(lists[1].items[0].chips[0].segmentId, "seg-a");
 });
 
+test("citation scope uses the same ATX grammar as View for inline Unicode separators", async () => {
+  const bullet = "The team reviewed its launch plan.";
+  const markdown = "# Notes\n\n## Overview\n\n## New\u2028 topic\n\n- " + `${bullet}\n`;
+  const env = setup();
+  await opened(env, { revisions: [revision({
+    markdown,
+    citations: [{ section: "Overview", text: bullet, sources: [{ id: "seg-a", start_seconds: 1 }] }],
+  })] });
+  const list = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "list");
+  assert.equal(list.items[0].chips.length, 0);
+});
+
+test("shared marker grammar keeps tab-delimited blocks rich and preserves unsupported indentation", async () => {
+  for (const [markdown, kind] of [
+    ["# Notes\n\n##\tTopic\u2028 inline\n", "heading"],
+    ["# Notes\n\n- \tTopic\u2028 inline\n", "list"],
+    ["# Notes\n\n1.\tTopic\u2028 inline\n", "list"],
+  ]) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    assert.equal(selectView(env.state()).savedWork.mode, "rich");
+    assert.ok(selectView(env.state()).savedWork.blocks.some((block) => block.kind === kind));
+  }
+
+  const env = setup();
+  const markdown = "# Notes\n\n- Exact statement\n  Supplemental context belongs in View.\n\n## Next\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  const raw = selectView(env.state()).savedWork.blocks.find((block) => block.kind === "raw" && block.viewLines);
+  assert.equal(raw.text, "- Exact statement\n  Supplemental context belongs in View.");
+  assert.deepEqual(raw.viewLines.map(({ nodes }) => nodes.map((node) => node.text).join("")), [
+    "- Exact statement",
+    "  Supplemental context belongs in View.",
+  ]);
+});
+
 test("View keeps source and citation parity through quote, tab-list and nested code boundaries", async () => {
   const env = setup();
   const href = "/meetings/m1?notes_source=s1&segment=seg-a#transcript";
@@ -1947,6 +1983,30 @@ test("rich edits preserve heading and list blocks containing U+2028/U+2029", asy
     env.dispatch("rich-edited", { index, before, value });
     assert.equal(saved(env).value, markdown.replace(before, value));
     assert.equal(selectView(env.state()).savedWork.blocks.find((candidate) => candidate.kind === kind).kind, kind);
+  }
+});
+
+test("rich edits preserve list blocks with mixed space-tab marker padding", async () => {
+  const cases = [
+    "# Notes\n\n- \tfoo\n",
+    "# Notes\n\n1. \tfoo\n",
+    "# Notes\n\n-  \tfoo\n",
+    "# Notes\n\n+ \tfoo\n",
+    "# Notes\n\n1) \tfoo\n",
+  ];
+  for (const markdown of cases) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const work = selectView(env.state()).savedWork;
+    assert.equal(work.mode, "rich");
+    assert.equal(work.blocks.find((block) => block.kind === "list").items.length, 1);
+    const runs = work.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => node.text === "foo");
+    assert.notEqual(index, -1);
+    env.dispatch("rich-edited", { index, before: "foo", value: "foox" });
+    assert.equal(saved(env).value, markdown.replace("foo", "foox"));
+    assert.equal(selectView(env.state()).savedWork.blocks.find((block) => block.kind === "list").kind, "list");
   }
 });
 

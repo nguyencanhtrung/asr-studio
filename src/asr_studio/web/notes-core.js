@@ -426,6 +426,28 @@ const referenceKey = (reference) => `${reference.meetingId}\u0000${reference.sna
 // were made with: once one was edited or removed, or another was edited into a copy, none keeps a chip.
 const citationIgnore = "\u0001";
 
+// Markdown lines are split only on CR/LF. Keep the marker grammar shared by
+// rendering, citation scope and rich marker protection; JS `.` and `\s` both
+// classify U+2028/U+2029 differently from CommonMark inline content.
+const headingPattern = /^(#{1,6})[ \t]+([^ \t][^]*)$/;
+const headingMarkerPattern = /^#{1,6}[ \t]*$/;
+const listMarkerSource = "[-*+]|\\d{1,9}[.)]";
+const listPrefixPattern = new RegExp(`^ {0,3}(?:${listMarkerSource})[ \\t]+$`);
+const listMarkerLinePattern = new RegExp(`^ {0,3}(?:${listMarkerSource})[ \\t]*$`);
+const listMarkerOnlyPattern = new RegExp(`^(?:${listMarkerSource})[ \\t]*$`);
+const listPattern = new RegExp(`^( {0,3})(${listMarkerSource})[ \\t]+([^ \\t][^]*)$`);
+const lineEnding = /\r\n?|\n/;
+const markdownWhitespace = /^[\t\n\f\r\p{Zs}]+|[\t\n\f\r\p{Zs}]+$/gu;
+const indentedLinePattern = /^[ \t]/;
+
+function trimMarkdownWhitespace(value) {
+  return value.replace(markdownWhitespace, "");
+}
+
+function trimMarkdownStart(value) {
+  return value.replace(/^[\t\n\f\r\p{Zs}]+/u, "");
+}
+
 function citedBullets(lines, citations) {
   const found = new Map();
   if (!citations.length) return found;
@@ -445,14 +467,14 @@ function citedBullets(lines, citations) {
     if (line === citationIgnore) {
       return;
     }
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    const heading = line.match(headingPattern);
     if (heading) {
-      section = heading[2].trim();
+      section = trimMarkdownWhitespace(heading[2]);
       return;
     }
-    const bullet = line.match(/^ {0,3}[-*](?: +|\t+)([^ \t].*)$/);
-    if (!bullet) return;
-    const key = keyOf(section, bullet[1].trim());
+    const bullet = line.match(listPattern);
+    if (!bullet || /^\d/.test(bullet[2])) return;
+    const key = keyOf(section, trimMarkdownWhitespace(bullet[3]));
     bullets.push({ index, key });
     counts.set(key, (counts.get(key) || 0) + 1);
   });
@@ -478,17 +500,6 @@ function citationChip(revision, source, group = "") {
 }
 
 const escapedPunctuation = /[!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-]/;
-// A Markdown line is split only on CR/LF above.  JavaScript's `.` excludes
-// U+2028/U+2029, but CommonMark treats those code points as ordinary inline
-// content, so marker lines containing them must remain headings/list items.
-const headingPattern = /^(#{1,6}) +([^ ][^]*)$/;
-const listPattern = /^( {0,3})([-*+]|\d{1,9}[.)])(?: +|\t+)([^ \t][^]*)$/;
-const lineEnding = /\r\n?|\n/;
-const markdownWhitespace = /^[\t\n\f\r\p{Zs}]+|[\t\n\f\r\p{Zs}]+$/gu;
-
-function trimMarkdownWhitespace(value) {
-  return value.replace(markdownWhitespace, "");
-}
 
 function unescapeMarkdown(value) {
   return value.replace(/\\([!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-])|&#(32|9);/g,
@@ -671,7 +682,8 @@ function tableCells(line) {
   let start = 0;
   const addCell = (end) => {
     const cell = line.slice(start, end);
-    cells.push({ text: cell.trim(), offset: start + cell.length - cell.trimStart().length });
+    const leftTrimmed = trimMarkdownStart(cell);
+    cells.push({ text: trimMarkdownWhitespace(cell), offset: start + cell.length - leftTrimmed.length });
   };
   for (let index = 0; index < line.length; index++) {
     if (line[index] === "\\" && escapedPunctuation.test(line[index + 1] || "")) index++;
@@ -725,13 +737,13 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     return block;
   };
   const isThematic = (value) => /^(?: *-){3,} *$|^(?: *\*){3,} *$|^(?: *_){3,} *$/.test(value);
-  const startsRaw = (value) => /^(?: {1,4}|\t|>|<|\[[^\]]+\]:|[-*+]\s*$|\d+[.)]\s*$)/.test(value)
-    || /^#{1,6}\s*$/.test(value) || isThematic(value);
+  const startsRaw = (value) => /^(?: {1,4}|\t|>|<|\[[^\]]+\]:)/.test(value)
+    || listMarkerLinePattern.test(value) || headingMarkerPattern.test(value) || isThematic(value);
   const fenceEnd = (value) => {
     const opening = value.match(/^ {0,3}(`{3,}|~{3,})/);
     if (opening) return new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \t]*$`);
     if (/^ {0,3}<!--/.test(value)) return /-->/;
-    const tag = value.match(/^ {0,3}<(script|style|iframe|object|svg|math|code|pre|textarea)(?:\s|>|$)/i);
+    const tag = value.match(/^ {0,3}<(script|style|iframe|object|svg|math|code|pre|textarea)(?:[ \t]|>|$)/i);
     return tag ? new RegExp(`</${tag[1]}\\s*>`, "i") : null;
   };
   const unquote = (value) => {
@@ -747,7 +759,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     let close = null;
     for (let index = start; index < end; index++) {
       const value = unquote(line(index));
-      const trimmed = value.trimStart();
+      const trimmed = trimMarkdownStart(value);
       if (close) {
         literal.add(index);
         if (close.test(trimmed)) close = null;
@@ -763,11 +775,11 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     }
     return literal;
   };
-  const isTableRule = (value) => /\|/.test(value) && /^[\s|:-]+$/.test(value);
+  const isTableRule = (value) => /\|/.test(value) && /^[ \t|:-]+$/.test(value);
   const startsBlock = (value) => headingPattern.test(value) || listPattern.test(value) || startsRaw(value) || fenceEnd(value);
   for (let index = 0; index < lines.length;) {
     const text = line(index);
-    if (!text.trim()) {
+    if (!trimMarkdownWhitespace(text)) {
       index++;
       continue;
     }
@@ -781,9 +793,9 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       index = end;
       continue;
     }
-    const citationHeading = text.match(/^(#{1,6})\s+(.+)$/);
+    const citationHeading = text.match(headingPattern);
     if (citationHeading) citationLines[index] = text;
-    if (!startsRaw(text) && (isTableRule(line(index + 1)) || (text.includes("|") && /^\s*[:\-]+\s*$/.test(line(index + 1))))) {
+    if (!startsRaw(text) && (isTableRule(line(index + 1)) || (text.includes("|") && /^[ \t]*[:\-]+[ \t]*$/.test(line(index + 1))))) {
       let end = index + 2;
       while (line(end).includes("|")) end++;
       const headers = tableCells(text);
@@ -803,7 +815,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       continue;
     }
     const heading = text.match(headingPattern);
-    if (heading && !/ +#+ *$/.test(text) && !/\s$/.test(text)) {
+    if (heading && !/ +#+ *$/.test(text) && !/[ \t]$/.test(text)) {
       citationLines[index] = text;
       blocks.push({ kind: "heading", level: heading[1].length, nodes: inline(heading[2], lines[index].offset + text.length - heading[2].length) });
       index++;
@@ -818,13 +830,13 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
       const items = [];
       let end = index;
       let unsupported = false;
-      while (end < lines.length && line(end).trim()) {
+      while (end < lines.length && trimMarkdownWhitespace(line(end))) {
         const item = line(end).match(listPattern);
         if (item && !isThematic(line(end)) && item[2].at(-1) === marker && item[1].length <= indent) {
           indent = item[1].length;
-          unsupported ||= /^\[[ xX]\](?: |$)/.test(item[3]) || /\s$/.test(item[3]);
+          unsupported ||= /^\[[ xX]\](?: |$)/.test(item[3]) || /[ \t]$/.test(item[3]);
           items.push({ index: end, nodes: inline(item[3], lines[end].offset + line(end).length - item[3].length), chips: [] });
-        } else if (startsBlock(line(end)) && !/^\s/.test(line(end))) {
+        } else if (startsBlock(line(end)) && !indentedLinePattern.test(line(end))) {
           break;
         } else {
           unsupported = true;
@@ -832,14 +844,14 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
         end++;
       }
       let continuation = end;
-      while (continuation < lines.length && !line(continuation).trim()) continuation++;
-      if (continuation < lines.length && /^\s/.test(line(continuation))) {
+      while (continuation < lines.length && !trimMarkdownWhitespace(line(continuation))) continuation++;
+      if (continuation < lines.length && indentedLinePattern.test(line(continuation))) {
         unsupported = true;
         let cursor = continuation;
         let close = null;
         while (cursor < lines.length) {
           const value = line(cursor);
-          if (!value.trim()) {
+          if (!trimMarkdownWhitespace(value)) {
             if (close) {
               cursor++;
               continue;
@@ -847,7 +859,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
             break;
           }
           const logical = unquote(value);
-          const trimmed = logical.trimStart();
+          const trimmed = trimMarkdownStart(logical);
           if (close) {
             if (close.test(trimmed)) close = null;
             cursor++;
@@ -859,7 +871,7 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
             cursor++;
             continue;
           }
-          if (startsBlock(trimmed) && !/^\s/.test(value)) break;
+          if (startsBlock(trimmed) && !indentedLinePattern.test(value)) break;
           cursor++;
         }
         end = cursor;
@@ -890,8 +902,8 @@ function markdownBlocks(markdown, revision, origin, presentation = "rich") {
     }
     let end = index + 1;
     const unsupported = startsRaw(text) || Boolean(heading) || /^ {0,3}[=\-]+ *$/.test(line(end));
-    while (line(end).trim() && !fenceEnd(line(end))
-      && (unsupported ? !(startsBlock(line(end)) && !/^\s/.test(line(end))) : !startsBlock(line(end)))) end++;
+    while (trimMarkdownWhitespace(line(end)) && !fenceEnd(line(end))
+      && (unsupported ? !(startsBlock(line(end)) && !indentedLinePattern.test(line(end))) : !startsBlock(line(end)))) end++;
     // Keep setext headings, reference definitions, HTML, multiline hard breaks and
     // GFM syntax outside the supported profile visible in their original spelling.
     const paragraph = lines.slice(index, end);
@@ -968,7 +980,7 @@ function sourceOffsets(node, source) {
 }
 
 function normalizeInteriorTrailingSpaces(source, raw, offsets, display, appended) {
-  if (!appended.trim()) return source;
+  if (!trimMarkdownWhitespace(appended)) return source;
   const trailing = display.match(/[ \t]+$/)?.[0] || "";
   if (!trailing) return source;
   const trailingStart = display.length - trailing.length;
@@ -1033,14 +1045,16 @@ function escapeRichValue(value, node, markdown, { edgeStart = false, edgeEnd = f
   const lineStart = Math.max(markdown.lastIndexOf("\n", node.start - 1), markdown.lastIndexOf("\r", node.start - 1)) + 1;
   const linePrefix = markdown.slice(lineStart, node.start);
   const atLineStart = linePrefix === "";
-  const atListItemStart = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?: +|\t+)$/.test(linePrefix);
+  const atListItemStart = listPrefixPattern.test(linePrefix);
   if (node.kind === "text" && edgeStart && (atLineStart || atListItemStart)) {
-    const ordered = value.match(/^\d{1,9}([.)]) /);
+    const ordered = value.match(/^\d{1,9}([.)])(?=[ \t]|$)/);
     if (ordered) {
       const marker = ordered[1];
       const position = ordered[0].indexOf(marker);
       escaped = escaped.slice(0, position) + `\\${marker}` + escaped.slice(position + 1);
-    } else if (/^(?:#{1,6}|[-+>]) /.test(value) && !escaped.startsWith("\\")) {
+    } else if ((headingPattern.test(value) || headingMarkerPattern.test(value)
+      || listPattern.test(value) || listMarkerOnlyPattern.test(value) || /^>(?:[ \t]|$)/.test(value))
+      && !escaped.startsWith("\\")) {
       escaped = `\\${escaped}`;
     }
   }
@@ -1163,16 +1177,18 @@ function protectRichMarker(source, value, node, markdown) {
   if (node.kind !== "text") return source;
   const lineStart = Math.max(markdown.lastIndexOf("\n", node.start - 1), markdown.lastIndexOf("\r", node.start - 1)) + 1;
   const linePrefix = markdown.slice(lineStart, node.start);
-  const atContentStart = linePrefix === "" || /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?: +|\t+)$/.test(linePrefix);
+  const atContentStart = linePrefix === "" || listPrefixPattern.test(linePrefix);
   if (!atContentStart) return source;
   // Protect the prefix as soon as it could become a block marker.  A first
   // `#`, `+`, or `-` is already parsed as raw Markdown, and an ordered
   // delimiter becomes raw before its following space is typed.  Looking at
   // the whole proposed run keeps the first keystroke in the same paragraph.
-  const ordered = value.match(/^\d+([.)])(?: |$)/);
+  const ordered = value.match(/^\d{1,9}([.)])(?=[ \t]|$)/);
   const marker = ordered
     ? { offset: ordered[0].indexOf(ordered[1]) }
-    : value.match(/^(?:#{1,6}|[-*+>])(?: |$)/) ? { offset: 0 } : null;
+    : headingPattern.test(value) || headingMarkerPattern.test(value)
+      || listPattern.test(value) || listMarkerOnlyPattern.test(value)
+      || /^>(?:[ \t]|$)/.test(value) ? { offset: 0 } : null;
   if (!marker || source[marker.offset] === "\\") return source;
   return source.slice(0, marker.offset) + "\\" + source.slice(marker.offset);
 }
