@@ -199,9 +199,6 @@ function step(state, action) {
           targetOwner: state.pendingTarget.dismissed ? null : state.pendingTarget.owner,
         });
       }
-      if (!pending && state.sourceRequestId !== null && !sourceSeekOwnsNativeEvent(state)) {
-        return out({ ...next, sourceRequestId: null });
-      }
       return out({
         ...next,
         target: pending?.dismissed ? null : (pending?.id || next.current),
@@ -222,7 +219,11 @@ function step(state, action) {
       // write is a newer time-only seek and supersedes the old explicit row identity.
       return out(state.pendingTarget.owedStarts > 0
         ? { ...state, pendingTarget: { ...state.pendingTarget, owedStarts: state.pendingTarget.owedStarts - 1 } }
-        : { ...state, pendingTarget: null, sourceRequestId: null });
+        : {
+          ...state,
+          pendingTarget: null,
+          sourceRequestId: null,
+        });
     }
     case "playback/target-requested": {
       const id = sourceRow(rowsOf(action.shown), action.segmentId, action.startSeconds);

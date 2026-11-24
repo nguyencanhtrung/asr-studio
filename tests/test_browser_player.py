@@ -1248,6 +1248,44 @@ def test_delayed_saved_source_card_does_not_override_newer_timestamp_seek(
     )
 
 
+def test_new_notes_source_after_native_seek_start_keeps_its_reveal(live, signed_in, tmp_path):
+    meeting_id, _, snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(reduced_motion="reduce")
+    open_notes(live, page, meeting_id)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').readyState >= 1")
+    chip = page.locator(CHIP).filter(has_text="00:25")
+    expect(chip).to_be_visible()
+    page.locator("#meeting-tab-transcript").click()
+    held = []
+    snapshot_url = f"{live.url}/api/notes-sources/{snapshot['id']}"
+    page.route(snapshot_url, lambda route: held.append(route))
+    with page.expect_request(snapshot_url):
+        chip.evaluate(
+            """chip => {
+              const audio = document.querySelector('#meeting-audio');
+              window.reverseSourceTrace = [];
+              audio.addEventListener('seeking', () => {
+                window.reverseSourceTrace.push(['seeking', audio.currentTime]);
+                document.querySelector('#meeting-tab-notes').click();
+                Array.from(document.querySelectorAll('#notes-preview a'))
+                  .find(link => link.textContent.includes('00:25')).click();
+              }, {once: true});
+              audio.addEventListener('seeked', () => {
+                window.reverseSourceTrace.push(['seeked', audio.currentTime]);
+              }, {once: true});
+              audio.currentTime = 20;
+            }"""
+        )
+    page.wait_for_function("() => window.reverseSourceTrace.some(([type]) => type === 'seeked')")
+    assert held
+    held[0].continue_()
+    expect(page.locator("#notes-source-text")).to_have_text(snapshot["segments"][25]["text"])
+    page.locator("#meeting-tab-transcript").click()
+    page.locator("#transcript-search").fill("No such local row")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[25])
+
+
 def test_closing_older_notes_source_keeps_newer_hidden_seek_recovery(live, signed_in, tmp_path):
     meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
     _, page = signed_in(viewport={"width": 1280, "height": 844})

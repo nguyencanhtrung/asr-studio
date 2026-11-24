@@ -771,6 +771,29 @@ test("a stale source snapshot may mark provenance without taking a newer reveal 
   assert.deepEqual(state.ops, [], "stale source provenance does not enqueue a reveal");
 });
 
+test("an older native seeked does not invalidate a source reserved after its seeking", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, {
+    type: "playback/seeking", shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/source-requested", sourceRequestId: 7, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/seeked", time: 20, paused: true, seeking: false, shown,
+  }).state;
+  assert.equal(state.sourceRequestId, 7);
+});
+
+test("a genuinely newer unowned native seeking supersedes a reserved source", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, {
+    type: "playback/source-requested", sourceRequestId: 7, shown,
+  }).state;
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.equal(state.sourceRequestId, null);
+});
+
 test("a native time-only seek still resolves the current row without an explicit target", () => {
   const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
   const state = reduce(initialState, { type: "playback/seeked", time: 3, paused: true, shown }).state;
