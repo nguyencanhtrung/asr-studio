@@ -1925,6 +1925,31 @@ test("rich marker protection applies at list-item content starts", async () => {
   assert.equal(saved(env).value, "# Notes\n\n- \\## one\n3. 1\\. two\n");
 });
 
+test("rich edits preserve heading and list blocks containing U+2028/U+2029", async () => {
+  const cases = [
+    ["# Notes\n\n## Decisions\u2028 today\n\n- item\n", "Decisions\u2028 today", "Decisions\u2028 todays", "heading", 2],
+    ["# Notes\n\n1. Alice owns\u2028 budget\n2. tail\n", "Alice owns\u2028 budget", "Alice owns\u2028 budgets", "list", 1],
+    ["# Notes\n\n- Alice\u2029 owns\n- tail\n", "Alice\u2029 owns", "Alice\u2029 ownss", "list", 1],
+  ];
+  for (const [markdown, before, value, kind, level] of cases) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const work = selectView(env.state()).savedWork;
+    const block = work.blocks.find((candidate) => candidate.kind === kind
+      && blockRuns(candidate).some((node) => node.text === before));
+    assert.ok(block);
+    if (kind === "heading") assert.equal(block.level, level);
+    else assert.equal(block.items.length, 2);
+    const runs = work.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => node.text === before);
+    assert.notEqual(index, -1);
+    env.dispatch("rich-edited", { index, before, value });
+    assert.equal(saved(env).value, markdown.replace(before, value));
+    assert.equal(selectView(env.state()).savedWork.blocks.find((candidate) => candidate.kind === kind).kind, kind);
+  }
+});
+
 test("stale saved reads cannot update revisions, copy, export or send an expired-session redirect after switching away and back", async () => {
   const env = setup();
   await opened(env, { revisions: [revision(), revision({ id: "r2" })] });

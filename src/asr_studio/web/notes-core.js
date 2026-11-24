@@ -478,8 +478,11 @@ function citationChip(revision, source, group = "") {
 }
 
 const escapedPunctuation = /[!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-]/;
-const headingPattern = /^(#{1,6}) +([^ ].*)$/;
-const listPattern = /^( {0,3})([-*+]|\d{1,9}[.)])(?: +|\t+)([^ \t].*)$/;
+// A Markdown line is split only on CR/LF above.  JavaScript's `.` excludes
+// U+2028/U+2029, but CommonMark treats those code points as ordinary inline
+// content, so marker lines containing them must remain headings/list items.
+const headingPattern = /^(#{1,6}) +([^ ][^]*)$/;
+const listPattern = /^( {0,3})([-*+]|\d{1,9}[.)])(?: +|\t+)([^ \t][^]*)$/;
 const lineEnding = /\r\n?|\n/;
 const markdownWhitespace = /^[\t\n\f\r\p{Zs}]+|[\t\n\f\r\p{Zs}]+$/gu;
 
