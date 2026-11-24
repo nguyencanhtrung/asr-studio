@@ -588,3 +588,36 @@ test("actions of other slices change nothing here", () => {
   env.send("task/poll-loaded");
   assert.equal(env.state(), before);
 });
+
+test("explicit seek and source targets keep real IDs independently of filtered rendering", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r3", startSeconds: 7, shown }).state;
+  assert.equal(state.target, "r3");
+  assert.equal(state.mark, "r3");
+  assert.equal(state.ops.at(-1).id, "r3");
+  state = reduce(state, { type: "playback/mark-requested", segmentId: "old-id", startSeconds: 13, shown }).state;
+  assert.equal(state.target, "r4");
+  state = reduce(state, { type: "playback/mark-requested", segmentId: null, shown }).state;
+  assert.equal(state.target, null);
+  state = reduce(state, { type: "playback/seek-requested", seekId: "seek", meetingId: "m1", audioMeetingId: "m1", ready: true, startSeconds: 7, shown }).state;
+  state = reduce(state, { type: "playback/seek-applied", meta: { seekId: "seek" }, value: { time: 7, paused: true }, shown }).state;
+  assert.equal(state.target, "r3");
+  assert.deepEqual(state.active, ["r3"]);
+  assert.equal(state.seekDone.ok, true);
+  for (const [time, expected] of [[13, "r4"], [11, null], [7, "r3"]]) {
+    state = reduce(state, { type: "playback/seeked", time, paused: true, shown }).state;
+    assert.equal(state.target, expected);
+  }
+  state = reduce(state, { type: "playback/meeting-left", kind: "switch" }).state;
+  assert.equal(state.target, null);
+});
+
+test("an explicit overlapping source ID survives the seek and its native acknowledgement", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/seek-requested", seekId: "overlap", meetingId: "m1", segmentId: "r2", startSeconds: 3, audioMeetingId: "m1", ready: true, shown }).state;
+  state = reduce(state, { type: "playback/seek-applied", meta: { seekId: "overlap" }, value: { time: 3, paused: true }, shown }).state;
+  assert.deepEqual(state.active, ["r1", "r2"]);
+  assert.equal(state.target, "r2");
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, shown }).state;
+  assert.equal(state.target, "r2");
+});

@@ -38,6 +38,9 @@ const KEY = { mutation: "transcript/mutation", reload: "transcript/reload", copy
 const CONFLICTS = ["source_version_changed", "current_generation_changed"];
 
 export const initialState = {
+  query: "", // local search of saved text, speaker identity and timestamps
+  reviewOnly: false, // existing flags; never a processing or verified status
+  reviewCursor: null, // last explicitly navigated review row
   selected: null, // id of the generation on screen
   lastCurrent: null, // id of the current generation when the page last looked: a new one takes the selection
   installed: 0, // the installRev of history-core the drafts were last reconciled for
@@ -106,6 +109,42 @@ function synced(state, transcription) {
 
 export const isEditing = (state, generationId, segmentId) => Boolean(state.editing && state.editing.generationId === generationId && state.editing.segmentId === segmentId);
 export const isRenaming = (state, generationId, speakerId) => Boolean(state.renaming && state.renaming.generationId === generationId && state.renaming.speakerId === speakerId);
+
+// Review flags are evidence to listen again, not a confidence score or a persisted review decision.
+export const needsReview = (segment) => Boolean(segment.uncertain)
+  || (Array.isArray(segment.review_reasons) && segment.review_reasons.length > 0);
+
+// Same timestamp notation as the row, including hours and hundredths of a second.
+export function searchTimestamp(secondsValue) {
+  const milliseconds = Math.max(0, Math.round((Number(secondsValue) || 0) * 1000));
+  const hours = Math.floor(milliseconds / 3_600_000);
+  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
+  const seconds = Math.floor((milliseconds % 60_000) / 1000);
+  const fraction = Math.floor((milliseconds % 1000) / 10);
+  const clock = hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${minutes}:${String(seconds).padStart(2, "0")}`;
+  return `${clock}.${String(fraction).padStart(2, "0")}`;
+}
+
+function timestampVariants(secondsValue) {
+  const timestamp = searchTimestamp(secondsValue);
+  const withoutFraction = timestamp.replace(/\.\d+$/, "");
+  const padded = timestamp.padStart(8, "0");
+  return [timestamp, withoutFraction, padded, padded.replace(/\.\d+$/, "")];
+}
+
+export function selectSegments(state, generation) {
+  const segments = generation?.segments || [];
+  const names = new Map((generation?.speakers || []).map((speaker) => [speaker.speaker_id, speaker.display_name]));
+  const query = state.query.trim().toLocaleLowerCase();
+  const matching = segments.filter((segment) => !query || [
+    segment.text, segment.speaker_id, names.get(segment.speaker_id),
+    ...timestampVariants(segment.start_seconds), ...timestampVariants(segment.end_seconds),
+  ].some((value) => String(value ?? "").toLocaleLowerCase().includes(query)));
+  const review = matching.filter(needsReview);
+  return { segments: state.reviewOnly ? review : matching, review, total: segments.length };
+}
 
 // ---- drafts ----
 
@@ -762,12 +801,32 @@ function step(state, action) {
       return out(repaint(next));
     }
     case "transcript/meeting-switched":
-      return out(repaint({ ...state, selected: null, lastCurrent: null, error: null, editing: null, renaming: null, addName: "", ops: [] }));
+      return out(repaint({ ...state, selected: null, lastCurrent: null, error: null, editing: null, renaming: null, query: "", reviewOnly: false, reviewCursor: null, addName: "", ops: [] }));
     case "transcript/painted":
       return out(state.ops.some((op) => op.n <= action.through) ? { ...state, ops: state.ops.filter((op) => op.n > action.through) } : state);
 
+    case "transcript/query-typed":
+      return out(repaint({ ...state, query: action.value, reviewCursor: null }));
+    case "transcript/review-filter-changed":
+      return out(repaint({ ...state, reviewOnly: Boolean(action.value), reviewCursor: null }));
+    case "transcript/filters-cleared": {
+      const generation = displayed(state, transcriptionOf(shown)).generation;
+      const next = repaint({ ...state, query: "", reviewOnly: false });
+      return out(generation?.segments.some((segment) => segment.id === action.segmentId)
+        ? emit(next, { op: "reveal-segment", id: action.segmentId }) : next);
+    }
+    case "transcript/review-stepped": {
+      const generation = displayed(state, transcriptionOf(shown)).generation;
+      const { review } = selectSegments(state, generation);
+      if (!review.length) return out(state);
+      const index = review.findIndex((segment) => segment.id === state.reviewCursor);
+      const at = index < 0 ? (action.direction < 0 ? review.length - 1 : 0)
+        : (index + (action.direction < 0 ? -1 : 1) + review.length) % review.length;
+      const id = review[at].id;
+      return out(emit({ ...state, reviewCursor: id }, { op: "reveal-segment", id }));
+    }
     case "transcript/generation-chosen":
-      return out(repaint({ ...state, selected: action.id, addName: state.selected !== action.id ? "" : state.addName }));
+      return out(repaint({ ...state, selected: action.id, reviewCursor: null, addName: state.selected !== action.id ? "" : state.addName }));
     case "transcript/segment-edit-opened":
       return out(openEditor(state, action));
     case "transcript/segment-edit-cancelled":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 import uuid
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 from notes_helpers import seed_completed_transcript
 from playwright.sync_api import expect
-from test_browser_history import FIXED_NOW
+from test_browser_history import FIXED_NOW, show_a_past_generation
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 
@@ -881,3 +882,123 @@ def test_player_shows_a_keyboard_focus_ring(live, signed_in, scheme):
     assert ring["left"] >= bar["left"] and ring["right"] <= bar["right"], (ring, bar)
     page.evaluate("document.activeElement.blur()")
     assert strip() != focused  # and it is really painted
+
+
+@pytest.mark.parametrize("target_kind", ["source-id", "source-time", "seek", "native-seek"])
+@pytest.mark.parametrize("generation_kind", ["current", "past"])
+def test_filtered_source_and_saved_seek_reveal_real_row(
+    live, signed_in, target_kind, generation_kind, tmp_path
+):
+    options = {"viewport": MINIMUM, "color_scheme": "dark"} if target_kind == "source-id" else {}
+    page = open_meeting(live, signed_in, **options)
+    if generation_kind == "past":
+        show_a_past_generation(page)
+        page.reload(wait_until="networkidle")
+        page.locator("#generation-selector").select_option("browser-past-generation")
+        page.evaluate(STUB_AUDIO)
+    target = page.locator(".transcript-segment").nth(30)
+    target_id = target.get_attribute("data-segment-id")
+    page.locator("#transcript-search").fill("no matching transcript")
+    page.locator("#transcript-review-only").check()
+    expect(target).to_be_hidden()
+    if target_kind == "seek":
+        assert seek_notes_source(page, 60.5) is True
+        assert page.evaluate("window.__player.time") == 60.5
+    elif target_kind == "native-seek":
+        page.evaluate("""() => {
+          const audio = document.querySelector('#meeting-audio');
+          audio.currentTime = 60.5;
+          audio.dispatchEvent(new Event('seeked'));
+        }""")
+    else:
+        found = page.evaluate(
+            """async ([id, seconds]) => {
+              const { meetingHistory } = await import('/assets/history.js');
+              return meetingHistory.markNotesSource(id, seconds);
+            }""",
+            [target_id if target_kind == "source-id" else "older-source-segment", 60.5],
+        )
+        assert found is True
+    control = page.locator("#transcript-reveal-target")
+    expect(control).to_be_visible()
+    expect(control).to_have_attribute("data-segment-id", target_id)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    screenshots = Path(os.environ.get("ASR_ISSUE_257_SCREENSHOT_DIR", tmp_path))
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=screenshots / f"hidden-{generation_kind}-{target_kind}.png", full_page=True
+    )
+    control.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator("#transcript-search")).to_have_value("")
+    expect(target).to_be_visible()
+    expect(page.locator("#transcript-review-only")).not_to_be_checked()
+    expect(target.locator(".segment-timestamp")).to_be_focused()
+    expect(control).to_be_hidden()
+    if target_kind in {"seek", "native-seek"}:
+        expect(target).to_have_attribute("aria-current", "true")
+    else:
+        expect(target).to_have_class("transcript-segment is-notes-source")
+        expect(target.locator(".segment-source-mark")).to_have_text("Nguồn của mục notes")
+
+
+def test_stable_playback_samples_do_not_repaint_transcript_filters(live, signed_in):
+    page = open_meeting(live, signed_in)
+    page.locator("#transcript-search").fill("Segment 30")
+    counts = page.evaluate(
+        """() => {
+          const list = document.querySelector('#transcript-segments');
+          const observer = new MutationObserver(() => {});
+          observer.observe(list, { attributes: true, subtree: true,
+            attributeFilter: ['hidden', 'data-filter-key'] });
+          for (let index = 0; index < 20; index++) {
+            window.__player.time = 60.5;
+            document.querySelector('#meeting-audio').dispatchEvent(new Event('timeupdate'));
+          }
+          const records = observer.takeRecords();
+          observer.disconnect();
+          return records.length;
+        }"""
+    )
+    assert counts == 0
+    expect(page.locator('.transcript-segment[aria-current="true"]')).to_have_count(1)
+    expect(page.locator(".transcript-segment:visible")).to_have_count(1)
+
+
+def test_filtered_seek_keeps_exact_source_id_when_segments_overlap(live, signed_in):
+    page = open_meeting(live, signed_in)
+    meeting_id = page.locator("#meeting-audio").get_attribute("data-meeting-id")
+
+    def overlap(route):
+        response = route.fetch()
+        payload = response.json()
+        # Two speakers overlap at the saved source timestamp. The source names the later row.
+        payload["transcription"]["generation"]["segments"][29]["start_seconds"] = 60
+        payload["transcription"]["generation"]["segments"][29]["end_seconds"] = 62
+        route.fulfill(response=response, json=payload)
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}", overlap)
+    page.reload(wait_until="networkidle")
+    page.evaluate(STUB_AUDIO)
+    target = page.locator(".transcript-segment").nth(30)
+    target_id = target.get_attribute("data-segment-id")
+    page.locator("#transcript-search").fill("no matching source")
+    assert page.evaluate(
+        """async ([meetingId, segmentId]) => {
+          const { meetingHistory } = await import('/assets/history.js');
+          return meetingHistory.seekNotesSource({
+            meetingId, snapshotId: 'saved', segmentId, startSeconds: 60.5,
+          });
+        }""",
+        [meeting_id, target_id],
+    )
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", target_id
+    )
+    # The native seeked event that follows currentTime must not replace the chosen overlapping ID.
+    page.locator("#meeting-audio").dispatch_event("seeked")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", target_id
+    )
+    page.locator("#transcript-reveal-target").click()
+    expect(target.locator(".segment-timestamp")).to_be_focused()

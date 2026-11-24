@@ -5677,3 +5677,234 @@ def test_extension_recording_status_is_visible_and_retries_without_playback_or_a
     expect(page.locator("#recording-status")).to_be_hidden()
     expect(page.locator("#recording-status-retry")).to_be_hidden()
     assert page.locator("#meeting-audio").evaluate("audio => audio.controls") is True
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1280, 320])
+def test_transcript_filters_review_and_generation_safe_open_draft(
+    live, signed_in, scheme, width, tmp_path
+):
+    _context, page = signed_in(color_scheme=scheme, viewport={"width": width, "height": 844})
+    show_a_past_generation(page)
+    meeting_id, generation_id = open_reading_meeting(live, page)
+    selector_box = page.locator("#generation-selector").bounding_box()
+    assert selector_box is not None
+    assert selector_box["x"] >= 0
+    assert selector_box["x"] + selector_box["width"] <= width
+    writes = []
+    page.on(
+        "request",
+        lambda request: (
+            writes.append(request.url)
+            if request.method in {"PATCH", "POST"} and "/transcript-" in request.url
+            else None
+        ),
+    )
+    search = page.locator("#transcript-search")
+    rows = page.locator(".transcript-segment:visible")
+    search.fill("ALICE")
+    expect(rows).to_have_count(1)
+    expect(rows.first.locator(".segment-text")).to_contain_text("Costs")
+    search.fill("00:07")
+    expect(rows).to_have_count(1)
+    search.fill("0:07")
+    expect(rows).to_have_count(1)
+    expect(rows.first).to_have_attribute("data-segment-id", "3" * 32)
+    search.fill("launch")
+    expect(rows).to_have_count(1)
+    expect(page.locator("#transcript-review-next")).to_be_disabled()
+    search.fill("<script>alert(1)</script>")
+    expect(rows).to_have_count(0)
+    expect(page.locator("#transcript-filter-status")).to_contain_text("Không có đoạn phù hợp")
+    expect(search).to_be_focused()
+    assert_focus_ring(page)
+    page.locator("#transcript-clear-filters").click()
+    expect(search).to_be_focused()
+    page.locator("#transcript-review-only").check()
+    expect(rows).to_have_count(2)
+    page.locator("#transcript-review-next").focus()
+    page.keyboard.press("Enter")
+    expect(rows.first.locator(".segment-timestamp")).to_be_focused()
+    page.locator("#transcript-review-prev").click()
+    expect(rows.last.locator(".segment-timestamp")).to_be_focused()
+    expect(rows.last.locator(".segment-review-cue")).to_contain_text("Chưa xác định người nói")
+    page.locator("#transcript-clear-filters").click()
+    first = page.locator('.transcript-segment[data-segment-id="' + "1" * 32 + '"]')
+    first.locator(".segment-edit-button").click()
+    editor = first.locator("textarea")
+    editor.fill("Unsaved <script>local draft</script>")
+    search.fill("Costs")
+    expect(first).to_be_hidden()
+    expect(rows).to_have_count(1)
+    page.locator("#generation-selector").select_option("browser-past-generation")
+    expect(page.locator(".segment-edit-button")).to_have_count(0)
+    page.locator("#generation-selector").select_option(generation_id)
+    expect(first).to_be_hidden()
+    page.locator("#transcript-clear-filters").click()
+    expect(editor).to_have_value("Unsaved <script>local draft</script>")
+    editor.focus()
+    expect(editor).to_be_focused()
+    assert writes == []
+    saved = page.request.get(f"{live.url}/api/meetings/{meeting_id}").json()
+    saved_text = saved["transcription"]["generation"]["segments"][0]["text"]
+    assert saved_text == READING_SEGMENTS[0]["text"]
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    screenshots = Path(os.environ.get("ASR_ISSUE_257_SCREENSHOT_DIR", tmp_path))
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=screenshots / f"filters-{width}-{scheme}.png", full_page=True)
+    editor.press("Escape")
+    expect(first.locator(".segment-edit-button")).to_be_focused()
+    expect(first.locator(".segment-text")).to_have_text(READING_SEGMENTS[0]["text"])
+
+
+def test_filtered_edits_save_and_speaker_changes_keep_controls_reachable(live, browser_context):
+    _context, page = browser_context
+    open_reading_meeting(live, page)
+    search = page.locator("#transcript-search")
+    search.fill("launch")
+    first = page.locator(".transcript-segment").first
+    first.locator(".segment-edit-button").click()
+    editor = first.locator("textarea")
+    editor.fill("Changed saved content")
+    editor.press("Control+Enter")
+    expect(first).to_be_hidden()
+    expect(page.locator("#transcript-mutation-status")).to_contain_text("Đã lưu.")
+    expect(search).to_be_focused()
+    page.locator("#transcript-clear-filters").click()
+    expect(first.locator(".segment-text")).to_have_text("Changed saved content")
+    search.fill("Alice")
+    chip = speaker_chip(page, 1)
+    chip.click()
+    rename = page.locator("form[data-speaker-name] input")
+    rename.fill("New Name")
+    rename.press("Enter")
+    expect(page.locator("#speaker-catalog-list")).to_contain_text("New Name")
+    expect(page.locator(".transcript-segment:visible")).to_have_count(0)
+    search.fill("New Name")
+    second = page.locator(".transcript-segment").nth(1)
+    expect(second).to_be_visible()
+    second.locator(".segment-edit-button").click()
+    second.locator("textarea").fill("Uncommitted assignment draft")
+    second.locator(".segment-speaker-select").select_option("SPEAKER_00")
+    expect(second).to_be_hidden()
+    expect(search).to_be_focused()
+    page.locator("#transcript-clear-filters").click()
+    expect(second.locator("textarea")).to_have_value("Uncommitted assignment draft")
+    second.locator("textarea").press("Escape")
+    expect(second.locator(".segment-text")).to_have_text(READING_SEGMENTS[1]["text"])
+    # Adding and renaming identities still use the catalog while the list has no matches.
+    search.fill("unfindable")
+    page.locator("#speaker-add-name").fill("New participant")
+    page.locator("#speaker-add-form button").click()
+    expect(page.locator("#speaker-catalog-list")).to_contain_text("New participant")
+    expect(page.locator(".transcript-segment:visible")).to_have_count(0)
+
+
+def test_filtered_transcript_rerun_keeps_ready_language_and_community_contract(
+    live, browser_context
+):
+    from test_browser_asr_model import finish_run
+
+    _context, page = browser_context
+    meeting_id, old_generation = open_reading_meeting(live, page)
+    first = page.locator(".transcript-segment").first
+    first.locator(".segment-edit-button").click()
+    first.locator("textarea").fill("Manual revision before rerun")
+    first.locator("textarea").press("Control+Enter")
+    expect(first.locator(".segment-text")).to_have_text("Manual revision before rerun")
+    data_dir = live.settings.data_dir
+    default_model = _prepare_browser_asr_model(data_dir.parent / "whisper-large-v3")
+    pho = _prepare_browser_asr_model(data_dir.parent / "pho-whisper-large")
+    object.__setattr__(live.settings, "asr_gpu_model_path", default_model)
+    object.__setattr__(live.settings, "asr_phowhisper_model_path", pho)
+    object.__setattr__(
+        live.settings,
+        "diarization_model_path",
+        prepare_diarization_model(data_dir.parent / "diarization-model"),
+    )
+    lock = acquire_worker_lock(data_dir)
+    assert lock is not None
+    write_runtime_profile(data_dir, RuntimeProfile("cuda", "float16", default_model))
+    write_heartbeat(data_dir, "idle")
+    bodies = []
+    page.on(
+        "request",
+        lambda request: (
+            bodies.append(request.post_data_json)
+            if request.method == "POST" and request.url.endswith("/api/tasks")
+            else None
+        ),
+    )
+    try:
+        page.reload(wait_until="networkidle")
+        page.locator("#transcript-search").fill("Manual revision")
+        model = page.locator("#transcription-model")
+        model.select_option("whisper-small")
+        expect(page.get_by_role("button", name="Chạy lại", exact=True)).to_be_disabled()
+        assert bodies == []
+        model.select_option("pho-whisper-large")
+        page.locator("#transcription-language").select_option("vi")
+        page.get_by_role("button", name="Chạy lại", exact=True).click()
+        expect(page.locator("#cancel-transcription")).to_be_visible()
+        assert len(bodies) == 1
+        assert set(bodies[0]) == {"meeting_id", "request_id", "asr_model", "language_hint"}
+        assert bodies[0]["asr_model"] == "pho-whisper-large"
+        assert bodies[0]["language_hint"] == "vi"
+        assert bodies[0]["meeting_id"] == meeting_id
+        new_generation = finish_run(live, "New rerun output")
+        expect(page.locator("#generation-title")).to_have_text("Transcript #2", timeout=8_000)
+        expect(page.locator("#generation-summary")).to_have_text("1 đoạn")
+        details = page.locator("#generation-details")
+        expect(details).to_have_js_property("open", False)
+        summary = details.locator("summary")
+        summary.focus()
+        summary.press("Enter")
+        expect(details).to_have_js_property("open", True)
+        expect(page.locator("#generation-meta")).to_contain_text("Community-1")
+        expect(page.locator(".transcript-segment:visible")).to_have_count(0)
+        page.locator("#generation-selector").select_option(old_generation)
+        expect(page.locator(".segment-text:visible")).to_have_text("Manual revision before rerun")
+        expect(page.locator("#generation-mode")).to_have_text("Bản lịch sử · Chỉ đọc.")
+        page.locator("#generation-selector").select_option(new_generation)
+        page.locator("#transcript-clear-filters").click()
+        expect(page.locator(".segment-text:visible")).to_have_text("New rerun output")
+    finally:
+        os.close(lock)
+
+
+def test_english_transcript_search_and_no_results_are_translated(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 844})
+    page.evaluate("localStorage.setItem('asr-studio:lang', 'en')")
+    open_reading_meeting(live, page)
+
+    search = page.get_by_role("searchbox", name="Search text, speaker, or timestamp")
+    expect(page.locator("#generation-details summary")).to_have_text("Transcript details")
+    expect(page.locator("#generation-summary")).to_have_text("3 seg. · 2 to review")
+    search.fill("no such transcript text")
+    expect(page.locator("#transcript-filter-status")).to_have_text(
+        "No matching segments. Clear or change the filters."
+    )
+    expect(page.get_by_role("button", name="Clear filters")).to_be_visible()
+
+
+def test_review_navigation_keeps_focus_when_recording_is_unavailable(live, browser_context):
+    _context, page = browser_context
+    meeting_id, _generation = open_reading_meeting(live, page)
+
+    def unavailable(route):
+        response = route.fetch()
+        payload = response.json()
+        payload["recording"]["state"] = "archived"
+        route.fulfill(response=response, json=payload)
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}", unavailable)
+    page.reload(wait_until="networkidle")
+    expect(page.locator(".segment-timestamp").first).to_be_disabled()
+    page.locator("#transcript-review-next").focus()
+    page.keyboard.press("Enter")
+    second = page.locator(".transcript-segment").nth(1)
+    expect(second).to_be_focused()
+    expect(second.locator(".segment-review-cue")).to_contain_text("Nhận dạng chưa chắc")
+    assert_focus_ring(page)
+    page.locator("#transcript-review-prev").click()
+    expect(page.locator(".transcript-segment").nth(2)).to_be_focused()
