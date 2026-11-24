@@ -998,6 +998,7 @@ def test_filtered_seek_keeps_exact_source_id_when_segments_overlap(live, signed_
         "data-segment-id", target_id
     )
     # The native seeked event that follows currentTime must not replace the chosen overlapping ID.
+    page.locator("#meeting-audio").dispatch_event("seeking")
     page.locator("#meeting-audio").dispatch_event("seeked")
     expect(page.locator("#transcript-reveal-target")).to_have_attribute(
         "data-segment-id", target_id
