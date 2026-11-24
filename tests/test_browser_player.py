@@ -1089,7 +1089,11 @@ def test_playing_timestamp_click_keeps_target_through_delayed_trusted_seeked(
     target = page.locator(".transcript-segment").nth(4)
     earlier_id = earlier.get_attribute("data-segment-id")
     target_id = target.get_attribute("data-segment-id")
-    assert target.get_attribute("data-start-seconds") == earlier.get_attribute("data-start-seconds") == "8"
+    assert (
+        target.get_attribute("data-start-seconds")
+        == earlier.get_attribute("data-start-seconds")
+        == "8"
+    )
     if older_mark:
         assert page.evaluate(
             """async segmentId => {
@@ -1124,17 +1128,22 @@ def test_new_player_seek_supersedes_outstanding_row_seek(live, signed_in, tmp_pa
     audio.evaluate("""node => {
       window.actualSeekTrace = [];
       for (const type of ['seeking', 'seeked']) {
-        node.addEventListener(type, event => window.actualSeekTrace.push([type, event.isTrusted, node.currentTime]));
+        node.addEventListener(type, event => window.actualSeekTrace.push([
+          type, event.isTrusted, node.currentTime,
+        ]));
       }
       node.addEventListener('seeking', () => { node.currentTime = 10.5; }, {once: true});
     }""")
     row.locator(".segment-timestamp").click()
     page.wait_for_function(
-        "() => window.actualSeekTrace.some(([type, trusted, time]) => type === 'seeked' && trusted && time >= 10.5)"
+        "() => window.actualSeekTrace.some("
+        "([type, trusted, time]) => type === 'seeked' && trusted && time >= 10.5)"
     )
     audio.evaluate("node => node.pause()")
     page.locator("#transcript-search").fill("no matching sources")
-    expect(page.locator("#transcript-reveal-target")).to_have_attribute("data-segment-id", target_id)
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", target_id
+    )
 
 
 def test_closing_older_notes_source_keeps_newer_hidden_seek_recovery(live, signed_in, tmp_path):
