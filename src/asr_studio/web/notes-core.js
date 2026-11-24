@@ -481,6 +481,11 @@ const escapedPunctuation = /[!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-]/;
 const headingPattern = /^(#{1,6}) +([^ ].*)$/;
 const listPattern = /^( {0,3})([-*+]|\d{1,9}[.)])(?: +|\t+)([^ \t].*)$/;
 const lineEnding = /\r\n?|\n/;
+const markdownWhitespace = /^[\t\n\f\r\p{Zs}]+|[\t\n\f\r\p{Zs}]+$/gu;
+
+function trimMarkdownWhitespace(value) {
+  return value.replace(markdownWhitespace, "");
+}
 
 function unescapeMarkdown(value) {
   return value.replace(/\\([!"#$%&'()*+,./:;<=>?@[\]\\^_`{|}~-])|&#(32|9);/g,
@@ -619,8 +624,8 @@ function inlineNodes(text, offset, revision, origin, presentation) {
       }
       const value = text.slice(contentStart, end);
       const unrepresentableCodeEdges = char === "`" && value.length > 1
-        && value.startsWith(" ") && value.endsWith(" ") && value.trim();
-      if (!value || (char !== "`" && value !== value.trim()) || unrepresentableCodeEdges
+        && value.startsWith(" ") && value.endsWith(" ") && trimMarkdownWhitespace(value);
+      if (!value || (char !== "`" && value !== trimMarkdownWhitespace(value)) || unrepresentableCodeEdges
         || !text.startsWith(delimiter, end) || text[end + delimiter.length] === char
         || (char === "_" && (word.test(text[index - 1] || "") || word.test(text[end + delimiter.length] || "")))
         || (char !== "`" && /(^|[^\\])[*_`\[\]<~]/.test(value))) {
@@ -1069,8 +1074,8 @@ function markdownRightFlanking(last, after) {
 // app's rich parser styled while standard Markdown renders literal markers.
 function richEdgesAreFlanking(markdown, node, source, { edgeStart = false, edgeEnd = false } = {}) {
   if (!edgeStart && !edgeEnd || !["strong", "em"].includes(node.kind)) return true;
-  const opening = markdown.slice(0, node.start).match(/[*_]+$/)?.[0] || "";
-  const closing = markdown.slice(node.end).match(/^[*_]+/)?.[0] || "";
+  const opening = markdown.slice(0, node.start).match(/([*_])\1*$/)?.[0] || "";
+  const closing = markdown.slice(node.end).match(/^([*_])\1*/)?.[0] || "";
   if (!opening || !closing) return true;
   const beforeOpening = Array.from(markdown.slice(0, node.start - opening.length)).at(-1) || "";
   const afterClosing = Array.from(markdown.slice(node.end + closing.length))[0] || "";

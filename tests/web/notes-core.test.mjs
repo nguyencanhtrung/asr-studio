@@ -1835,6 +1835,40 @@ test("rich adjacent plain-text edits cannot invalidate emphasis delimiters", asy
   }
 });
 
+test("rich emphasis edge checks use the active delimiter run", async () => {
+  const cases = [
+    ["# Notes\n\nIntro *one*__two__ end\n", "two", "?two"],
+    ["# Notes\n\nIntro **one**_two_ end\n", "two", "?two"],
+    ["# Notes\n\nIntro _one_**two** end\n", "two", "?two"],
+    ["# Notes\n\nIntro *one*__two__ end\n", "one", "one?"],
+  ];
+  for (const [markdown, before, value] of cases) {
+    const env = setup();
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => node.kind !== "text" && node.text === before);
+    assert.notEqual(index, -1, `missing emphasis run ${before}`);
+    env.dispatch("rich-edited", { index, before, value });
+    assert.equal(saved(env).value, markdown.replace(before, value));
+  }
+});
+
+test("rich emphasis parsing uses CommonMark whitespace boundaries", async () => {
+  const cases = ["\u2028bold", "bold\u2028", "\u2029bold", "\ufeffbold", "\u000bbold"];
+  for (const value of cases) {
+    const env = setup();
+    const markdown = "# Notes\n\nHello *bold* world\n";
+    await opened(env, { revisions: [revision({ markdown })] });
+    env.dispatch("mode-chosen", { mode: "rich" });
+    const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+    const index = runs.findIndex((node) => node.kind === "em" && node.text === "bold");
+    assert.notEqual(index, -1);
+    env.dispatch("rich-edited", { index, before: "bold", value });
+    assert.equal(saved(env).value, markdown.replace("*bold*", `*${value}*`));
+  }
+});
+
 test("rich emphasis accepts encoded boundary spaces beside Unicode symbols", async () => {
   const cases = [
     ["# Notes\n\n🦉**bold**world.\n", " bold", "# Notes\n\n🦉**&#32;bold**world.\n"],
