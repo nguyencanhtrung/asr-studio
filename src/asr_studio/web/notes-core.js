@@ -1129,8 +1129,8 @@ function richMarkdownEdit(state, action, revision, draft) {
   const offsets = sourceOffsets(node, raw);
   if (offsets.length !== node.text.length + 1) return null;
   const [first, tail] = sharedEdges(node.text, action.value);
-  const edgeStart = first === 0;
-  const edgeEnd = tail === 0;
+  const edgeStart = first === 0 && /^[ \t]/.test(action.value);
+  const edgeEnd = tail === 0 && /[ \t]$/.test(action.value);
   if (!richEdgeWhitespaceIsFlanking(draft.value, node, { edgeStart, edgeEnd })) return null;
   const changed = action.value.slice(first, action.value.length - tail);
   const escaped = escapeRichValue(changed, node, draft.value, {

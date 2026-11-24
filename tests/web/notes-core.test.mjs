@@ -1786,6 +1786,17 @@ test("rich intraword emphasis rejects boundary whitespace that breaks CommonMark
   assert.equal(selectView(env.state()).savedWork.blocks.flatMap(blockRuns)[index].text, "a b");
 });
 
+test("rich intraword emphasis accepts ordinary edge letters", async () => {
+  const env = setup();
+  const markdown = "# Notes\n\nHello**bold**world.\n";
+  await opened(env, { revisions: [revision({ markdown })] });
+  env.dispatch("mode-chosen", { mode: "rich" });
+  const runs = selectView(env.state()).savedWork.blocks.flatMap(blockRuns);
+  const index = runs.findIndex((node) => node.kind === "strong" && node.text === "bold");
+  env.dispatch("rich-edited", { index, before: "bold", value: "boldX" });
+  assert.equal(saved(env).value, "# Notes\n\nHello**boldX**world.\n");
+});
+
 test("rich deletion encodes newly exposed boundary spaces without rewriting other bytes", async () => {
   const env = setup();
   const markdown = "# Plan A\n\n- one two\n3. one two\n\n| A | B |\n|---|---|\n| x y | z |\n\n**a b**\n\nab words here.\n";

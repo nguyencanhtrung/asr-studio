@@ -292,6 +292,30 @@ def test_rejected_rich_paste_restores_the_pre_input_caret(live, signed_in):
     )
 
 
+def test_rich_rejects_intraword_emphasis_boundary_that_breaks_commonmark(live, signed_in):
+    _context, page = signed_in()
+    markdown = "# Notes\n\nHello**a b**world.\n"
+    _, revision, _, _ = _open_notes(live, page, lambda *_: markdown)
+    page.get_by_role("button", name="Viết", exact=True).click()
+    strong = page.locator('#notes-rich-editor strong[contenteditable="plaintext-only"]')
+    strong.click()
+    page.keyboard.press("Home")
+    page.keyboard.press("Delete")
+    expect(strong).to_have_text("a b")
+    selection = strong.evaluate(
+        """element => {
+            const current = getSelection();
+            return [current.focusNode === element.firstChild, current.focusOffset,
+                document.activeElement === element];
+        }"""
+    )
+    assert selection == [True, 0, True]
+    expect(page.locator("#notes-copy-export-status")).to_contain_text(
+        "Không thể giữ nguyên cấu trúc Markdown"
+    )
+    assert get_note(live.settings.data_dir, revision["id"])["markdown"] == markdown
+
+
 def test_rich_deletion_preserves_supported_runs_when_a_boundary_space_is_exposed(live, signed_in):
     _context, page = signed_in()
     markdown = (
