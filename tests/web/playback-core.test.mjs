@@ -621,3 +621,23 @@ test("an explicit overlapping source ID survives the seek and its native acknowl
   state = reduce(state, { type: "playback/seeked", time: 3, paused: true, shown }).state;
   assert.equal(state.target, "r2");
 });
+
+test("the latest explicit timestamp target wins over an older Notes mark", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+  state = reduce(state, { type: "playback/target-requested", segmentId: "r1", startSeconds: 3, shown }).state;
+  assert.equal(state.mark, "r2");
+  assert.equal(state.target, "r1");
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: false, shown }).state;
+  assert.equal(state.target, "r1");
+  assert.equal(state.pendingTarget, null);
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, shown }).state;
+  assert.equal(state.target, "r1");
+  assert.equal(state.mark, "r2");
+});
+
+test("a native time-only seek still resolves the current row without an explicit target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  const state = reduce(initialState, { type: "playback/seeked", time: 3, paused: true, shown }).state;
+  assert.equal(state.target, "r1");
+});

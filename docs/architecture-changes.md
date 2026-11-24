@@ -19,7 +19,11 @@ This extends ADR 0010's current core/view boundary; no new runner effect, API or
 The generation header keeps a short count summary. Existing model, language, runtime, diarization
 and review-policy values stay available in a native `Chi tiết transcript` disclosure, separate from
 the pipeline's `Chi tiết xử lý` diagnostics and cancel controls.
-See [frontend transitions](frontend-design.md#1110-transcript) and focused transcript/player browser tests.
+See [frontend transitions](frontend-design.md#1110-transcript), focused transcript/player browser tests,
+and the committed [desktop light](evidence/issue-257/hidden-target-1280-light.png),
+[desktop dark](evidence/issue-257/hidden-target-1280-dark.png),
+[phone light](evidence/issue-257/hidden-target-320-light.png), and
+[phone dark](evidence/issue-257/hidden-target-320-dark.png) recovery captures.
 
 ## #97 — Attribute quadratic clustering memory and document the RAM budget
 

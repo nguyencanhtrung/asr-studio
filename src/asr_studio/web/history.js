@@ -3024,6 +3024,7 @@ $("#transcript-segments").addEventListener("click", (event) => {
   const seconds = Number(timestamp.dataset.seekSeconds);
   if (!Number.isFinite(seconds) || seconds < 0) return;
   audio.currentTime = seconds;
+  dispatch({ type: "playback/target-requested", segmentId: timestamp.closest(".transcript-segment").dataset.segmentId, startSeconds: seconds, ...audioFacts() });
   updateActiveTranscriptIntervals();
   const playback = audio.play();
   if (playback && typeof playback.catch === "function") playback.catch(() => {});

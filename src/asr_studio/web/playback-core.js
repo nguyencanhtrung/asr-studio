@@ -28,6 +28,7 @@ export const initialState = {
   lastManual: null, // clock of the last scroll the user made (null: none yet)
   ownUntil: 0, // a scroll event up to this clock is ours, not the user's
   target: null, // real row of the last explicit source jump or seek, even when filtered out
+  pendingTarget: null, // { id, meetingId, generationId, startSeconds }: one native seeked acknowledgement
   mark: null, // id of the row the open notes source names
   seek: null, // the seek waiting for the audio metadata: { id, ids, meetingId, startSeconds, generationId }; ids: every seek joined to it
   seekDone: null, // { id, ids, ok }: how the last seek ended; ok holds for every id in ids
@@ -99,8 +100,15 @@ function sample(state, action) {
 
 function sampleTarget(state, action) {
   const next = sample(state, action);
-  const preferred = action.targetId || [state.mark, state.target].find((id) => next.active.includes(id));
+  const preferred = action.targetId || [state.target, state.mark].find((id) => next.active.includes(id));
   return { ...next, target: preferred || next.current };
+}
+
+function sameNativeTarget(target, action) {
+  return target
+    && target.meetingId === action.shown?.id
+    && target.generationId === action.shown?.generationId
+    && Math.abs((Number(action.time) || 0) - target.startSeconds) < 0.05;
 }
 
 const finishSeek = (state, ok) => ({ ...state, seek: null, seekDone: { id: state.seek.id, ids: state.seek.ids, ok } });
@@ -141,8 +149,21 @@ function step(state, action) {
   switch (action.type) {
     case "playback/sampled":
       return out(sample(state, action));
-    case "playback/seeked":
-      return out(sampleTarget(state, action));
+    case "playback/seeked": {
+      const next = sample(state, action);
+      const explicit = sameNativeTarget(state.pendingTarget, action) ? state.pendingTarget.id : null;
+      return out({ ...next, target: explicit || next.current, pendingTarget: null });
+    }
+    case "playback/target-requested": {
+      const id = sourceRow(rowsOf(action.shown), action.segmentId, action.startSeconds);
+      return out(bumped({
+        ...state,
+        target: id,
+        pendingTarget: id
+          ? { id, meetingId: action.shown?.id, generationId: action.shown?.generationId, startSeconds: action.startSeconds }
+          : null,
+      }));
+    }
     case "playback/metadata-loaded": {
       const next = sample(state, action);
       const seek = state.seek;
@@ -167,13 +188,20 @@ function step(state, action) {
     }
     case "playback/seek-applied": {
       if (!state.seek || state.seek.id !== action.meta.seekId) return out(state); // an answer for a seek that was replaced
-      return out(sampleTarget(finishSeek(state, true), { ...action.value, now: action.now, shown: action.shown, targetId: state.seek.targetId }));
+      const seek = state.seek;
+      const next = sampleTarget(finishSeek(state, true), { ...action.value, now: action.now, shown: action.shown, targetId: seek.targetId });
+      return out({
+        ...next,
+        pendingTarget: seek.targetId
+          ? { id: seek.targetId, meetingId: seek.meetingId, generationId: seek.generationId, startSeconds: seek.startSeconds }
+          : null,
+      });
     }
     case "playback/seek-failed":
       return state.seek && state.seek.id === action.meta.seekId ? out(finishSeek(state, false)) : out(state);
     case "playback/meeting-left": {
       // The seek belongs to the meeting that was left; the mark only to a meeting we switched away from.
-      const next = { ...state, seek: null, seekDone: null, target: null, mark: action.kind === "switch" ? null : state.mark };
+      const next = { ...state, seek: null, seekDone: null, target: null, pendingTarget: null, mark: action.kind === "switch" ? null : state.mark };
       return out(bumped(next), stopWaits(state.seek));
     }
     case "playback/mark-requested": {

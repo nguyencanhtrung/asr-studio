@@ -1002,3 +1002,64 @@ def test_filtered_seek_keeps_exact_source_id_when_segments_overlap(live, signed_
     )
     page.locator("#transcript-reveal-target").click()
     expect(target.locator(".segment-timestamp")).to_be_focused()
+
+
+@pytest.mark.parametrize("older_mark", [False, True], ids=["no-older-mark", "older-notes-mark"])
+@pytest.mark.parametrize(
+    "scheme,width",
+    [("light", 1280), ("dark", 1280), ("light", 320), ("dark", 320)],
+    ids=["desktop-light", "desktop-dark", "phone-light", "phone-dark"],
+)
+def test_filtered_timestamp_click_keeps_exact_overlapping_target(
+    live, signed_in, older_mark, scheme, width, tmp_path
+):
+    page = open_meeting(
+        live, signed_in, viewport={"width": width, "height": 844}, color_scheme=scheme
+    )
+    meeting_id = page.locator("#meeting-audio").get_attribute("data-meeting-id")
+
+    def overlap(route):
+        response = route.fetch()
+        payload = response.json()
+        payload["transcription"]["generation"]["segments"][29]["start_seconds"] = 60
+        payload["transcription"]["generation"]["segments"][29]["end_seconds"] = 62
+        route.fulfill(response=response, json=payload)
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}", overlap)
+    page.reload(wait_until="networkidle")
+    page.evaluate(STUB_AUDIO)
+    target = page.locator(".transcript-segment").nth(30)
+    target_id = target.get_attribute("data-segment-id")
+    older = page.locator(".transcript-segment").nth(29)
+    older_id = older.get_attribute("data-segment-id")
+    if older_mark:
+        page.evaluate(
+            """async ([meetingId, segmentId]) => {
+              const { meetingHistory } = await import('/assets/history.js');
+              return meetingHistory.markNotesSource(segmentId, 60.5);
+            }""",
+            [meeting_id, older_id],
+        )
+        expect(older.locator(".segment-source-mark")).to_be_visible()
+
+    target.locator(".segment-timestamp").click()
+    page.locator("#meeting-audio").dispatch_event("seeked")
+    page.locator("#transcript-search").fill("no matching source")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", target_id)
+    screenshots = Path(os.environ.get("ASR_ISSUE_257_SCREENSHOT_DIR", tmp_path))
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=screenshots / f"hidden-target-{width}-{scheme}.png", full_page=True)
+    reveal.focus()
+    reveal.press("Enter")
+    expect(target).to_be_visible()
+    expect(target.locator(".segment-timestamp")).to_be_focused()
+    if older_mark:
+        expect(older.locator(".segment-source-mark")).to_be_visible()
+
+    # Once the matching native acknowledgement is consumed, a later time-only seek resolves by time.
+    later = page.locator(".transcript-segment").nth(4)
+    later_id = later.get_attribute("data-segment-id")
+    page.evaluate("window.__player.time = 8.5")
+    page.locator("#meeting-audio").dispatch_event("seeked")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute("data-segment-id", later_id)
