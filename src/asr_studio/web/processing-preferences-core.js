@@ -32,6 +32,7 @@ export const initialState = {
   request: 0,
   mutation: 0,
   refreshPending: false,
+  initialRetry: false,
   saved: null,
   draft: null,
   error: null,
@@ -114,6 +115,15 @@ function readEffect(request, reconcile = false) {
   };
 }
 
+function startInitialRead(state, { retry = false } = {}) {
+  if (!state.open) return done(state);
+  const request = state.request + 1;
+  return done(
+    { ...state, status: "loading", request, refreshPending: false, initialRetry: retry || state.initialRetry, error: null },
+    [readEffect(request)],
+  );
+}
+
 function reconciledDraft(server, draft, baseline) {
   const localLanguage = draft.asr.language !== baseline.asr.language;
   const localProvider = draft.notes.provider !== baseline.notes.provider;
@@ -178,22 +188,30 @@ function fieldEdited(state, action) {
 function startReconcile(state) {
   if (!state.open || !state.saved) return done({ ...state, refreshPending: true });
   const request = state.request + 1;
+  const error = state.error?.source === "mutation" ? state.error : null;
   return done(
-    { ...state, status: "loading", request, refreshPending: false, error: null },
+    { ...state, status: "loading", request, refreshPending: false, error },
     [readEffect(request, true)],
   );
 }
 
-function queueReconcile(state) {
+function queueReconcile(state, { retryInitial = false } = {}) {
   if (!state.open) return done(state);
-  if (!state.saved || state.status === "loading" || state.status === "saving") {
+  if (!state.saved) {
+    if (retryInitial && state.status === "error") return startInitialRead(state, { retry: true });
+    return done({ ...state, refreshPending: true });
+  }
+  if (state.status === "loading" || state.status === "saving") {
     return done({ ...state, refreshPending: true });
   }
   return startReconcile(state);
 }
 
 function continuePendingRefresh(state) {
-  return state.refreshPending && state.open && state.saved ? startReconcile(state) : done(state);
+  if (!state.refreshPending || !state.open) return done(state);
+  if (state.saved) return startReconcile(state);
+  if (!state.initialRetry) return startInitialRead(state, { retry: true });
+  return done({ ...state, refreshPending: false });
 }
 
 export function reduce(state, action) {
@@ -207,6 +225,7 @@ export function reduce(state, action) {
           status: "loading",
           request,
           refreshPending: false,
+          initialRetry: false,
           saved: null,
           draft: null,
           error: null,
@@ -224,6 +243,7 @@ export function reduce(state, action) {
           request: state.request + 1,
           mutation: state.mutation + 1,
           refreshPending: false,
+          initialRetry: false,
           saved: null,
           draft: null,
           error: null,
@@ -233,7 +253,7 @@ export function reduce(state, action) {
       );
     case "provider/settings-section-selected":
       return action.section === "processing" && action.previousSection !== "processing"
-        ? queueReconcile(state)
+        ? queueReconcile(state, { retryInitial: true })
         : done(state);
     case "provider/asr-settings-changed":
       // The successful Automation PATCH broadcasts its own source-tagged event.
@@ -252,11 +272,15 @@ export function reduce(state, action) {
       const reconciled = action.meta?.reconcile === true && state.draft && state.saved
         ? reconciledDraft(preferences, state.draft, state.saved)
         : clone(preferences);
-      return continuePendingRefresh({ ...state, status: "ready", saved: preferences, draft: reconciled, error: null });
+      const error = state.error?.source === "mutation" ? state.error : null;
+      return continuePendingRefresh({ ...state, status: "ready", saved: preferences, draft: reconciled, error });
     }
     case "provider/processing-preferences-failed": {
       if (action.meta?.request !== state.request || !state.open) return done(state);
-      return continuePendingRefresh({ ...state, status: "error", error: requestError(action.error, state.draft?.notes.provider), notice: null });
+      const error = state.error?.source === "mutation"
+        ? state.error
+        : requestError(action.error, state.draft?.notes.provider);
+      return continuePendingRefresh({ ...state, status: "error", error, notice: null });
     }
     case "provider/processing-preference-edited":
       return fieldEdited(state, action);
@@ -273,7 +297,7 @@ export function reduce(state, action) {
       if (action.meta?.mutation !== state.mutation || !state.open) return done(state);
       const preferences = normalizePreferences(action.response?.body);
       if (!preferences) {
-        return done({ ...state, status: "ready", error: { code: "invalid_response", text: t("Máy chủ chưa xác nhận cài đặt xử lý tự động.") } });
+        return done({ ...state, status: "ready", error: { code: "invalid_response", source: "mutation", text: t("Máy chủ chưa xác nhận cài đặt xử lý tự động.") } });
       }
       const confirmed = { ...state, status: "ready", saved: preferences, draft: clone(preferences), error: null, notice: t("Đã lưu cài đặt xử lý tự động.") };
       const pending = continuePendingRefresh(confirmed);
@@ -281,7 +305,12 @@ export function reduce(state, action) {
     }
     case "provider/processing-preferences-save-failed":
       if (action.meta?.mutation !== state.mutation || !state.open) return done(state);
-      return continuePendingRefresh({ ...state, status: "ready", error: requestError(action.error, state.draft?.notes.provider), notice: null });
+      return continuePendingRefresh({
+        ...state,
+        status: "ready",
+        error: { ...requestError(action.error, state.draft?.notes.provider), source: "mutation" },
+        notice: null,
+      });
     default:
       return done(state);
   }
@@ -298,7 +327,12 @@ function choiceLabel(choice) {
 
 function providerStatusText(provider, catalog) {
   if (!provider) return t("Không chọn provider notes. Transcript có thể hoàn tất; notes sẽ chờ đến khi bạn chọn provider.");
-  if (!catalog || !catalog.status) return t("Đang kiểm tra");
+  const name = provider === "chatgpt" ? "ChatGPT" : "Google Antigravity";
+  if (!catalog || !catalog.status) {
+    return catalog?.catalogStatus === "error"
+      ? t("Không đọc được trạng thái của {name}. Hãy thử lại trong panel sở hữu.", { name })
+      : t("Đang kiểm tra");
+  }
   if (catalog.status === "connected") return catalog.account ? t("Đã kết nối với {account}", { account: catalog.account }) : t("Đã kết nối");
   return provider === "chatgpt"
     ? t("ChatGPT chưa được kết nối. Không tự chuyển sang provider khác.")
@@ -306,6 +340,7 @@ function providerStatusText(provider, catalog) {
 }
 
 function ownerPair(catalog) {
+  if (catalog?.ownerKnown !== true) return { model: null, effort: null };
   const model = validChoice(catalog?.ownerModel) ? catalog.ownerModel : null;
   const effort = validChoice(catalog?.ownerEffort) ? catalog.ownerEffort : null;
   return { model, effort };
@@ -327,29 +362,53 @@ function asrOwnerView(catalog, savedChoice) {
   const workflow = validChoice(savedChoice) ? savedChoice : "auto";
   const ownerRow = models.find((choice) => choice.id === committed);
   const effectiveRow = models.find((choice) => choice.id === workflow);
-  const ownerLabel = ownerRow ? choiceLabel(ownerRow) : committed === "auto" ? (asr.hardwareModel || "auto") : committed;
+  const hardwareLabel = validChoice(asr.hardwareModel)
+    ? ASR_MODEL_TEXT[asr.hardwareModel]?.label || asr.hardwareModel
+    : null;
+  const ownerLabel = ownerRow ? choiceLabel(ownerRow) : committed === "auto" ? (hardwareLabel || "auto") : committed;
   const workflowLabel = effectiveRow ? choiceLabel(effectiveRow) : workflow;
   const discrepancy = workflow !== committed;
+  const damaged = asr.defaultDamaged === true;
+  const effectiveWarning = !effectiveRow
+    ? t("Workflow chép lời dùng {model}, nhưng model này không còn trong catalog. Hãy mở ASR Model để chọn lại.", { model: workflowLabel })
+    : effectiveRow.ready === false
+      ? effectiveRow.reason === "worker_unavailable"
+        ? t("Workflow chép lời dùng {model}, nhưng worker chưa sẵn sàng để kiểm tra model.", { model: workflowLabel })
+        : t("Workflow chép lời dùng {model}, nhưng model này chưa sẵn sàng trên máy này.", { model: workflowLabel })
+      : null;
   let state = "ready";
   let message;
-  if (!effectiveRow) {
+  if (damaged) {
     state = "warning";
-    message = t("Workflow chép lời dùng {model}, nhưng model này không còn trong catalog. Hãy mở ASR Model để chọn lại.", { model: workflowLabel });
-  } else if (effectiveRow.ready === false) {
+    message = workflow === "auto"
+      ? hardwareLabel
+        ? t("Không đọc được model mặc định đã lưu. Workflow chép lời Tự động đang dùng fallback theo phần cứng {hardware}.", { hardware: hardwareLabel })
+        : t("Không đọc được model mặc định đã lưu. Workflow chép lời Tự động đang dùng fallback theo phần cứng.")
+      : hardwareLabel
+        ? t("Không đọc được model mặc định đã lưu. Workflow chép lời dùng {workflow}; mặc định đang fallback theo phần cứng {hardware}.", { workflow: workflowLabel, hardware: hardwareLabel })
+        : t("Không đọc được model mặc định đã lưu. Workflow chép lời dùng {workflow}.", { workflow: workflowLabel });
+    if (effectiveWarning) message = [message, " ", effectiveWarning];
+  } else if (effectiveWarning) {
     state = "warning";
-    message = effectiveRow.reason === "worker_unavailable"
-      ? t("Workflow chép lời dùng {model}, nhưng worker chưa sẵn sàng để kiểm tra model.", { model: workflowLabel })
-      : t("Workflow chép lời dùng {model}, nhưng model này chưa sẵn sàng trên máy này.", { model: workflowLabel });
+    message = effectiveWarning;
   } else if (discrepancy) {
     message = t("Workflow chép lời dùng {workflow}. Cài đặt sở hữu hiện là {owner}. Lần chạy mới vẫn dùng workflow đã lưu.", { workflow: workflowLabel, owner: ownerLabel });
   } else {
     message = t("Lần chép lời Tự động dùng {model}. Mỗi lần chạy vẫn chọn được model khác.", { model: workflowLabel });
   }
+  const warningWithOwner = state === "warning"
+    ? [
+      ...(Array.isArray(message) ? message : [message]),
+      " ",
+      ...(damaged || !discrepancy ? [] : [t("Mặc định ASR đã commit là {owner}.", { owner: ownerLabel }), " "]),
+      t("Mở Cài đặt → ASR Model để đồng bộ nếu muốn."),
+    ]
+    : null;
   return {
     state,
-    text: discrepancy && state === "ready"
+    text: warningWithOwner || (discrepancy && state === "ready"
       ? [message, " ", t("Mở Cài đặt → ASR Model để đồng bộ nếu muốn.")]
-      : message,
+      : message),
     model: committed === "auto" ? null : committed,
     workflow,
     discrepancy,
@@ -369,17 +428,20 @@ function providerOwnerView(provider, catalog, saved) {
   const ownerMessage = (message) => discrepancy
     ? [message, " ", t("Cài đặt sở hữu khác recipe workflow đã lưu. Lưu để áp dụng cài đặt sở hữu.")]
     : message;
-  if (!catalog.status) {
+  const catalogStatus = catalog.catalogStatus || "ready";
+  if (catalogStatus === "error") {
+    const message = catalog.status
+      ? t("Không tải được catalog của {name}. Hãy thử lại trong panel sở hữu.", { name })
+      : t("Không đọc được trạng thái của {name}. Hãy thử lại trong panel sở hữu.", { name });
     return {
-      state: "loading",
+      state: "error",
       model: pair.model,
       effort: pair.effort,
-      text: ownerMessage(pair.model || pair.effort ? t("Đang kiểm tra. Model đã lưu {owner} vẫn được giữ.", { owner }) : t("Đang kiểm tra")),
+      text: ownerMessage(pair.model ? [message, " ", t("Model đã lưu {owner} vẫn được giữ.", { owner })] : message),
       discrepancy,
       ownerConfigured,
     };
   }
-  const catalogStatus = catalog.catalogStatus || "ready";
   if (catalog.status !== "connected") {
     return {
       state: "disconnected",

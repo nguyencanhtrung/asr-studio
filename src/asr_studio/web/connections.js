@@ -690,7 +690,11 @@ function renderProcessingPreferences(state, rootState) {
   setProp(processingPreferenceEls.notice, "textContent", view.notice ? tr(view.notice) : "");
   setProp(processingPreferenceEls.error, "hidden", !view.error);
   setProp(processingPreferenceEls.error, "textContent", view.error ? tr(view.error.text) : "");
-  if (!view.saving && form.dataset.focusMutation) {
+  // A failed PATCH can immediately queue a reconciliation GET. Keep the
+  // marker through that loading boundary: the Save button is disabled while
+  // the GET is in flight, so restoring to it here would consume the marker
+  // and lose the actionable error focus.
+  if (!view.saving && !view.loading && form.dataset.focusMutation) {
     const matches = form.dataset.focusMutation === String(state.mutation);
     delete form.dataset.focusMutation;
     const active = document.activeElement;

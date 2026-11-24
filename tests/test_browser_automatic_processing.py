@@ -122,9 +122,12 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
     expect(page.locator("#automatic-preferences-provider")).to_have_value("")
     expect(page.locator("#automatic-preferences-provider-help")).to_contain_text("Transcript")
     expect(page.locator("#automatic-preferences-save")).to_be_disabled()
-    assert page.locator("#automatic-preferences-asr-choice").count() == 0
-    assert page.locator("#automatic-preferences-model").count() == 0
-    assert page.locator("#automatic-preferences-effort").count() == 0
+    form = page.locator("#automatic-preferences-form")
+    comboboxes = form.get_by_role("combobox")
+    assert comboboxes.count() == 3
+    assert form.get_by_role("combobox", name="Ngôn ngữ transcript").count() == 1
+    assert form.get_by_role("combobox", name="Provider notes").count() == 1
+    assert form.get_by_role("combobox", name="Ngôn ngữ đầu ra notes").count() == 1
     expect(page.locator("#automatic-preferences-asr-owner")).to_be_visible()
     expect(page.locator("#automatic-preferences-asr-owner")).not_to_have_text("")
     asr_link = page.get_by_role("link", name="ASR Model")

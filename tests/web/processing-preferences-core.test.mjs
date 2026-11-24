@@ -23,6 +23,7 @@ const CATALOGS = {
       account: "test@example.com",
       ownerModel: "m1",
       ownerEffort: "high",
+      ownerKnown: true,
       models: [{ id: "m1", display_name: "Model 1" }],
       effortOptions: [{ value: "default", label: "Default" }, { value: "high", label: "High" }],
     },
@@ -30,6 +31,7 @@ const CATALOGS = {
       status: "disconnected",
       ownerModel: "g1",
       ownerEffort: "high",
+      ownerKnown: true,
       models: [],
       effortOptions: [],
     },
@@ -479,6 +481,27 @@ test("ASR owner and workflow choices stay distinct, including Auto readiness", (
   assert.equal(qwen.asrOwner.discrepancy, true);
   assert.deepEqual(qwen.asrOwner.text[0].params, { workflow: "Qwen3-ASR-1.7B", owner: "Whisper small" });
 
+  const unavailable = selectPreferences(loaded, {
+    ...catalog,
+    asr: {
+      ...catalog.asr,
+      models: catalog.asr.models.map((model) => model.id === "qwen3-asr-1.7b"
+        ? { ...model, ready: false, reason: "not_prepared" }
+        : model),
+    },
+  });
+  assert.equal(unavailable.asrOwner.state, "warning");
+  assert.match(JSON.stringify(unavailable.asrOwner.text), /Qwen3-ASR-1\.7B/);
+  assert.match(JSON.stringify(unavailable.asrOwner.text), /Whisper small/);
+
+  const absent = selectPreferences(loaded, {
+    ...catalog,
+    asr: { ...catalog.asr, models: catalog.asr.models.filter((model) => model.id !== "qwen3-asr-1.7b") },
+  });
+  assert.equal(absent.asrOwner.state, "warning");
+  assert.match(JSON.stringify(absent.asrOwner.text), /qwen3-asr-1\.7b/);
+  assert.match(JSON.stringify(absent.asrOwner.text), /Whisper small/);
+
   const auto = selectPreferences({
     ...loaded,
     draft: { ...loaded.draft, asr: { choice: "auto", language: "vi" } },
@@ -488,5 +511,213 @@ test("ASR owner and workflow choices stay distinct, including Auto readiness", (
   });
   assert.equal(auto.asrOwner.workflow, "auto");
   assert.equal(auto.asrOwner.state, "warning");
-  assert.match(auto.asrOwner.text.text, /worker/);
+  assert.match(JSON.stringify(auto.asrOwner.text), /worker/);
+  assert.match(JSON.stringify(auto.asrOwner.text), /Whisper small/);
+
+  const damaged = selectPreferences({
+    ...loaded,
+    draft: { ...loaded.draft, asr: { choice: "auto", language: "vi" } },
+  }, {
+    ...catalog,
+    asr: {
+      ...catalog.asr,
+      models: [{ id: "auto", label: "Auto", ready: true }],
+      defaultModel: null,
+      defaultDamaged: true,
+      hardwareModel: "whisper-large-v3",
+    },
+  });
+  assert.equal(damaged.asrOwner.state, "warning");
+  assert.match(JSON.stringify(damaged.asrOwner.text), /Không đọc được/);
+  assert.match(JSON.stringify(damaged.asrOwner.text), /phần cứng/);
+
+  const damagedExplicit = selectPreferences({
+    ...loaded,
+    draft: { ...loaded.draft, asr: { choice: "whisper-small", language: "vi" } },
+  }, {
+    ...catalog,
+    asr: {
+      ...catalog.asr,
+      defaultModel: null,
+      defaultDamaged: true,
+      hardwareModel: "qwen3-asr-1.7b",
+    },
+  });
+  assert.equal(damagedExplicit.asrOwner.state, "warning");
+  assert.match(JSON.stringify(damagedExplicit.asrOwner.text), /Whisper small/);
+  assert.match(JSON.stringify(damagedExplicit.asrOwner.text), /Qwen3-ASR-1\.7B/);
+  assert.doesNotMatch(JSON.stringify(damagedExplicit.asrOwner.text), /Cài đặt sở hữu hiện là/);
+
+  const damagedUnready = selectPreferences({
+    ...loaded,
+    draft: { ...loaded.draft, asr: { choice: "auto", language: "vi" } },
+  }, {
+    ...catalog,
+    asr: {
+      ...catalog.asr,
+      models: catalog.asr.models.map((model) => model.id === "auto"
+        ? { ...model, ready: false, reason: "worker_unavailable" }
+        : model),
+      defaultModel: null,
+      defaultDamaged: true,
+      hardwareModel: "qwen3-asr-1.7b",
+    },
+  });
+  assert.equal(damagedUnready.asrOwner.state, "warning");
+  assert.match(JSON.stringify(damagedUnready.asrOwner.text), /fallback/);
+  assert.match(JSON.stringify(damagedUnready.asrOwner.text), /worker/);
+});
+
+test("a failed initial read retries once on same-dialog re-entry and coalesces another notification", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const queued = reduce(opened.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "ai",
+  });
+  const failed = reduce(queued.state, {
+    type: "provider/processing-preferences-failed",
+    meta: { request: opened.state.request },
+    error: { status: 503, body: { detail: { code: "unavailable" } } },
+  });
+  assert.equal(failed.state.saved, null);
+  assert.equal(failed.state.status, "loading");
+  assert.equal(failed.state.refreshPending, false);
+  assert.equal(failed.state.initialRetry, true);
+  assert.equal(failed.effects.length, 1);
+  assert.equal(failed.effects[0].meta.reconcile, false);
+
+  const failedAgain = reduce(failed.state, {
+    type: "provider/processing-preferences-failed",
+    meta: { request: failed.state.request },
+    error: { status: 503, body: { detail: { code: "unavailable" } } },
+  });
+  assert.equal(failedAgain.state.status, "error");
+  assert.equal(failedAgain.state.refreshPending, false);
+  assert.deepEqual(failedAgain.effects, []);
+
+  const retried = reduce(failedAgain.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "ai",
+  });
+  assert.equal(retried.state.status, "loading");
+  assert.equal(retried.state.refreshPending, false);
+  assert.equal(retried.effects.length, 1);
+  assert.equal(retried.effects[0].meta.reconcile, false);
+
+  const coalesced = reduce(retried.state, { type: "provider/notes-owner-changed" });
+  assert.equal(coalesced.state.refreshPending, true);
+  assert.deepEqual(coalesced.effects, []);
+
+  const firstRecovery = reduce(coalesced.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: retried.state.request },
+    response: { body: PREFS },
+  });
+  assert.equal(firstRecovery.state.status, "loading");
+  assert.equal(firstRecovery.effects.length, 1);
+  assert.equal(firstRecovery.effects[0].meta.reconcile, true);
+
+  const recovered = reduce(firstRecovery.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: firstRecovery.state.request, reconcile: true },
+    response: { body: { ...PREFS, version: 5 } },
+  });
+  assert.equal(recovered.state.status, "ready");
+  assert.equal(recovered.state.saved.version, 5);
+  assert.deepEqual(recovered.effects, []);
+});
+
+for (const code of ["notes_owner_unconfigured", "preferences_changed"]) {
+  test(`a ${code} mutation error survives the queued owner refresh until edit or save`, () => {
+    const opened = reduce(initialState, { type: "provider/dialog-opened" });
+    const loaded = reduce(opened.state, {
+      type: "provider/processing-preferences-loaded",
+      meta: { request: opened.state.request },
+      response: { body: {
+        ...PREFS,
+        notes: { provider: "chatgpt", model: "old-model", reasoning_effort: "default", output_language: "en" },
+      } },
+    }).state;
+    const edited = reduce(loaded, {
+      type: "provider/processing-preference-edited",
+      field: "asr_language",
+      value: "en",
+    }).state;
+    const saving = reduce(edited, saveAction(edited));
+    const queued = reduce(saving.state, { type: "provider/notes-owner-changed" });
+    assert.equal(queued.state.refreshPending, true);
+
+    const failed = reduce(queued.state, {
+      type: "provider/processing-preferences-save-failed",
+      meta: { mutation: saving.state.mutation },
+      error: { status: 409, body: { detail: { code } } },
+    });
+    assert.equal(failed.state.status, "loading");
+    assert.equal(failed.state.error.code, code);
+    assert.equal(failed.state.error.source, "mutation");
+    assert.equal(failed.effects[0].meta.reconcile, true);
+
+    const refreshed = reduce(failed.state, {
+      type: "provider/processing-preferences-loaded",
+      meta: { request: failed.state.request, reconcile: true },
+      response: { body: {
+        ...PREFS,
+        notes: { provider: "chatgpt", model: "new-model", reasoning_effort: "high", output_language: "en" },
+        version: 5,
+      } },
+    });
+    assert.equal(refreshed.state.status, "ready");
+    assert.equal(refreshed.state.error.code, code);
+    assert.equal(refreshed.state.draft.asr.language, "en");
+    assert.equal(refreshed.state.saved.version, 5);
+
+    const editedAgain = reduce(refreshed.state, {
+      type: "provider/processing-preference-edited",
+      field: "asr_language",
+      value: "vi",
+    });
+    assert.equal(editedAgain.state.error, null);
+  });
+}
+
+test("settled provider read failures are explicit and do not invent an owner pair", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened" });
+  const loaded = reduce(opened.state, {
+    type: "provider/processing-preferences-loaded",
+    meta: { request: opened.state.request },
+    response: { body: {
+      ...PREFS,
+      notes: { provider: "chatgpt", model: "workflow-model", reasoning_effort: "medium", output_language: "en" },
+    } },
+  }).state;
+  const firstReadFailed = selectPreferences(loaded, {
+    ...CATALOGS,
+    providers: {
+      ...CATALOGS.providers,
+      chatgpt: { ...CATALOGS.providers.chatgpt, status: undefined, catalogStatus: "error", ownerModel: null, ownerEffort: "default", ownerKnown: false },
+    },
+  });
+  assert.equal(firstReadFailed.notesOwner.state, "error");
+  assert.equal(firstReadFailed.notesOwner.ownerConfigured, false);
+  assert.equal(firstReadFailed.notesOwner.model, null);
+  assert.equal(firstReadFailed.notesOwner.effort, null);
+  assert.doesNotMatch(JSON.stringify(firstReadFailed.notesOwner.text), /Đang kiểm tra/);
+  assert.doesNotMatch(JSON.stringify(firstReadFailed.providerStatus), /Đang kiểm tra/);
+
+  const catalogFailed = selectPreferences(loaded, {
+    ...CATALOGS,
+    providers: {
+      ...CATALOGS.providers,
+      chatgpt: { ...CATALOGS.providers.chatgpt, status: "connected", catalogStatus: "error", ownerModel: "m1", ownerEffort: "high", ownerKnown: true },
+    },
+  });
+  assert.equal(catalogFailed.notesOwner.state, "error");
+  assert.equal(catalogFailed.notesOwner.ownerConfigured, true);
+  assert.match(JSON.stringify(catalogFailed.notesOwner.text), /Model 1/);
+  assert.match(JSON.stringify(catalogFailed.notesOwner.text), /high/);
+  assert.doesNotMatch(JSON.stringify(catalogFailed.notesOwner.text), /Đang kiểm tra/);
+  assert.match(JSON.stringify(catalogFailed.providerStatus), /Đã kết nối với|test@example\.com/);
+  assert.doesNotMatch(JSON.stringify(catalogFailed.providerStatus), /Không tải được catalog/);
 });
