@@ -287,6 +287,89 @@ test("marking a source repaints the rows", () => {
   assert.equal(env.state().rev, before + 1);
 });
 
+test("closing an older source keeps a newer explicit seek target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  for (const newerId of ["r2", "r4"]) {
+    let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+    state = reduce(state, { type: "playback/target-requested", segmentId: newerId, startSeconds: newerId === "r2" ? 3 : 13, shown }).state;
+    state = reduce(state, { type: "playback/mark-requested", segmentId: null, startSeconds: null, shown }).state;
+    assert.equal(state.mark, null);
+    assert.equal(state.target, newerId);
+    assert.equal(state.targetOwner, "timestamp");
+  }
+});
+
+test("closing Notes clears source-owned reveal and its pending seek", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "source-seek", meetingId: "m1", segmentId: "r2",
+    startSeconds: 3, audioMeetingId: "m1", ready: true, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/seek-applied", meta: { seekId: "source-seek" },
+    value: { time: 3, paused: true }, shown,
+  }).state;
+  assert.equal(state.targetOwner, "source");
+  assert.ok(state.pendingTarget);
+  state = reduce(state, { type: "playback/mark-requested", segmentId: null, startSeconds: null, shown }).state;
+  assert.equal(state.mark, null);
+  assert.equal(state.target, null);
+  assert.equal(state.targetOwner, null);
+  assert.equal(state.pendingTarget.dismissed, true);
+  assert.equal(state.seek, null);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, shown }).state;
+  assert.equal(state.pendingTarget, null);
+  assert.equal(state.target, null);
+});
+
+test("a citation with no current row keeps its source seek alive", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/source-requested", sourceRequestId: 7 }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "source-seek", meetingId: "m1", segmentId: "gone",
+    startSeconds: 25, sourceRequestId: 7, audioMeetingId: "m1", ready: true, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/mark-requested", segmentId: "gone", startSeconds: 25, sourceRequestId: 7, shown,
+  }).state;
+  assert.equal(state.mark, null);
+  assert.equal(state.sourceRequestId, 7);
+  assert.ok(state.seek, "the valid timestamp seek remains in flight");
+});
+
+test("a newer timestamp cancels a source seek waiting for metadata", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r3", startSeconds: 7, shown }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "source-seek", meetingId: "m1", segmentId: "r3",
+    startSeconds: 7, audioMeetingId: "m1", ready: false, shown,
+  }).state;
+  assert.ok(state.seek);
+  state = reduce(state, { type: "playback/target-requested", segmentId: "r4", startSeconds: 13, shown }).state;
+  assert.equal(state.seek, null);
+  assert.equal(state.target, "r4");
+  assert.equal(state.targetOwner, "timestamp");
+});
+
+test("a newer row reuses the pending meeting scope with its own target identity", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r3", startSeconds: 7, shown }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "source-seek", meetingId: "m1", segmentId: "r3",
+    startSeconds: 7, audioMeetingId: "m1", ready: true, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/seek-applied", meta: { seekId: "source-seek" },
+    value: { time: 7, paused: true }, shown,
+  }).state;
+  state = reduce(state, { type: "playback/target-requested", segmentId: "r4", startSeconds: 13, shown }).state;
+  assert.equal(state.pendingTarget.id, "r4");
+  assert.equal(state.pendingTarget.owner, "timestamp");
+  assert.equal(state.pendingTarget.owedStarts, 2);
+});
+
 test("switching meetings clears the mark; going home keeps it", () => {
   const env = setup();
   env.send("playback/mark-requested", { segmentId: "r3", startSeconds: 7 });
@@ -587,4 +670,236 @@ test("actions of other slices change nothing here", () => {
   env.send("history/anything");
   env.send("task/poll-loaded");
   assert.equal(env.state(), before);
+});
+
+test("explicit seek and source targets keep real IDs independently of filtered rendering", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r3", startSeconds: 7, shown }).state;
+  assert.equal(state.target, "r3");
+  assert.equal(state.mark, "r3");
+  assert.equal(state.ops.at(-1).id, "r3");
+  state = reduce(state, { type: "playback/mark-requested", segmentId: "old-id", startSeconds: 13, shown }).state;
+  assert.equal(state.target, "r4");
+  state = reduce(state, { type: "playback/mark-requested", segmentId: null, shown }).state;
+  assert.equal(state.target, null);
+  state = reduce(state, { type: "playback/seek-requested", seekId: "seek", meetingId: "m1", audioMeetingId: "m1", ready: true, startSeconds: 7, shown }).state;
+  state = reduce(state, { type: "playback/seek-applied", meta: { seekId: "seek" }, value: { time: 7, paused: true }, shown }).state;
+  assert.equal(state.target, "r3");
+  assert.deepEqual(state.active, ["r3"]);
+  assert.equal(state.seekDone.ok, true);
+  for (const [time, expected] of [[13, "r4"], [11, null], [7, "r3"]]) {
+    state = reduce(state, { type: "playback/seeked", time, paused: true, shown }).state;
+    assert.equal(state.target, expected);
+  }
+  state = reduce(state, { type: "playback/meeting-left", kind: "switch" }).state;
+  assert.equal(state.target, null);
+});
+
+test("an explicit overlapping source ID survives the seek and its native acknowledgement", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/seek-requested", seekId: "overlap", meetingId: "m1", segmentId: "r2", startSeconds: 3, audioMeetingId: "m1", ready: true, shown }).state;
+  state = reduce(state, { type: "playback/seek-applied", meta: { seekId: "overlap" }, value: { time: 3, paused: true }, shown }).state;
+  assert.deepEqual(state.active, ["r1", "r2"]);
+  assert.equal(state.target, "r2");
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, shown }).state;
+  assert.equal(state.target, "r2");
+});
+
+test("recording-scoped native debt survives a generation switch and keeps the latest overlap target", () => {
+  const first = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  const second = { ...first, generationId: "g2", rows: [row("new-first", 3, 5), row("new-overlap", 3, 5)] };
+  const audioKey = "m1:/api/meetings/m1/audio";
+  let state = reduce(initialState, {
+    type: "playback/target-requested", segmentId: "r2", startSeconds: 3,
+    ready: true, audioMeetingId: "m1", audioKey, shown: first,
+  }).state;
+  state = reduce(state, {
+    type: "playback/target-requested", segmentId: "new-overlap", startSeconds: 3,
+    ready: true, audioMeetingId: "m1", audioKey, shown: second,
+  }).state;
+  assert.equal(state.pendingTarget.owedStarts, 2);
+  assert.equal(state.target, "new-overlap");
+  state = reduce(state, { type: "playback/seeking", audioMeetingId: "m1", audioKey, shown: second }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, audioMeetingId: "m1", audioKey, shown: second }).state;
+  assert.equal(state.pendingTarget.owedStarts, 1);
+  assert.equal(state.target, "new-overlap");
+  state = reduce(state, { type: "playback/seeking", audioMeetingId: "m1", audioKey, shown: second }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, audioMeetingId: "m1", audioKey, shown: second }).state;
+  assert.equal(state.pendingTarget, null);
+  assert.equal(state.target, "new-overlap");
+});
+
+test("the latest explicit timestamp target wins over an older Notes mark", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+  state = reduce(state, { type: "playback/target-requested", segmentId: "r1", startSeconds: 3, shown }).state;
+  assert.equal(state.mark, "r2");
+  assert.equal(state.target, "r1");
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: false, seeking: false, shown }).state;
+  assert.equal(state.target, "r1");
+  assert.equal(state.pendingTarget, null);
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, shown }).state;
+  assert.equal(state.target, "r1");
+  assert.equal(state.mark, "r2");
+});
+
+test("a delayed native acknowledgement belongs to its outstanding explicit target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: [row("first", 0, 5), row("short", 3, 3.08)] };
+  let state = reduce(initialState, { type: "playback/target-requested", segmentId: "short", startSeconds: 3, shown }).state;
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3.25, paused: false, seeking: false, shown }).state;
+  assert.equal(state.target, "short");
+  assert.equal(state.targetOwner, "timestamp");
+  assert.equal(state.pendingTarget, null);
+});
+
+test("a superseding native seek cancels the older pending target", () => {
+  const rows = [row("old", 8, 10), row("new", 10, 12)];
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows };
+  let state = reduce(initialState, { type: "playback/target-requested", segmentId: "old", startSeconds: 8, shown }).state;
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.ok(state.pendingTarget);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.equal(state.pendingTarget, null);
+  state = reduce(state, { type: "playback/seeked", time: 10.5, paused: true, seeking: false, shown }).state;
+  assert.equal(state.target, "new");
+  assert.equal(state.targetOwner, "time");
+});
+
+test("each programmatic start is owed before a native acknowledgement is consumed", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/target-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+  state = reduce(state, { type: "playback/target-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+  assert.equal(state.pendingTarget.owedStarts, 2);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, shown }).state;
+  assert.equal(state.pendingTarget.owedStarts, 1);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, shown }).state;
+  assert.equal(state.pendingTarget, null);
+  assert.equal(state.target, "r2");
+});
+
+test("repeated timestamp writes before metadata owe one coalesced native start", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, {
+    type: "playback/target-requested", segmentId: "r2", startSeconds: 3, ready: false, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/target-requested", segmentId: "r2", startSeconds: 3, ready: false, shown,
+  }).state;
+  assert.equal(state.pendingTarget.owedStarts, 1);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, shown }).state;
+  assert.equal(state.pendingTarget, null);
+  state = reduce(state, { type: "playback/seeked", time: 13, paused: true, seeking: false, shown }).state;
+  assert.equal(state.target, "r4", "the first later time-only seek resolves by its current time");
+  assert.equal(state.targetOwner, "time");
+});
+
+test("a newer source cancels an older metadata waiter", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/source-requested", sourceRequestId: 1, shown }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "old-source", sourceRequestId: 1,
+    meetingId: "m1", audioMeetingId: "m1", startSeconds: 25, segmentId: "gone", ready: false, shown,
+  }).state;
+  assert.ok(state.seek);
+  const result = reduce(state, { type: "playback/source-requested", sourceRequestId: 2, shown });
+  assert.equal(result.state.sourceRequestId, 2);
+  assert.equal(result.state.seek, null);
+  assert.deepEqual(result.state.seekDone, { id: "old-source", ids: ["old-source"], ok: false });
+  assert.deepEqual(result.effects, [{ type: "cancel", key: "playback/seek-timeout/old-source" }]);
+});
+
+test("an issued source seek with no current row keeps its native acknowledgement owner", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/source-requested", sourceRequestId: 1, shown }).state;
+  state = reduce(state, {
+    type: "playback/seek-requested", seekId: "old-source", sourceRequestId: 1,
+    meetingId: "m1", audioMeetingId: "m1", startSeconds: 25, segmentId: "gone", ready: true, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/seek-applied", meta: { seekId: "old-source" }, value: { time: 25, paused: true, ready: true }, shown,
+  }).state;
+  assert.equal(state.pendingTarget.id, null);
+  state = reduce(state, { type: "playback/source-requested", sourceRequestId: 2, shown }).state;
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.equal(state.sourceRequestId, 2);
+  assert.equal(state.pendingTarget.owedStarts, 0);
+  state = reduce(state, { type: "playback/seeked", time: 25, paused: true, seeking: false, shown }).state;
+  assert.equal(state.pendingTarget, null);
+  assert.equal(state.sourceRequestId, 2);
+});
+
+test("premetadata zero selections retain the row without borrowing a later native seek", () => {
+  const rows = [row("first", 0, 1), row("later", 10, 11)];
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows };
+  let state = reduce(initialState, {
+    type: "playback/target-requested", segmentId: "first", startSeconds: 0, ready: false, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/target-requested", segmentId: "first", startSeconds: 0, ready: false, shown,
+  }).state;
+  assert.equal(state.target, "first");
+  assert.equal(state.pendingTarget.owedStarts, 0);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.equal(state.pendingTarget, null);
+  state = reduce(state, { type: "playback/seeked", time: 10.5, paused: true, seeking: false, shown }).state;
+  assert.equal(state.target, "later");
+  assert.equal(state.targetOwner, "time");
+});
+
+test("a stale source snapshot may mark provenance without taking a newer reveal target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/source-requested", sourceRequestId: 1, shown }).state;
+  state = reduce(state, { type: "playback/target-requested", segmentId: "r4", startSeconds: 13, ready: true, shown }).state;
+  state = reduce(state, {
+    type: "playback/mark-requested", sourceRequestId: 1, segmentId: "r3", startSeconds: 7, shown,
+  }).state;
+  assert.equal(state.mark, "r3");
+  assert.equal(state.target, "r4");
+  assert.equal(state.targetOwner, "timestamp");
+  assert.deepEqual(state.ops, [], "stale source provenance does not enqueue a reveal");
+});
+
+test("an older native seeked does not invalidate a source reserved after its seeking", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, {
+    type: "playback/seeking", shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/source-requested", sourceRequestId: 7, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/seeked", time: 20, paused: true, seeking: false, shown,
+  }).state;
+  assert.equal(state.sourceRequestId, 7);
+});
+
+test("a genuinely newer unowned native seeking supersedes a reserved source", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, {
+    type: "playback/source-requested", sourceRequestId: 7, shown,
+  }).state;
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  assert.equal(state.sourceRequestId, null);
+});
+
+test("a native time-only seek still resolves the current row without an explicit target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  const state = reduce(initialState, { type: "playback/seeked", time: 3, paused: true, shown }).state;
+  assert.equal(state.target, "r1");
+});
+
+test("a seeked from another generation clears a pending target and uses current time", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  const other = { ...shown, generationId: "g2", rows: [row("new", 13, 20)] };
+  let state = reduce(initialState, { type: "playback/target-requested", segmentId: "r2", startSeconds: 3, shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 13, paused: true, seeking: false, shown: other }).state;
+  assert.equal(state.pendingTarget, null);
+  assert.equal(state.target, "new");
+  assert.equal(state.targetOwner, "time");
 });

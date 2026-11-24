@@ -447,6 +447,24 @@ def test_a_click_opens_the_source_under_the_player_plays_it_and_marks_its_row(
     assert page.evaluate("window.__sameDocument") == 1  # the chip, Back and Forward never reloaded
 
 
+def test_a_historical_citation_without_a_current_row_still_seeks_and_plays(
+    live, signed_in, tmp_path
+):
+    meeting_id, _, snapshot, _ = seed_long_cited_notes(live, tmp_path)
+    rerun_transcript(live.settings.data_dir, meeting_id)
+    _, page = signed_in(reduced_motion="reduce")
+    open_notes(live, page, meeting_id)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').readyState >= 1")
+    page.locator(CHIP).filter(has_text="00:25").click()
+    expect(page.locator("#notes-source-text")).to_have_text(snapshot["segments"][25]["text"])
+    expect(page.locator("#notes-source-status")).to_contain_text(
+        re.compile("đang phát|vừa chọn"), timeout=10_000
+    )
+    audio = page.locator("#meeting-audio")
+    current_time, paused = audio.evaluate("element => [element.currentTime, element.paused]")
+    assert current_time >= 24.7 and not paused
+
+
 def test_a_browser_that_refuses_to_play_still_opens_and_seeks_the_source(live, signed_in, tmp_path):
     _context, page = signed_in(viewport=DESKTOP, reduced_motion="reduce")
     meeting_id, *_ = seed_long_cited_notes(live, tmp_path)

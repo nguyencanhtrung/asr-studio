@@ -11,6 +11,9 @@ import {
   hasUnsavedDrafts,
   initialState,
   navigation,
+  needsReview,
+  selectSegments,
+  searchTimestamp,
   reduce,
 } from "../../src/asr_studio/web/transcript-core.js";
 
@@ -1145,4 +1148,82 @@ test("an action the transcript slice does not know changes nothing", () => {
   const result = reduce(initialState, { type: "transcript/unknown" });
   assert.equal(result.state, initialState);
   assert.deepEqual(result.effects, []);
+});
+
+
+test("search selects saved text, speaker names/IDs and timestamp ranges literally", () => {
+  const g = generation("g", 1, { segments: [
+    segment("a", { text: "Launch <script>", start_seconds: 1.234, end_seconds: 3 }),
+    segment("b", { text: "Costs", speaker_id: "identity-b", start_seconds: 3661.25, end_seconds: 3663 }),
+  ], speakers: [speaker("A", "Speaker 1"), speaker("identity-b", "Bob")] });
+  const ids = (query) => selectSegments({ ...initialState, query }, g).segments.map((s) => s.id);
+  assert.deepEqual(ids(" LAUNCH "), ["a"]);
+  assert.deepEqual(ids("<script>"), ["a"]);
+  assert.deepEqual(ids("Bob"), ["b"]);
+  assert.deepEqual(ids("identity-b"), ["b"]);
+  assert.deepEqual(ids("0:01.23"), ["a"]);
+  assert.deepEqual(ids("00:01.23"), ["a"]);
+  assert.deepEqual(ids("00:01"), ["a"]);
+  assert.deepEqual(ids("1:01:01.25"), ["b"]);
+  assert.deepEqual(ids("1:01:03"), ["b"]);
+  assert.deepEqual(ids("absent"), []);
+  assert.equal(searchTimestamp(59.9996), "1:00.00");
+  assert.deepEqual(selectSegments(initialState, null), { segments: [], review: [], total: 0 });
+});
+
+test("review navigation follows flags and reasons, wraps both ways and ignores processing status", () => {
+  const g = generation("g", 1, { segments: [
+    segment("a", { uncertain: true }), segment("b", { review_reasons: ["overlap"] }),
+    segment("c", { status: "complete", reviewed: true, review_reasons: [] }),
+    segment("d", { review_reasons: ["future-reason"] }),
+  ] });
+  const shown = { meeting: meeting("m", g, []) };
+  let state = reduce(initialState, { type: "transcript/review-filter-changed", value: true, shown }).state;
+  assert.deepEqual(selectSegments(state, g).segments.map((s) => s.id), ["a", "b", "d"]);
+  assert.equal(needsReview(g.segments[2]), false);
+  for (const [direction, expected] of [[-1, "d"], [1, "a"], [1, "b"], [1, "d"], [-1, "b"]]) {
+    const result = reduce(state, { type: "transcript/review-stepped", direction, shown });
+    state = result.state;
+    assert.deepEqual(result.effects, []);
+    assert.equal(state.ops.at(-1).id, expected);
+    assert.equal(state.ops.at(-1).op, "reveal-segment");
+  }
+  state = reduce(state, { type: "transcript/query-typed", value: "absent", shown }).state;
+  assert.equal(state.reviewCursor, null);
+  assert.equal(reduce(state, { type: "transcript/review-stepped", direction: 1, shown }).state, state);
+  assert.deepEqual(selectSegments(state, g).segments, []);
+});
+
+test("filters and generation toggles preserve an open draft without any write or storage effect", async () => {
+  const env = await setup();
+  await openEditorOn(env);
+  env.send("transcript/draft-typed", { generationId: "g2", field: "segmentText", itemId: "s1", value: "Unsaved only" });
+  const requests = env.requests.length;
+  for (const [type, extra] of [
+    ["transcript/query-typed", { value: "no matches" }],
+    ["transcript/review-filter-changed", { value: true }],
+    ["transcript/generation-chosen", { id: "g1" }],
+    ["transcript/generation-chosen", { id: "g2" }],
+    ["transcript/filters-cleared", { segmentId: "s1" }],
+  ]) {
+    const result = reduce(env.t(), { type, ...extra, shown: { meeting: env.history().meeting } });
+    assert.deepEqual(result.effects, []);
+    env.send(type, extra);
+    assert.equal(draftOf(env.t().drafts, "g2", "segmentText", "s1").value, "Unsaved only");
+    assert.equal(draftOf(env.t().drafts, "g1", "segmentText", "s1"), null);
+    assert.deepEqual(env.t().editing, { generationId: "g2", segmentId: "s1" });
+  }
+  assert.equal(env.requests.length, requests);
+  assert.equal(env.history().meeting.transcription.generation.segments[0].text, "text s1");
+  assert.equal(env.t().ops.at(-1).id, "s1");
+  assert.equal(env.t().query, "");
+  assert.equal(env.t().reviewOnly, false);
+  env.ops();
+  env.send("transcript/filters-cleared", { segmentId: "missing" });
+  assert.deepEqual(env.ops(), []);
+  env.send("transcript/query-typed", { value: "other meeting query" });
+  env.send("transcript/review-filter-changed", { value: true });
+  env.send("transcript/meeting-switched");
+  assert.equal(env.t().query, "");
+  assert.equal(env.t().reviewOnly, false);
 });

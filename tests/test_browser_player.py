@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import sqlite3
 import time
 import uuid
@@ -10,11 +12,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from notes_helpers import seed_completed_transcript
+from notes_helpers import rerun_transcript, seed_cited_notes, seed_completed_transcript
 from playwright.sync_api import expect
-from test_browser_history import FIXED_NOW
+from test_browser_history import FIXED_NOW, show_a_past_generation
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
+from test_browser_notes_citations import CHIP, open_notes, seed_long_cited_notes
 
 from asr_studio.media import normalize_media
 from asr_studio.storage import database_path
@@ -881,3 +884,725 @@ def test_player_shows_a_keyboard_focus_ring(live, signed_in, scheme):
     assert ring["left"] >= bar["left"] and ring["right"] <= bar["right"], (ring, bar)
     page.evaluate("document.activeElement.blur()")
     assert strip() != focused  # and it is really painted
+
+
+@pytest.mark.parametrize("target_kind", ["source-id", "source-time", "seek", "native-seek"])
+@pytest.mark.parametrize("generation_kind", ["current", "past"])
+def test_filtered_source_and_saved_seek_reveal_real_row(
+    live, signed_in, target_kind, generation_kind, tmp_path
+):
+    options = {"viewport": MINIMUM, "color_scheme": "dark"} if target_kind == "source-id" else {}
+    page = open_meeting(live, signed_in, **options)
+    if generation_kind == "past":
+        show_a_past_generation(page)
+        page.reload(wait_until="networkidle")
+        page.locator("#generation-selector").select_option("browser-past-generation")
+        page.evaluate(STUB_AUDIO)
+    target = page.locator(".transcript-segment").nth(30)
+    target_id = target.get_attribute("data-segment-id")
+    page.locator("#transcript-search").fill("no matching transcript")
+    page.locator("#transcript-review-only").check()
+    expect(target).to_be_hidden()
+    if target_kind == "seek":
+        assert seek_notes_source(page, 60.5) is True
+        assert page.evaluate("window.__player.time") == 60.5
+    elif target_kind == "native-seek":
+        page.evaluate("""() => {
+          const audio = document.querySelector('#meeting-audio');
+          audio.currentTime = 60.5;
+          audio.dispatchEvent(new Event('seeked'));
+        }""")
+    else:
+        found = page.evaluate(
+            """async ([id, seconds]) => {
+              const { meetingHistory } = await import('/assets/history.js');
+              return meetingHistory.markNotesSource(id, seconds);
+            }""",
+            [target_id if target_kind == "source-id" else "older-source-segment", 60.5],
+        )
+        assert found is True
+    control = page.locator("#transcript-reveal-target")
+    expect(control).to_be_visible()
+    expect(control).to_have_attribute("data-segment-id", target_id)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    screenshots = Path(os.environ.get("ASR_ISSUE_257_SCREENSHOT_DIR", tmp_path))
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(
+        path=screenshots / f"hidden-{generation_kind}-{target_kind}.png", full_page=True
+    )
+    control.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator("#transcript-search")).to_have_value("")
+    expect(target).to_be_visible()
+    expect(page.locator("#transcript-review-only")).not_to_be_checked()
+    expect(target.locator(".segment-timestamp")).to_be_focused()
+    expect(control).to_be_hidden()
+    if target_kind in {"seek", "native-seek"}:
+        expect(target).to_have_attribute("aria-current", "true")
+    else:
+        expect(target).to_have_class(re.compile(r"(?:^|\s)is-notes-source(?:\s|$)"))
+        expect(target.locator(".segment-source-mark")).to_have_text("Nguồn của mục notes")
+
+
+def test_stable_playback_samples_do_not_repaint_transcript_filters(live, signed_in):
+    page = open_meeting(live, signed_in)
+    page.locator("#transcript-search").fill("Segment 30")
+    counts = page.evaluate(
+        """() => {
+          const list = document.querySelector('#transcript-segments');
+          const observer = new MutationObserver(() => {});
+          observer.observe(list, { attributes: true, subtree: true,
+            attributeFilter: ['hidden', 'data-filter-key'] });
+          for (let index = 0; index < 20; index++) {
+            window.__player.time = 60.5;
+            document.querySelector('#meeting-audio').dispatchEvent(new Event('timeupdate'));
+          }
+          const records = observer.takeRecords();
+          observer.disconnect();
+          return records.length;
+        }"""
+    )
+    assert counts == 0
+    expect(page.locator('.transcript-segment[aria-current="true"]')).to_have_count(1)
+    expect(page.locator(".transcript-segment:visible")).to_have_count(1)
+
+
+def test_filtered_seek_keeps_exact_source_id_when_segments_overlap(live, signed_in):
+    page = open_meeting(live, signed_in)
+    meeting_id = page.locator("#meeting-audio").get_attribute("data-meeting-id")
+
+    def overlap(route):
+        response = route.fetch()
+        payload = response.json()
+        # Two speakers overlap at the saved source timestamp. The source names the later row.
+        payload["transcription"]["generation"]["segments"][29]["start_seconds"] = 60
+        payload["transcription"]["generation"]["segments"][29]["end_seconds"] = 62
+        route.fulfill(response=response, json=payload)
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}", overlap)
+    page.reload(wait_until="networkidle")
+    page.evaluate(STUB_AUDIO)
+    target = page.locator(".transcript-segment").nth(30)
+    target_id = target.get_attribute("data-segment-id")
+    page.locator("#transcript-search").fill("no matching source")
+    assert page.evaluate(
+        """async ([meetingId, segmentId]) => {
+          const { meetingHistory } = await import('/assets/history.js');
+          return meetingHistory.seekNotesSource({
+            meetingId, snapshotId: 'saved', segmentId, startSeconds: 60.5,
+          });
+        }""",
+        [meeting_id, target_id],
+    )
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", target_id
+    )
+    # The native seeked event that follows currentTime must not replace the chosen overlapping ID.
+    page.locator("#meeting-audio").dispatch_event("seeking")
+    page.locator("#meeting-audio").dispatch_event("seeked")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", target_id
+    )
+    page.locator("#transcript-reveal-target").click()
+    expect(target.locator(".segment-timestamp")).to_be_focused()
+
+
+@pytest.mark.parametrize("older_mark", [False, True], ids=["no-older-mark", "older-notes-mark"])
+@pytest.mark.parametrize(
+    "scheme,width",
+    [("light", 1280), ("dark", 1280), ("light", 320), ("dark", 320)],
+    ids=["desktop-light", "desktop-dark", "phone-light", "phone-dark"],
+)
+def test_filtered_timestamp_click_keeps_exact_overlapping_target(
+    live, signed_in, older_mark, scheme, width, tmp_path
+):
+    page = open_meeting(
+        live, signed_in, viewport={"width": width, "height": 844}, color_scheme=scheme
+    )
+    meeting_id = page.locator("#meeting-audio").get_attribute("data-meeting-id")
+
+    def overlap(route):
+        response = route.fetch()
+        payload = response.json()
+        payload["transcription"]["generation"]["segments"][29]["start_seconds"] = 60
+        payload["transcription"]["generation"]["segments"][29]["end_seconds"] = 62
+        route.fulfill(response=response, json=payload)
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}", overlap)
+    page.reload(wait_until="networkidle")
+    page.evaluate(STUB_AUDIO)
+    target = page.locator(".transcript-segment").nth(30)
+    target_id = target.get_attribute("data-segment-id")
+    older = page.locator(".transcript-segment").nth(29)
+    older_id = older.get_attribute("data-segment-id")
+    if older_mark:
+        page.evaluate(
+            """async ([meetingId, segmentId]) => {
+              const { meetingHistory } = await import('/assets/history.js');
+              return meetingHistory.markNotesSource(segmentId, 60.5);
+            }""",
+            [meeting_id, older_id],
+        )
+        expect(older.locator(".segment-source-mark")).to_be_visible()
+
+    target.locator(".segment-timestamp").click()
+    page.locator("#meeting-audio").dispatch_event("seeking")
+    page.locator("#meeting-audio").dispatch_event("seeked")
+    page.locator("#transcript-search").fill("no matching source")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", target_id)
+    screenshots = Path(os.environ.get("ASR_ISSUE_257_SCREENSHOT_DIR", tmp_path))
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=screenshots / f"hidden-target-{width}-{scheme}.png", full_page=True)
+    reveal.focus()
+    reveal.press("Enter")
+    expect(target).to_be_visible()
+    expect(target.locator(".segment-timestamp")).to_be_focused()
+    if older_mark:
+        expect(older.locator(".segment-source-mark")).to_be_visible()
+
+    # Once the matching native acknowledgement is consumed, a later time-only seek resolves by time.
+    later = page.locator(".transcript-segment").nth(4)
+    later_id = later.get_attribute("data-segment-id")
+    page.evaluate("window.__player.time = 8.5")
+    page.locator("#meeting-audio").dispatch_event("seeked")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute("data-segment-id", later_id)
+
+
+@pytest.mark.parametrize("older_mark", [False, True], ids=["no-older-mark", "older-notes-mark"])
+def test_playing_timestamp_click_keeps_target_through_delayed_trusted_seeked(
+    live, signed_in, tmp_path, older_mark
+):
+    meeting_id = seed_long_transcript(live.settings.data_dir, count=8)
+    write_recording(live.settings.data_dir, meeting_id, tmp_path, 16)
+    with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
+        connection.execute(
+            "UPDATE transcript_segments SET start_seconds = 8, end_seconds = 10 "
+            "WHERE sequence = 3 AND generation_id = "
+            "(SELECT current_generation_id FROM meetings WHERE id = ?)",
+            (meeting_id,),
+        )
+    _, page = signed_in(viewport={"width": 360, "height": 800}, color_scheme="dark")
+    load_meeting(live, page, meeting_id, 8)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').readyState >= 1")
+    earlier = page.locator(".transcript-segment").nth(3)
+    target = page.locator(".transcript-segment").nth(4)
+    earlier_id = earlier.get_attribute("data-segment-id")
+    target_id = target.get_attribute("data-segment-id")
+    assert (
+        target.get_attribute("data-start-seconds")
+        == earlier.get_attribute("data-start-seconds")
+        == "8"
+    )
+    if older_mark:
+        assert page.evaluate(
+            """async segmentId => {
+              const { meetingHistory } = await import('/assets/history.js');
+              return meetingHistory.markNotesSource(segmentId, 8);
+            }""",
+            earlier_id,
+        )
+    page.locator("#meeting-audio").evaluate("async node => { await node.play(); }")
+    page.locator(".transcript-segments").evaluate(
+        """node => node.addEventListener('click', () => {
+          const end = performance.now() + 250;
+          while (performance.now() < end) {}
+        }, {once: true})"""
+    )
+    target.locator(".segment-timestamp").click()
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 8")
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no matching delayed target")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", target_id)
+    if older_mark:
+        expect(earlier).to_have_class(re.compile(r"(?:^|\s)is-notes-source(?:\s|$)"))
+
+
+def test_new_player_seek_supersedes_outstanding_row_seek(live, signed_in, tmp_path):
+    page, _ = real_recording_page(live, signed_in, tmp_path, reduced_motion="reduce")
+    row = page.locator(".transcript-segment").nth(4)
+    new_target = page.locator(".transcript-segment").nth(5)
+    target_id = new_target.get_attribute("data-segment-id")
+    audio = page.locator("#meeting-audio")
+    audio.evaluate("""node => {
+      window.actualSeekTrace = [];
+      for (const type of ['seeking', 'seeked']) {
+        node.addEventListener(type, event => window.actualSeekTrace.push([
+          type, event.isTrusted, node.currentTime,
+        ]));
+      }
+      node.addEventListener('seeking', () => { node.currentTime = 10.5; }, {once: true});
+    }""")
+    row.locator(".segment-timestamp").click()
+    page.wait_for_function(
+        "() => window.actualSeekTrace.some("
+        "([type, trusted, time]) => type === 'seeked' && trusted && time >= 10.5)"
+    )
+    audio.evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no matching sources")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", target_id
+    )
+
+
+def test_two_timestamp_writes_before_metadata_keep_first_later_time_only_seek(
+    live, signed_in, tmp_path
+):
+    meeting_id = seed_long_transcript(live.settings.data_dir, count=8)
+    write_recording(live.settings.data_dir, meeting_id, tmp_path, 16)
+    _, page = signed_in(reduced_motion="reduce")
+    held = []
+    audio_url = f"{live.url}/api/meetings/{meeting_id}/audio"
+    page.route(audio_url, lambda route: held.append(route))
+    page.set_default_timeout(10_000)
+    page.goto(f"{live.url}/meetings/{meeting_id}#transcript", wait_until="domcontentloaded")
+    audio = page.locator("#meeting-audio")
+    rows = page.locator(".transcript-segment")
+    expect(rows).to_have_count(8)
+    page.locator("#meeting-tab-transcript").click()
+    events = audio.evaluate(
+        """node => {
+          window.loadingSeekEvents = [];
+          for (const type of ['seeking', 'seeked']) {
+            node.addEventListener(type, event => window.loadingSeekEvents.push([
+              event.type, event.isTrusted, node.currentTime,
+            ]));
+          }
+        }"""
+    )
+    assert events is None
+    assert audio.evaluate("node => node.readyState") == 0
+    first = rows.nth(1)
+    target = rows.nth(4)
+    later = rows.nth(5)
+    first.locator(".segment-timestamp").click()
+    target.locator(".segment-timestamp").click()
+    assert audio.evaluate("node => node.readyState") == 0
+    assert held
+    for route in held[:]:
+        route.continue_()
+    page.unroute(audio_url)
+    page.wait_for_function(
+        "() => window.loadingSeekEvents.some(([type, trusted, time]) => "
+        "type === 'seeked' && trusted && time >= 8 && time < 8.7)"
+    )
+    audio.evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("No matching local rows")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", target.get_attribute("data-segment-id"))
+    audio.evaluate("node => { node.currentTime = 10.5; }")
+    page.wait_for_function(
+        "() => window.loadingSeekEvents.some(([type, trusted, time]) => "
+        "type === 'seeked' && trusted && time >= 10.5 && time < 11.2)"
+    )
+    expect(reveal).to_have_attribute("data-segment-id", later.get_attribute("data-segment-id"))
+
+
+@pytest.mark.parametrize("prior_nonzero", [False, True], ids=["single-zero", "nonzero-then-zero"])
+def test_premetadata_zero_timestamp_does_not_own_a_later_native_seek(
+    live, signed_in, tmp_path, prior_nonzero
+):
+    meeting_id = seed_long_transcript(live.settings.data_dir, count=8)
+    write_recording(live.settings.data_dir, meeting_id, tmp_path, 16)
+    _, page = signed_in(reduced_motion="reduce")
+    audio_url = f"{live.url}/api/meetings/{meeting_id}/audio"
+    held = []
+    page.route(audio_url, lambda route: held.append(route))
+    page.set_default_timeout(10_000)
+    page.goto(f"{live.url}/meetings/{meeting_id}#transcript", wait_until="domcontentloaded")
+    audio = page.locator("#meeting-audio")
+    rows = page.locator(".transcript-segment")
+    expect(rows).to_have_count(8)
+    page.locator("#meeting-tab-transcript").click()
+    audio.evaluate(
+        """node => {
+          window.zeroSeekEvents = [];
+          for (const type of ['seeking', 'seeked']) {
+            node.addEventListener(type, event => window.zeroSeekEvents.push([
+              type, event.isTrusted, node.currentTime,
+            ]));
+          }
+        }"""
+    )
+    assert audio.evaluate("node => node.readyState") == 0
+    if prior_nonzero:
+        rows.nth(1).locator(".segment-timestamp").click()
+    rows.nth(0).locator(".segment-timestamp").click()
+    assert audio.evaluate("node => node.readyState") == 0
+    assert held
+    for route in held[:]:
+        route.continue_()
+    page.unroute(audio_url)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').readyState >= 1")
+    audio.evaluate("node => { node.currentTime = 10.5; }")
+    page.wait_for_function(
+        "() => window.zeroSeekEvents.some(([type, trusted, time]) => "
+        "type === 'seeked' && trusted && time >= 10.5)"
+    )
+    audio.evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("No matching zero target")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute(
+        "data-segment-id", rows.nth(5).get_attribute("data-segment-id")
+    )
+
+
+def test_delayed_saved_source_card_does_not_override_newer_timestamp_seek(
+    live, signed_in, tmp_path
+):
+    meeting_id, _, snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(reduced_motion="reduce")
+    open_notes(live, page, meeting_id)
+    audio = page.locator("#meeting-audio")
+    audio.evaluate(
+        """node => {
+          window.loadingSeekEvents = [];
+          for (const type of ['seeking', 'seeked']) {
+            node.addEventListener(type, event => window.loadingSeekEvents.push([
+              event.type, event.isTrusted, node.currentTime,
+            ]));
+          }
+        }"""
+    )
+    snapshot_url = f"{live.url}/api/notes-sources/{snapshot['id']}"
+    held = []
+    page.route(snapshot_url, lambda route: held.append(route))
+    with page.expect_request(snapshot_url):
+        page.locator(CHIP).filter(has_text="00:25").click()
+    target = page.locator(f'.transcript-segment[data-segment-id="{segment_ids[20]}"]')
+    target.locator(".segment-timestamp").click()
+    page.wait_for_function(
+        "() => window.loadingSeekEvents.some(([type, trusted, time]) => "
+        "type === 'seeked' && trusted && time >= 20 && time < 20.7)"
+    )
+    audio.evaluate("node => node.pause()")
+    assert held
+    for route in held[:]:
+        route.continue_()
+    page.unroute(snapshot_url)
+    card = page.locator("#notes-source-view")
+    expect(card).to_be_visible()
+    expect(page.locator("#notes-source-time")).to_have_text("00:00:25")
+    expect(page.locator("#notes-source-text")).to_have_text(snapshot["segments"][25]["text"])
+    page.locator("#meeting-tab-transcript").click()
+    page.locator("#transcript-search").fill("No matching local rows")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+    page.locator("#notes-source-close").click()
+    expect(card).to_be_hidden()
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+    assert audio.evaluate(
+        "node => node.paused && node.currentTime >= 19.9 && node.currentTime < 20.7"
+    )
+
+
+def test_newer_notes_source_cancels_an_older_historical_metadata_wait(live, signed_in, tmp_path):
+    meeting_id, old_revision, old_snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+
+    def newer_document(ids):
+        return {
+            "schema_version": 1,
+            "overview": [{"text": "The newer source.", "source_ids": [ids[2]]}],
+            "key_topics": [],
+            "decisions": [],
+            "open_questions": [],
+            "action_items": [],
+            "confirmation_items": [],
+        }
+
+    new_revision = seed_cited_notes(
+        live.settings.data_dir,
+        newer_document,
+        existing=(meeting_id, old_snapshot["generation_id"], segment_ids),
+    )[1]
+    _, page = signed_in(reduced_motion="reduce")
+    audio_url = f"{live.url}/api/meetings/{meeting_id}/audio"
+    held_audio = []
+    page.route(audio_url, lambda route: held_audio.append(route))
+    open_notes(live, page, meeting_id)
+    selector = page.locator("#notes-revision-selector")
+    expect(selector).to_have_count(1)
+    selector.select_option(old_revision["id"])
+    expect(page.locator(CHIP).filter(has_text="00:25")).to_be_visible()
+    page.evaluate(
+        """() => Object.defineProperty(document.querySelector('#meeting-audio'), 'readyState', {
+          configurable: true, get: () => 0,
+        })"""
+    )
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.wait_for_function(
+        "() => document.querySelector('#notes-source-time').textContent === '00:00:25'"
+    )
+
+    page.locator("#meeting-tab-notes").click()
+    selector.select_option(new_revision["id"])
+    expect(page.locator(CHIP).filter(has_text="00:02")).to_be_visible()
+    new_snapshot_url = f"{live.url}/api/notes-sources/{new_revision['source_snapshot_id']}"
+    held_snapshot = []
+    page.route(new_snapshot_url, lambda route: held_snapshot.append(route))
+    page.locator(CHIP).filter(has_text="00:02").click()
+    assert held_audio and held_snapshot
+    for route in held_audio[:]:
+        route.continue_()
+    page.unroute(audio_url)
+    for route in held_snapshot[:]:
+        route.continue_()
+    page.unroute(new_snapshot_url)
+    page.wait_for_function(
+        "() => document.querySelector('#notes-source-time').textContent === '00:00:02'"
+    )
+    page.wait_for_function(
+        "() => !document.querySelector('#meeting-audio').seeking "
+        "&& document.querySelector('#meeting-audio').currentTime >= 1.7 "
+        "&& document.querySelector('#meeting-audio').currentTime < 2.4"
+    )
+    expect(page.locator("#notes-source-status")).not_to_contain_text("vẫn ở mốc")
+    assert page.locator("#notes-source-time").inner_text() == "00:00:02"
+    page.locator("#meeting-tab-transcript").click()
+    page.locator("#transcript-search").fill("No current row")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", segment_ids[2]
+    )
+
+
+def test_issued_native_seek_survives_transcript_generation_switch(live, signed_in, tmp_path):
+    """A mounted recording's native acknowledgement is not owned by its old generation."""
+    meeting_id, _, snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+    rerun_transcript(live.settings.data_dir, meeting_id)
+    _, page = signed_in(reduced_motion="reduce")
+    page.set_default_timeout(8_000)
+    held_audio = []
+    held_snapshot = []
+    audio_url = f"{live.url}/api/meetings/{meeting_id}/audio"
+    snapshot_url = f"{live.url}/api/notes-sources/{snapshot['id']}"
+    page.route(audio_url, lambda route: held_audio.append(route))
+    page.route(snapshot_url, lambda route: held_snapshot.append(route))
+    page.goto(f"{live.url}/meetings/{meeting_id}#transcript", wait_until="domcontentloaded")
+    selector = page.locator("#generation-selector")
+    expect(selector).to_be_visible()
+    current_generation = selector.input_value()
+    selector.select_option(snapshot["generation_id"])
+    audio = page.locator("#meeting-audio")
+    assert audio.evaluate("node => node.readyState") == 0
+    audio.evaluate(
+        """node => {
+          window.crossGenerationSeekTrace = [];
+          for (const type of ['seeking', 'seeked']) {
+            node.addEventListener(type, event => window.crossGenerationSeekTrace.push([
+              event.type, event.isTrusted, node.currentTime,
+            ]));
+          }
+        }"""
+    )
+    page.locator(
+        f'.transcript-segment[data-segment-id="{segment_ids[8]}"] .segment-timestamp'
+    ).click()
+    selector.select_option(current_generation)
+    page.locator("#meeting-tab-notes").click()
+    with page.expect_request(snapshot_url):
+        page.locator(CHIP).filter(has_text="00:25").click()
+    assert held_audio and held_snapshot
+    for route in held_audio[:]:
+        route.continue_()
+    page.unroute(audio_url)
+    page.wait_for_function(
+        "() => window.crossGenerationSeekTrace.some("
+        "([type, trusted]) => type === 'seeked' && trusted)"
+    )
+    for route in held_snapshot[:]:
+        route.continue_()
+    page.unroute(snapshot_url)
+    expect(page.locator("#notes-source-time")).to_have_text("00:00:25")
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 24.9")
+
+
+def test_explicit_source_seek_wins_over_held_newer_snapshot(live, signed_in, tmp_path):
+    """A visible saved card's deliberate seek remains newer than automatic snapshot playback."""
+    meeting_id, old_revision, old_snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+
+    def newer_document(ids):
+        return {
+            "schema_version": 1,
+            "overview": [{"text": "The newer source.", "source_ids": [ids[2]]}],
+            "key_topics": [],
+            "decisions": [],
+            "open_questions": [],
+            "action_items": [],
+            "confirmation_items": [],
+        }
+
+    new_revision = seed_cited_notes(
+        live.settings.data_dir,
+        newer_document,
+        existing=(meeting_id, old_snapshot["generation_id"], segment_ids),
+    )[1]
+    _, page = signed_in(reduced_motion="reduce")
+    open_notes(live, page, meeting_id)
+    selector = page.locator("#notes-revision-selector")
+    selector.select_option(old_revision["id"])
+    page.locator(CHIP).filter(has_text="00:25").click()
+    audio = page.locator("#meeting-audio")
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 25")
+    audio.evaluate("node => node.pause()")
+    page.locator("#meeting-tab-notes").click()
+    selector.select_option(new_revision["id"])
+    expect(page.locator(CHIP).filter(has_text="00:02")).to_be_visible()
+    snapshot_url = f"{live.url}/api/notes-sources/{new_revision['source_snapshot_id']}"
+    held_snapshot = []
+    page.route(snapshot_url, lambda route: held_snapshot.append(route))
+    page.locator(CHIP).filter(has_text="00:02").click()
+    seek = page.locator("#notes-source-seek")
+    expect(seek).to_be_visible()
+    expect(seek).to_be_enabled()
+    seek.click()
+    page.locator("#transcript-search").fill("No matching local transcript row")
+    assert held_snapshot
+    for route in held_snapshot[:]:
+        route.continue_()
+    page.unroute(snapshot_url)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 24.7")
+    expect(page.locator("#notes-source-time")).to_have_text("00:00:02")
+    assert f"notes_source={new_revision['source_snapshot_id']}" in page.url
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", segment_ids[25]
+    )
+    page.locator("#notes-source-seek").click()
+    page.wait_for_function(
+        "() => document.querySelector('#meeting-audio').currentTime >= 1.7 "
+        "&& document.querySelector('#meeting-audio').currentTime < 2.4"
+    )
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", segment_ids[2]
+    )
+
+
+def test_new_notes_source_after_native_seek_start_keeps_its_reveal(live, signed_in, tmp_path):
+    meeting_id, _, snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(reduced_motion="reduce")
+    open_notes(live, page, meeting_id)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').readyState >= 1")
+    chip = page.locator(CHIP).filter(has_text="00:25")
+    expect(chip).to_be_visible()
+    page.locator("#meeting-tab-transcript").click()
+    held = []
+    snapshot_url = f"{live.url}/api/notes-sources/{snapshot['id']}"
+    page.route(snapshot_url, lambda route: held.append(route))
+    with page.expect_request(snapshot_url):
+        chip.evaluate(
+            """chip => {
+              const audio = document.querySelector('#meeting-audio');
+              window.reverseSourceTrace = [];
+              audio.addEventListener('seeking', () => {
+                window.reverseSourceTrace.push(['seeking', audio.currentTime]);
+                document.querySelector('#meeting-tab-notes').click();
+                Array.from(document.querySelectorAll('#notes-preview a'))
+                  .find(link => link.textContent.includes('00:25')).click();
+              }, {once: true});
+              audio.addEventListener('seeked', () => {
+                window.reverseSourceTrace.push(['seeked', audio.currentTime]);
+              }, {once: true});
+              audio.currentTime = 20;
+            }"""
+        )
+    page.wait_for_function("() => window.reverseSourceTrace.some(([type]) => type === 'seeked')")
+    assert held
+    held[0].continue_()
+    expect(page.locator("#notes-source-text")).to_have_text(snapshot["segments"][25]["text"])
+    page.locator("#meeting-tab-transcript").click()
+    page.locator("#transcript-search").fill("No such local row")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[25])
+
+
+def test_closing_older_notes_source_keeps_newer_hidden_seek_recovery(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.wait_for_function(
+        "() => document.querySelector('#meeting-audio').currentTime >= 24.7 "
+        "&& !document.querySelector('#meeting-audio').seeking"
+    )
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    target = page.locator(f'.transcript-segment[data-segment-id="{segment_ids[20]}"]')
+    target.locator(".segment-timestamp").click()
+    page.wait_for_function(
+        "() => !document.querySelector('#meeting-audio').seeking "
+        "&& document.querySelector('#meeting-audio').currentTime < 22"
+    )
+    page.locator("#transcript-search").fill("no result random")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+    page.locator("#notes-source-close").click()
+    expect(reveal).to_be_visible()
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+
+
+def test_closing_notes_source_clears_source_owned_hidden_reveal(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.wait_for_function(
+        "() => document.querySelector('#meeting-audio').currentTime >= 24.7 "
+        "&& !document.querySelector('#meeting-audio').seeking"
+    )
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no source row")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[25])
+    page.locator("#notes-source-close").click()
+    expect(reveal).to_be_hidden()
+    expect(reveal).to_have_attribute("data-segment-id", "")
+
+
+def test_closing_notes_during_trusted_source_seeking_dismisses_reveal(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.locator("#meeting-audio").evaluate("""node => {
+      window.sourceSeekTrace = [];
+      node.addEventListener('seeking', () => {
+        window.sourceSeekTrace.push('seeking');
+        document.querySelector('#notes-source-close')?.click();
+      }, {once: true});
+      node.addEventListener('seeked', () => window.sourceSeekTrace.push('seeked'));
+    }""")
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.wait_for_function(
+        "() => window.sourceSeekTrace.includes('seeking') "
+        "&& window.sourceSeekTrace.includes('seeked')"
+    )
+    page.locator("#meeting-audio").evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("no source row")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_be_hidden()
+    expect(reveal).to_have_attribute("data-segment-id", "")
+    assert segment_ids[25]
+
+
+def test_newer_timestamp_wins_when_notes_seek_is_waiting_for_metadata(live, signed_in, tmp_path):
+    meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(viewport={"width": 1280, "height": 844})
+    open_notes(live, page, meeting_id)
+    page.evaluate(
+        """() => Object.defineProperty(document.querySelector('#meeting-audio'), 'readyState', {
+          configurable: true, get: () => 0,
+        })"""
+    )
+    page.locator(CHIP).filter(has_text="00:25").click()
+    page.locator(
+        f'.transcript-segment[data-segment-id="{segment_ids[20]}"] .segment-timestamp'
+    ).click()
+    page.locator("#notes-source-close").click()
+    page.evaluate(
+        """() => {
+          const audio = document.querySelector('#meeting-audio');
+          delete audio.readyState;
+          audio.dispatchEvent(new Event('loadedmetadata'));
+        }"""
+    )
+    page.locator("#transcript-search").fill("nothing matches this")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])

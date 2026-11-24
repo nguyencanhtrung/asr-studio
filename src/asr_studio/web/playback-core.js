@@ -8,7 +8,7 @@
 // through actions: the clock (`now`, from performance.now()), the audio facts (`time`, `paused`, `ended`, `ready`
 // for "metadata loaded", `meetingId` of the loaded audio), two layout facts (`visible`: some of the list shows below
 // the player bar; `typing`: focus is in a transcript field) and `reduced` (prefers-reduced-motion). The rows come
-// from `shown.rows`, the segments of the generation whose list is on the page (null until it is painted).
+// from `shown.rows`, all segments of the selected generation, independently of filtering or painting.
 //
 // The slice cannot touch the page, so what it wants done is data: `ops` are paint commands for the view, run in
 // order and acknowledged with `playback/painted` (same idea as the `ops` of transcript-core); the audio seek is an
@@ -27,6 +27,10 @@ export const initialState = {
   current: null, // id of the current row, null in a gap between rows
   lastManual: null, // clock of the last scroll the user made (null: none yet)
   ownUntil: 0, // a scroll event up to this clock is ours, not the user's
+  target: null, // real row of the last explicit source jump or seek, even when filtered out
+  targetOwner: null, // source | timestamp | time: why target is still the reveal target
+  sourceRequestId: null, // Notes source intent reserved before its snapshot fetch; timestamps supersede it
+  pendingTarget: null, // { id, owner, sourceRequestId, meetingId, audioKey, generationId, owedStarts, startedStarts, dismissed }: native acknowledgement
   mark: null, // id of the row the open notes source names
   seek: null, // the seek waiting for the audio metadata: { id, ids, meetingId, startSeconds, generationId }; ids: every seek joined to it
   seekDone: null, // { id, ids, ok }: how the last seek ended; ok holds for every id in ids
@@ -96,6 +100,48 @@ function sample(state, action) {
   return next;
 }
 
+function sampleTarget(state, action) {
+  const next = sample(state, action);
+  const preferred = action.targetId || [state.target, state.mark].find((id) => next.active.includes(id));
+  return { ...next, target: preferred || next.current };
+}
+
+function sameNativeTarget(target, action) {
+  return target
+    && target.meetingId === action.shown?.id
+    && target.generationId === action.shown?.generationId
+    // The view supplies the native seeking state with every seeked action. A pending target is
+    // acknowledged only by the real-shaped end of that seeking/seeked pair.
+    && target.owedStarts === 0
+    && target.startedStarts > 0
+    && action.seeking === false;
+}
+
+// The audio element is mounted across transcript-generation changes. Native seeking belongs to
+// that loaded recording, while a row identity remains valid only in the generation that supplied it.
+const recordingScope = (value) => value?.audioKey || value?.audioMeetingId || value?.meetingId || value?.shown?.id || null;
+const sameRecording = (a, b) => recordingScope(a) !== null && recordingScope(a) === recordingScope(b);
+
+const sourceSeekOwnsNativeEvent = (state) => state.seek
+  && state.sourceRequestId !== null
+  && state.seek.sourceRequestId === state.sourceRequestId;
+
+function addPendingStart(previous, target) {
+  const sameScope = previous && sameRecording(previous, target);
+  const owesNativeStart = target.ready !== false || target.startSeconds !== 0;
+  // Before metadata exists, Chromium coalesces repeated currentTime writes and emits one native
+  // seeking/seeked pair when it can apply the final position. Once metadata is available, each
+  // subsequent write has its own native start and must remain owed.
+  return sameScope
+    ? {
+      ...target,
+      owedStarts: owesNativeStart ? (target.ready === false ? 1 : previous.owedStarts + 1) : 0,
+      startedStarts: previous.startedStarts || 0,
+      dismissed: false,
+    }
+    : { ...target, owedStarts: owesNativeStart ? 1 : 0, startedStarts: 0, dismissed: false };
+}
+
 const finishSeek = (state, ok) => ({ ...state, seek: null, seekDone: { id: state.seek.id, ids: state.seek.ids, ok } });
 const stopWaits = (seek) => (seek ? seek.ids.map((id) => ({ type: "cancel", key: KEY.timeout(id) })) : []);
 const wait = (id) => ({ type: "schedule", key: KEY.timeout(id), delay: SEEK_TIMEOUT_MS, action: { type: "playback/seek-timed-out", seekId: id } });
@@ -104,18 +150,42 @@ const wait = (id) => ({ type: "schedule", key: KEY.timeout(id), delay: SEEK_TIME
 function startSeek(state, action) {
   const { shown } = action;
   const here = Boolean(shown) && shown.view === "meeting" && shown.id === action.meetingId && action.audioMeetingId === action.meetingId;
-  const seek = { id: action.seekId, ids: [action.seekId], meetingId: action.meetingId, startSeconds: action.startSeconds, generationId: shown ? shown.generationId : null };
+  const seek = {
+    targetId: sourceRow(rowsOf(shown), action.segmentId, action.startSeconds),
+    id: action.seekId,
+    ids: [action.seekId],
+    meetingId: action.meetingId,
+    audioKey: action.audioKey || action.audioMeetingId || action.meetingId,
+    startSeconds: action.startSeconds,
+    generationId: shown ? shown.generationId : null,
+    sourceRequestId: action.sourceRequestId,
+    mediaWriteIssued: Boolean(action.ready),
+  };
   const open = state.seek;
   if (!here) return out({ ...state, seek: null, seekDone: { id: action.seekId, ids: [action.seekId], ok: false } }, stopWaits(open));
   // The same target as the seek in progress: join it, every waiter gets its result (or its own deadline first).
   if (open && open.meetingId === seek.meetingId && open.startSeconds === seek.startSeconds) {
-    return out({ ...state, seek: { ...open, ids: [...open.ids, seek.id] } }, action.ready ? [] : [wait(seek.id)]);
+    return out({ ...state, seek: { ...open, targetId: seek.targetId, ids: [...open.ids, seek.id] } }, action.ready ? [] : [wait(seek.id)]);
   }
   const apply = {
     type: "call", key: KEY.seek, name: "playback.seek", args: [action.startSeconds],
     ok: "playback/seek-applied", error: "playback/seek-failed", meta: { seekId: seek.id },
   };
-  if (action.ready) return out({ ...state, seek, seekDone: null }, [...stopWaits(open), apply]);
+  if (action.ready) {
+    const pendingTarget = seek.sourceRequestId !== undefined && seek.sourceRequestId !== null
+      ? addPendingStart(state.pendingTarget, {
+        id: seek.targetId,
+        owner: "source",
+        sourceRequestId: seek.sourceRequestId,
+        meetingId: seek.meetingId,
+        audioKey: seek.audioKey,
+        generationId: seek.generationId,
+        startSeconds: seek.startSeconds,
+        ready: true,
+      })
+      : state.pendingTarget;
+    return out({ ...state, seek, pendingTarget, seekDone: null }, [...stopWaits(open), apply]);
+  }
   return out({ ...state, seek, seekDone: null }, [...stopWaits(open), wait(seek.id)]);
 }
 
@@ -134,11 +204,112 @@ function step(state, action) {
   switch (action.type) {
     case "playback/sampled":
       return out(sample(state, action));
+    case "playback/seeked": {
+      const next = sample(state, action);
+      const pending = sameNativeTarget(state.pendingTarget, action) ? state.pendingTarget : null;
+      if (state.pendingTarget && !pending) {
+        const sameScope = sameRecording(state.pendingTarget, action);
+        if (sameScope && state.pendingTarget.startedStarts > 0 && state.pendingTarget.owedStarts > 0) {
+          // The native completion may belong to an earlier app write. Keep the latest explicit
+          // row and its remaining recording-scoped debt for the next seeking/seeked pair.
+          return out({
+            ...next,
+            target: state.pendingTarget.dismissed ? null : state.pendingTarget.id,
+            targetOwner: state.pendingTarget.dismissed ? null : state.pendingTarget.owner,
+            pendingTarget: { ...state.pendingTarget, startedStarts: state.pendingTarget.startedStarts - 1 },
+          });
+        }
+        if (!sameScope || state.pendingTarget.generationId !== action.shown?.generationId || state.pendingTarget.startedStarts === 0) {
+          return out({
+            ...next,
+            target: next.current,
+            targetOwner: next.current ? "time" : null,
+            pendingTarget: null,
+          });
+        }
+        // A stale seeked belongs to an earlier native start. Keep the newer request owned until
+        // its own seeking/seeked pair arrives; current/active still follows the media clock.
+        return out({
+          ...next,
+          target: state.pendingTarget.dismissed ? null : state.pendingTarget.id,
+          targetOwner: state.pendingTarget.dismissed ? null : state.pendingTarget.owner,
+        });
+      }
+      return out({
+        ...next,
+        target: pending?.dismissed ? null : (pending?.id || next.current),
+        targetOwner: pending?.dismissed ? null : (pending?.owner || (next.current ? "time" : null)),
+        pendingTarget: null,
+      });
+    }
+    case "playback/seeking": {
+      const sameScope = state.pendingTarget && sameRecording(state.pendingTarget, action);
+      if (!sameScope) {
+        if (state.sourceRequestId === null || sourceSeekOwnsNativeEvent(state)) return out(state);
+        const next = state.seek ? finishSeek(state, false) : { ...state, sourceRequestId: null };
+        return out({ ...next, sourceRequestId: null }, state.seek ? stopWaits(state.seek) : []);
+      }
+      // Each app write owns one native seeking notification. A second seeking with no owed
+      // write is a newer time-only seek and supersedes the old explicit row identity.
+      return out(state.pendingTarget.owedStarts > 0
+        ? {
+          ...state,
+          pendingTarget: {
+            ...state.pendingTarget,
+            owedStarts: state.pendingTarget.owedStarts - 1,
+            startedStarts: (state.pendingTarget.startedStarts || 0) + 1,
+          },
+        }
+        : {
+          ...state,
+          pendingTarget: null,
+          sourceRequestId: null,
+        });
+    }
+    case "playback/target-requested": {
+      const id = sourceRow(rowsOf(action.shown), action.segmentId, action.startSeconds);
+      const next = bumped({
+        ...state,
+        target: id,
+        targetOwner: id ? "timestamp" : null,
+        sourceRequestId: null,
+        pendingTarget: id ? addPendingStart(state.pendingTarget, {
+          id,
+          owner: "timestamp",
+          meetingId: action.shown?.id,
+          audioKey: action.audioKey || action.audioMeetingId || action.shown?.id,
+          generationId: action.shown?.generationId,
+          startSeconds: action.startSeconds,
+          ready: action.ready,
+        }) : null,
+        seek: id && state.seek ? null : state.seek,
+        seekDone: id && state.seek
+          ? { id: state.seek.id, ids: state.seek.ids, ok: false }
+          : state.seekDone,
+      });
+      return out(next, id && state.seek ? stopWaits(state.seek) : []);
+    }
     case "playback/metadata-loaded": {
       const next = sample(state, action);
       const seek = state.seek;
       if (!seek || action.audioMeetingId !== seek.meetingId) return out(next);
-      return out(next, [
+      const started = {
+        ...seek,
+        mediaWriteIssued: true,
+      };
+      const pendingTarget = started.sourceRequestId !== undefined && started.sourceRequestId !== null
+        ? addPendingStart(state.pendingTarget, {
+          id: started.targetId,
+          owner: "source",
+          sourceRequestId: started.sourceRequestId,
+          meetingId: started.meetingId,
+          audioKey: started.audioKey,
+          generationId: started.generationId,
+          startSeconds: started.startSeconds,
+          ready: true,
+        })
+        : state.pendingTarget;
+      return out({ ...next, seek: started, pendingTarget }, [
         ...stopWaits(seek),
         {
           type: "call", key: KEY.seek, name: "playback.seek", args: [seek.startSeconds],
@@ -158,19 +329,108 @@ function step(state, action) {
     }
     case "playback/seek-applied": {
       if (!state.seek || state.seek.id !== action.meta.seekId) return out(state); // an answer for a seek that was replaced
-      return out(sample(finishSeek(state, true), { ...action.value, now: action.now, shown: action.shown }));
+      const seek = state.seek;
+      const next = sampleTarget(finishSeek(state, true), { ...action.value, now: action.now, shown: action.shown, targetId: seek.targetId });
+      const pendingTarget = seek.sourceRequestId !== undefined && seek.sourceRequestId !== null
+        ? (seek.mediaWriteIssued
+          ? state.pendingTarget
+          : addPendingStart(state.pendingTarget, {
+            id: seek.targetId,
+            owner: "source",
+            sourceRequestId: seek.sourceRequestId,
+            meetingId: seek.meetingId,
+            audioKey: seek.audioKey,
+            generationId: seek.generationId,
+            startSeconds: seek.startSeconds,
+            ready: action.value?.ready,
+          }))
+        : (seek.targetId ? addPendingStart(state.pendingTarget, {
+          id: seek.targetId,
+          owner: "source",
+          meetingId: seek.meetingId,
+          audioKey: seek.audioKey,
+          generationId: seek.generationId,
+          startSeconds: seek.startSeconds,
+          ready: action.value?.ready,
+        }) : null);
+      return out({
+        ...next,
+        targetOwner: seek.targetId ? "source" : next.target ? "time" : null,
+        pendingTarget,
+      });
     }
     case "playback/seek-failed":
       return state.seek && state.seek.id === action.meta.seekId ? out(finishSeek(state, false)) : out(state);
     case "playback/meeting-left": {
       // The seek belongs to the meeting that was left; the mark only to a meeting we switched away from.
-      const next = { ...state, seek: null, seekDone: null, mark: action.kind === "switch" ? null : state.mark };
+      const next = {
+        ...state,
+        seek: null,
+        seekDone: null,
+        target: null,
+        targetOwner: null,
+        sourceRequestId: null,
+        pendingTarget: null,
+        mark: action.kind === "switch" ? null : state.mark,
+      };
       return out(bumped(next), stopWaits(state.seek));
     }
     case "playback/mark-requested": {
       const id = sourceRow(rowsOf(action.shown), action.segmentId, action.startSeconds);
-      const next = bumped({ ...state, mark: id });
-      return out(id === null ? next : queue(next, { op: "reveal", id, smooth: !action.reduced }));
+      const staleSource = action.sourceRequestId !== undefined
+        && action.sourceRequestId !== state.sourceRequestId;
+      if (id !== null && staleSource) {
+        // A snapshot may finish after a timestamp click. Its saved provenance is still useful,
+        // but it must not claim the newer reveal target or enqueue a scroll.
+        return out(bumped({ ...state, mark: id }));
+      }
+      const explicitDismiss = action.segmentId === null;
+      const closingSource = explicitDismiss && state.targetOwner === "source";
+      // Closing Notes clears source provenance and source-owned seek recovery. A newer manual
+      // timestamp target remains, including when it intentionally names the same row.
+      const preservesNewerTarget = id === null && !closingSource;
+      const target = preservesNewerTarget ? state.target : id;
+      const targetOwner = preservesNewerTarget ? state.targetOwner : (id ? "source" : null);
+      const sourcePending = explicitDismiss && state.pendingTarget?.owner === "source"
+        ? { ...state.pendingTarget, dismissed: true }
+        : state.pendingTarget;
+      const sourceSeek = closingSource || sourceSeekOwnsNativeEvent(state);
+      const next = bumped({
+        ...state,
+        mark: id,
+        target: closingSource ? null : target,
+        targetOwner: closingSource ? null : targetOwner,
+        sourceRequestId: explicitDismiss ? null : state.sourceRequestId,
+        pendingTarget: sourcePending,
+        seek: explicitDismiss && sourceSeek ? null : state.seek,
+        seekDone: explicitDismiss && sourceSeek && state.seek
+          ? { id: state.seek.id, ids: state.seek.ids, ok: false }
+          : state.seekDone,
+      });
+      const effects = explicitDismiss && sourceSeek ? stopWaits(state.seek) : [];
+      return out(id === null ? next : queue(next, { op: "reveal", id, smooth: !action.reduced }), effects);
+    }
+    case "playback/source-requested": {
+      const sourceRequestId = action.sourceRequestId ?? null;
+      const open = state.seek;
+      const superseded = open
+        && open.sourceRequestId !== undefined
+        && open.sourceRequestId !== null
+        && open.sourceRequestId !== sourceRequestId;
+      if (!superseded) return out({ ...state, sourceRequestId });
+      if (open.mediaWriteIssued) {
+        // The request is no longer allowed to resolve its waiter, but its already-issued media
+        // write still owns the native seeking/seeked acknowledgement. Keep that ownership until
+        // seek-applied records the no-row or row target.
+        return out({
+          ...state,
+          sourceRequestId,
+          seek: { ...open, ids: [] },
+          seekDone: { id: open.id, ids: open.ids, ok: false },
+        }, stopWaits(open));
+      }
+      const next = finishSeek({ ...state, sourceRequestId }, false);
+      return out(next, stopWaits(open));
     }
     case "playback/scroll-started":
       return out({ ...state, ownUntil: action.now + OWN_SCROLL_GAP_MS });

@@ -61,6 +61,9 @@ import {
   isEditing,
   isRenaming,
   navigation,
+  needsReview,
+  selectSegments,
+  searchTimestamp,
   reduce as reduceTranscript,
   speakerAddReady,
 } from "./transcript-core.js";
@@ -155,15 +158,9 @@ function shownNow() {
     blocked: coreSourceMutationUnavailable(state) || !recordingReady(meeting),
     tab: state.tab,
     generationId: onScreen ? onScreen.id : null,
-    // The playback slice reasons about the rows on the page: those of the generation whose list is painted.
-    rows: onScreen && onScreen.id === paintedGenerationId() && Array.isArray(onScreen.segments) ? onScreen.segments : null,
+    // Playback/source identity comes from the selected generation, never the filtered DOM.
+    rows: onScreen && Array.isArray(onScreen.segments) ? onScreen.segments : null,
   };
-}
-
-// The generation whose rows the transcript list holds (its render key starts with the generation id).
-function paintedGenerationId() {
-  const key = $("#transcript-generation").dataset.renderKey;
-  return key ? key.split(":").slice(0, -2).join(":") : null;
 }
 
 // The clock enters the core as data, on every action.
@@ -192,6 +189,7 @@ const run = createRunner({
     "clipboard.select": selectDiagnosticCommand,
     "transcript.copy": copyTranscriptDraft,
     "playback.seek": seekAudio,
+    "history.sourceRequestStarted": sourceRequestStarted,
     "meeting.refresh": (meetingId) => meetingHistory.refreshMeeting(meetingId),
   },
 });
@@ -735,12 +733,12 @@ async function leaveCalendar() {
 
 // Resolves true when the player was sent to the source, false when the source could not be shown or a newer seek,
 // a meeting or transcript change, an audio error or the metadata timeout won (the core decides, see playback-core.js).
-async function seekNotesSource(source) {
+async function seekNotesSource(source, sourceRequestId, { updateLocation = true } = {}) {
   const { meetingId, snapshotId, segmentId, startSeconds } = source; // no source at all rejects, as before 4d
   if (!validSource(source)) return false;
   const path = `/meetings/${encodeURIComponent(meetingId)}`;
   const query = `?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}${source.group ? `&group=${encodeURIComponent(source.group)}` : ""}`;
-  if (window.location.pathname !== path || window.location.search !== query) {
+  if (updateLocation && (window.location.pathname !== path || window.location.search !== query)) {
     // Opening a source does not change the tab: the new entry keeps the address's hash and the tab shown.
     const state = nav();
     const shown = state.meeting && state.meeting.id === meetingId && state.view === "meeting";
@@ -755,6 +753,9 @@ async function seekNotesSource(source) {
     const painted = await loadMeeting(meetingId);
     if (!painted || !showing()) return false;
   }
+  if (sourceRequestId !== undefined && store.getState().playback.sourceRequestId !== sourceRequestId) {
+    return { superseded: true };
+  }
   const seekId = newRequestId();
   return new Promise((resolve) => {
     const stop = store.subscribe((root) => {
@@ -764,7 +765,7 @@ async function seekNotesSource(source) {
       else return;
       stop();
     });
-    dispatch({ type: "playback/seek-requested", seekId, meetingId, startSeconds, ...audioFacts() });
+    dispatch({ type: "playback/seek-requested", seekId, meetingId, segmentId, startSeconds, sourceRequestId, ...audioFacts() });
   });
 }
 
@@ -858,15 +859,7 @@ function formatElapsedSeconds(value) {
 }
 
 function formatTimestamp(secondsValue) {
-  const milliseconds = Math.max(0, Math.round((Number(secondsValue) || 0) * 1000));
-  const hours = Math.floor(milliseconds / 3_600_000);
-  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
-  const seconds = Math.floor((milliseconds % 60_000) / 1000);
-  const fraction = Math.floor((milliseconds % 1000) / 10);
-  const clock = hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-    : `${minutes}:${String(seconds).padStart(2, "0")}`;
-  return `${clock}.${String(fraction).padStart(2, "0")}`;
+  return searchTimestamp(secondsValue);
 }
 
 function renderTaskError(view) {
@@ -1547,6 +1540,37 @@ function replaceSpeakerItem(generationId, speakerId) {
   return item;
 }
 
+// Filtering only hides rows: typing, selection and an open editor survive each keystroke.
+function renderTranscriptFilters() {
+  const generation = shownGeneration().generation;
+  if (!generation) return;
+  const state = tstate();
+  const list = $("#transcript-segments");
+  const playback = store.getState().playback;
+  const filterKey = JSON.stringify([generation.id, generation.source_version, state.query, state.reviewOnly, playback.target]);
+  if (list.dataset.filterKey === filterKey) return;
+  list.dataset.filterKey = filterKey;
+  const result = selectSegments(state, generation);
+  const visible = new Set(result.segments.map((segment) => segment.id));
+  for (const row of $("#transcript-segments").children) {
+    const hidden = !visible.has(row.dataset.segmentId);
+    if (hidden && row.contains(document.activeElement)) $("#transcript-search").focus({ preventScroll: true });
+    setProp(row, "hidden", hidden);
+  }
+  setProp($("#transcript-search"), "value", state.query);
+  setProp($("#transcript-review-only"), "checked", state.reviewOnly);
+  setProp($("#transcript-filter-status"), "textContent", result.segments.length
+    ? t("{count}/{total} đoạn · {review} cần kiểm tra", { count: result.segments.length, total: result.total, review: result.review.length })
+    : t("Không có đoạn phù hợp. Xóa hoặc đổi bộ lọc."));
+  for (const id of ["prev", "next"]) $("#transcript-review-" + id).disabled = !result.review.length;
+  $("#transcript-clear-filters").hidden = !state.query && !state.reviewOnly;
+  const target = generation.segments.find((segment) => segment.id === playback.target);
+  const button = $("#transcript-reveal-target");
+  button.hidden = !target || visible.has(target.id);
+  button.dataset.segmentId = target?.id || "";
+  button.textContent = target ? t("Hiện đoạn nguồn / tua {time} · Xóa bộ lọc", { time: formatTimestamp(target.start_seconds) }) : "";
+}
+
 function renderTranscriptGeneration(generation, editable) {
   const panel = $("#transcript-generation");
   const list = $("#transcript-segments");
@@ -1574,6 +1598,7 @@ function renderTranscriptGeneration(generation, editable) {
     return;
   }
   list.replaceChildren();
+  delete list.dataset.filterKey;
   panel.dataset.renderKey = renderKey;
 
   $("#generation-title").textContent = `Transcript #${generation.generation_number}`;
@@ -1593,6 +1618,10 @@ function renderTranscriptGeneration(generation, editable) {
     meta.push(t("“cần kiểm tra” không xét độ tin cậy của chữ"));
   }
   if (generation.diarization_model_name) meta.push(`Diarization · ${generation.diarization_model_name}`);
+  const reviewCount = segments.filter(needsReview).length;
+  $("#generation-summary").textContent = reviewCount
+    ? t("{count} đoạn · {review} cần kiểm tra", { count: generation.segment_count, review: reviewCount })
+    : t("{count} đoạn", { count: generation.segment_count });
   $("#generation-meta").textContent = meta.join(" · ");
   renderSpeakerCatalog(generation, editable);
 
@@ -1612,11 +1641,6 @@ function buildOriginalSpeaker(segment, speakerNames) {
       : t("Chưa xác định"),
   });
   return originalSpeaker;
-}
-
-// A segment that shows the review cue is one the Transcript tab counts as "cần kiểm tra".
-function needsReview(segment) {
-  return Boolean(segment.uncertain) || (Array.isArray(segment.review_reasons) && segment.review_reasons.length > 0);
 }
 
 function buildReviewCue(segment) {
@@ -1760,6 +1784,7 @@ function buildSegmentRow(generation, segment, editable) {
 
   const item = document.createElement("li");
   item.className = editing ? "transcript-segment is-editing" : "transcript-segment";
+  item.tabIndex = -1; // programmatic review focus remains available without audio
   item.dataset.segmentId = segment.id;
   item.dataset.startSeconds = String(segment.start_seconds);
   item.dataset.endSeconds = String(segment.end_seconds);
@@ -1845,6 +1870,7 @@ function replaceSegmentRow(generationId, segmentId) {
   if (!segment || !current) return null;
   const row = buildSegmentRow(generation, segment, editable);
   current.replaceWith(row);
+  delete $("#transcript-segments").dataset.filterKey;
   syncTranscriptMutationControls();
   updateActiveTranscriptIntervals();
   return row;
@@ -1911,8 +1937,10 @@ function audioFacts() {
     time: audio.currentTime,
     paused: audio.paused,
     ended: audio.ended,
+    seeking: audio.seeking,
     ready: audio.readyState >= HTMLMediaElement.HAVE_METADATA,
     audioMeetingId: audio.dataset.meetingId ?? null,
+    audioKey: audio.dataset.audioKey ?? null,
     reduced: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     visible: false,
     typing: false,
@@ -1942,6 +1970,7 @@ function seekAudio(seconds) {
 // The rows playing now and the row of the open notes source, painted from the slice: this runs after every pass over
 // the rows (a re-render of the list asks for a new sample).
 function paintPlaybackRows(slice) {
+  renderTranscriptFilters();
   const active = new Set(slice.active);
   const items = [...$("#transcript-segments").querySelectorAll(".transcript-segment")];
   for (const item of items) {
@@ -1967,7 +1996,12 @@ function paintPlaybackRows(slice) {
 // A scroll the app starts is told to the core first, so the scroll events it causes are not the user's.
 function runPlaybackOp(op) {
   const row = segmentRow(op.id);
-  if (!row) return;
+  const generation = shownGeneration().generation;
+  if (!generation?.segments.some((segment) => segment.id === op.id) || !row) return;
+  if (row.hidden) {
+    renderTranscriptFilters();
+    return;
+  }
   if (op.op === "reveal") {
     // Bring the source row into view when it is not, moving the page no further than that takes so the card above
     // stays as visible as it can.
@@ -1995,10 +2029,14 @@ function updateActiveTranscriptIntervals() {
 
 // Mark the row a saved notes source names (its ID, else the row spanning its time, since a newer
 // transcript has other IDs) and bring it into view when it is not. Null clears the mark. True when a row was found.
-function markNotesSource(segmentId, startSeconds) {
+function sourceRequestStarted(sourceRequestId) {
+  dispatch({ type: "playback/source-requested", sourceRequestId });
+}
+
+function markNotesSource(segmentId, startSeconds, sourceRequestId) {
   const shown = shownNow();
   const found = sourceRow((shown && shown.rows) || [], segmentId, startSeconds) !== null;
-  dispatch({ type: "playback/mark-requested", segmentId, startSeconds, reduced: audioFacts().reduced });
+  dispatch({ type: "playback/mark-requested", segmentId, startSeconds, sourceRequestId, reduced: audioFacts().reduced });
   return found;
 }
 
@@ -2253,6 +2291,16 @@ function runTranscriptOp(op) {
   const transcription = transcriptionNow();
   const find = (generationId) => generationsFor(transcription).find((item) => item.id === generationId);
   switch (op.op) {
+    case "reveal-segment": {
+      renderTranscriptFilters();
+      const row = segmentRow(op.id);
+      if (row && !row.hidden) {
+        const timestamp = row.querySelector(".segment-timestamp");
+        (timestamp.disabled ? row : timestamp).focus({ preventScroll: true });
+        runPlaybackOp({ op: "reveal", id: op.id, smooth: !audioFacts().reduced });
+      }
+      break;
+    }
     case "error":
       renderTranscriptMutationError();
       break;
@@ -2386,6 +2434,7 @@ function moveTranscriptFocus(focus) {
   const previous = focus.from ? resolveTranscriptMutationFocus(focus.from) : null;
   let element = focus.sameMeeting ? resolveTranscriptFocus(focus.target) : null;
   if ((!element || !element.isConnected) && previous) element = previous;
+  if (element?.closest(".transcript-segment[hidden]")) element = $("#transcript-search");
   const active = document.activeElement;
   if (element && element.isConnected && (active === document.body || active === previous || active === element)) {
     element.focus({ preventScroll: true });
@@ -2411,6 +2460,7 @@ function paintTranscript(root, memory) {
   memory.transcript = slice;
   for (const op of slice.ops) runTranscriptOp(op);
   if (slice.rev !== painted.rev) paintTranscriptTail(transcriptionNow());
+  renderTranscriptFilters();
   setProp($("#speaker-add-name"), "value", slice.addName);
   // Before focus moves: a control the write disabled takes no focus. The page rebuilds that touch the controls sync them
   // themselves, so an unchanged slice (each task poll) needs no walk.
@@ -2655,6 +2705,7 @@ export const meetingHistory = Object.freeze({
   defaultSpeakerNames,
   focusSpeakerCatalog,
   showNotesSourceTab,
+  sourceRequestStarted,
   markNotesSource,
   playRecording,
   currentContext() {
@@ -2984,6 +3035,7 @@ $("#transcript-segments").addEventListener("click", (event) => {
   const seconds = Number(timestamp.dataset.seekSeconds);
   if (!Number.isFinite(seconds) || seconds < 0) return;
   audio.currentTime = seconds;
+  dispatch({ type: "playback/target-requested", segmentId: timestamp.closest(".transcript-segment").dataset.segmentId, startSeconds: seconds, ...audioFacts() });
   updateActiveTranscriptIntervals();
   const playback = audio.play();
   if (playback && typeof playback.catch === "function") playback.catch(() => {});
@@ -2992,9 +3044,11 @@ $("#transcript-segments").addEventListener("change", (event) => {
   const select = event.target.closest("select[data-speaker-assignment]");
   if (select) dispatchAssignment(select, false);
 });
-for (const eventName of ["timeupdate", "seeked", "play"]) {
+for (const eventName of ["timeupdate", "play"]) {
   $("#meeting-audio").addEventListener(eventName, updateActiveTranscriptIntervals);
 }
+$("#meeting-audio").addEventListener("seeking", () => dispatch({ type: "playback/seeking", ...audioFacts() }));
+$("#meeting-audio").addEventListener("seeked", () => dispatch({ type: "playback/seeked", ...audioFacts() }));
 $("#meeting-audio").addEventListener("loadedmetadata", () => dispatch({ type: "playback/metadata-loaded", ...audioFacts() }));
 $("#meeting-audio").addEventListener("error", () => dispatch({ type: "playback/audio-failed" }));
 // A wheel, a touch move, a scroll key or any scroll the app did not start counts as the user's. A scrollbar drag
@@ -3044,3 +3098,15 @@ $("#meeting-tabs").addEventListener("keydown", (event) => {
 store.subscribe(render);
 dispatch({ type: "task/visibility-changed", hidden: document.hidden });
 dispatch({ type: "history/booted", today: todayKey() });
+
+$("#transcript-search").addEventListener("input", (event) => dispatch({ type: "transcript/query-typed", value: event.target.value }));
+$("#transcript-review-only").addEventListener("change", (event) => dispatch({ type: "transcript/review-filter-changed", value: event.target.checked }));
+$("#transcript-review-prev").addEventListener("click", () => dispatch({ type: "transcript/review-stepped", direction: -1 }));
+$("#transcript-review-next").addEventListener("click", () => dispatch({ type: "transcript/review-stepped", direction: 1 }));
+$("#transcript-clear-filters").addEventListener("click", () => {
+  dispatch({ type: "transcript/filters-cleared" });
+  $("#transcript-search").focus();
+});
+$("#transcript-reveal-target").addEventListener("click", (event) => {
+  dispatch({ type: "transcript/filters-cleared", segmentId: event.currentTarget.dataset.segmentId });
+});

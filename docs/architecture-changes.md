@@ -4,6 +4,27 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #257 — Filter transcript without changing source or draft identity
+
+Transcript search and review navigation belong to the existing `transcript-core` slice.
+The view hides unmatched rows without rebuilding an open editor. Generation changes keep
+unsaved text under its generation/segment IDs; filter and generation actions emit no writes.
+The existing flag/reason semantics remain separate from processing and from any verified-review claim.
+
+Playback reads all segments of the selected generation. Its last explicit source/seek target
+keeps the real segment ID, so the view can offer a reachable clear-filter/reveal control when
+that row is hidden. Filtering never changes the immutable Notes source or seeks to a visible substitute.
+A save or assignment that removes a focused row from the results returns focus to search.
+This extends ADR 0010's current core/view boundary; no new runner effect, API or persisted schema.
+The generation header keeps a short count summary. Existing model, language, runtime, diarization
+and review-policy values stay available in a native `Chi tiết transcript` disclosure, separate from
+the pipeline's `Chi tiết xử lý` diagnostics and cancel controls.
+See [frontend transitions](frontend-design.md#1110-transcript), focused transcript/player browser tests,
+and the committed [desktop light](evidence/issue-257/hidden-target-1280-light.png),
+[desktop dark](evidence/issue-257/hidden-target-1280-dark.png),
+[phone light](evidence/issue-257/hidden-target-320-light.png), and
+[phone dark](evidence/issue-257/hidden-target-320-dark.png) recovery captures.
+
 ## #97 — Attribute quadratic clustering memory and document the RAM budget
 
 **Problem and measured cause.** The historical four-hour composite reached 4.93 GiB runner RSS
