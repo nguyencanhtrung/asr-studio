@@ -1059,50 +1059,36 @@ function saveChoice(d, s) {
   return done(next, [request]);
 }
 
-function saveOk(d, s, meta, body) {
-  const { model, effort } = meta;
-  let next = { ...setPending(s, "save", false), ownerFence: s.ownerFence + 1 };
-  if (d.catalog === "preferences") {
-    const reply = isObject(body) ? body : {};
-    const reasoningEfforts = isObject(reply.reasoning_efforts) ? reply.reasoning_efforts : {};
-    const savedEffort = typeof reasoningEfforts[d.id] === "string"
-      ? reasoningEfforts[d.id]
-      : typeof reply.reasoning_effort === "string" ? reply.reasoning_effort : effort;
-    const preferences = {
-      provider: d.id,
-      models: isObject(reply.models) ? reply.models : { [d.id]: model },
-      reasoning_effort: savedEffort,
-      reasoning_efforts: reasoningEfforts,
-    };
-    const savedModel = preferences.models[d.id] || model;
-    next = {
-      ...next,
-      preferences,
-      savedModel,
-      selectedModel: savedModel,
-      savedEffort,
-      ownerModel: savedModel,
-      ownerEffort: savedEffort,
-      ownerKnown: true,
-    };
-    next.selectedEffort = effortValue(d, next, savedModel, preferences.reasoning_effort);
-  } else {
-    const reply = isObject(body) ? body : {};
-    const savedModel = typeof reply.model === "string" && reply.model ? reply.model : model;
-    const savedEffort = typeof reply.reasoning_effort === "string" && reply.reasoning_effort ? reply.reasoning_effort : effort;
-    next = {
-      ...next,
-      savedModel,
-      savedEffort,
-      selectedModel: savedModel,
-      selectedEffort: savedEffort,
-      ownerModel: savedModel,
-      ownerEffort: savedEffort,
-      ownerKnown: true,
-    };
+function saveOk(d, s, body) {
+  const reply = isObject(body) ? body : {};
+  const notesPreferences = d.catalog === "preferences";
+  const models = isObject(reply.models) ? reply.models : {};
+  const reasoningEfforts = isObject(reply.reasoning_efforts) ? reply.reasoning_efforts : {};
+  const savedModel = notesPreferences ? models[d.id] : reply.model;
+  const savedEffort = notesPreferences && Object.hasOwn(reasoningEfforts, d.id)
+    ? reasoningEfforts[d.id]
+    : reply.reasoning_effort;
+  if (typeof savedModel !== "string" || !savedModel.trim() || typeof savedEffort !== "string" || !savedEffort.trim()
+    || !notesPreferences && reply.provider !== d.id) {
+    const error = { code: "provider_invalid_response", text: errorMessageForCode("provider_invalid_response", undefined, d.id), retryPoll: false };
+    return done({ ...setPending(s, "save", false), error, modelStatus: { state: "error", text: null } });
   }
-  const label = d.effortLabels ? d.effortLabels[next.savedEffort] ?? next.savedEffort : next.savedEffort;
-  next = { ...next, modelStatus: { state: "saved", text: fill(d.copy.saved, { model: modelName(next, next.selectedModel), effort: label }) } };
+  let next = {
+    ...setPending(s, "save", false),
+    ownerFence: s.ownerFence + 1,
+    savedModel,
+    selectedModel: savedModel,
+    savedEffort,
+    ownerModel: savedModel,
+    ownerEffort: savedEffort,
+    ownerKnown: true,
+  };
+  if (notesPreferences) {
+    next.preferences = { provider: d.id, models, reasoning_effort: savedEffort, reasoning_efforts: reasoningEfforts };
+  }
+  next.selectedEffort = effortValue(d, next, savedModel, savedEffort);
+  const label = d.effortLabels ? d.effortLabels[savedEffort] ?? savedEffort : savedEffort;
+  next = { ...next, modelStatus: { state: "saved", text: fill(d.copy.saved, { model: modelName(next, savedModel), effort: label }) } };
   return done(next, [CHOICE_CHANGED]);
 }
 
@@ -1287,7 +1273,7 @@ function onResponse(d, s, meta, body, now) {
     case "callback":
       return callbackOk(d, s, meta, body, now);
     case "save":
-      return saveOk(d, s, meta, body);
+      return saveOk(d, s, body);
     case "verify":
       return verifyOk(d, s, meta, body);
     default:
@@ -1401,8 +1387,8 @@ function reduceAsr(state, action) {
       return done({ ...state, status: "loading", summaryStatus: null, request, copy: null, notice: null, defaultRefusal: null, open: true }, [asrFetch(request)]);
     }
     case "provider/settings-section-selected": {
-      if (action.section !== "processing" || action.previousSection === "processing" || !state.open
-        || state.defaultPending !== undefined) return done(state);
+      if (action.section !== "processing" || action.previousSection === "processing" || !state.open) return done(state);
+      if (state.defaultPending !== undefined) return done({ ...state, summaryStatus: "loading" });
       // The first Automation visit can share a catalog already loading at open.
       // Re-entry requests the current snapshot, superseding any older keyed read.
       if (state.status === "loading" && state.summaryStatus !== "loading") {
@@ -1421,7 +1407,8 @@ function reduceAsr(state, action) {
     case "provider/asr-loaded": {
       if (action.meta.id !== state.request) return done(state);
       const list = action.response.body?.asr_models;
-      if (!Array.isArray(list)) return done({ ...state, status: "error", summaryStatus: null });
+      const summaryStatus = state.defaultPending === undefined ? null : state.summaryStatus;
+      if (!Array.isArray(list)) return done({ ...state, status: "error", summaryStatus });
       const models = list.filter(isAsrModelRow).map((row) => {
         const pending = pendingInstall(state, row.id);
         // A catalog-confirmed job can be canceled while its create response is on the way.
@@ -1432,7 +1419,7 @@ function reduceAsr(state, action) {
       const { default_model: saved, hardware_model: hardware } = action.response.body;
       const defaultModel = isAsrModelId(saved) && saved !== "auto" ? saved : null;
       const hardwareModel = typeof hardware === "string" ? hardware : null;
-      const next = { ...state, summaryStatus: null, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
+      const next = { ...state, summaryStatus, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
         // A reply with no usable model must say so; an empty list would leave the section blank.
         status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
       return withPoll(next);
@@ -1440,7 +1427,8 @@ function reduceAsr(state, action) {
     case "provider/asr-failed":
       // A failed poll keeps the rows: the next tick reads again.
       if (action.meta.id !== state.request) return done(state);
-      const next = state.summaryStatus === "loading" ? { ...state, summaryStatus: "error" } : state;
+      const next = state.summaryStatus === "loading" && state.defaultPending === undefined
+        ? { ...state, summaryStatus: "error" } : state;
       return next.status === "ready" ? withPoll(next) : done({ ...next, status: "error" });
     // The new value shows at once. A catalog read already in flight predates it and is dropped.
     case "provider/asr-default-chosen": {
@@ -1474,7 +1462,11 @@ function reduceAsr(state, action) {
       const request = state.request + 1;
       const next = withInstall({ ...state, pendingInstalls, request }, id, install);
       const loadingOpenCatalog = next.open && (next.status === "loading" || next.summaryStatus === "loading");
-      return loadingOpenCatalog ? done(next, [asrFetch(request)]) : withPoll(next);
+      if (loadingOpenCatalog) return done(next, [asrFetch(request)]);
+      // An install can finish before its POST response is constructed. Verify model readiness once.
+      if (next.open && action.meta.method === "POST" && install.state === "idle"
+        && !next.models.some((row) => row.id === id && row.ready === true)) return done(next, [ASR_POLL]);
+      return withPoll(next);
     }
     // The server said no (no installer, no GPU, already prepared, nothing to cancel): say why, then read the truth.
     case "provider/asr-install-refused": {

@@ -385,7 +385,9 @@ for (const { d, other, save } of CASES) {
     dispatch(env, d, "save-requested");
     assert.equal(env.pending(env.is(...save)).length, 1);
     assert.equal(selectView(d, own(env, d)).saveDisabled, true);
-    await env.answer(env.is(...save), 200, d === CHATGPT ? { models: { chatgpt: other }, reasoning_effort: "default" } : {});
+    await env.answer(env.is(...save), 200, d === CHATGPT
+      ? { models: { chatgpt: other }, reasoning_effort: "default" }
+      : { provider: d.id, model: other, reasoning_effort: "high" });
     assert.equal(own(env, d).savedModel, other);
     assert.equal(own(env, d).ownerModel, other);
     assert.equal(own(env, d).ownerEffort, own(env, d).savedEffort);
@@ -512,7 +514,7 @@ test("a read that started before an owner save cannot restore either provider's 
       response: {
         body: d === CHATGPT
           ? { models: { chatgpt: next }, reasoning_effort: "high", reasoning_efforts: { chatgpt: "high" } }
-          : { model: next, reasoning_effort: "medium" },
+          : { provider: d.id, model: next, reasoning_effort: "medium" },
       },
     }).state;
     assert.equal(acknowledged[d.id].ownerFence, 1);
@@ -1507,7 +1509,7 @@ test("Automation re-entry does not overtake an ASR default save", () => {
     section: "processing",
     previousSection: "devices",
   });
-  assert.equal(result.state.asr, state.asr);
+  assert.deepEqual(result.state.asr, { ...state.asr, summaryStatus: "loading" });
   assert.equal(result.effects.some((effect) => effect.url === "/api/asr-models"), false);
 });
 
@@ -2111,6 +2113,103 @@ test("conductor R9 terminal cancel acknowledges while a reopened catalog is load
   assert.equal(selectAsr(env.state().asr).text, null);
   assert.equal(phoRow(env).install.kind, "offer");
 });
+
+test("conductor R10 terminal POST replaces a stale readiness poll with one current read", async () => {
+  const stale = catalog();
+  const ready = catalog({ pho: { ready: true, reason: null, prepare_command: null, install: { state: "idle" } } });
+  const env = await openedWith(stale);
+  const read = env.is("GET", "/api/asr-models");
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+  await env.answer(read, 200, stale);
+  env.fire(1000);
+  await env.answer(env.is("POST", "/install"), 202, { install: { state: "idle" } });
+  await env.answer(read, 200, ready); // started before the ACK, now fenced
+  assert.equal(phoRow(env).state, "not_prepared");
+  assert.deepEqual(env.live(), [1000]);
+  env.fire(1000);
+  await env.answer(read, 200, ready);
+  assert.equal(phoRow(env).state, "ready");
+  assert.equal(phoRow(env).install, null);
+  assert.deepEqual(env.live(), []);
+});
+
+for (const failed of [false, true]) {
+  test(`conductor R10 Automation waits for default save read, error=${failed}`, async () => {
+    const env = await openedWith(catalog());
+    const read = env.is("GET", "/api/asr-models");
+    env.store.dispatch({ type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+    assert.equal(env.pending(read).length, 0);
+    assert.equal(env.state().asr.summaryStatus, "loading");
+    await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "whisper-large-v3" });
+    assert.equal(env.pending(read).length, 1);
+    await env.answer(read, failed ? 503 : 200, failed ? { detail: { code: "worker_unavailable" } } : {
+      ...catalog(), default_model: "whisper-large-v3",
+    });
+    assert.equal(env.state().asr.summaryStatus, failed ? "error" : null);
+    assert.equal(env.state().asr.status, "ready");
+    assert.equal(env.state().asr.defaultModel, "whisper-large-v3");
+    assert.ok(phoRow(env));
+  });
+}
+
+for (const response of ["loaded", "malformed", "failed"]) {
+  test(`conductor R10 pending default keeps Automation loading through an ongoing install ${response}`, async () => {
+    const running = catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } });
+    const env = await openedWith(running);
+    const read = env.is("GET", "/api/asr-models");
+    env.store.dispatch({ type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+    assert.equal(env.pending(read).length, 0);
+    assert.equal(env.state().asr.summaryStatus, "loading");
+
+    env.fire(1000);
+    if (response === "loaded") await env.answer(read, 200, running);
+    else if (response === "malformed") await env.answer(read, 200, {});
+    else await env.fail(read);
+    assert.equal(env.state().asr.summaryStatus, "loading");
+
+    await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "whisper-large-v3" });
+    assert.equal(env.pending(read).length, 1);
+    await env.answer(read, 200, { ...catalog({ pho: { install: { state: "running", phase: "downloading" } } }), default_model: "whisper-large-v3" });
+    assert.equal(env.state().asr.summaryStatus, null);
+    assert.equal(env.state().asr.defaultPending, undefined);
+    assert.equal(env.state().asr.defaultModel, "whisper-large-v3");
+    assert.ok(phoRow(env));
+  });
+}
+
+for (const { d, other, save } of CASES) {
+  test(`conductor R10 ${d.id} partial ACK preserves the confirmed owner and draft`, async () => {
+    const cases = d === CHATGPT
+      ? [{}, { models: { chatgpt: other } }, { reasoning_efforts: { chatgpt: "high" } }]
+      : [{}, { provider: d.id, model: other }, { provider: d.id, reasoning_effort: "high" }];
+    for (const payload of cases) {
+      const env = setup();
+      await loaded(env);
+      const before = own(env, d);
+      dispatch(env, d, "choice-edited", { field: "model", value: other });
+      dispatch(env, d, "save-requested");
+      await env.answer(env.is(...save), 200, payload);
+      const after = own(env, d);
+      assert.equal(after.ownerModel, before.ownerModel);
+      assert.equal(after.ownerEffort, before.ownerEffort);
+      assert.equal(after.ownerFence, before.ownerFence);
+      assert.equal(after.savedModel, before.savedModel);
+      assert.equal(after.selectedModel, other);
+      assert.equal(after.pending.save, false);
+      assert.deepEqual(after.modelStatus, { state: "error", text: null });
+      assert.equal(after.error.code, "provider_invalid_response");
+      assert.deepEqual(after.error.text, {
+        text: "{provider} trả về phản hồi không hợp lệ.",
+        params: { provider: d === CHATGPT ? "ChatGPT" : "Google Antigravity" },
+      });
+      assert.equal(after.error.retryPoll, false);
+      assert.deepEqual(env.events, []);
+    }
+  });
+}
 
 test("conductor R9 terminal cancel stays settled when its acknowledgement arrives after closing Settings", async () => {
   const running = catalog({ pho: { install: { state: "running", phase: "downloading" } } });
