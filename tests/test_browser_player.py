@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from notes_helpers import seed_cited_notes, seed_completed_transcript
+from notes_helpers import rerun_transcript, seed_cited_notes, seed_completed_transcript
 from playwright.sync_api import expect
 from test_browser_history import FIXED_NOW, show_a_past_generation
 from test_browser_history import live as live
@@ -1361,6 +1361,117 @@ def test_newer_notes_source_cancels_an_older_historical_metadata_wait(live, sign
     assert page.locator("#notes-source-time").inner_text() == "00:00:02"
     page.locator("#meeting-tab-transcript").click()
     page.locator("#transcript-search").fill("No current row")
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", segment_ids[2]
+    )
+
+
+def test_issued_native_seek_survives_transcript_generation_switch(live, signed_in, tmp_path):
+    """A mounted recording's native acknowledgement is not owned by its old generation."""
+    meeting_id, _, snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+    rerun_transcript(live.settings.data_dir, meeting_id)
+    _, page = signed_in(reduced_motion="reduce")
+    page.set_default_timeout(8_000)
+    held_audio = []
+    held_snapshot = []
+    audio_url = f"{live.url}/api/meetings/{meeting_id}/audio"
+    snapshot_url = f"{live.url}/api/notes-sources/{snapshot['id']}"
+    page.route(audio_url, lambda route: held_audio.append(route))
+    page.route(snapshot_url, lambda route: held_snapshot.append(route))
+    page.goto(f"{live.url}/meetings/{meeting_id}#transcript", wait_until="domcontentloaded")
+    selector = page.locator("#generation-selector")
+    expect(selector).to_be_visible()
+    current_generation = selector.input_value()
+    selector.select_option(snapshot["generation_id"])
+    audio = page.locator("#meeting-audio")
+    assert audio.evaluate("node => node.readyState") == 0
+    audio.evaluate(
+        """node => {
+          window.crossGenerationSeekTrace = [];
+          for (const type of ['seeking', 'seeked']) {
+            node.addEventListener(type, event => window.crossGenerationSeekTrace.push([
+              event.type, event.isTrusted, node.currentTime,
+            ]));
+          }
+        }"""
+    )
+    page.locator(
+        f'.transcript-segment[data-segment-id="{segment_ids[8]}"] .segment-timestamp'
+    ).click()
+    selector.select_option(current_generation)
+    page.locator("#meeting-tab-notes").click()
+    with page.expect_request(snapshot_url):
+        page.locator(CHIP).filter(has_text="00:25").click()
+    assert held_audio and held_snapshot
+    for route in held_audio[:]:
+        route.continue_()
+    page.unroute(audio_url)
+    page.wait_for_function(
+        "() => window.crossGenerationSeekTrace.some("
+        "([type, trusted]) => type === 'seeked' && trusted)"
+    )
+    for route in held_snapshot[:]:
+        route.continue_()
+    page.unroute(snapshot_url)
+    expect(page.locator("#notes-source-time")).to_have_text("00:00:25")
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 24.9")
+
+
+def test_explicit_source_seek_wins_over_held_newer_snapshot(live, signed_in, tmp_path):
+    """A visible saved card's deliberate seek remains newer than automatic snapshot playback."""
+    meeting_id, old_revision, old_snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+
+    def newer_document(ids):
+        return {
+            "schema_version": 1,
+            "overview": [{"text": "The newer source.", "source_ids": [ids[2]]}],
+            "key_topics": [],
+            "decisions": [],
+            "open_questions": [],
+            "action_items": [],
+            "confirmation_items": [],
+        }
+
+    new_revision = seed_cited_notes(
+        live.settings.data_dir,
+        newer_document,
+        existing=(meeting_id, old_snapshot["generation_id"], segment_ids),
+    )[1]
+    _, page = signed_in(reduced_motion="reduce")
+    open_notes(live, page, meeting_id)
+    selector = page.locator("#notes-revision-selector")
+    selector.select_option(old_revision["id"])
+    page.locator(CHIP).filter(has_text="00:25").click()
+    audio = page.locator("#meeting-audio")
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 25")
+    audio.evaluate("node => node.pause()")
+    page.locator("#meeting-tab-notes").click()
+    selector.select_option(new_revision["id"])
+    expect(page.locator(CHIP).filter(has_text="00:02")).to_be_visible()
+    snapshot_url = f"{live.url}/api/notes-sources/{new_revision['source_snapshot_id']}"
+    held_snapshot = []
+    page.route(snapshot_url, lambda route: held_snapshot.append(route))
+    page.locator(CHIP).filter(has_text="00:02").click()
+    seek = page.locator("#notes-source-seek")
+    expect(seek).to_be_visible()
+    expect(seek).to_be_enabled()
+    seek.click()
+    page.locator("#transcript-search").fill("No matching local transcript row")
+    assert held_snapshot
+    for route in held_snapshot[:]:
+        route.continue_()
+    page.unroute(snapshot_url)
+    page.wait_for_function("() => document.querySelector('#meeting-audio').currentTime >= 24.7")
+    expect(page.locator("#notes-source-time")).to_have_text("00:00:02")
+    assert f"notes_source={new_revision['source_snapshot_id']}" in page.url
+    expect(page.locator("#transcript-reveal-target")).to_have_attribute(
+        "data-segment-id", segment_ids[25]
+    )
+    page.locator("#notes-source-seek").click()
+    page.wait_for_function(
+        "() => document.querySelector('#meeting-audio').currentTime >= 1.7 "
+        "&& document.querySelector('#meeting-audio').currentTime < 2.4"
+    )
     expect(page.locator("#transcript-reveal-target")).to_have_attribute(
         "data-segment-id", segment_ids[2]
     )

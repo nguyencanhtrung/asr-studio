@@ -30,7 +30,7 @@ export const initialState = {
   target: null, // real row of the last explicit source jump or seek, even when filtered out
   targetOwner: null, // source | timestamp | time: why target is still the reveal target
   sourceRequestId: null, // Notes source intent reserved before its snapshot fetch; timestamps supersede it
-  pendingTarget: null, // { id, owner, sourceRequestId, meetingId, generationId, owedStarts, dismissed }: one native seeked acknowledgement
+  pendingTarget: null, // { id, owner, sourceRequestId, meetingId, audioKey, generationId, owedStarts, startedStarts, dismissed }: native acknowledgement
   mark: null, // id of the row the open notes source names
   seek: null, // the seek waiting for the audio metadata: { id, ids, meetingId, startSeconds, generationId }; ids: every seek joined to it
   seekDone: null, // { id, ids, ok }: how the last seek ended; ok holds for every id in ids
@@ -113,17 +113,21 @@ function sameNativeTarget(target, action) {
     // The view supplies the native seeking state with every seeked action. A pending target is
     // acknowledged only by the real-shaped end of that seeking/seeked pair.
     && target.owedStarts === 0
+    && target.startedStarts > 0
     && action.seeking === false;
 }
+
+// The audio element is mounted across transcript-generation changes. Native seeking belongs to
+// that loaded recording, while a row identity remains valid only in the generation that supplied it.
+const recordingScope = (value) => value?.audioKey || value?.audioMeetingId || value?.meetingId || value?.shown?.id || null;
+const sameRecording = (a, b) => recordingScope(a) !== null && recordingScope(a) === recordingScope(b);
 
 const sourceSeekOwnsNativeEvent = (state) => state.seek
   && state.sourceRequestId !== null
   && state.seek.sourceRequestId === state.sourceRequestId;
 
 function addPendingStart(previous, target) {
-  const sameScope = previous
-    && previous.meetingId === target.meetingId
-    && previous.generationId === target.generationId;
+  const sameScope = previous && sameRecording(previous, target);
   const owesNativeStart = target.ready !== false || target.startSeconds !== 0;
   // Before metadata exists, Chromium coalesces repeated currentTime writes and emits one native
   // seeking/seeked pair when it can apply the final position. Once metadata is available, each
@@ -132,9 +136,10 @@ function addPendingStart(previous, target) {
     ? {
       ...target,
       owedStarts: owesNativeStart ? (target.ready === false ? 1 : previous.owedStarts + 1) : 0,
+      startedStarts: previous.startedStarts || 0,
       dismissed: false,
     }
-    : { ...target, owedStarts: owesNativeStart ? 1 : 0, dismissed: false };
+    : { ...target, owedStarts: owesNativeStart ? 1 : 0, startedStarts: 0, dismissed: false };
 }
 
 const finishSeek = (state, ok) => ({ ...state, seek: null, seekDone: { id: state.seek.id, ids: state.seek.ids, ok } });
@@ -150,6 +155,7 @@ function startSeek(state, action) {
     id: action.seekId,
     ids: [action.seekId],
     meetingId: action.meetingId,
+    audioKey: action.audioKey || action.audioMeetingId || action.meetingId,
     startSeconds: action.startSeconds,
     generationId: shown ? shown.generationId : null,
     sourceRequestId: action.sourceRequestId,
@@ -172,6 +178,7 @@ function startSeek(state, action) {
         owner: "source",
         sourceRequestId: seek.sourceRequestId,
         meetingId: seek.meetingId,
+        audioKey: seek.audioKey,
         generationId: seek.generationId,
         startSeconds: seek.startSeconds,
         ready: true,
@@ -201,9 +208,18 @@ function step(state, action) {
       const next = sample(state, action);
       const pending = sameNativeTarget(state.pendingTarget, action) ? state.pendingTarget : null;
       if (state.pendingTarget && !pending) {
-        const sameScope = state.pendingTarget.meetingId === action.shown?.id
-          && state.pendingTarget.generationId === action.shown?.generationId;
-        if (!sameScope) {
+        const sameScope = sameRecording(state.pendingTarget, action);
+        if (sameScope && state.pendingTarget.startedStarts > 0 && state.pendingTarget.owedStarts > 0) {
+          // The native completion may belong to an earlier app write. Keep the latest explicit
+          // row and its remaining recording-scoped debt for the next seeking/seeked pair.
+          return out({
+            ...next,
+            target: state.pendingTarget.dismissed ? null : state.pendingTarget.id,
+            targetOwner: state.pendingTarget.dismissed ? null : state.pendingTarget.owner,
+            pendingTarget: { ...state.pendingTarget, startedStarts: state.pendingTarget.startedStarts - 1 },
+          });
+        }
+        if (!sameScope || state.pendingTarget.generationId !== action.shown?.generationId || state.pendingTarget.startedStarts === 0) {
           return out({
             ...next,
             target: next.current,
@@ -227,9 +243,7 @@ function step(state, action) {
       });
     }
     case "playback/seeking": {
-      const sameScope = state.pendingTarget
-        && state.pendingTarget.meetingId === action.shown?.id
-        && state.pendingTarget.generationId === action.shown?.generationId;
+      const sameScope = state.pendingTarget && sameRecording(state.pendingTarget, action);
       if (!sameScope) {
         if (state.sourceRequestId === null || sourceSeekOwnsNativeEvent(state)) return out(state);
         const next = state.seek ? finishSeek(state, false) : { ...state, sourceRequestId: null };
@@ -238,7 +252,14 @@ function step(state, action) {
       // Each app write owns one native seeking notification. A second seeking with no owed
       // write is a newer time-only seek and supersedes the old explicit row identity.
       return out(state.pendingTarget.owedStarts > 0
-        ? { ...state, pendingTarget: { ...state.pendingTarget, owedStarts: state.pendingTarget.owedStarts - 1 } }
+        ? {
+          ...state,
+          pendingTarget: {
+            ...state.pendingTarget,
+            owedStarts: state.pendingTarget.owedStarts - 1,
+            startedStarts: (state.pendingTarget.startedStarts || 0) + 1,
+          },
+        }
         : {
           ...state,
           pendingTarget: null,
@@ -256,6 +277,7 @@ function step(state, action) {
           id,
           owner: "timestamp",
           meetingId: action.shown?.id,
+          audioKey: action.audioKey || action.audioMeetingId || action.shown?.id,
           generationId: action.shown?.generationId,
           startSeconds: action.startSeconds,
           ready: action.ready,
@@ -281,6 +303,7 @@ function step(state, action) {
           owner: "source",
           sourceRequestId: started.sourceRequestId,
           meetingId: started.meetingId,
+          audioKey: started.audioKey,
           generationId: started.generationId,
           startSeconds: started.startSeconds,
           ready: true,
@@ -316,6 +339,7 @@ function step(state, action) {
             owner: "source",
             sourceRequestId: seek.sourceRequestId,
             meetingId: seek.meetingId,
+            audioKey: seek.audioKey,
             generationId: seek.generationId,
             startSeconds: seek.startSeconds,
             ready: action.value?.ready,
@@ -324,6 +348,7 @@ function step(state, action) {
           id: seek.targetId,
           owner: "source",
           meetingId: seek.meetingId,
+          audioKey: seek.audioKey,
           generationId: seek.generationId,
           startSeconds: seek.startSeconds,
           ready: action.value?.ready,

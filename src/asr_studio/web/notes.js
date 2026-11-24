@@ -544,7 +544,7 @@ const run = createRunner({
     "history.showNotesSourceTab": meetingHistory.showNotesSourceTab,
     "history.focusSpeakerCatalog": meetingHistory.focusSpeakerCatalog,
     "history.refreshMeeting": meetingHistory.refreshMeeting,
-    "history.seekNotesSource": async (source, sourceRequestId) => meetingHistory.seekNotesSource(source, sourceRequestId),
+    "history.seekNotesSource": async (source, sourceRequestId, options) => meetingHistory.seekNotesSource(source, sourceRequestId, options),
     "history.playRecording": async () => meetingHistory.playRecording(),
     "meeting.change": meetingHistory.publishMeetingChange,
     replaceUrl: (url) => window.history.replaceState(window.history.state, "", url),

@@ -2547,7 +2547,12 @@ textarea:focus-visible {
 
 .generation-details summary {
   cursor: pointer;
+  font-size: var(--text-control);
   text-align: right;
+}
+
+.generation-details:not([open]) > p {
+  display: none;
 }
 
 .generation-details p {

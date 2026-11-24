@@ -733,12 +733,12 @@ async function leaveCalendar() {
 
 // Resolves true when the player was sent to the source, false when the source could not be shown or a newer seek,
 // a meeting or transcript change, an audio error or the metadata timeout won (the core decides, see playback-core.js).
-async function seekNotesSource(source, sourceRequestId) {
+async function seekNotesSource(source, sourceRequestId, { updateLocation = true } = {}) {
   const { meetingId, snapshotId, segmentId, startSeconds } = source; // no source at all rejects, as before 4d
   if (!validSource(source)) return false;
   const path = `/meetings/${encodeURIComponent(meetingId)}`;
   const query = `?notes_source=${encodeURIComponent(snapshotId)}&segment=${encodeURIComponent(segmentId)}${source.group ? `&group=${encodeURIComponent(source.group)}` : ""}`;
-  if (window.location.pathname !== path || window.location.search !== query) {
+  if (updateLocation && (window.location.pathname !== path || window.location.search !== query)) {
     // Opening a source does not change the tab: the new entry keeps the address's hash and the tab shown.
     const state = nav();
     const shown = state.meeting && state.meeting.id === meetingId && state.view === "meeting";
@@ -1940,6 +1940,7 @@ function audioFacts() {
     seeking: audio.seeking,
     ready: audio.readyState >= HTMLMediaElement.HAVE_METADATA,
     audioMeetingId: audio.dataset.meetingId ?? null,
+    audioKey: audio.dataset.audioKey ?? null,
     reduced: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
     visible: false,
     typing: false,

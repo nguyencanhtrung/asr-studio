@@ -321,6 +321,20 @@ def test_the_saved_source_text_opened_from_a_citation_is_reading_size(live, sign
 
 
 @pytest.mark.browser
+def test_open_generation_details_wrap_at_the_minimum_width(live, signed_in):
+    _context, page = signed_in(viewport={"width": 320, "height": 900})
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    page.locator("#meeting-tab-transcript").click()
+    details = page.locator("#generation-details")
+    expect(details).to_be_visible()
+    details.locator("summary").press("Enter")
+    expect(details).to_have_js_property("open", True)
+    assert page.evaluate("document.documentElement.scrollWidth - innerWidth") <= 0
+    assert page.evaluate(CUT_TEXT_JS) == []
+
+
+@pytest.mark.browser
 def test_browser_font_preference_scales_the_interface(live, signed_in):
     _context, page = signed_in(viewport={"width": 1440, "height": 900})
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)

@@ -706,6 +706,30 @@ test("an explicit overlapping source ID survives the seek and its native acknowl
   assert.equal(state.target, "r2");
 });
 
+test("recording-scoped native debt survives a generation switch and keeps the latest overlap target", () => {
+  const first = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  const second = { ...first, generationId: "g2", rows: [row("new-first", 3, 5), row("new-overlap", 3, 5)] };
+  const audioKey = "m1:/api/meetings/m1/audio";
+  let state = reduce(initialState, {
+    type: "playback/target-requested", segmentId: "r2", startSeconds: 3,
+    ready: true, audioMeetingId: "m1", audioKey, shown: first,
+  }).state;
+  state = reduce(state, {
+    type: "playback/target-requested", segmentId: "new-overlap", startSeconds: 3,
+    ready: true, audioMeetingId: "m1", audioKey, shown: second,
+  }).state;
+  assert.equal(state.pendingTarget.owedStarts, 2);
+  assert.equal(state.target, "new-overlap");
+  state = reduce(state, { type: "playback/seeking", audioMeetingId: "m1", audioKey, shown: second }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, audioMeetingId: "m1", audioKey, shown: second }).state;
+  assert.equal(state.pendingTarget.owedStarts, 1);
+  assert.equal(state.target, "new-overlap");
+  state = reduce(state, { type: "playback/seeking", audioMeetingId: "m1", audioKey, shown: second }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, audioMeetingId: "m1", audioKey, shown: second }).state;
+  assert.equal(state.pendingTarget, null);
+  assert.equal(state.target, "new-overlap");
+});
+
 test("the latest explicit timestamp target wins over an older Notes mark", () => {
   const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
   let state = reduce(initialState, { type: "playback/mark-requested", segmentId: "r2", startSeconds: 3, shown }).state;
