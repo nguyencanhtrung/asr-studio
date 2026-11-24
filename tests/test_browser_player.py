@@ -1146,6 +1146,108 @@ def test_new_player_seek_supersedes_outstanding_row_seek(live, signed_in, tmp_pa
     )
 
 
+def test_two_timestamp_writes_before_metadata_keep_first_later_time_only_seek(
+    live, signed_in, tmp_path
+):
+    meeting_id = seed_long_transcript(live.settings.data_dir, count=8)
+    write_recording(live.settings.data_dir, meeting_id, tmp_path, 16)
+    _, page = signed_in(reduced_motion="reduce")
+    held = []
+    audio_url = f"{live.url}/api/meetings/{meeting_id}/audio"
+    page.route(audio_url, lambda route: held.append(route))
+    page.set_default_timeout(10_000)
+    page.goto(f"{live.url}/meetings/{meeting_id}#transcript", wait_until="domcontentloaded")
+    audio = page.locator("#meeting-audio")
+    rows = page.locator(".transcript-segment")
+    expect(rows).to_have_count(8)
+    page.locator("#meeting-tab-transcript").click()
+    events = audio.evaluate(
+        """node => {
+          window.loadingSeekEvents = [];
+          for (const type of ['seeking', 'seeked']) {
+            node.addEventListener(type, event => window.loadingSeekEvents.push([
+              event.type, event.isTrusted, node.currentTime,
+            ]));
+          }
+        }"""
+    )
+    assert events is None
+    assert audio.evaluate("node => node.readyState") == 0
+    first = rows.nth(1)
+    target = rows.nth(4)
+    later = rows.nth(5)
+    first.locator(".segment-timestamp").click()
+    target.locator(".segment-timestamp").click()
+    assert audio.evaluate("node => node.readyState") == 0
+    assert held
+    for route in held[:]:
+        route.continue_()
+    page.unroute(audio_url)
+    page.wait_for_function(
+        "() => window.loadingSeekEvents.some(([type, trusted, time]) => "
+        "type === 'seeked' && trusted && time >= 8 && time < 8.7)"
+    )
+    audio.evaluate("node => node.pause()")
+    page.locator("#transcript-search").fill("No matching local rows")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", target.get_attribute("data-segment-id"))
+    audio.evaluate("node => { node.currentTime = 10.5; }")
+    page.wait_for_function(
+        "() => window.loadingSeekEvents.some(([type, trusted, time]) => "
+        "type === 'seeked' && trusted && time >= 10.5 && time < 11.2)"
+    )
+    expect(reveal).to_have_attribute("data-segment-id", later.get_attribute("data-segment-id"))
+
+
+def test_delayed_saved_source_card_does_not_override_newer_timestamp_seek(
+    live, signed_in, tmp_path
+):
+    meeting_id, _, snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
+    _, page = signed_in(reduced_motion="reduce")
+    open_notes(live, page, meeting_id)
+    audio = page.locator("#meeting-audio")
+    audio.evaluate(
+        """node => {
+          window.loadingSeekEvents = [];
+          for (const type of ['seeking', 'seeked']) {
+            node.addEventListener(type, event => window.loadingSeekEvents.push([
+              event.type, event.isTrusted, node.currentTime,
+            ]));
+          }
+        }"""
+    )
+    snapshot_url = f"{live.url}/api/notes-sources/{snapshot['id']}"
+    held = []
+    page.route(snapshot_url, lambda route: held.append(route))
+    with page.expect_request(snapshot_url):
+        page.locator(CHIP).filter(has_text="00:25").click()
+    target = page.locator(f'.transcript-segment[data-segment-id="{segment_ids[20]}"]')
+    target.locator(".segment-timestamp").click()
+    page.wait_for_function(
+        "() => window.loadingSeekEvents.some(([type, trusted, time]) => "
+        "type === 'seeked' && trusted && time >= 20 && time < 20.7)"
+    )
+    audio.evaluate("node => node.pause()")
+    assert held
+    for route in held[:]:
+        route.continue_()
+    page.unroute(snapshot_url)
+    card = page.locator("#notes-source-view")
+    expect(card).to_be_visible()
+    expect(page.locator("#notes-source-time")).to_have_text("00:00:25")
+    expect(page.locator("#notes-source-text")).to_have_text(snapshot["segments"][25]["text"])
+    page.locator("#meeting-tab-transcript").click()
+    page.locator("#transcript-search").fill("No matching local rows")
+    reveal = page.locator("#transcript-reveal-target")
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+    page.locator("#notes-source-close").click()
+    expect(card).to_be_hidden()
+    expect(reveal).to_have_attribute("data-segment-id", segment_ids[20])
+    assert audio.evaluate(
+        "node => node.paused && node.currentTime >= 19.9 && node.currentTime < 20.7"
+    )
+
+
 def test_closing_older_notes_source_keeps_newer_hidden_seek_recovery(live, signed_in, tmp_path):
     meeting_id, _, _, segment_ids = seed_long_cited_notes(live, tmp_path)
     _, page = signed_in(viewport={"width": 1280, "height": 844})

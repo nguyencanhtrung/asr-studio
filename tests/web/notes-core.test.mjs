@@ -1207,6 +1207,23 @@ test("source seek answered true marks the source on the player", async () => {
   await tick();
   assert.ok(env.hostCalls.slice(mark).some(([name, seg, at]) => name === "history.markNotesSource" && seg === "seg1" && at === 12));
 });
+
+test("a superseded source seek reports the newer timestamp and ignores a late card answer", async () => {
+  const env = setup();
+  await opened(env);
+  const ref = { meetingId: "m1", snapshotId: "s9", segmentId: "seg1" };
+  env.dispatch("source-opened", { reference: ref, fromClick: false });
+  await env.answer(env.is("GET", "/api/notes-sources/s9"), 200, SNAPSHOT("s9"));
+  const id = env.state().source.id;
+  env.dispatch("source-sought", { meta: { id }, value: { superseded: true } });
+  assert.match(text(env.state().source.status), /Tua tới đây/);
+  const before = env.state().source.status;
+  env.dispatch("source-seek-answered", {
+    meta: { id: id - 1, source: env.state().source.current },
+    value: true,
+  });
+  assert.equal(env.state().source.status, before);
+});
 test("a location for another meeting does not open a source", async () => {
   const env = setup();
   await opened(env);

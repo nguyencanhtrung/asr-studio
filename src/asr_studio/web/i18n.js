@@ -910,6 +910,7 @@ const { t, UI_LOCALE } = (() => {
       "Đã lưu · {duration}": "Saved · {duration}",
       "Đã lưu.": "Saved.",
       "Đã mở nguồn bất biến nhưng chưa thể tua bản ghi. Dùng nút tua để thử lại.": "Opened the immutable source, but the recording could not be seeked. Use the seek button to try again.",
+      "Trình phát vẫn ở mốc bạn vừa chọn. Dùng nút Tua tới đây để nghe đoạn nguồn.": "The player is still at your latest timestamp. Choose Seek here to hear this source.",
       "Đã ngắt kết nối Antigravity và vô hiệu hóa credential OMP đã lưu.": "Disconnected Antigravity and disabled the saved OMP credential.",
       "Đã ngắt kết nối trong không gian làm việc. ChatGPT chưa xác nhận thu hồi quyền từ xa; hãy kiểm tra ChatGPT → Cài đặt → Mức sử dụng.": "Disconnected in the workspace. ChatGPT has not confirmed remote revocation; check ChatGPT → Settings → Usage.",
       "Đã nhận": "Accepted",

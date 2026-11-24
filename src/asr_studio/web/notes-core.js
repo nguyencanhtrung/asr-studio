@@ -2515,8 +2515,9 @@ function sourceDifference(meeting, source) {
 }
 
 function showSource(state, reference, fromClick) {
-  const effects = fromClick ? [call("history.showNotesSourceTab", [reference])] : [];
   const id = state.source.id + 1;
+  const effects = [call("history.sourceRequestStarted", [id])];
+  if (fromClick) effects.unshift(call("history.showNotesSourceTab", [reference]));
   const next = patchSource(state, { id, key: referenceKey(reference), status: t("Đang tải bản chụp transcript đã lưu…") });
   const snapshot = state.snapshots[reference.snapshotId];
   if (!snapshot) {
@@ -2908,14 +2909,18 @@ function transition(state, action) {
       const source = state.source.current;
       if (action.id !== state.source.id || !source) return out(state);
       return out(state, [
-        call("history.markNotesSource", [source.segmentId, source.startSeconds]),
-        call("history.seekNotesSource", [source], { key: "notes/source-open-seek", ok: "notes/source-sought", error: "notes/source-failed", meta: { id: action.id } }),
+        call("history.markNotesSource", [source.segmentId, source.startSeconds, action.id]),
+        call("history.seekNotesSource", [source, action.id], { key: "notes/source-open-seek", ok: "notes/source-sought", error: "notes/source-failed", meta: { id: action.id } }),
       ]);
     }
     case "notes/source-sought": {
       if (action.meta.id !== state.source.id) return out(state);
-      if (!action.value) {
-        return out(patchSource(state, { status: t("Đã mở nguồn bất biến nhưng chưa thể tua bản ghi. Dùng nút tua để thử lại.") }));
+      if (!action.value || action.value.superseded) {
+        return out(patchSource(state, {
+          status: action.value?.superseded
+            ? t("Trình phát vẫn ở mốc bạn vừa chọn. Dùng nút Tua tới đây để nghe đoạn nguồn.")
+            : t("Đã mở nguồn bất biến nhưng chưa thể tua bản ghi. Dùng nút tua để thử lại."),
+        }));
       }
       return out(state, [call("history.playRecording", [], { key: "notes/source-play", ok: "notes/source-played", error: "notes/source-failed", meta: { id: action.meta.id } })]);
     }
@@ -2933,18 +2938,25 @@ function transition(state, action) {
     case "notes/source-seek-clicked": {
       const source = state.source.current;
       if (!source) return out(state);
-      return out(state, [call("history.seekNotesSource", [source], { key: "notes/source-seek", ok: "notes/source-seek-answered", meta: { source } })]);
+      return out(state, [
+        call("history.sourceRequestStarted", [state.source.id]),
+        call("history.seekNotesSource", [source, state.source.id], { key: "notes/source-seek", ok: "notes/source-seek-answered", meta: { id: state.source.id, source } }),
+      ]);
     }
     case "notes/source-seek-answered": {
+      if (action.meta.id !== state.source.id) return out(state);
       const { source } = action.meta;
-      const sought = Boolean(action.value);
+      const superseded = Boolean(action.value && action.value.superseded);
+      const sought = !superseded && Boolean(action.value);
       return out(
         patchSource(state, {
-          status: sought
+          status: superseded
+            ? t("Trình phát vẫn ở mốc bạn vừa chọn. Dùng nút Tua tới đây để nghe đoạn nguồn.")
+            : sought
             ? t("Đã tua bản ghi cuộc họp tới {time}.", { time: formatSeconds(source.startSeconds) })
             : t("Chưa thể tua bản ghi tới mốc này. Hãy kiểm tra audio đã tải xong."),
         }),
-        sought ? [call("history.markNotesSource", [source.segmentId, source.startSeconds])] : [],
+        sought ? [call("history.markNotesSource", [source.segmentId, source.startSeconds, state.source.id])] : [],
       );
     }
     default:

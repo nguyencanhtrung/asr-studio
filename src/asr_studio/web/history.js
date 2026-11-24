@@ -189,6 +189,7 @@ const run = createRunner({
     "clipboard.select": selectDiagnosticCommand,
     "transcript.copy": copyTranscriptDraft,
     "playback.seek": seekAudio,
+    "history.sourceRequestStarted": sourceRequestStarted,
     "meeting.refresh": (meetingId) => meetingHistory.refreshMeeting(meetingId),
   },
 });
@@ -732,7 +733,7 @@ async function leaveCalendar() {
 
 // Resolves true when the player was sent to the source, false when the source could not be shown or a newer seek,
 // a meeting or transcript change, an audio error or the metadata timeout won (the core decides, see playback-core.js).
-async function seekNotesSource(source) {
+async function seekNotesSource(source, sourceRequestId) {
   const { meetingId, snapshotId, segmentId, startSeconds } = source; // no source at all rejects, as before 4d
   if (!validSource(source)) return false;
   const path = `/meetings/${encodeURIComponent(meetingId)}`;
@@ -752,6 +753,9 @@ async function seekNotesSource(source) {
     const painted = await loadMeeting(meetingId);
     if (!painted || !showing()) return false;
   }
+  if (sourceRequestId !== undefined && store.getState().playback.sourceRequestId !== sourceRequestId) {
+    return { superseded: true };
+  }
   const seekId = newRequestId();
   return new Promise((resolve) => {
     const stop = store.subscribe((root) => {
@@ -761,7 +765,7 @@ async function seekNotesSource(source) {
       else return;
       stop();
     });
-    dispatch({ type: "playback/seek-requested", seekId, meetingId, segmentId, startSeconds, ...audioFacts() });
+    dispatch({ type: "playback/seek-requested", seekId, meetingId, segmentId, startSeconds, sourceRequestId, ...audioFacts() });
   });
 }
 
@@ -2024,10 +2028,14 @@ function updateActiveTranscriptIntervals() {
 
 // Mark the row a saved notes source names (its ID, else the row spanning its time, since a newer
 // transcript has other IDs) and bring it into view when it is not. Null clears the mark. True when a row was found.
-function markNotesSource(segmentId, startSeconds) {
+function sourceRequestStarted(sourceRequestId) {
+  dispatch({ type: "playback/source-requested", sourceRequestId });
+}
+
+function markNotesSource(segmentId, startSeconds, sourceRequestId) {
   const shown = shownNow();
   const found = sourceRow((shown && shown.rows) || [], segmentId, startSeconds) !== null;
-  dispatch({ type: "playback/mark-requested", segmentId, startSeconds, reduced: audioFacts().reduced });
+  dispatch({ type: "playback/mark-requested", segmentId, startSeconds, sourceRequestId, reduced: audioFacts().reduced });
   return found;
 }
 
@@ -2696,6 +2704,7 @@ export const meetingHistory = Object.freeze({
   defaultSpeakerNames,
   focusSpeakerCatalog,
   showNotesSourceTab,
+  sourceRequestStarted,
   markNotesSource,
   playRecording,
   currentContext() {

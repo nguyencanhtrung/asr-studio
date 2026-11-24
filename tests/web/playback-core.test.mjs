@@ -741,6 +741,36 @@ test("each programmatic start is owed before a native acknowledgement is consume
   assert.equal(state.target, "r2");
 });
 
+test("repeated timestamp writes before metadata owe one coalesced native start", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, {
+    type: "playback/target-requested", segmentId: "r2", startSeconds: 3, ready: false, shown,
+  }).state;
+  state = reduce(state, {
+    type: "playback/target-requested", segmentId: "r2", startSeconds: 3, ready: false, shown,
+  }).state;
+  assert.equal(state.pendingTarget.owedStarts, 1);
+  state = reduce(state, { type: "playback/seeking", shown }).state;
+  state = reduce(state, { type: "playback/seeked", time: 3, paused: true, seeking: false, shown }).state;
+  assert.equal(state.pendingTarget, null);
+  state = reduce(state, { type: "playback/seeked", time: 13, paused: true, seeking: false, shown }).state;
+  assert.equal(state.target, "r4", "the first later time-only seek resolves by its current time");
+  assert.equal(state.targetOwner, "time");
+});
+
+test("a stale source snapshot may mark provenance without taking a newer reveal target", () => {
+  const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
+  let state = reduce(initialState, { type: "playback/source-requested", sourceRequestId: 1, shown }).state;
+  state = reduce(state, { type: "playback/target-requested", segmentId: "r4", startSeconds: 13, ready: true, shown }).state;
+  state = reduce(state, {
+    type: "playback/mark-requested", sourceRequestId: 1, segmentId: "r3", startSeconds: 7, shown,
+  }).state;
+  assert.equal(state.mark, "r3");
+  assert.equal(state.target, "r4");
+  assert.equal(state.targetOwner, "timestamp");
+  assert.deepEqual(state.ops, [], "stale source provenance does not enqueue a reveal");
+});
+
 test("a native time-only seek still resolves the current row without an explicit target", () => {
   const shown = { id: "m1", view: "meeting", generationId: "g1", rows: ROWS };
   const state = reduce(initialState, { type: "playback/seeked", time: 3, paused: true, shown }).state;
