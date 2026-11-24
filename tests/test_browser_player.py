@@ -1045,6 +1045,7 @@ def test_filtered_timestamp_click_keeps_exact_overlapping_target(
         expect(older.locator(".segment-source-mark")).to_be_visible()
 
     target.locator(".segment-timestamp").click()
+    page.locator("#meeting-audio").dispatch_event("seeking")
     page.locator("#meeting-audio").dispatch_event("seeked")
     page.locator("#transcript-search").fill("no matching source")
     reveal = page.locator("#transcript-reveal-target")
