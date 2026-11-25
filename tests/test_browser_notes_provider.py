@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from notes_helpers import StubNotesProvider, seed_completed_transcript
 from playwright.sync_api import expect
+from test_browser_history import hold_first
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 
@@ -549,6 +551,14 @@ def announce_choice_change(page):
     )
 
 
+def wait_for_held_choice_request(page, held):
+    # The request event can arrive before Playwright runs the route callback.
+    deadline = time.monotonic() + 5
+    while not held and time.monotonic() < deadline:
+        page.wait_for_timeout(25)
+    assert held, "Notes preferences GET did not reach the hold point"
+
+
 def test_model_saved_elsewhere_refreshes_the_open_notes_panel(live, signed_in, fake_notes_provider):
     _context, page = signed_in()
     meeting_id, _generation, _ = seed_completed_transcript(live.settings.data_dir)
@@ -721,15 +731,17 @@ def test_complete_pending_retry_survives_choice_reload_between_pointer_events(
     page.reload()
     expect(button).to_have_text("Xác minh yêu cầu notes")
     expect(button).to_be_enabled()
+    reload_choice = page.locator("#notes-choice-reload")
+    expect(reload_choice).to_be_visible()
+    expect(reload_choice).to_be_enabled()
 
-    held = []
-    page.route(f"{live.url}/api/notes-preferences", lambda route: held.append(route))
+    held = hold_first(page, rf"^{re.escape(live.url)}/api/notes-preferences$", "GET")
     bounds = button.bounding_box()
     page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
     page.mouse.down()
-    with page.expect_request(lambda request: request.url.endswith("/api/notes-preferences")):
-        announce_choice_change(page)
     try:
+        announce_choice_change(page)
+        wait_for_held_choice_request(page, held)
         with page.expect_response(
             lambda response: (
                 response.url.endswith("/notes-runs") and response.request.method == "POST"
@@ -768,18 +780,20 @@ def test_incomplete_pending_request_waits_for_choice_loading_before_completion(
     page.add_init_script(f"localStorage.setItem({key}, {json.dumps(json.dumps(stored))})")
     page.goto(f"{live.url}/meetings/{meeting_id}#notes")
 
-    held = []
-    page.route(f"{live.url}/api/notes-preferences", lambda route: held.append(route))
     button = page.locator("#notes-start")
-    with page.expect_request(lambda request: request.url.endswith("/api/notes-preferences")):
-        announce_choice_change(page)
+    expect(button).to_have_text("Xác minh yêu cầu notes")
+    expect(button).to_be_enabled()
+
+    held = hold_first(page, rf"^{re.escape(live.url)}/api/notes-preferences$", "GET")
     try:
+        announce_choice_change(page)
+        wait_for_held_choice_request(page, held)
         expect(button).to_have_text("Xác minh yêu cầu notes")
         expect(button).to_be_disabled()
+        assert not bodies
     finally:
         for route in held:
             route.continue_()
-        held.clear()
 
     expect(button).to_be_enabled()
     with page.expect_response(
@@ -788,11 +802,17 @@ def test_incomplete_pending_request_waits_for_choice_loading_before_completion(
     ) as accepted:
         button.click()
     assert accepted.value.status == 202
-    assert bodies[0]["request_id"] == stored["request_id"]
-    assert bodies[0]["provider"] == "chatgpt"
-    assert bodies[0]["expected_generation_id"] == generation_id
-    assert bodies[0]["expected_model"] == CHATGPT_MODEL
-    assert bodies[0]["expected_reasoning_effort"] == "high"
+    assert bodies == [
+        {
+            **stored,
+            "provider": "chatgpt",
+            "expected_generation_id": generation_id,
+            "expected_source_version": 1,
+            "expected_metadata_version": 1,
+            "expected_model": CHATGPT_MODEL,
+            "expected_reasoning_effort": "high",
+        }
+    ]
 
 
 def test_failed_reload_after_a_good_load_disables_start_despite_known_model(live, signed_in):
