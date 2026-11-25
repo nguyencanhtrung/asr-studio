@@ -2154,6 +2154,46 @@ for (const failed of [false, true]) {
   });
 }
 
+for (const enterAfterAck of [false, true]) {
+  for (const response of ["loaded", "malformed", "failed"]) {
+    test(`conductor R11 default follow-up owns the install poll, enter after ACK=${enterAfterAck}, response=${response}`, async () => {
+      const running = catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+      const env = await openedWith(running);
+      const read = env.is("GET", "/api/asr-models");
+      const before = catalogCalls(env).length;
+      env.store.dispatch({ type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+      if (!enterAfterAck) {
+        env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+        assert.equal(env.state().asr.summaryStatus, "loading");
+      }
+      assert.deepEqual(env.live(), [1000]);
+
+      await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "whisper-large-v3" });
+      assert.equal(catalogCalls(env).length, before + 1, "the ACK starts exactly one catalog follow-up");
+      assert.equal(env.pending(read).length, 1);
+      assert.deepEqual(env.live(), [], "the ordinary poll timer is suspended while the follow-up is pending");
+      if (enterAfterAck) {
+        env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+        assert.equal(env.state().asr.summaryStatus, "loading");
+        assert.equal(catalogCalls(env).length, before + 1, "Automation joins the current follow-up");
+      }
+
+      env.store.dispatch({ type: "provider/asr-poll" });
+      assert.equal(catalogCalls(env).length, before + 1, "a stale poll tick cannot replace the follow-up");
+
+      if (response === "loaded") await env.answer(read, 200, { ...running, default_model: "whisper-large-v3" });
+      else if (response === "malformed") await env.answer(read, 200, {});
+      else await env.fail(read);
+      assert.equal(env.state().asr.summaryStatus, response === "failed" ? "error" : null);
+      assert.deepEqual(env.live(), [1000], "settling the follow-up resumes active-install polling");
+
+      env.fire(1000);
+      assert.equal(catalogCalls(env).length, before + 2, "the resumed poll starts one later catalog read");
+      await env.answer(read, 200, running);
+    });
+  }
+}
+
 for (const response of ["loaded", "malformed", "failed"]) {
   test(`conductor R10 pending default keeps Automation loading through an ongoing install ${response}`, async () => {
     const running = catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } });
@@ -2208,6 +2248,61 @@ for (const { d, other, save } of CASES) {
       assert.equal(after.error.retryPoll, false);
       assert.deepEqual(env.events, []);
     }
+  });
+}
+
+for (const { d, other, save } of CASES) {
+  for (const failure of ["malformed", "server"]) {
+    test(`conductor R11 ${d.id} clears a ${failure} Save alert after a valid retry`, async () => {
+      const env = setup();
+      await loaded(env);
+      dispatch(env, d, "choice-edited", { field: "model", value: other });
+      dispatch(env, d, "save-requested");
+      if (failure === "malformed") {
+        await env.answer(env.is(...save), 200, d === CHATGPT
+          ? { models: { chatgpt: other } }
+          : { provider: d.id, model: other });
+      } else {
+        await env.answer(env.is(...save), 503, { detail: { code: "provider_unavailable", message: "The provider is offline." } });
+      }
+      assert.equal(own(env, d).error.code, failure === "malformed" ? "provider_invalid_response" : "provider_unavailable");
+      assert.equal(own(env, d).error.operation, "save");
+
+      dispatch(env, d, "save-requested");
+      await env.answer(env.is(...save), 200, d === CHATGPT
+        ? { models: { chatgpt: other }, reasoning_effort: "high", reasoning_efforts: { chatgpt: "high" } }
+        : { provider: d.id, model: other, reasoning_effort: "medium" });
+      assert.equal(own(env, d).error, null);
+      assert.equal(own(env, d).modelStatus.state, "saved");
+      assert.equal(own(env, d).ownerModel, other);
+    });
+  }
+}
+
+for (const unrelated of ["verify", "login"]) {
+  test(`conductor R11 keeps an unrelated Antigravity ${unrelated} error after a valid Save`, async () => {
+    const env = setup();
+    await loaded(env);
+    if (unrelated === "verify") {
+      dispatch(env, ANTIGRAVITY, "verify-requested");
+      await env.answer(env.is("POST", "/api/providers/antigravity/verify"), 503, {
+        detail: { code: "provider_unavailable", message: "The provider is offline." },
+      });
+    } else {
+      dispatch(env, ANTIGRAVITY, "login-requested");
+      await env.answer(env.is("POST", "/api/providers/antigravity/login-sessions"), 503, {
+        detail: { code: "provider_unavailable", message: "The provider is offline." },
+      });
+    }
+    assert.equal(own(env, ANTIGRAVITY).error.operation, undefined);
+    dispatch(env, ANTIGRAVITY, "choice-edited", { field: "model", value: "g2" });
+    dispatch(env, ANTIGRAVITY, "save-requested");
+    await env.answer(env.is("PUT", "/api/providers/antigravity/preference"), 200, {
+      provider: "antigravity", model: "g2", reasoning_effort: "medium",
+    });
+    assert.equal(own(env, ANTIGRAVITY).error.code, "provider_unavailable");
+    assert.equal(own(env, ANTIGRAVITY).error.operation, undefined);
+    assert.equal(own(env, ANTIGRAVITY).modelStatus.state, "saved");
   });
 }
 

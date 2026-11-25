@@ -709,7 +709,8 @@ function resume(d, s, error, after, operation = after) {
   }
   if (after === "save") {
     const next = setPending(s, "save", false);
-    return done(showError(d, d.copy.saveFailed ? { ...next, modelStatus: { state: "error", text: d.copy.saveFailed } } : next, error));
+    const shown = showError(d, d.copy.saveFailed ? { ...next, modelStatus: { state: "error", text: d.copy.saveFailed } } : next, error);
+    return done({ ...shown, error: { ...shown.error, operation: "save" } });
   }
   const next = setPending(s, "verify", false);
   return done(showError(d, { ...next, verifyResult: { state: "error", text: d.copy.verifyFailed } }, error));
@@ -1070,11 +1071,12 @@ function saveOk(d, s, body) {
     : reply.reasoning_effort;
   if (typeof savedModel !== "string" || !savedModel.trim() || typeof savedEffort !== "string" || !savedEffort.trim()
     || !notesPreferences && reply.provider !== d.id) {
-    const error = { code: "provider_invalid_response", text: errorMessageForCode("provider_invalid_response", undefined, d.id), retryPoll: false };
+    const error = { code: "provider_invalid_response", text: errorMessageForCode("provider_invalid_response", undefined, d.id), retryPoll: false, operation: "save" };
     return done({ ...setPending(s, "save", false), error, modelStatus: { state: "error", text: null } });
   }
   let next = {
     ...setPending(s, "save", false),
+    error: s.error?.operation === "save" ? null : s.error,
     ownerFence: s.ownerFence + 1,
     savedModel,
     selectedModel: savedModel,
@@ -1348,6 +1350,7 @@ const asrFetch = (request) => ({ type: "fetch", key: "provider/asr-models", url:
 // The meeting behind the dialog reads its model list again. Closing can beat a save, so a save says so too.
 const ASR_SETTINGS_CHANGED = { type: "call", key: "provider/asr-settings-changed", name: "asr.settings-changed", args: [] };
 const ASR_POLL = { type: "schedule", key: "provider/asr-poll", delay: 1000, action: { type: "provider/asr-poll" } };
+const ASR_STOP_POLL = { type: "cancel", key: ASR_POLL.key };
 const JOB_ACTIVE = ["queued", "running", "cancelling"];
 const jobActive = (choice) => JOB_ACTIVE.includes(choice.install?.state);
 const installerUsable = (installer) => installer.available && installer.models_writable;
@@ -1388,7 +1391,7 @@ function reduceAsr(state, action) {
     }
     case "provider/settings-section-selected": {
       if (action.section !== "processing" || action.previousSection === "processing" || !state.open) return done(state);
-      if (state.defaultPending !== undefined) return done({ ...state, summaryStatus: "loading" });
+      if (state.defaultPending !== undefined || state.defaultCatalogRequest === state.request) return done({ ...state, summaryStatus: "loading" });
       // The first Automation visit can share a catalog already loading at open.
       // Re-entry requests the current snapshot, superseding any older keyed read.
       if (state.status === "loading" && state.summaryStatus !== "loading") {
@@ -1398,17 +1401,21 @@ function reduceAsr(state, action) {
       return done({ ...state, request, summaryStatus: "loading" }, [asrFetch(request)]);
     }
     case "provider/dialog-closed":
-      return done({ ...state, open: false }, [{ type: "cancel", key: "provider/asr-poll" }, ASR_SETTINGS_CHANGED]);
+      return done({ ...state, open: false }, [ASR_STOP_POLL, ASR_SETTINGS_CHANGED]);
     case "provider/asr-poll": {
-      if (!state.open) return done(state);
+      if (!state.open || state.defaultCatalogRequest === state.request) return done(state);
       const request = state.request + 1;
       return done({ ...state, request }, [asrFetch(request)]);
     }
     case "provider/asr-loaded": {
       if (action.meta.id !== state.request) return done(state);
+      const settled = { ...state, defaultCatalogRequest: undefined };
       const list = action.response.body?.asr_models;
       const summaryStatus = state.defaultPending === undefined ? null : state.summaryStatus;
-      if (!Array.isArray(list)) return done({ ...state, status: "error", summaryStatus });
+      if (!Array.isArray(list)) {
+        const invalid = { ...settled, status: "error", summaryStatus };
+        return state.defaultCatalogRequest === state.request ? withPoll(invalid) : done(invalid);
+      }
       const models = list.filter(isAsrModelRow).map((row) => {
         const pending = pendingInstall(state, row.id);
         // A catalog-confirmed job can be canceled while its create response is on the way.
@@ -1419,7 +1426,7 @@ function reduceAsr(state, action) {
       const { default_model: saved, hardware_model: hardware } = action.response.body;
       const defaultModel = isAsrModelId(saved) && saved !== "auto" ? saved : null;
       const hardwareModel = typeof hardware === "string" ? hardware : null;
-      const next = { ...state, summaryStatus, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
+      const next = { ...settled, summaryStatus, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
         // A reply with no usable model must say so; an empty list would leave the section blank.
         status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
       return withPoll(next);
@@ -1427,9 +1434,12 @@ function reduceAsr(state, action) {
     case "provider/asr-failed":
       // A failed poll keeps the rows: the next tick reads again.
       if (action.meta.id !== state.request) return done(state);
-      const next = state.summaryStatus === "loading" && state.defaultPending === undefined
-        ? { ...state, summaryStatus: "error" } : state;
-      return next.status === "ready" ? withPoll(next) : done({ ...next, status: "error" });
+      const summaryStatus = state.summaryStatus === "loading" && state.defaultPending === undefined
+        ? "error" : state.summaryStatus;
+      const next = { ...state, summaryStatus, defaultCatalogRequest: undefined };
+      if (next.status === "ready") return withPoll(next);
+      const failed = { ...next, status: "error" };
+      return state.defaultCatalogRequest === state.request ? withPoll(failed) : done(failed);
     // The new value shows at once. A catalog read already in flight predates it and is dropped.
     case "provider/asr-default-chosen": {
       if (!isAsrModelId(action.value)) return done(state);
@@ -1448,7 +1458,7 @@ function reduceAsr(state, action) {
       const request = state.request + 1;
       const saved = action.response?.body?.default_model;
       const value = !refused && (saved === null || (isAsrModelId(saved) && saved !== "auto")) ? saved : state.defaultModel;
-      return done({ ...state, request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request), ...(refused ? [] : [ASR_SETTINGS_CHANGED])]);
+      return done({ ...state, request, defaultCatalogRequest: request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [ASR_STOP_POLL, asrFetch(request), ...(refused ? [] : [ASR_SETTINGS_CHANGED])]);
     }
     case "provider/asr-install-requested":
       return asrInstallCall(state, action, "POST", { state: "queued", sending: true });
