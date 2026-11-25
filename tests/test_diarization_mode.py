@@ -228,6 +228,7 @@ def test_explicit_off_is_manual_rerun_only_and_publishes_truthful_no_speaker_gen
         expected_generation_id=first_generation["id"],
     )
     assert off_task["diarization_mode"] == "off"
+    assert off_task["status"] == "accepted"
     retry = _accept(
         data_dir,
         model_dir,
@@ -279,7 +280,8 @@ def test_explicit_off_is_manual_rerun_only_and_publishes_truthful_no_speaker_gen
         expected_generation_id=first_generation["id"],
         worker_ready=False,
     )
-    assert completed_retry["id"] == off_task["id"]
+    for field in ("id", "meeting_id", "asr_model", "language_hint", "diarization_mode"):
+        assert completed_retry[field] == off_task[field]
     assert completed_retry["status"] == "succeeded"
     state = transcription_state(data_dir, meeting_id)
     assert state["generation"]["id"] == off_generation["id"]

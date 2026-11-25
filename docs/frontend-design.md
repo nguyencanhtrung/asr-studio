@@ -833,7 +833,7 @@ bản ghi. Transcript, bản sửa đã lưu và bản Markdown của Notes vẫ
 | hộp thoại mới | `rerun-choice` | cập nhật lựa chọn trong danh sách ASR đã ready, ngôn ngữ hợp lệ hoặc chế độ diarization đã ready | |
 | hộp thoại mới | `rerun-submitted` với đúng generation hiện tại, model và chế độ ready, ghi âm sẵn sàng và không có tác vụ hoặc khóa nguồn cản trở | đóng hộp thoại, đặt focus ở trạng thái task và giữ nguyên recipe trong request chờ | ghi sessionStorage rồi `POST /api/tasks` với ASR, ngôn ngữ, chế độ và `expected_generation_id`. Server kiểm tra lại trước khi nhận task |
 | đang xác minh | `rerun-choice` | giữ các lựa chọn đóng băng | |
-| đang xác minh | `rerun-submitted` đúng request đang chờ và cuộc họp cho phép gửi | đóng hộp thoại và gửi lại đúng ID, ASR, ngôn ngữ, chế độ, generation đã giữ. Request cũ gửi các trường đã có lúc tạo | `POST /api/tasks`. Server xác minh biên nhận của request gốc |
+| đang xác minh | `rerun-submitted` đúng request đang chờ và cuộc họp cho phép gửi | đóng hộp thoại và gửi lại đúng ID, ASR, ngôn ngữ, chế độ, generation đã giữ. Request cũ gửi các trường đã có lúc tạo | `POST /api/tasks`. Nếu yêu cầu đã được nhận, server trả đúng task với cấu hình đã lưu và trạng thái hiện tại |
 | hộp thoại | Escape hoặc `rerun-cancelled` | đóng bản nháp, focus về nút Chạy lại còn dùng được. Request chưa rõ kết quả vẫn giữ để xác minh | |
 | có capability hoặc hộp thoại | `meeting-left` | bỏ capability và bản nháp. Kết quả đọc capability cũ bị bỏ qua | hủy poll của cuộc họp |
 

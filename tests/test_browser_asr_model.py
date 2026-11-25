@@ -323,6 +323,58 @@ def test_restored_rerun_replays_unavailable_original_choices_and_refreshes_capab
     }
 
 
+@pytest.mark.parametrize("mode", ["community-1", "off"])
+def test_rerun_refuses_empty_asr_weight_and_refreshes_ready_choices(live, signed_in, worker, mode):
+    _context, page = signed_in()
+    data_dir = live.settings.data_dir
+    small = _prepare_browser_asr_model(data_dir.parent / "whisper-small")
+    object.__setattr__(live.settings, "asr_cpu_model_path", small)
+    meeting, generation, _segments = seed_completed_transcript(data_dir)
+    prepare_recording(data_dir, meeting)
+    page.goto(f"{live.url}/meetings/{meeting}#transcript")
+    start = page.locator("#start-transcription")
+    dialog = page.locator("#transcription-rerun-dialog")
+    model = page.locator("#transcription-rerun-model")
+    submit = page.locator("#transcription-rerun-submit")
+    status = page.locator("#transcription-status")
+    expect(status).to_have_text("Transcript đã được lưu hoàn chỉnh.")
+    start.press("Enter")
+    model.select_option("whisper-small")
+    dialog.locator(f'[value="{mode}"]').check()
+    expect(submit).to_be_enabled()
+
+    (small / "model.bin").write_bytes(b"")
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as refused:
+        submit.press("Enter")
+    assert refused.value.status == 503
+    assert refused.value.json()["detail"]["code"] == "model_unavailable"
+    expect(start).to_be_focused()
+    expect(status).to_have_text("Transcript đã được lưu hoàn chỉnh.")
+    expect(page.locator("#transcription-error-message")).to_contain_text(
+        "Model đã chọn chưa được chuẩn bị"
+    )
+
+    page.reload()
+    expect(status).to_have_text("Transcript đã được lưu hoàn chỉnh.")
+    start.press("Enter")
+    expect(model.locator('option[value="whisper-small"]')).to_have_count(0)
+    expect(model.locator('option[value="auto"]')).to_have_count(1)
+    expect(model).to_have_value("auto")
+    dialog.locator(f'[value="{mode}"]').check()
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as accepted:
+        submit.press("Enter")
+    assert accepted.value.status == 202
+    recipe = accepted.value.request.post_data_json
+    assert recipe["asr_model"] == "auto"
+    assert recipe["diarization_mode"] == mode
+    assert recipe["expected_generation_id"] == generation
+    assert recipe["request_id"] != refused.value.request.post_data_json["request_id"]
+
+
 @pytest.mark.parametrize("lang", ["vi", "en"])
 def test_rollback_refusal_reopens_with_fresh_choices_and_request(
     live, signed_in, worker, monkeypatch, lang
