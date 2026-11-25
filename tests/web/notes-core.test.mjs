@@ -3317,3 +3317,106 @@ test("late toolbar Verify keeps the error in Notes without opening a modal over 
   env.dispatch("start-clicked", { requestId: "ignored-returned-id" });
   assert.deepEqual(posts(env, "/notes-runs").map((post) => post.raw), [original, original, original]);
 });
+
+test("definitive toolbar Verify rejection in Transcript lets Notes recover the exact recipe", async () => {
+  const env = setup();
+  const frozen = {
+    request_id: "refused-background-verify",
+    expected_generation_id: "g1",
+    expected_source_version: 2,
+    expected_metadata_version: 3,
+    output_language: "vi",
+    run: { provider: "antigravity", model: "gemini", reasoning_effort: "medium", generation_id: "g0", source_version: 7 },
+  };
+  const current = meeting();
+  current.transcription.generation_history = [{ id: "g0", status: "complete", source_version: 7 }];
+  await openedRestored(env, current, frozen);
+  env.dispatch("start-clicked", { requestId: "ignored-toolbar-id" });
+  env.context(current, { detail: { view: "meeting", meeting: current, tab: "transcript" } });
+  await env.answer(env.is("POST", "/notes-runs"), 409, { detail: { code: "provider_disconnected" } });
+  await answerSavedNotesChoices(env);
+  await env.answer(env.is("GET", "/m1/notes"), 200, notesBody([revision()]));
+  assert.equal(selectView(env.state()).regenerateDialog.open, false);
+  assert.equal(env.state().pending.m1, undefined);
+
+  env.context(current);
+  const returned = selectView(env.state());
+  assert.equal(returned.regenerateDialog.open, false);
+  assert.ok(returned.error);
+  assert.equal(returned.run.action, "regenerate");
+  env.dispatch("regenerate-clicked");
+  const dialog = selectView(env.state()).regenerateDialog;
+  assert.equal(dialog.open, true);
+  assert.equal(dialog.locked, false);
+  assert.deepEqual(
+    [dialog.provider, dialog.model, dialog.reasoningEffort, dialog.generationId, dialog.sourceVersion, dialog.outputLanguage],
+    ["antigravity", "gemini", "medium", "g0", 7, "vi"],
+  );
+  assert.equal(dialog.submitDisabled, true);
+  const selectedProvider = dialog.providerItems.find((item) => item.value === dialog.provider);
+  assert.equal(selectedProvider.disabled, true);
+  env.dispatch("regenerate-submit", { requestId: "must-not-send" });
+  assert.deepEqual(posts(env, "/notes-runs").map((post) => post.body), [frozen]);
+
+  env.dispatch("regenerate-provider-picked", { provider: "chatgpt" });
+  assert.equal(selectView(env.state()).regenerateDialog.submitDisabled, false);
+  env.dispatch("regenerate-submit", { requestId: "corrected-background-verify" });
+  const corrected = posts(env, "/notes-runs").at(-1).body;
+  assert.deepEqual(corrected, {
+    ...frozen,
+    request_id: "corrected-background-verify",
+    run: { ...frozen.run, provider: "chatgpt", model: "m1", reasoning_effort: "default" },
+  });
+  assert.equal(env.requests.some((request) => request.method === "PUT"), false);
+  assert.equal(env.written.some(([, op, key]) => op === "write" && key === outputLanguageStorageKey("m1")), false);
+});
+
+test("a definitive refusal on another meeting preserves only the originating correction", async () => {
+  const env = setup();
+  const frozen = {
+    request_id: "refused-other-meeting",
+    expected_generation_id: "g1",
+    expected_source_version: 2,
+    expected_metadata_version: 3,
+    output_language: "vi",
+    run: { provider: "antigravity", model: "older-model", reasoning_effort: "high", generation_id: "g1", source_version: 2 },
+  };
+  const current = meeting();
+  await openedRestored(env, current, frozen);
+  env.dispatch("start-clicked", { requestId: "ignored-toolbar-id" });
+
+  env.context(meeting("m2"));
+  await env.answer(env.is("GET", "/m2/notes"), 200, notesBody([revision({ id: "r2", meeting_id: "m2" })]));
+  await answerSavedNotesChoices(env);
+  env.dispatch("regenerate-clicked");
+  const otherDialog = selectView(env.state()).regenerateDialog;
+  await env.answer(env.is("POST", "/m1/notes-runs"), 422, { detail: { code: "model_unavailable" } });
+  assert.deepEqual(selectView(env.state()).regenerateDialog, otherDialog);
+  assert.equal(env.state().pending.m1, undefined);
+  assert.equal(notes(env, "m2").regenerateCorrection, null);
+
+  env.context(current);
+  await env.answer(env.is("GET", "/m1/notes"), 200, notesBody([revision()]));
+  await answerSavedNotesChoices(env);
+  assert.equal(selectView(env.state()).regenerateDialog.open, false);
+  env.dispatch("regenerate-clicked");
+  assert.equal(selectView(env.state()).regenerateDialog.model, "older-model");
+  env.dispatch("regenerate-cancelled");
+  assert.equal(selectView(env.state()).error, "");
+  env.dispatch("regenerate-clicked");
+  const fresh = selectView(env.state()).regenerateDialog;
+  assert.deepEqual([fresh.provider, fresh.model, fresh.outputLanguage], ["chatgpt", "m1", "en"]);
+  assert.deepEqual(posts(env, "/notes-runs").map((post) => post.body), [frozen]);
+});
+
+async function answerSavedNotesChoices(env) {
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+}
+
+async function openedRestored(env, current, frozen) {
+  env.context(current, { stored: { pending: JSON.stringify(frozen) } });
+  await env.answer(env.is("GET", "/m1/notes"), 200, notesBody([revision()]));
+  await answerSavedNotesChoices(env);
+}

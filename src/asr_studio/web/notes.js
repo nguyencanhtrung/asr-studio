@@ -32,6 +32,7 @@ const els = {
   run: $("#notes-run"),
   status: $("#notes-status"),
   start: $("#notes-start"),
+  reviewCorrection: $("#notes-review-correction"),
   cancel: $("#notes-cancel"),
   notesTab: $("#meeting-tab-notes"),
   regenerateDialog: $("#notes-regenerate-dialog"),
@@ -364,7 +365,9 @@ function restoreRegenerateFocus() {
   window.setTimeout(() => {
     if (els.regenerateDialog.open) return;
     const active = document.activeElement;
-    if (active !== document.body && active !== els.start && !els.regenerateDialog.contains(active)) return;
+    if (active === els.reviewCorrection && !active.hidden && !active.disabled) return;
+    if (active !== document.body && active !== els.start && active !== els.reviewCorrection
+      && !els.regenerateDialog.contains(active)) return;
     const target = [els.start, els.cancel, els.notesTab].find((element) =>
       element?.isConnected && !element.disabled && element.getClientRects().length,
     );
@@ -561,6 +564,8 @@ function render(state) {
   setProp(els.start, "disabled", view.run.disabled);
   setProp(els.start, "title", tr(view.run.title));
   setProp(els.start, "textContent", tr(view.run.label));
+  setProp(els.reviewCorrection, "hidden", !view.run.correctionVisible);
+  setProp(els.reviewCorrection, "disabled", view.run.correctionDisabled);
   // A run copies the speaker names as they stand, so say which ones are still the system's own.
   const names = view.reminder.names;
   setProp(els.reminder, "hidden", !names.length || view.reminder.blocked);
@@ -691,6 +696,7 @@ els.start.addEventListener("click", (event) => {
   }
   else dispatch({ type: "notes/start-clicked", requestId: newRequestId() });
 });
+els.reviewCorrection.addEventListener("click", () => dispatch({ type: "notes/regenerate-clicked" }));
 els.regenerateProvider.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-provider-picked", provider: event.currentTarget.value }));
 els.regenerateModel.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-model-picked", model: event.currentTarget.value }));
 els.regenerateEffort.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-effort-picked", reasoningEffort: event.currentTarget.value }));

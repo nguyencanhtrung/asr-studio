@@ -2169,8 +2169,9 @@ def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(
 
 
 @pytest.mark.usefixtures("fake_vendor_notes_provider")
+@pytest.mark.parametrize("context_at_refusal", ["notes", "transcript", "transcript_disconnected"])
 def test_restored_run_keeps_disconnected_destination_after_definitive_verify_rejection(
-    live, signed_in
+    live, signed_in, context_at_refusal
 ):
     _context, page = signed_in()
     mock_providers(page, live, antigravity="disconnected")
@@ -2203,15 +2204,19 @@ def test_restored_run_keeps_disconnected_destination_after_definitive_verify_rej
     raw_requests = []
     preference_writes = []
     allow_submission = False
+    held_refusals = []
 
     def intercept_run(route):
         raw_requests.append(route.request.post_data_buffer)
         if len(raw_requests) == 1:
-            route.fulfill(status=503, json={"detail": {"code": "temporary_failure"}})
-        elif len(raw_requests) == 2:
-            route.fulfill(status=409, json={"detail": {"code": "provider_disconnected"}})
+            if context_at_refusal == "notes":
+                route.fulfill(status=503, json={"detail": {"code": "temporary_failure"}})
+            else:
+                held_refusals.append(route)
         elif allow_submission:
             route.continue_()
+        elif len(raw_requests) == 2 and context_at_refusal == "notes":
+            route.fulfill(status=409, json={"detail": {"code": "provider_disconnected"}})
         else:
             route.abort()
 
@@ -2232,50 +2237,92 @@ def test_restored_run_keeps_disconnected_destination_after_definitive_verify_rej
     language = page.locator("#notes-regenerate-language")
     error = page.locator("#notes-regenerate-error")
     reload_choices = page.locator("#notes-regenerate-reload")
+    notes_tab = page.locator("#meeting-tab-notes")
+    transcript_tab = page.locator("#meeting-tab-transcript")
     verify = "Xác minh yêu cầu notes"
     expect(start).to_have_text(verify)
-    with page.expect_response(runs_url, timeout=5_000) as first:
-        start.click()
-    assert first.value.status == 503
-    expect(dialog).to_be_visible()
-    expect(error).to_be_visible()
-    expect(page.locator("#notes-regenerate-status")).to_contain_text("đã được giữ nguyên")
-    expect(submit).to_have_text(verify)
-    expect(submit).to_be_focused()
-    expect(provider).to_have_value("antigravity")
-    expect(provider).to_be_disabled()
-    expect(reload_choices).to_be_enabled()
+    if context_at_refusal == "notes":
+        with page.expect_response(runs_url, timeout=5_000) as first:
+            start.click()
+        assert first.value.status == 503
+        expect(dialog).to_be_visible()
+        expect(error).to_be_visible()
+        expect(page.locator("#notes-regenerate-status")).to_contain_text("đã được giữ nguyên")
+        expect(submit).to_have_text(verify)
+        expect(submit).to_be_focused()
+        expect(provider).to_have_value("antigravity")
+        expect(provider).to_be_disabled()
+        expect(reload_choices).to_be_enabled()
 
-    with (
-        page.expect_response(runs_url, timeout=5_000) as second,
-        page.expect_response(f"{live.url}/api/providers/chatgpt/models", timeout=5_000),
-    ):
-        submit.click()
-    assert second.value.status == 409
-    assert second.value.json()["detail"]["code"] == "provider_disconnected"
-    assert len(raw_requests) == 2
-    assert raw_requests[0] == raw_requests[1]
+        with (
+            page.expect_response(runs_url, timeout=5_000) as refusal,
+            page.expect_response(f"{live.url}/api/providers/chatgpt/models", timeout=5_000),
+        ):
+            submit.click()
+        assert len(raw_requests) == 2
+        assert raw_requests[0] == raw_requests[1]
+        expect(page.locator("#notes-regenerate-cancel")).to_be_focused()
+    else:
+        with page.expect_request(runs_url, timeout=5_000):
+            start.click()
+        transcript_tab.click()
+        expect(transcript_tab).to_be_focused()
+        assert len(held_refusals) == 1
+        all_disconnected = context_at_refusal == "transcript_disconnected"
+        if all_disconnected:
+            mock_providers(page, live, chatgpt="disconnected", antigravity="disconnected")
+        with page.expect_response(runs_url, timeout=5_000) as refusal:
+            held_refusals.pop().fulfill(
+                status=409, json={"detail": {"code": "provider_disconnected"}}
+            )
+        expect(page.locator("#notes-error")).to_contain_text("Google Antigravity")
+        expect(dialog).to_be_hidden()
+        expect(transcript_tab).to_be_focused()
+        notes_tab.click()
+        expect(dialog).to_be_hidden()
+        if all_disconnected:
+            expect(start).to_have_text("Kết nối ChatGPT để tạo notes")
+            review_correction = page.locator("#notes-review-correction")
+            expect(review_correction).to_have_text("Xem lại lựa chọn bị từ chối")
+            review_correction.click()
+            expect(provider).to_have_value("antigravity")
+            expect(provider.locator("option:checked")).to_be_disabled()
+            expect(submit).to_be_disabled()
+            assert len(raw_requests) == 1
+            assert preference_writes == []
+            expect(page.locator("#notes-regenerate-cancel")).to_be_visible()
+            page.keyboard.press("Escape")
+            expect(dialog).to_be_hidden()
+            expect(review_correction).to_be_hidden()
+            expect(start).to_be_focused()
+            expect(start).to_have_text("Kết nối ChatGPT để tạo notes")
+            return
+        start.click()
+        expect(provider).to_be_focused()
+    assert refusal.value.status == 409
+    assert refusal.value.json()["detail"]["code"] == "provider_disconnected"
     assert json.loads(raw_requests[0]) == body
+    requests_before_correction = len(raw_requests)
     expect(reload_choices).to_be_enabled()
     expect(dialog).to_be_visible()
     expect(error).to_contain_text("Google Antigravity")
-    expect(page.locator("#notes-regenerate-cancel")).to_be_focused()
     expect(provider).to_be_enabled()
     expect(provider).to_have_value("antigravity")
     expect(model).to_have_value(ANTIGRAVITY_MODEL)
     expect(effort).to_have_value("medium")
+    expect(page.locator("#notes-regenerate-source")).to_have_value(generation_id)
     expect(language).to_have_value("vi")
     expect(submit).to_have_text("Tạo lại notes")
     expect(submit).to_be_disabled()
 
     provider.select_option("chatgpt")
     expect(submit).to_be_enabled()
-    assert len(raw_requests) == 2
+    assert len(raw_requests) == requests_before_correction
     allow_submission = True
     with page.expect_response(runs_url, timeout=5_000) as admitted:
         submit.click()
     assert admitted.value.status == 202
-    assert len(raw_requests) == 3
+    assert len(raw_requests) == requests_before_correction + 1
     corrected = admitted.value.request.post_data_json
     task = admitted.value.json()
     assert corrected["request_id"] != body["request_id"]

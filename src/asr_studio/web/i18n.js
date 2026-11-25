@@ -723,6 +723,7 @@ const { t, UI_LOCALE } = (() => {
       "Tạm mất kết nối khi đọc tiến độ. Tác vụ vẫn thuộc worker; đang thử đọc lại.": "Connection lost while reading progress. The task still belongs to the worker; reading again.",
       "Tạo cuộc họp": "Create meeting",
       "Tạo lại notes": "Recreate notes",
+      "Xem lại lựa chọn bị từ chối": "Review rejected choices",
       "Tạo notes": "Create notes",
       "TẢI LÊN VÀ KIỂM TRA": "UPLOAD AND CHECK",
       "Đang kiểm tra lại trạng thái file trên máy chủ.": "Checking the file status on the server again.",
