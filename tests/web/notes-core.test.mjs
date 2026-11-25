@@ -2748,7 +2748,6 @@ test("regenerate output-language edits keep a confirmed model provider across st
     preferences: { ...PREFS, reasoning_effort: "high" },
   });
   env.dispatch("regenerate-clicked");
-  assert.equal(env.state().regenerate.confirmed.model, true);
   env.dispatch("regenerate-language-picked", { language: "vi" });
 
   await reloadRunChoices(env, {
@@ -2897,8 +2896,7 @@ test("regenerate model or effort picks pin their provider across status refresh 
     await opened(env, { catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["high"] }] } });
     env.dispatch("regenerate-clicked");
     env.dispatch(type, extra);
-    const before = env.state().regenerate;
-    assert.equal(before.touched.provider, false);
+    const before = selectView(env.state()).regenerateDialog;
     await reloadRunChoices(env, {
       providers: { providers: [{ id: "chatgpt", status: "disconnected" }, { id: "antigravity", status: "connected" }] },
       preferences: { provider: "antigravity", models: { antigravity: "gemini" } },
@@ -3087,4 +3085,38 @@ test("restoring a pending per-run language keeps the meeting's default after com
   restored.dispatch("regenerate-clicked");
   assert.equal(selectView(restored.state()).regenerateDialog.outputLanguage, "en");
   assert.ok(!restored.written.some(([, op, key]) => op === "write" && key === outputLanguageStorageKey("m1")));
+});
+
+test("regenerate retains its draft while a concurrently admitted notes task holds the source", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-language-picked", { language: "vi" });
+  assert.equal(selectView(env.state()).regenerateDialog.submitDisabled, false);
+
+  env.dispatch("meeting-change-received", { meetingId: "m1" });
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200,
+    notesBody([revision()], { ...TASK, status: "running", request_id: "other-operator" }, true));
+  const blocked = selectView(env.state()).regenerateDialog;
+  assert.equal(blocked.open, true);
+  assert.equal(blocked.outputLanguage, "vi");
+  assert.equal(blocked.submitDisabled, true);
+  assert.match(text(blocked.status), /Chờ tác vụ kết thúc/);
+  env.dispatch("regenerate-submit", { requestId: "our-rejected-attempt" });
+  assert.equal(posts(env, "/notes-runs").length, 0);
+
+  env.dispatch("meeting-change-received", { meetingId: "m1" });
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200,
+    notesBody([revision()], { ...TASK, status: "succeeded", request_id: "other-operator" }));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+  const unblocked = selectView(env.state()).regenerateDialog;
+  assert.equal(unblocked.open, true);
+  assert.equal(unblocked.outputLanguage, "vi");
+  assert.equal(unblocked.submitDisabled, false);
+  assert.equal(text(unblocked.status), "");
+  env.dispatch("regenerate-submit", { requestId: "our-accepted-attempt" });
+  assert.equal(posts(env, "/notes-runs").length, 1);
+  assert.equal(posts(env, "/notes-runs")[0].body.output_language, "vi");
 });

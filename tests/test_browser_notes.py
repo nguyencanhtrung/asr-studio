@@ -923,11 +923,10 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     _context, page = signed_in()
     meeting_id, _revision, snapshot, _segment_ids = _seed_saved_notes(live.settings.data_dir)
     rerun_transcript(live.settings.data_dir, meeting_id)
-    requests: list[dict[str, object]] = []
+    requests: list[str] = []
 
     def notes_request(route) -> None:
-        body = json.loads(route.request.post_data or "{}")
-        requests.append(body)
+        requests.append(route.request.post_data or "")
         route.fulfill(
             status=503,
             json={"detail": {"code": "temporary_failure", "message": "Try again."}},
@@ -945,7 +944,9 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     first_body = requests[0]
     expect(page.locator("#notes-regenerate-submit")).to_have_text("Xác minh yêu cầu notes")
 
-    page.locator("#notes-regenerate-submit").click()
+    page.reload()
+    expect(page.locator("#notes-start")).to_have_text("Xác minh yêu cầu notes")
+    page.locator("#notes-start").click()
     expect(page.locator("#notes-regenerate-dialog")).to_be_visible()
     assert len(requests) == 2
     assert requests[1] == first_body
@@ -959,6 +960,45 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     expect(page.locator("#notes-regenerate-dialog")).to_be_hidden()
     expect(page.locator("#notes-start")).to_be_focused()
     assert snapshot["generation_id"]
+
+
+def test_regenerate_waits_for_a_concurrent_notes_task_without_losing_the_draft(
+    live, signed_in, fake_notes_provider
+):
+    _context, page = signed_in(viewport={"width": 390, "height": 900})
+    data_dir = live.settings.data_dir
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(data_dir)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    dialog = page.locator("#notes-regenerate-dialog")
+    submit = page.locator("#notes-regenerate-submit")
+    language = page.locator("#notes-regenerate-language")
+    language.select_option("vi")
+    expect(submit).to_be_enabled()
+
+    other = _accept(
+        data_dir, meeting_id, snapshot["generation_id"], request_id="notes-second-operator"
+    )
+    page.evaluate(
+        "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+        meeting_id,
+    )
+    expect(dialog).to_be_visible()
+    expect(submit).to_be_disabled()
+    expect(page.locator("#notes-regenerate-status")).to_contain_text("Chờ tác vụ kết thúc")
+    expect(language).to_have_value("vi")
+    _complete_fake_task(data_dir, other["id"], "other", "# Other operator\n")
+
+    expect(submit).to_be_enabled(timeout=10_000)
+    expect(language).to_have_value("vi")
+    expect(page.locator("#notes-regenerate-status")).to_be_empty()
+    with page.expect_response(
+        lambda response: response.request.method == "POST" and response.url.endswith("/notes-runs")
+    ) as response:
+        submit.click()
+    assert response.value.status == 202
+    assert response.value.request.post_data_json["output_language"] == "vi"
+    assert response.value.json()["id"] != other["id"]
 
 
 def test_explicit_regenerate_dialog_uses_english_title_intro_and_error(

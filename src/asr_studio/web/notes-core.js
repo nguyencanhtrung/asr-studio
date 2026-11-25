@@ -328,14 +328,8 @@ export function normalizePendingRequest(value, { legacy = false } = {}) {
         || ["provider", "expected_model", "expected_reasoning_effort"].some((key) => Object.hasOwn(parsed, key))
         || Object.keys(parsed).length !== 6
       ) return null;
-      return {
-        request_id: parsed.request_id,
-        output_language: parsed.output_language,
-        expected_generation_id: parsed.expected_generation_id,
-        expected_source_version: parsed.expected_source_version,
-        expected_metadata_version: parsed.expected_metadata_version,
-        run: { ...parsed.run },
-      };
+      // Storage contains the original POST serialization. Retain its validated field order on retry.
+      return parsed;
     }
     if (parsed.provider !== undefined && !PROVIDER_IDS.includes(parsed.provider)) return null;
     // Stored requests from before provider choice were always ChatGPT requests.
@@ -1906,48 +1900,30 @@ function newRunChoiceReady(state, meeting) {
   return readiness.ready && Boolean(readiness.model);
 }
 
-function canStartNotes(state) {
+function notesAdmissionBlock(state) {
   const meeting = state.meeting;
   const data = currentEntry(state);
   const generation = currentGeneration(meeting);
-  if (
-    !meeting
-    || !data
-    || !generation
-    || !recordingReady(meeting)
-    || transcriptionBusy(state, meeting)
-    || !hasRequestVersions(meeting, generation)
-    || !data.sourceLockKnown
-    || data.sourceLocked
-    || activeTask(data)
-    || data.starting
-    || state.choice.saving
-  ) return false;
-  const pending = pendingOf(state, meeting.id);
-  return Boolean(
-    (!state.choice.loading || isCompletePendingRequest(pending))
-    && (pending || newRunChoiceReady(state, meeting)),
-  );
+  if (!meeting || !data || !generation || !recordingReady(meeting) || !hasRequestVersions(meeting, generation)) {
+    return t("Cần bản ghi và transcript đã lưu để tạo notes.");
+  }
+  if (transcriptionBusy(state, meeting)) return t("Đang xử lý transcript. Chờ tác vụ kết thúc để tạo notes.");
+  if (data.sourceLocked || activeTask(data)) {
+    return t("Cuộc họp đang có tác vụ notes. Chờ tác vụ kết thúc để tạo notes.");
+  }
+  if (!data.sourceLockKnown) return t("Đang kiểm tra trạng thái notes…");
+  if (data.starting) return t("Đang gửi yêu cầu notes. Bạn có thể đóng hộp thoại; yêu cầu sẽ được giữ để xác minh lại nếu cần.");
+  if (state.choice.saving) return t("Đang lưu lựa chọn nhà cung cấp…");
+  return "";
 }
 
-// Explicit regeneration only needs a usable dialog context. It must not require a saved global
-// model because the dialog supplies a complete per-run model and effort choice.
-function canOpenExplicitRun(state) {
-  const meeting = state.meeting;
-  const data = currentEntry(state);
-  const generation = currentGeneration(meeting);
+function canStartNotes(state) {
+  if (notesAdmissionBlock(state)) return false;
+  const { meeting, choice } = state;
+  const pending = pendingOf(state, meeting.id);
   return Boolean(
-    meeting
-    && data
-    && generation
-    && recordingReady(meeting)
-    && !transcriptionBusy(state, meeting)
-    && hasRequestVersions(meeting, generation)
-    && data.sourceLockKnown
-    && !data.sourceLocked
-    && !activeTask(data)
-    && !data.starting
-    && !state.choice.saving,
+    (!choice.loading || isCompletePendingRequest(pending))
+    && (pending || newRunChoiceReady(state, meeting)),
   );
 }
 
@@ -2501,7 +2477,7 @@ function startExplicitNotes(state, requestId) {
   const meeting = state.meeting;
   const meetingId = state.meetingId;
   const generation = currentGeneration(meeting);
-  if (!canOpenExplicitRun(state) || !generation || !meetingId) return out(state);
+  if (notesAdmissionBlock(state)) return out(state);
   const pending = pendingOf(state, meetingId);
   if (pending && validRunObject(pending.run)) return startNotes(state, requestId, { explicit: true });
   const values = state.regenerate;
@@ -3815,6 +3791,7 @@ function regenerateView(state, data, pending) {
     });
   }
   const locked = Boolean(pendingRun || data?.starting);
+  const admissionBlock = state.regenerate.open ? notesAdmissionBlock(state) : "";
   const validationError = !locked && state.regenerate.open ? explicitRunError(state, values) : "";
   const error = validationError || state.regenerate.error;
   const selectedSource = generationChoice(state, values.generationId);
@@ -3837,18 +3814,14 @@ function regenerateView(state, data, pending) {
     sourceRefresh,
     outputLanguage: values.outputLanguage,
     locked,
-    status: data?.starting
-      ? t("Đang gửi yêu cầu notes. Bạn có thể đóng hộp thoại; yêu cầu sẽ được giữ để xác minh lại nếu cần.")
-      : pendingRun
-        ? t("Yêu cầu này đã được giữ nguyên. Thử lại sẽ dùng cùng các lựa chọn.")
-        : loading
-          ? t("Đang đọc trạng thái nhà cung cấp và danh sách model…")
-          : "",
+    status: admissionBlock || (pendingRun
+      ? t("Yêu cầu này đã được giữ nguyên. Thử lại sẽ dùng cùng các lựa chọn.")
+      : loading ? t("Đang đọc trạng thái nhà cung cấp và danh sách model…") : ""),
     error,
     reloadVisible,
     reloadDisabled: state.choice.loading,
     submitLabel: data?.starting ? t("Đang gửi…") : pendingRun ? t("Xác minh yêu cầu notes") : t("Tạo lại notes"),
-    submitDisabled: Boolean(data?.starting || loading || (!pendingRun && (!sourceItems.length || validationError))),
+    submitDisabled: Boolean(admissionBlock || (!pendingRun && (loading || !sourceItems.length || validationError))),
     cancelLabel: data?.starting ? t("Đóng") : t("Hủy"),
   };
 }
@@ -3919,7 +3892,7 @@ export function selectView(state) {
       action: regenerate ? "regenerate" : connect ? "connect" : configure ? "configure" : "start",
       describedBy: regenerate ? "notes-regenerate-intro" : connect || configure ? "notes-run-plan" : "notes-status",
       disabled: regenerate
-        ? !canOpenExplicitRun(state) || state.choice.loading
+        ? Boolean(notesAdmissionBlock(state)) || state.choice.loading
         : !connect && !configure && !canStartNotes(state),
       title: !connect && !configure && wait ? waitMessage : "",
       label: runLabel,
