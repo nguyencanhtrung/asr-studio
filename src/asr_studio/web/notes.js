@@ -356,19 +356,15 @@ function renderSelect(select, items, value, disabled) {
   setProp(select, "disabled", Boolean(disabled));
 }
 
-let regenerateOpener = null;
-
 function renderRegenerateDialog(view) {
   const dialog = els.regenerateDialog;
   const regenerate = view.regenerateDialog;
   if (!dialog || !regenerate) return;
   if (regenerate.open && !dialog.open) {
     dialog.showModal();
-    regenerateOpener = regenerateOpener || els.start;
   } else if (!regenerate.open && dialog.open) {
     dialog.close();
-    const opener = regenerateOpener;
-    regenerateOpener = null;
+    const opener = els.start;
     // Native dialog dismissal may restore focus after this render pass; restore it on
     // the next turn so Escape, cancel, and an uncertain retry all return to the launcher.
     if (opener?.isConnected) window.setTimeout(() => {
@@ -669,7 +665,6 @@ els.start.addEventListener("click", (event) => {
   if (event.currentTarget.dataset.action === "connect") $(`#launcher-${selectedProvider(store.getState(), null)}`).click();
   else if (event.currentTarget.dataset.action === "configure") dispatch({ type: "notes/configure-clicked" });
   else if (event.currentTarget.dataset.action === "regenerate") {
-    regenerateOpener = event.currentTarget;
     dispatch({ type: "notes/regenerate-clicked" });
   }
   else dispatch({ type: "notes/start-clicked", requestId: newRequestId() });
