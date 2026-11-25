@@ -490,8 +490,9 @@ def test_a_browser_that_refuses_to_play_still_opens_and_seeks_the_source(live, s
     expect(page.locator(".transcript-segment.is-notes-source")).to_have_count(1)
 
 
-def test_the_card_sits_directly_under_the_player_in_the_transcript_tab(live, signed_in):
-    _context, page = signed_in(viewport=DESKTOP)
+@pytest.mark.parametrize("preference", ["no-preference", "reduce"])
+def test_the_card_sits_directly_under_the_player_in_the_transcript_tab(live, signed_in, preference):
+    _context, page = signed_in(viewport=DESKTOP, reduced_motion=preference)
     meeting_id, *_ = seed_cited_notes(live.settings.data_dir)
     open_notes(live, page, meeting_id)
     assert page.locator("#meeting-panel-notes #notes-source-view").count() == 0  # not in the notes
@@ -507,11 +508,19 @@ def test_the_card_sits_directly_under_the_player_in_the_transcript_tab(live, sig
             && card.nextElementSibling.id === "transcription-panel";
         }"""
     )
-    page.evaluate(
-        "window.scrollTo({ top: 0, behavior: 'instant' })"
-    )  # the row may have scrolled it
-    bar, card = rect(page.locator(".player-bar")), rect(page.locator("#notes-source-view"))
-    assert 0 <= card["top"] - bar["bottom"] <= 32  # nothing but the page's own gap between them
+    # The citation can reveal its row while the test is sampling. Read both boxes at scroll top
+    # in one browser evaluation so they share the same scroll position.
+    scroll_top, gap = page.evaluate(
+        """() => {
+          window.scrollTo({ top: 0, behavior: "instant" });
+          const card = document.querySelector("#meeting-panel-transcript > #notes-source-view");
+          const player = card.previousElementSibling;
+          const gap = card.getBoundingClientRect().top - player.getBoundingClientRect().bottom;
+          return [window.scrollY, gap];
+        }"""
+    )
+    assert scroll_top == 0
+    assert 0 <= gap <= 32  # nothing but the page's own gap between them
 
 
 def test_a_second_click_on_the_same_chip_plays_the_source_again(live, signed_in, tmp_path):

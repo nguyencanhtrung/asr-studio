@@ -14,6 +14,8 @@ import pytest
 import yaml
 from media_tools import require_media_tools
 
+from asr_studio.storage import SCHEMA_VERSION
+
 ROOT = Path(__file__).parents[1]
 PIPELINE_PATH = ROOT / ".github" / "workflows" / "pipeline.yml"
 DEPENDABOT_PATH = ROOT / ".github" / "dependabot.yml"
@@ -425,7 +427,7 @@ def test_pull_version_mismatch_stops_before_any_service_volume_is_mounted(tmp_pa
     )
 
     assert result.returncode != 0
-    assert "does not match source version 0.2.8 and schema 20" in result.stderr
+    assert f"does not match source version 0.2.8 and schema {SCHEMA_VERSION}" in result.stderr
     commands = result.docker_log.splitlines()
     assert f"pull {image}" in commands
     assert any("version --json --expect-version" in line for line in commands)

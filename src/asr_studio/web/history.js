@@ -155,6 +155,7 @@ function shownNow() {
     installRev: state.installRev,
     generation: Boolean(generation),
     generationLanguage: generation ? generation.language_hint : null,
+    currentGenerationId: generation ? generation.id : null,
     blocked: coreSourceMutationUnavailable(state) || !recordingReady(meeting),
     tab: state.tab,
     generationId: onScreen ? onScreen.id : null,
@@ -851,6 +852,16 @@ const NOTICE_TEXT = {
   "poll-lost": t("Tạm mất kết nối khi đọc tiến độ. Tác vụ vẫn thuộc worker; đang thử đọc lại."),
   "refresh-lost": t("Tác vụ đã hoàn tất; không tải được transcript mới. Mở lại cuộc họp để thử lại."),
   "session-ended": t("Phiên làm việc đã hết. Đang chuyển đến trang đăng nhập."),
+};
+const RERUN_MODE_LABELS = {
+  "community-1": t("Community-1 · tách người nói"),
+  off: t("Tắt nhận dạng người nói"),
+};
+const RERUN_MODE_REASONS = {
+  model_unavailable: t("Community-1 chưa sẵn sàng trên máy này."),
+  worker_unavailable: t("Worker chưa sẵn sàng để xác nhận Community-1."),
+  off_worker_unavailable: t("Worker chưa sẵn sàng để xác nhận Off."),
+  rollback_fence: t("Chế độ tắt đang tạm khóa."),
 };
 
 function formatElapsedSeconds(value) {
@@ -1617,7 +1628,11 @@ function renderTranscriptGeneration(generation, editable) {
   if (segments.length && segments.every((segment) => segment.avg_logprob === null)) {
     meta.push(t("“cần kiểm tra” không xét độ tin cậy của chữ"));
   }
-  if (generation.diarization_model_name) meta.push(`Diarization · ${generation.diarization_model_name}`);
+  if (generation.diarization_mode === "off") {
+    meta.push(t("Đã tắt nhận dạng người nói"));
+  } else if (generation.diarization_model_name) {
+    meta.push(`Diarization · ${generation.diarization_model_name}`);
+  }
   const reviewCount = segments.filter(needsReview).length;
   $("#generation-summary").textContent = reviewCount
     ? t("{count} đoạn · {review} cần kiểm tra", { count: generation.segment_count, review: reviewCount })
@@ -2624,6 +2639,7 @@ function renderTranscription(transcription) {
   const status = $("#transcription-status");
   status.dataset.workerState = task && task.worker_state ? task.worker_state : "";
   status.classList.toggle("is-checking-worker", workerChecking);
+  renderRerunDialog(view, startButton, status);
   renderMeetingProcessingStatus(task, generation);
   for (const timestamp of $("#transcript-segments").querySelectorAll("button[data-seek-seconds]")) {
     timestamp.disabled = !recording.ready;
@@ -2663,6 +2679,108 @@ function renderModelControl(view) {
   if (model.guidance) setProp($("#transcription-model-guidance-text"), "textContent", tr(model.guidance));
   setProp($("#transcription-model-command-wrap"), "hidden", !model.command);
   setProp($("#transcription-model-command"), "value", model.command);
+}
+
+function renderRerunDialog(view, opener, taskStatus) {
+  const dialog = $("#transcription-rerun-dialog");
+  const rerun = view.rerun;
+  if (!rerun || !rerun.open) {
+    if (dialog.open) {
+      dialog.close();
+      if (view.requestBusy) {
+        taskStatus.tabIndex = -1;
+        taskStatus.focus({ preventScroll: true });
+      } else if (!opener.hidden && !opener.disabled) {
+        opener.focus({ preventScroll: true });
+      }
+    } else if (view.error.visible && document.activeElement === taskStatus && !opener.hidden && !opener.disabled) {
+      opener.focus({ preventScroll: true });
+    }
+    return;
+  }
+
+  const interrupted = {
+    busy: t("Cuộc họp đang bận hoặc bản ghi chưa sẵn sàng. Chờ rồi thử lại."),
+    changed: t("Cuộc họp đã thay đổi. Đóng hộp thoại và mở lại để xem lựa chọn hiện tại."),
+    model: t("Model đã chọn chưa sẵn sàng. Chọn một model sẵn sàng để tiếp tục."),
+  };
+  const status = rerun.replay
+    ? t("Chưa có xác nhận từ server. Xác minh gửi lại đúng request ID và lựa chọn đã lưu.")
+    : rerun.capability.status === "loading"
+      ? t("Đang kiểm tra khả năng nhận dạng người nói…")
+      : rerun.capability.status === "error"
+        ? tr(rerun.capability.error)
+        : t("Lựa chọn được xác nhận từ server. Community-1 và Off chỉ áp dụng cho lần chạy lại này.");
+  setProp($("#rerun-capability-status"), "textContent", tr(interrupted[rerun.block]) || status);
+  setProp($("#rerun-capability-retry"), "hidden", rerun.capability.status !== "error");
+
+  const language = $("#transcription-rerun-language");
+  setProp(language, "value", rerun.languageHint);
+  const model = $("#transcription-rerun-model");
+  const modelKey = JSON.stringify(rerun.models);
+  if (model.dataset.optionsKey !== modelKey) {
+    model.replaceChildren(...rerun.models.map((option) => {
+      const element = document.createElement("option");
+      element.value = option.id;
+      element.disabled = !option.ready;
+      element.textContent = `${tr(option.label)}${option.ready ? "" : ` · ${t("chưa sẵn sàng")}`}`;
+      return element;
+    }));
+    model.dataset.optionsKey = modelKey;
+  }
+  setProp(model, "value", rerun.asrModel || "");
+
+  const modeRoot = $("#transcription-rerun-modes");
+  const modeKey = JSON.stringify(rerun.modes);
+  if (modeRoot.dataset.optionsKey !== modeKey) {
+    modeRoot.replaceChildren(...rerun.modes.map((option) => {
+      const label = document.createElement("label");
+      label.className = "rerun-mode-option";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "diarization_mode";
+      input.value = option.id;
+      input.disabled = !option.ready || rerun.pending;
+      const copy = document.createElement("span");
+      copy.textContent = tr(RERUN_MODE_LABELS[option.id] || option.id);
+      const reasonKey = option.id === "off" && option.reason === "worker_unavailable"
+        ? "off_worker_unavailable"
+        : option.reason;
+      if (!option.ready && reasonKey && RERUN_MODE_REASONS[reasonKey]) {
+        copy.textContent += ` · ${tr(RERUN_MODE_REASONS[reasonKey])}`;
+      } else if (!option.ready) {
+        copy.textContent += ` · ${t("chưa sẵn sàng")}`;
+      }
+      label.append(input, copy);
+      return label;
+    }));
+    modeRoot.dataset.optionsKey = modeKey;
+  }
+  for (const input of modeRoot.querySelectorAll("input")) input.checked = input.value === rerun.diarizationMode;
+  setProp(
+    $("#transcription-rerun-mode-help"),
+    "textContent",
+    rerun.legacyReplay
+      ? t("Yêu cầu cũ này không có lựa chọn nhận dạng người nói. Xác minh sẽ gửi lại đúng payload cũ.")
+      : rerun.replay
+        ? t("Các lựa chọn đã được khóa theo yêu cầu đã gửi.")
+        : rerun.capability.status === "ready"
+          ? t("Community-1 giữ cách tách người nói hiện tại. Chế độ Tắt giữ văn bản và mốc thời gian, để trống tên người nói.")
+          : t("Chờ server xác nhận lựa chọn trước khi chạy lại."),
+  );
+  setProp(language, "disabled", rerun.capability.status !== "ready" || rerun.pending);
+  setProp(model, "disabled", rerun.capability.status !== "ready" || rerun.pending || !rerun.models.length);
+  setProp($("#transcription-rerun-submit"), "disabled", !rerun.canSubmit);
+  setProp(
+    $("#transcription-rerun-submit"),
+    "textContent",
+    rerun.replay ? t("Xác minh yêu cầu chạy lại") : t("Chạy lại"),
+  );
+
+  if (!dialog.open) {
+    dialog.showModal();
+    $("#transcription-rerun-cancel").focus({ preventScroll: true });
+  }
 }
 
 // ---- transcription task: the view of task-core.js ----
@@ -2858,6 +2976,30 @@ $("#recording-status-retry").addEventListener("click", (event) => {
 });
 $("#transcription-model").addEventListener("change", (event) => dispatch({ type: "task/model-chosen", model: event.target.value }));
 $("#start-transcription").addEventListener("click", () => dispatch({ type: "task/start-clicked", requestId: newRequestId() }));
+$("#transcription-rerun-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  dispatch({ type: "task/rerun-submitted", requestId: newRequestId() });
+});
+$("#transcription-rerun-language").addEventListener("change", (event) => {
+  dispatch({ type: "task/rerun-choice", languageHint: event.currentTarget.value });
+});
+$("#transcription-rerun-model").addEventListener("change", (event) => {
+  dispatch({ type: "task/rerun-choice", asrModel: event.currentTarget.value });
+});
+$("#transcription-rerun-modes").addEventListener("change", (event) => {
+  if (event.target.matches("input[name='diarization_mode']")) {
+    dispatch({ type: "task/rerun-choice", diarizationMode: event.target.value });
+  }
+});
+$("#transcription-rerun-cancel").addEventListener("click", () => dispatch({ type: "task/rerun-cancelled" }));
+$("#transcription-rerun-close").addEventListener("click", () => dispatch({ type: "task/rerun-cancelled" }));
+$("#transcription-rerun-dialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  dispatch({ type: "task/rerun-cancelled" });
+});
+$("#rerun-capability-retry").addEventListener("click", () => {
+  dispatch({ type: "task/capability-retry", requestId: newRequestId() });
+});
 $("#cancel-transcription").addEventListener("click", () => dispatch({ type: "task/cancel-clicked" }));
 $("#automatic-processing-cancel").addEventListener("click", () => dispatch({ type: "processing/cancel-clicked", requestId: newRequestId() }));
 $("#automatic-processing-retry-notes").addEventListener("click", () => dispatch({ type: "processing/retry-notes-clicked", requestId: newRequestId() }));

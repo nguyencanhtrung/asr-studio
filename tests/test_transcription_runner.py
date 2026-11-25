@@ -197,6 +197,47 @@ def _prepared_qwen(path: Path) -> Path:
     return path
 
 
+@pytest.mark.parametrize(
+    ("engine", "prepare", "filename"),
+    [
+        ("whisper", _prepared_model, "model.bin"),
+        ("whisper_vi", _prepared_model, "model.bin"),
+        ("qwen", _prepared_qwen, "model.safetensors"),
+    ],
+)
+@pytest.mark.parametrize("invalid", ["empty", "unreadable", "lfs_pointer"])
+def test_engine_preflight_rejects_unusable_weights(
+    tmp_path, monkeypatch, engine, prepare, filename, invalid
+):
+    model = prepare(tmp_path / "model")
+    weights = model / filename
+    # Prepared snapshots may link to weights stored outside the model directory.
+    target = weights.rename(tmp_path / filename)
+    weights.symlink_to(target)
+    assert prepared_engine_directory(engine, model) == model.resolve()
+
+    original_open = os.open
+
+    def deny_weights(path, flags, *args, **kwargs):
+        if path == weights:
+            raise PermissionError("fixture weights cannot be opened")
+        return original_open(path, flags, *args, **kwargs)
+
+    if invalid == "empty":
+        target.write_bytes(b"")
+    elif invalid == "lfs_pointer":
+        target.write_bytes(
+            b"version https://git-lfs.github.com/spec/v1\noid sha256:"
+            + b"0" * 64
+            + b"\nsize 1000\n"
+        )
+    else:
+        monkeypatch.setattr(os, "open", deny_weights)
+
+    with pytest.raises(ModelConfigurationError):
+        prepared_engine_directory(engine, model)
+
+
 def _fake_audio_modules(monkeypatch, chunks, observed=None):
     """16 kHz samples are indices, so each decode can tell which chunk it received."""
     audio_module = ModuleType("faster_whisper.audio")

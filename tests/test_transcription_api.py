@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from seeding import prepare_diarization_model, seed_meeting
+from notes_helpers import seed_cited_notes, seed_completed_transcript
+from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 
 from asr_studio import routes
 from asr_studio.app import create_app
+from asr_studio.asr_models import write_default_model
 from asr_studio.auth import AuthStore
 from asr_studio.config import Settings
-from asr_studio.runtime import RuntimeProfile, write_runtime_profile
+from asr_studio.runtime import RuntimeProfile, runtime_profile_path, write_runtime_profile
+from asr_studio.storage import database_path
 from asr_studio.tasks import (
     accept_transcription_task,
     claim_next_task,
@@ -20,7 +25,12 @@ from asr_studio.tasks import (
     transcription_state,
     update_task_progress,
 )
-from asr_studio.worker import acquire_worker_lock, write_heartbeat
+from asr_studio.worker import (
+    acquire_transcription_lock,
+    acquire_worker_lock,
+    write_heartbeat,
+    write_transcription_heartbeat,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -150,6 +160,9 @@ async def test_task_routes_accept_poll_cancel_and_rediscover_meeting_state(tmp_p
                 claimed = claim_next_task(settings.data_dir, owner_id="api-test-worker")
                 assert claimed and claimed["id"] == accepted.json()["id"]
                 running = await client.get(f"/api/tasks/{accepted.json()['id']}")
+                assert running.status_code == 200
+                assert running.json()["kind"] == "transcription"
+                assert running.json()["diarization_mode"] == "community-1"
                 assert running.json()["status"] == "running"
                 assert running.json()["worker_state"] == "healthy"
                 stopping = await client.post(
@@ -193,6 +206,533 @@ async def test_asr_models_route_requires_auth_and_matches_meeting_choices(tmp_pa
                 {k: v for k, v in choice.items() if k not in install_keys}
                 for choice in catalog.json()["asr_models"]
             ] == meeting.json()["transcription"]["asr_models"]
+
+
+def _admission_state(data_dir):
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute("BEGIN")
+        return (
+            connection.execute("SELECT id, current_generation_id FROM meetings").fetchall(),
+            connection.execute("SELECT * FROM transcript_generations ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM transcript_segments ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM tasks ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM processing_slot").fetchall(),
+            connection.execute("SELECT * FROM notes_sources ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM notes_revisions ORDER BY id").fetchall(),
+        )
+
+
+async def test_diarization_capability_route_is_authoritative_and_authenticated(tmp_path):
+    diarization_model_dir = prepare_diarization_model(tmp_path / "diarization-model")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_model_path=_prepared_model(tmp_path / "model"),
+        diarization_model_path=diarization_model_dir,
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url=settings.public_url) as client:
+            unauthorized = await client.get("/api/diarization-capability")
+            assert unauthorized.status_code == 401
+            headers = await _authorize(client, settings)
+            meeting_id, generation_id, _ = seed_completed_transcript(settings.data_dir)
+            prepare_recording(settings.data_dir, meeting_id)
+            before = _admission_state(settings.data_dir)
+            lock_fd = acquire_transcription_lock(settings.data_dir)
+            assert lock_fd is not None
+            try:
+                write_transcription_heartbeat(settings.data_dir, "idle")
+                response = await client.get("/api/diarization-capability", headers=headers)
+                assert response.status_code == 200
+                capability = response.json()
+                assert capability["community_1"]["operator_prepared"] is True
+                for key, mode in (("community_1", "community-1"), ("off", "off")):
+                    refused = await client.post(
+                        "/api/tasks",
+                        headers=headers,
+                        json={
+                            "meeting_id": meeting_id,
+                            "request_id": f"missing-profile-{mode}",
+                            "expected_generation_id": generation_id,
+                            "diarization_mode": mode,
+                        },
+                    )
+                    assert refused.status_code == 503
+                    assert refused.json()["detail"]["code"] == "worker_unavailable"
+                    assert capability[key]["ready"] is False
+                    assert capability[key]["reason"] == "worker_unavailable"
+                assert _admission_state(settings.data_dir) == before
+
+                write_runtime_profile(
+                    settings.data_dir,
+                    RuntimeProfile(
+                        device="cpu", compute_type="int8", model_path=settings.asr_model_path
+                    ),
+                )
+                response = await client.get("/api/diarization-capability", headers=headers)
+                assert response.status_code == 200
+                assert response.json() == {
+                    "contract_version": 1,
+                    "default_mode": "community-1",
+                    "explicit_mode_scope": "manual_transcript_rerun",
+                    "community_1": {
+                        "id": "community-1",
+                        "ready": True,
+                        "state": "ready",
+                        "reason": None,
+                        "operator_prepared": True,
+                    },
+                    "off": {
+                        "id": "off",
+                        "ready": True,
+                        "state": "ready",
+                        "reason": None,
+                        "allowed_on": "manual_transcript_rerun",
+                    },
+                }
+            finally:
+                os.close(lock_fd)
+
+            response = await client.get("/api/diarization-capability", headers=headers)
+            assert response.status_code == 200
+            for mode in ("community_1", "off"):
+                assert response.json()[mode]["ready"] is False
+                assert response.json()[mode]["reason"] == "worker_unavailable"
+
+
+@pytest.mark.parametrize(
+    "file_change", ["missing", "lfs_pointer", "empty", "directory_loop", "asset_loop"]
+)
+async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
+    tmp_path, file_change
+):
+    snapshot = prepare_diarization_model(tmp_path / "community-snapshot")
+    community = tmp_path / "diarization"
+    community.symlink_to(snapshot, target_is_directory=True)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_model_path=_prepared_model(tmp_path / "asr"),
+        asr_qwen_model_path=tmp_path / "qwen",
+        diarization_model_path=community,
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url=settings.public_url) as client:
+            headers = await _authorize(client, settings)
+            meeting_id, generation_id, segment_ids = seed_completed_transcript(
+                settings.data_dir, title="Stale Community-1 readiness fixture"
+            )
+            _, revision, _, _ = seed_cited_notes(
+                settings.data_dir, existing=(meeting_id, generation_id, segment_ids)
+            )
+            prepare_recording(settings.data_dir, meeting_id)
+            before = _admission_state(settings.data_dir)
+            lock_fd = acquire_transcription_lock(settings.data_dir)
+            assert lock_fd is not None
+            try:
+                write_runtime_profile(
+                    settings.data_dir,
+                    RuntimeProfile(
+                        device="cpu", compute_type="int8", model_path=settings.asr_model_path
+                    ),
+                )
+                write_transcription_heartbeat(settings.data_dir, "idle")
+                capability = await client.get("/api/diarization-capability", headers=headers)
+                assert capability.status_code == 200
+                assert capability.json()["community_1"]["ready"] is True
+                assert capability.json()["off"]["ready"] is True
+                model = community / "embedding" / "pytorch_model.bin"
+                if file_change == "missing":
+                    model.unlink()
+                elif file_change == "lfs_pointer":
+                    model.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid fixture\n")
+                elif file_change == "directory_loop":
+                    community.unlink()
+                    community.symlink_to(community, target_is_directory=True)
+                elif file_change == "asset_loop":
+                    model.unlink()
+                    model.symlink_to(model)
+                else:
+                    model.write_bytes(b"")
+                payload = {
+                    "meeting_id": meeting_id,
+                    "request_id": f"catalog-stale-community-{file_change}",
+                    "expected_generation_id": generation_id,
+                    "diarization_mode": "community-1",
+                }
+                capability = await client.get("/api/diarization-capability", headers=headers)
+                assert capability.status_code == 200
+                refused = await client.post("/api/tasks", headers=headers, json=payload)
+                community_1 = capability.json()["community_1"]
+                assert (community_1["ready"], refused.status_code) == (False, 503)
+                assert community_1 == {
+                    "id": "community-1",
+                    "ready": False,
+                    "state": "unavailable",
+                    "reason": "model_unavailable",
+                    "operator_prepared": False,
+                }
+                assert refused.json() == {
+                    "detail": {
+                        "code": "diarization_model_unavailable",
+                        "message": "The configured local Community-1 model is not prepared.",
+                    }
+                }
+                assert _admission_state(settings.data_dir) == before
+
+                meeting = await client.get(f"/api/meetings/{meeting_id}", headers=headers)
+                assert meeting.status_code == 200
+                generation = meeting.json()["transcription"]["generation"]
+                assert generation["id"] == generation_id
+                assert generation["segments"][0]["text"] == "We need a launch plan."
+                notes = await client.get(f"/api/notes/{revision['id']}/export", headers=headers)
+                assert notes.status_code == 200
+                assert notes.text == revision["markdown"]
+
+                assert capability.json()["off"]["ready"] is True
+                off_payload = {
+                    **payload,
+                    "request_id": f"off-{file_change}",
+                    "diarization_mode": "off",
+                }
+                asr_weights = settings.asr_model_path / "model.bin"
+                saved_weights = asr_weights.rename(tmp_path / "saved-asr.bin")
+                unavailable = await client.post("/api/tasks", headers=headers, json=off_payload)
+                assert unavailable.status_code == 503
+                assert unavailable.json()["detail"]["code"] == "model_unavailable"
+                assert _admission_state(settings.data_dir) == before
+                saved_weights.rename(asr_weights)
+
+                accepted = await client.post("/api/tasks", headers=headers, json=off_payload)
+                assert accepted.status_code == 202
+                task = await client.get(f"/api/tasks/{accepted.json()['id']}", headers=headers)
+                assert task.status_code == 200
+                assert task.json()["kind"] == "transcription"
+                assert task.json()["diarization_mode"] == "off"
+
+                runtime_profile_path(settings.data_dir).unlink()
+                after_accept = _admission_state(settings.data_dir)
+                replay = await client.post("/api/tasks", headers=headers, json=off_payload)
+                assert replay.status_code == 202
+                assert replay.json() == accepted.json()
+                assert _admission_state(settings.data_dir) == after_accept
+            finally:
+                os.close(lock_fd)
+
+
+@pytest.mark.parametrize("mode", ["community-1", "off"])
+async def test_explicit_rerun_rejects_weights_lost_after_readiness(tmp_path, mode):
+    selected = _prepared_model(tmp_path / "small")
+    default = _prepared_model(tmp_path / "default")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_cpu_model_path=selected,
+        asr_model_path=default,
+        asr_gpu_model_path=default,
+        diarization_model_path=prepare_diarization_model(tmp_path / "community"),
+    )
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as client,
+    ):
+        headers = await _authorize(client, settings)
+        meeting, generation, segments = seed_completed_transcript(settings.data_dir)
+        _, revision, _, _ = seed_cited_notes(
+            settings.data_dir, existing=(meeting, generation, segments)
+        )
+        prepare_recording(settings.data_dir, meeting)
+        before = _admission_state(settings.data_dir)
+        lock_fd = acquire_transcription_lock(settings.data_dir)
+        assert lock_fd is not None
+        try:
+            write_runtime_profile(settings.data_dir, RuntimeProfile("cpu", "int8", default))
+            write_transcription_heartbeat(settings.data_dir, "idle")
+            meeting_url = f"/api/meetings/{meeting}"
+            response = await client.get(meeting_url, headers=headers)
+            assert response.status_code == 200
+            initial = response.json()["transcription"]
+            choices = {choice["id"]: choice for choice in initial["asr_models"]}
+            assert choices["whisper-small"]["ready"] is True
+            assert choices["auto"]["ready"] is True
+
+            (selected / "model.bin").write_bytes(b"")
+            refreshed = await client.get(meeting_url, headers=headers)
+            assert refreshed.status_code == 200
+            transcription = refreshed.json()["transcription"]
+            choices = {choice["id"]: choice for choice in transcription["asr_models"]}
+            refused = await client.post(
+                "/api/tasks",
+                headers=headers,
+                json={
+                    "meeting_id": meeting,
+                    "expected_generation_id": generation,
+                    "request_id": "unusable-asr-model",
+                    "asr_model": "whisper-small",
+                    "diarization_mode": mode,
+                },
+            )
+
+            assert (choices["whisper-small"]["ready"], refused.status_code) == (False, 503)
+            assert choices["whisper-small"]["reason"] == "not_prepared"
+            assert choices["auto"]["ready"] is True
+            assert refused.json()["detail"]["code"] == "model_unavailable"
+            assert _admission_state(settings.data_dir) == before
+            assert transcription["generation"] == initial["generation"]
+            notes = await client.get(f"/api/notes/{revision['id']}/export", headers=headers)
+            assert notes.status_code == 200
+            assert notes.text == revision["markdown"]
+        finally:
+            os.close(lock_fd)
+
+
+@pytest.mark.parametrize(
+    ("mode", "choice"),
+    [("community-1", "whisper-small"), ("off", "whisper-small"), (None, "auto")],
+)
+async def test_model_directory_loop_preserves_exact_post_retries(tmp_path, mode, choice):
+    selected = tmp_path / "selected"
+    snapshot = _prepared_model(tmp_path / "snapshot")
+    selected.symlink_to(snapshot, target_is_directory=True)
+    alternate = _prepared_model(tmp_path / "alternate")
+    community = prepare_diarization_model(tmp_path / "community")
+    diarizer = tmp_path / "diarization"
+    diarizer.symlink_to(community, target_is_directory=True)
+    uses_small = choice == "whisper-small"
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_cpu_model_path=selected if uses_small else alternate,
+        asr_gpu_model_path=alternate if uses_small else selected,
+        asr_phowhisper_model_path=tmp_path / "pho",
+        asr_qwen_model_path=tmp_path / "qwen",
+        diarization_model_path=diarizer,
+    )
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as client,
+    ):
+        headers = await _authorize(client, settings)
+        meeting, source, segments = seed_completed_transcript(settings.data_dir)
+        seed_cited_notes(settings.data_dir, existing=(meeting, source, segments))
+        prepare_recording(settings.data_dir, meeting)
+        payload = {"meeting_id": meeting, "request_id": "original-recipe"}
+        if mode is not None:
+            payload.update(asr_model=choice, expected_generation_id=source, diarization_mode=mode)
+        lock_fd = acquire_transcription_lock(settings.data_dir)
+        assert lock_fd is not None
+        try:
+            write_runtime_profile(settings.data_dir, RuntimeProfile("cpu", "int8", alternate))
+            write_transcription_heartbeat(settings.data_dir, "idle")
+            if choice == "auto":
+                write_default_model(settings, "whisper-large-v3")
+            accepted = await client.post("/api/tasks", headers=headers, json=payload)
+            assert accepted.status_code == 202
+            receipt = accepted.json()
+            assert receipt["status"] == "accepted"
+            assert receipt["model_name"] == "snapshot"
+            assert receipt["asr_model"] == (choice if uses_small else "whisper-large-v3")
+            assert receipt["diarization_mode"] == (mode or "community-1")
+
+            selected.unlink()
+            selected.symlink_to(selected, target_is_directory=True)
+            profile_path = runtime_profile_path(settings.data_dir)
+            profile_path.chmod(0o640)  # Reading the current profile would chmod it back to 0600.
+            before_retry = _admission_state(settings.data_dir)
+            replay = await client.post("/api/tasks", headers=headers, json=payload)
+            assert (replay.status_code, replay.json()) == (202, receipt)
+            assert profile_path.stat().st_mode & 0o777 == 0o640
+            assert _admission_state(settings.data_dir) == before_retry
+
+            owner = "model-loop-fixture"
+            task_id = receipt["id"]
+            claimed = claim_next_task(settings.data_dir, owner_id=owner)
+            assert claimed and claimed["id"] == task_id
+            assert claimed["model_path"] == str(snapshot)
+            assert claimed["diarization_model_path"] == ("" if mode == "off" else str(community))
+            assert update_task_progress(
+                settings.data_dir,
+                task_id,
+                owner_id=owner,
+                stage="publishing",
+                elapsed_seconds=1.0,
+                transcript_end_seconds=0.2,
+                segment_count=1,
+            )
+            generation = publish_complete_generation(
+                settings.data_dir,
+                task_id,
+                owner_id=owner,
+                segments=[
+                    {"id": "d" * 32, "start_seconds": 0.0, "end_seconds": 0.2, "text": "New."}
+                ],
+                alignment_policy=None if mode == "off" else "community-1-exclusive-max-overlap-v1",
+                diarization_model_name=None if mode == "off" else "Community-1",
+                language_probability=None,
+                elapsed_seconds=1.0,
+            )
+            assert generation and generation["id"] != source
+
+            # Even the completed replay cannot consult the installed diarizer or new runtime.
+            diarizer.unlink()
+            diarizer.symlink_to(diarizer, target_is_directory=True)
+            before_rejection = _admission_state(settings.data_dir)
+            completed = await client.post("/api/tasks", headers=headers, json=payload)
+            task = await client.get(f"/api/tasks/{task_id}")
+            assert (completed.status_code, completed.json()) == (202, task.json())
+            assert completed.json()["status"] == "succeeded"
+            assert completed.json()["model_name"] == receipt["model_name"]
+            conflict = await client.post(
+                "/api/tasks", headers=headers, json={**payload, "language_hint": "vi"}
+            )
+            assert conflict.status_code == 409
+            assert conflict.json()["detail"]["code"] == "idempotency_conflict"
+            assert profile_path.stat().st_mode & 0o777 == 0o640
+
+            fresh = {**payload, "request_id": "fresh-recipe"}
+            if mode is not None:
+                fresh["expected_generation_id"] = generation["id"]
+            refused = await client.post("/api/tasks", headers=headers, json=fresh)
+            assert (refused.status_code, refused.json()) == (
+                503,
+                {
+                    "detail": {
+                        "code": "model_unavailable",
+                        "message": "The selected local ASR model is not prepared.",
+                    }
+                },
+            )
+            response = await client.get("/api/asr-models")
+            assert response.status_code == 200
+            choices = {row["id"]: row for row in response.json()["asr_models"]}
+            broken_choices = ["whisper-small"] if uses_small else ["auto", "whisper-large-v3"]
+            for broken in broken_choices:
+                assert (choices[broken]["ready"], choices[broken]["reason"]) == (
+                    False,
+                    "not_prepared",
+                )
+            assert choices["whisper-large-v3" if uses_small else "whisper-small"]["ready"] is True
+            assert _admission_state(settings.data_dir) == before_rejection
+        finally:
+            os.close(lock_fd)
+
+
+@pytest.mark.parametrize("mode", ["community-1", "off"])
+@pytest.mark.parametrize("loss", ["missing", "unreadable", "fifo", "empty"])
+async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypatch, mode, loss):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_model_path=_prepared_model(tmp_path / "asr"),
+        diarization_model_path=prepare_diarization_model(tmp_path / "community"),
+    )
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as client,
+    ):
+        headers = await _authorize(client, settings)
+        meeting, generation, segments = seed_completed_transcript(settings.data_dir)
+        edit = await client.patch(
+            f"/api/meetings/{meeting}/transcript-segments/{segments[0]}/text",
+            headers=headers,
+            json={
+                "expected_generation_id": generation,
+                "expected_source_version": 1,
+                "text": "A saved correction.",
+            },
+        )
+        assert edit.status_code == 200
+        seed_cited_notes(
+            settings.data_dir, existing=(meeting, generation, segments), source_version=2
+        )
+        audio = prepare_recording(settings.data_dir, meeting)
+        lock_fd = acquire_transcription_lock(settings.data_dir)
+        assert lock_fd is not None
+        try:
+            write_runtime_profile(
+                settings.data_dir, RuntimeProfile("cpu", "int8", settings.asr_model_path)
+            )
+            write_transcription_heartbeat(settings.data_dir, "idle")
+            capability = await client.get("/api/diarization-capability", headers=headers)
+            assert capability.status_code == 200
+            assert capability.json()["community_1"]["ready"] and capability.json()["off"]["ready"]
+            request = {
+                "meeting_id": meeting,
+                "expected_generation_id": generation,
+                "diarization_mode": mode,
+                "request_id": "recording-refused",
+            }
+            original_open = os.open
+
+            def deny_recording(path, flags, *args, **kwargs):
+                if path == audio:
+                    raise PermissionError("fixture audio cannot be opened")
+                return original_open(path, flags, *args, **kwargs)
+
+            with closing(sqlite3.connect(database_path(settings.data_dir))) as connection:
+                assert connection.execute(
+                    "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
+                ).fetchone() == (None,)
+            before = _admission_state(settings.data_dir)
+            with monkeypatch.context() as inaccessible:
+                if loss == "unreadable":
+                    inaccessible.setattr(os, "open", deny_recording)
+                else:
+                    backup = tmp_path / "saved.m4a"
+                    if loss == "empty":
+                        backup.write_bytes(audio.read_bytes())
+                        audio.write_bytes(b"")
+                    else:
+                        audio.rename(backup)
+                        if loss == "fifo":
+                            os.mkfifo(audio)
+                refused = await client.post("/api/tasks", headers=headers, json=request)
+                after = _admission_state(settings.data_dir)
+                assert (refused.status_code, after == before) == (409, True)
+                assert refused.json() == {
+                    "detail": {
+                        "code": "recording_unavailable",
+                        "message": (
+                            "The original recording is unavailable. Restore it before rerunning."
+                        ),
+                    }
+                }
+
+            if loss != "unreadable":
+                backup.replace(audio)
+            accepted_request = {**request, "request_id": "recording-accepted"}
+            accepted = await client.post("/api/tasks", headers=headers, json=accepted_request)
+            assert accepted.status_code == 202
+            assert accepted.json()["diarization_mode"] == mode
+            after_accept = _admission_state(settings.data_dir)
+            if mode == "community-1":
+                (settings.diarization_model_path / "embedding/pytorch_model.bin").write_bytes(b"")
+                replay = await client.post("/api/tasks", headers=headers, json=accepted_request)
+                assert replay.status_code == 202
+                assert replay.json() == accepted.json()
+                assert _admission_state(settings.data_dir) == after_accept
+            if loss == "empty":
+                audio.write_bytes(b"")
+            else:
+                audio.unlink()
+            replay = await client.post("/api/tasks", headers=headers, json=accepted_request)
+            assert replay.status_code == 202
+            assert replay.json() == accepted.json()
+            assert _admission_state(settings.data_dir) == after_accept
+        finally:
+            os.close(lock_fd)
 
 
 async def test_task_route_persists_per_run_language_and_checks_idempotency(tmp_path, monkeypatch):

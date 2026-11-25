@@ -3,16 +3,26 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from notes_helpers import StubNotesProvider, seed_completed_transcript
 from playwright.sync_api import expect
+from test_browser_history import hold_first
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 
 from asr_studio import notes_routes
-from asr_studio.notes import accept_notes_task, get_note, publish_notes_revision, update_note
+from asr_studio.antigravity import normalize_effort
+from asr_studio.notes import (
+    ABSENT,
+    accept_notes_task,
+    get_note,
+    publish_notes_revision,
+    update_note,
+)
 from asr_studio.storage import database_path
 from asr_studio.tasks import claim_next_task, fail_task
 
@@ -51,19 +61,31 @@ class PinnedStub(StubNotesProvider):
             }
         return super().notes_task_pin()
 
+    @contextmanager
+    def notes_task_pin_for_run(self, *, model: str, reasoning_effort: str):
+        with self.store.operation():
+            effort = (
+                normalize_effort(reasoning_effort)
+                if self.provider == "antigravity"
+                else reasoning_effort
+            )
+            yield {**self.notes_task_pin(), "model": model, "reasoning_effort": effort}
+
 
 @pytest.fixture
 def fake_notes_provider(monkeypatch):
     original_accept = notes_routes.accept_notes_task
 
-    def accept_with_stub(data_dir, *, provider, provider_id="chatgpt", **kwargs):
+    def accept_with_stub(data_dir, *, provider, provider_id="chatgpt", run=ABSENT, **kwargs):
+        selected = provider_id if run is ABSENT else run["provider"]
         return original_accept(
             data_dir,
             provider=PinnedStub(
-                provider_id,
-                provider.saved_notes_effort() if provider_id == "antigravity" else "high",
+                selected,
+                provider.saved_notes_effort() if selected == "antigravity" else "high",
             ),
             provider_id=provider_id,
+            run=run,
             **kwargs,
         )
 
@@ -289,12 +311,19 @@ def test_antigravity_run_produces_labelled_revision_and_regeneration_keeps_edits
     expect(page.locator("#notes-start")).to_have_text(
         "Tạo lại notes · English · ChatGPT GPT 6.1 Sol"
     )
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-regenerate-provider")).to_have_value("chatgpt")
+    expect(page.locator("#notes-regenerate-model")).to_have_value(CHATGPT_MODEL)
+    assert len(runs) == 1
     with page.expect_response(
         lambda response: response.url.endswith("/notes-runs") and response.request.method == "POST"
     ) as second_response:
-        page.locator("#notes-start").click()
+        page.locator("#notes-regenerate-submit").click()
+    assert second_response.value.status == 202
     second_task = second_response.value.json()
-    assert runs[1]["provider"] == "chatgpt" and second_task["provider"] == "chatgpt"
+    assert runs[1]["run"]["provider"] == "chatgpt"
+    assert runs[1]["run"]["model"] == CHATGPT_MODEL
+    assert second_task["provider"] == "chatgpt"
     second = complete(live.settings.data_dir, second_task["id"], "# Second\n\nChatGPT notes.\n")
     expect(page.locator("#notes-revision-selector option")).to_have_count(2, timeout=10_000)
     options = page.locator("#notes-revision-selector option").all_text_contents()
@@ -522,6 +551,14 @@ def announce_choice_change(page):
     )
 
 
+def wait_for_held_choice_request(page, held):
+    # The request event can arrive before Playwright runs the route callback.
+    deadline = time.monotonic() + 5
+    while not held and time.monotonic() < deadline:
+        page.wait_for_timeout(25)
+    assert held, "Notes preferences GET did not reach the hold point"
+
+
 def test_model_saved_elsewhere_refreshes_the_open_notes_panel(live, signed_in, fake_notes_provider):
     _context, page = signed_in()
     meeting_id, _generation, _ = seed_completed_transcript(live.settings.data_dir)
@@ -694,15 +731,17 @@ def test_complete_pending_retry_survives_choice_reload_between_pointer_events(
     page.reload()
     expect(button).to_have_text("Xác minh yêu cầu notes")
     expect(button).to_be_enabled()
+    reload_choice = page.locator("#notes-choice-reload")
+    expect(reload_choice).to_be_visible()
+    expect(reload_choice).to_be_enabled()
 
-    held = []
-    page.route(f"{live.url}/api/notes-preferences", lambda route: held.append(route))
+    held = hold_first(page, rf"^{re.escape(live.url)}/api/notes-preferences$", "GET")
     bounds = button.bounding_box()
     page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
     page.mouse.down()
-    with page.expect_request(lambda request: request.url.endswith("/api/notes-preferences")):
-        announce_choice_change(page)
     try:
+        announce_choice_change(page)
+        wait_for_held_choice_request(page, held)
         with page.expect_response(
             lambda response: (
                 response.url.endswith("/notes-runs") and response.request.method == "POST"
@@ -741,18 +780,20 @@ def test_incomplete_pending_request_waits_for_choice_loading_before_completion(
     page.add_init_script(f"localStorage.setItem({key}, {json.dumps(json.dumps(stored))})")
     page.goto(f"{live.url}/meetings/{meeting_id}#notes")
 
-    held = []
-    page.route(f"{live.url}/api/notes-preferences", lambda route: held.append(route))
     button = page.locator("#notes-start")
-    with page.expect_request(lambda request: request.url.endswith("/api/notes-preferences")):
-        announce_choice_change(page)
+    expect(button).to_have_text("Xác minh yêu cầu notes")
+    expect(button).to_be_enabled()
+
+    held = hold_first(page, rf"^{re.escape(live.url)}/api/notes-preferences$", "GET")
     try:
+        announce_choice_change(page)
+        wait_for_held_choice_request(page, held)
         expect(button).to_have_text("Xác minh yêu cầu notes")
         expect(button).to_be_disabled()
+        assert not bodies
     finally:
         for route in held:
             route.continue_()
-        held.clear()
 
     expect(button).to_be_enabled()
     with page.expect_response(
@@ -761,11 +802,17 @@ def test_incomplete_pending_request_waits_for_choice_loading_before_completion(
     ) as accepted:
         button.click()
     assert accepted.value.status == 202
-    assert bodies[0]["request_id"] == stored["request_id"]
-    assert bodies[0]["provider"] == "chatgpt"
-    assert bodies[0]["expected_generation_id"] == generation_id
-    assert bodies[0]["expected_model"] == CHATGPT_MODEL
-    assert bodies[0]["expected_reasoning_effort"] == "high"
+    assert bodies == [
+        {
+            **stored,
+            "provider": "chatgpt",
+            "expected_generation_id": generation_id,
+            "expected_source_version": 1,
+            "expected_metadata_version": 1,
+            "expected_model": CHATGPT_MODEL,
+            "expected_reasoning_effort": "high",
+        }
+    ]
 
 
 def test_failed_reload_after_a_good_load_disables_start_despite_known_model(live, signed_in):

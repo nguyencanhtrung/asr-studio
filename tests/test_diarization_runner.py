@@ -145,6 +145,14 @@ def test_runner_requires_a_prepared_local_community_directory(tmp_path):
         prepared_diarization_directory(model)
 
 
+def test_runner_refuses_an_empty_required_community_file(tmp_path):
+    model = _prepared_model(tmp_path / "community-1")
+    (model / "embedding/pytorch_model.bin").write_bytes(b"")
+
+    with pytest.raises(DiarizationConfigurationError, match="embedding/pytorch_model.bin is empty"):
+        prepared_diarization_directory(model)
+
+
 def test_runner_loads_local_pipeline_with_telemetry_and_network_disabled(tmp_path, monkeypatch):
     model_dir = _prepared_model(tmp_path / "model")
     audio_path = tmp_path / "recording.m4a"

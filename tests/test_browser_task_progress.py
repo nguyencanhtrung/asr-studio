@@ -345,6 +345,29 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
             },
         )
 
+    page.route(
+        "**/api/diarization-capability",
+        lambda route: route.fulfill(
+            content_type="application/json",
+            json={
+                "contract_version": 1,
+                "default_mode": "community-1",
+                "explicit_mode_scope": "manual_transcript_rerun",
+                "community_1": {"id": "community-1", "ready": True, "state": "ready"},
+                "off": {"id": "off", "ready": True, "state": "ready"},
+            },
+        ),
+    )
+
+    def meeting_response(route):
+        response = route.fetch()
+        body = response.json()
+        body["transcription"]["asr_models"] = [
+            {"id": "auto", "model_name": "fixture-asr", "ready": True, "chosen": True}
+        ]
+        route.fulfill(response=response, json=body)
+
+    page.route(f"**/api/meetings/{meeting_id}", meeting_response)
     page.route(f"{live.url}/api/tasks", start_task)
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     language = page.locator("#transcription-language")
@@ -364,6 +387,7 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
     expect(language).to_have_value("vi")
     expect(language).not_to_be_disabled()
     page.get_by_role("button", name="Chạy lại").click()
+    page.locator("#transcription-rerun-submit").click()
     expect(page.locator("#transcription-error")).to_be_visible()
     expect(language).to_have_value("vi")
     expect(language).to_be_disabled()
@@ -374,6 +398,7 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
     expect(language).to_have_value("vi")
     expect(language).to_be_disabled()
     page.get_by_role("button", name="Chạy lại").click()
+    page.locator("#transcription-rerun-submit").click()
     expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     assert len(requests) == 2
     assert requests[0]["language_hint"] == "vi"
