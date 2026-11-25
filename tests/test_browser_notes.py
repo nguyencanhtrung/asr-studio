@@ -1471,10 +1471,17 @@ def test_regenerate_rejected_choice_clears_error_on_edit_and_reopen(live, signed
     expect(page.locator("#notes-regenerate-provider")).to_be_focused()
 
 
-@pytest.mark.parametrize("width", [1440, 390])
-def test_regenerate_adopts_updated_single_source_only_after_confirmation(live, signed_in, width):
+@pytest.mark.parametrize(("width", "locale"), [(1440, "en"), (390, "en"), (390, "vi")])
+def test_regenerate_adopts_updated_single_source_only_after_confirmation(
+    live, signed_in, width, locale
+):
     _context, page = signed_in(viewport={"width": width, "height": 900})
-    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    page.add_init_script(f"localStorage.setItem('asr-studio:lang', {json.dumps(locale)})")
+    adopt_label, source_label = (
+        ("Use updated transcript source (version 2)", "Current transcript · source")
+        if locale == "en"
+        else ("Dùng nguồn transcript đã cập nhật (phiên bản 2)", "Bản transcript hiện tại · nguồn")
+    )
     meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
     requests = []
     preference_writes = []
@@ -1500,16 +1507,19 @@ def test_regenerate_adopts_updated_single_source_only_after_confirmation(live, s
     _open_saved_notes(live, page, meeting_id)
     page.locator("#notes-start").click()
     adopt = page.locator("#notes-regenerate-source-adopt")
+    selected_source = page.locator("#notes-regenerate-source option:checked")
     expect(adopt).to_be_hidden()
     page.locator("#notes-regenerate-submit").click()
     expect(adopt).to_be_visible()
-    expect(adopt).to_have_text("Use updated transcript source")
+    expect(adopt).to_have_text(adopt_label)
     expect(page.locator("#notes-regenerate-source option")).to_have_count(1)
+    expect(selected_source).to_have_text(f"{source_label} 1")
     expect(page.locator("#notes-regenerate-submit")).to_be_disabled()
     expect(page.locator("#notes-regenerate-error")).to_be_visible()
     expect(page.locator("#notes-status")).not_to_be_empty()
     adopt.click()
     expect(adopt).to_be_hidden()
+    expect(selected_source).to_have_text(f"{source_label} 2")
     expect(page.locator("#notes-regenerate-error")).to_be_hidden()
     expect(page.locator("#notes-regenerate-submit")).to_be_enabled()
     assert len(requests) == 1  # Confirmation only adopts; it never submits.

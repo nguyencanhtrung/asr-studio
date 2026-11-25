@@ -3782,16 +3782,16 @@ function regenerateView(state, data, pending) {
   const values = submitted ? { ...state.regenerate, ...submitted } : state.regenerate;
   const sourceChoices = generationChoices(state.meeting);
   const sourceItems = sourceChoices.map((source, index) => {
-    const frozenVersion = submitted && source.id === values.generationId
+    const version = source.id === values.generationId
       ? values.sourceVersion
       : source.sourceVersion;
     return {
       value: source.id,
       text: source.current
-        ? t("Bản transcript hiện tại · nguồn {version}", { version: frozenVersion })
+        ? t("Bản transcript hiện tại · nguồn {version}", { version })
         : t("Bản transcript lịch sử {number} · nguồn {version}", {
           number: source.generationNumber ?? index + 1,
-          version: frozenVersion,
+          version,
         }),
     };
   });
@@ -3859,6 +3859,9 @@ function regenerateView(state, data, pending) {
     sourceVersion: values.sourceVersion,
     sourceItems,
     sourceRefresh,
+    sourceRefreshLabel: sourceRefresh
+      ? t("Dùng nguồn transcript đã cập nhật (phiên bản {version})", { version: sourceRefresh.sourceVersion })
+      : "",
     outputLanguage: values.outputLanguage,
     locked,
     busy: Boolean(data?.starting),

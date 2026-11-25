@@ -401,6 +401,7 @@ function renderRegenerateDialog(view) {
   setProp(els.regenerateReload, "disabled", regenerate.reloadDisabled);
   setProp(els.regenerateSourceAdopt, "hidden", !regenerate.sourceRefresh);
   setProp(els.regenerateSourceAdopt, "disabled", regenerate.locked);
+  if (regenerate.sourceRefresh) setProp(els.regenerateSourceAdopt, "textContent", tr(regenerate.sourceRefreshLabel));
   setProp(els.regenerateSubmit, "textContent", tr(regenerate.submitLabel));
   setProp(els.regenerateSubmit, "disabled", regenerate.submitDisabled);
   setProp(els.regenerateCancel, "textContent", tr(regenerate.cancelLabel));

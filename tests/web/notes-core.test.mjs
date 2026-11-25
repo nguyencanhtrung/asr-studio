@@ -2827,13 +2827,17 @@ test("regenerate stale source requires explicit adoption without submitting", as
   env.context({ ...meeting(), transcription: { generation: { ...GENERATION, source_version: 3 }, task: null } });
   const stale = selectView(env.state()).regenerateDialog;
   assert.equal(stale.sourceVersion, 2);
+  assert.match(text(stale.sourceItems.find((item) => item.value === stale.generationId).text), /nguồn 2$/);
   assert.deepEqual(stale.sourceRefresh, { generationId: "g1", sourceVersion: 3 });
+  assert.match(text(stale.sourceRefreshLabel), /phiên bản 3/);
   assert.equal(stale.submitDisabled, true);
   const requestCount = env.requests.length;
   env.dispatch("regenerate-source-adopted");
   const adopted = selectView(env.state()).regenerateDialog;
   assert.equal(adopted.sourceVersion, 3);
+  assert.match(text(adopted.sourceItems.find((item) => item.value === adopted.generationId).text), /nguồn 3$/);
   assert.equal(adopted.sourceRefresh, null);
+  assert.equal(adopted.sourceRefreshLabel, "");
   assert.equal(adopted.submitDisabled, false);
   assert.equal(text(adopted.error), "");
   assert.equal(env.requests.length, requestCount);

@@ -1285,6 +1285,7 @@ const { t, UI_LOCALE } = (() => {
       "Nguồn lịch sử là bản đã lưu, không bị thay đổi bởi chỉnh sửa hiện tại.": "A historical source is a saved version. Current edits do not change it.",
       "Nguồn transcript": "Transcript source",
       "Dùng nguồn transcript đã cập nhật": "Use updated transcript source",
+      "Dùng nguồn transcript đã cập nhật (phiên bản {version})": "Use updated transcript source (version {version})",
       "Cao": "High",
       "Rất cao": "Very high",
       "Thấp": "Low",
