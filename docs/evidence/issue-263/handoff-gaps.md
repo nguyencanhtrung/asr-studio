@@ -15,8 +15,21 @@ Handoff cung cấp mẫu bố cục và tương tác. Audit trước khi sửa g
 | Tự động xử lý | Recipe Extension đi tiếp sau raw receipt và media ready, dùng snapshot nguồn. Import giữ checkbox auto-ASR đã nhớ trong browser và lựa chọn model/ngôn ngữ của từng cuộc họp. | Thiết kế stage policy ở #267. Công tắc Extension và server admission tương ứng thuộc #277. |
 | Footer và About | Desktop giữ Settings và GitHub cân giữa trên dòng version. Trạng thái provider, mặc định và khả năng kết nối có vai trò riêng. Link và version dùng cấu hình và metadata bản build. | About giữ trang thông tin sản phẩm và website. Bằng chứng hiển thị dùng tên và dữ liệu mẫu. |
 
+## Các phần triển khai và nghiệm thu riêng
+
+| Issue | Kết quả và phần mở rộng |
+| --- | --- |
+| #260 | Hiển thị readiness và dependency thực tế của Community-1 chuẩn bị trên server. Thêm lựa chọn catalog và installer diarization cần capability được server công bố. |
+| #261 | Cho chọn Off ở rerun thủ công khi server sẵn sàng và đã có transcript hoàn chỉnh. Giữ Community-1 trong các luồng mặc định. |
+| #262 | Hướng dẫn Whisper small cho host mới và kiểm tra giữ trạng thái khi dùng lại volume và đường dẫn hiện tại. Uninstall chờ thiết kế bảo vệ default, installer và các job. |
+| #265 và #275 | Lịch sử từng lần Save, link cố định, thùng rác và dọn vĩnh viễn theo từng cuộc họp có checklist riêng. |
+| #266 | Lịch sử chỉnh Transcript, gộp người nói, Undo và đánh dấu đã kiểm tra có checklist riêng. |
+| #267 và #277 | Đặc tả và triển khai công tắc từng bước cho Extension có checklist riêng. |
+
+#263 nghiệm thu parity và các khả năng đã giao trong bảng trên. Các phần mở rộng còn mở được nghiệm thu ở issue tương ứng. Prototype dùng trạng thái mẫu cho callback, kết nối, cài model và Extension. Ứng dụng triển khai chỉ hiển thị trạng thái tương ứng khi server hoặc Extension xác nhận dữ liệu.
+
 ## Phạm vi bằng chứng
 
-Fixture chạy app, Extension, API routes, admission, SQLite, receipt, snapshot, worker và publication. Audio, model output và phản hồi provider dùng dữ liệu tổng hợp. Fixture HTTPS dùng cấu hình riêng của test. Độ chính xác suy luận, chất lượng microphone vật lý, tài khoản và quota provider thật, chứng chỉ công khai và các mạng triển khai cần kiểm chứng ở môi trường sử dụng tương ứng.
+Fixture chạy app, Extension, API routes, admission, SQLite, receipt, snapshot, worker và publication. Audio, model output và phản hồi provider dùng dữ liệu tổng hợp. Fixture HTTPS dùng cấu hình riêng của test. Tải trọng số thật, chạy GPU/CUDA, độ chính xác suy luận, microphone vật lý, tài khoản và quota provider thật, chứng chỉ công khai và mạng triển khai cần kiểm chứng ở môi trường sử dụng tương ứng.
 
 Các mục phát triển tiếp theo có checklist riêng. Báo cáo nghiệm thu ghi SHA và kết quả của bộ fixture, ảnh và CI trên phiên bản được đưa ra merge.
