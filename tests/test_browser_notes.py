@@ -964,12 +964,22 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     expect(page.locator("#notes-start")).to_have_text("Xác minh yêu cầu notes")
     with page.expect_request(lambda request: request.url.endswith("/notes-runs")):
         page.locator("#notes-start").click()
+    transcript = page.locator("#meeting-tab-transcript")
+    transcript.click()
+    expect(transcript).to_be_focused()
     reject(waiting.pop())
+    expect(page.locator("#notes-status")).to_contain_text("Yêu cầu chưa được tự gửi lại")
+    expect(dialog).to_be_hidden()
+    expect(transcript).to_be_focused()
+    page.locator("#meeting-tab-notes").click()
+    expect(page.locator("#meeting-tab-notes")).to_be_focused()
+    assert requests == [first_body, first_body]
+
+    page.locator("#notes-start").click()
     expect(dialog).to_be_visible()
     expect(submit).to_be_enabled()
     expect(dialog).to_have_attribute("aria-busy", "false")
-    assert len(requests) == 2
-    assert requests[1] == first_body
+    assert requests == [first_body, first_body, first_body]
 
     page.locator("#notes-regenerate-cancel").click()
     page.locator("#notes-start").click()

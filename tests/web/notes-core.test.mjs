@@ -3120,3 +3120,26 @@ test("regenerate retains its draft while a concurrently admitted notes task hold
   assert.equal(posts(env, "/notes-runs").length, 1);
   assert.equal(posts(env, "/notes-runs")[0].body.output_language, "vi");
 });
+
+
+test("late toolbar Verify keeps the error in Notes without opening a modal over Transcript", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: "scoped-verify-first" });
+  const original = posts(env, "/notes-runs")[0].raw;
+  await env.fail(env.is("POST", "/notes-runs"));
+  env.dispatch("regenerate-cancelled");
+  env.dispatch("start-clicked", { requestId: "ignored-toolbar-id" });
+  const current = env.state().meeting;
+  env.context(current, { detail: { view: "meeting", meeting: current, tab: "transcript" } });
+  await env.answer(env.is("POST", "/notes-runs"), 503, { detail: { code: "temporary_failure" } });
+
+  assert.equal(selectView(env.state()).regenerateDialog.open, false);
+  assert.match(text(selectView(env.state()).status), /Yêu cầu chưa được tự gửi lại/);
+  env.context(current);
+  assert.equal(selectView(env.state()).regenerateDialog.open, false);
+  assert.equal(selectView(env.state()).run.disabled, false);
+  env.dispatch("start-clicked", { requestId: "ignored-returned-id" });
+  assert.deepEqual(posts(env, "/notes-runs").map((post) => post.raw), [original, original, original]);
+});

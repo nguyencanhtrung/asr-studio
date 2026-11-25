@@ -1717,7 +1717,7 @@ export const initialState = {
   snapshots: {}, // saved transcript snapshots by id
   readId: 0, // id of the latest notes read
   selectionId: 0, // changes even when the operator switches away and back
-  previewContextId: 0, // rich/email previews are valid only while this Notes context is active
+  previewContextId: 0, // dialog and clipboard results belong to the Notes context that opened them
   copyPreview: null,
   previewLoading: false,
   poll: { token: 0, scheduled: false },
@@ -2058,7 +2058,7 @@ function reconcileRegenerateChoices(state) {
 }
 
 function openRegenerateDialog(state) {
-  if (!state.meetingId || !currentGeneration(state.meeting)) return out(state);
+  if (state.activeTab !== "notes" || !state.meetingId || !currentGeneration(state.meeting)) return out(state);
   const values = initialRegenerateValues(state);
   let result = out(patchRegenerate(state, {
     ...values,
@@ -2467,6 +2467,7 @@ function startNotes(state, requestId, { explicit = false } = {}) {
       provider: body.provider || body.run?.provider,
       requestId: body.request_id,
       explicit,
+      contextId: state.previewContextId,
       attempt,
     },
   ));
@@ -2515,6 +2516,7 @@ function startExplicitNotes(state, requestId) {
       provider: body.run.provider,
       requestId: body.request_id,
       explicit: true,
+      contextId: state.previewContextId,
       attempt,
     },
   ));
@@ -2557,24 +2559,23 @@ function startAccepted(state, action) {
 function startRejected(state, meta, error) {
   const { meetingId } = meta;
   const definitive = isDefinitive(error);
-  const sameOpenDialog = Boolean(
-    meta.explicit
+  const showDialog = meta.explicit
     && state.meetingId === meetingId
-    && state.regenerate.open
-    && state.regenerate.meetingId === meetingId,
-  );
-  const reopenedValues = meta.explicit && state.meetingId === meetingId
+    && state.activeTab === "notes"
+    && meta.contextId === state.previewContextId;
+  const sameOpenDialog = showDialog && state.regenerate.open && state.regenerate.meetingId === meetingId;
+  const reopenedValues = showDialog
     ? sameOpenDialog ? state.regenerate : initialRegenerateValues(state)
     : null;
   let result = definitive ? clearPending(state, meetingId) : out(state);
   const mapped = definitive ? failureMessage(error.code, meta.provider) : "";
   const message = mapped || errorMessageForCode(error.code, error.status, meta.provider) || error.message || t("Không thể xác nhận yêu cầu notes.");
   result = then(result, (s) => out(patchNotes(s, meetingId, {
-    runError: meta.explicit && state.meetingId === meetingId ? "" : message,
+    runError: showDialog ? "" : message,
     runErrorUncertain: !definitive,
     actionMessage: "",
   })));
-  if (meta.explicit && state.meetingId === meetingId) {
+  if (showDialog) {
     result = then(result, (s) => out(patchRegenerate(s, {
       ...reopenedValues,
       confirmed: sameOpenDialog
@@ -3800,7 +3801,7 @@ function regenerateView(state, data, pending) {
   const loading = state.choice.loading && !state.choice.loaded;
   const reloadVisible = !state.choice.loaded || Boolean(state.choice.catalogErrors[values.provider]);
   return {
-    open: state.regenerate.open,
+    open: state.activeTab === "notes" && state.regenerate.open,
     focus: state.regenerate.focus,
     provider: values.provider,
     providerItems,
