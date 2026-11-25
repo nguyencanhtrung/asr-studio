@@ -1651,7 +1651,7 @@ const EMPTY_NOTES = Object.freeze({
   known: false, // the server has answered a notes read (or failed one) since the meeting opened
   selectedNoteId: null,
   starting: false,
-  canceling: false,
+  cancelingTaskId: null,
   saving: {}, // revision id -> true while its PATCH runs
   readError: "",
   runError: "",
@@ -2527,7 +2527,9 @@ function startExplicitNotes(state, requestId) {
   return result;
 }
 
-function staleStart(state, meta) {
+function staleTaskRequest(state, meta) {
+  if (meta.op === "cancel") return entryOf(state, meta.meetingId).cancelingTaskId !== meta.taskId;
+  if (meta.op !== "start") return false;
   if (Number.isInteger(meta.attempt) && meta.attempt !== (state.startAttempts[meta.meetingId] || 0)) return true;
   const pending = pendingOf(state, meta.meetingId);
   return Boolean(meta.requestId && (!pending || pending.request_id !== meta.requestId));
@@ -2623,8 +2625,8 @@ function cancelNotes(state) {
   const meetingId = state.meetingId;
   const data = currentEntry(state);
   const task = data && data.task;
-  if (!meetingId || !task || task.kind !== "notes" || !isActiveStatus(task.status) || data.canceling) return out(state);
-  return out(patchNotes(state, meetingId, { canceling: true }), [
+  if (!meetingId || task?.kind !== "notes" || !isActiveStatus(task.status) || data.cancelingTaskId === task.id) return out(state);
+  return out(patchNotes(state, meetingId, { cancelingTaskId: task.id }), [
     request(`notes/cancel/${task.id}`, `/api/tasks/${encodeURIComponent(task.id)}/cancel`, "POST", "{}", "cancel", { meetingId, taskId: task.id }),
   ]);
 }
@@ -2641,7 +2643,7 @@ function cancelAnswered(state, action) {
   const keepObserved = observed && (observed.id !== taskId || (active && !isActiveStatus(observed.status)));
   const next = patchNotes(state, meetingId, {
     ...(keepObserved ? {} : { task, runError: "" }),
-    canceling: false,
+    cancelingTaskId: null,
   });
   let result = out(next);
   if (state.meetingId === meetingId) {
@@ -2658,7 +2660,7 @@ function cancelFailed(state, meta, error) {
     runError: error.message || t("Không thể gửi yêu cầu hủy. Trạng thái worker chưa được xác nhận là đã đổi."),
     runErrorUncertain: false,
   } : {};
-  return out(patchNotes(state, meta.meetingId, { ...status, canceling: false }));
+  return out(patchNotes(state, meta.meetingId, { ...status, cancelingTaskId: null }));
 }
 
 // ---- saving a revision and the saved copy ----
@@ -3093,7 +3095,7 @@ function meetingContext(state, action) {
 function response(state, action) {
   const { meta } = action;
   if (staleAuthoritativeRead(state, meta)) return out(state);
-  if (meta.op === "start" && staleStart(state, meta)) return out(state);
+  if (staleTaskRequest(state, meta)) return out(state);
   switch (meta.op) {
     case "read": {
       if (meta.id !== state.readId || meta.meetingId !== state.meetingId || (meta.poll !== null && meta.poll !== state.poll.token)) return out(state);
@@ -3128,7 +3130,7 @@ function response(state, action) {
 function requestFailed(state, action) {
   const { meta } = action;
   if (staleAuthoritativeRead(state, meta)) return out(state);
-  if (meta.op === "start" && staleStart(state, meta)) return out(state);
+  if (staleTaskRequest(state, meta)) return out(state);
   if (isWorkspaceAuthenticationFailure(action.error?.status, action.error?.body)) {
     const meetingId = state.meetingId || meta.meetingId;
     const next = meetingId ? patchNotes(state, meetingId, {
@@ -3543,7 +3545,7 @@ function taskView(state, data) {
   else status = t("Đang đọc trạng thái tác vụ notes.");
   const taskFailure = errorMessageForCode(task.error_code, undefined, provider);
   if (taskFailure && !["failed", "interrupted"].includes(task.status)) status = [status, " ", taskFailure];
-  const stopping = task.status === "stopping" || data.canceling;
+  const stopping = task.status === "stopping" || data.cancelingTaskId === task.id;
   const progress = task.progress && typeof task.progress === "object" ? task.progress : null;
   const progressCurrent = Number.isSafeInteger(progress?.current) && progress.current >= 0 ? progress.current : null;
   const progressTotal = Number.isSafeInteger(progress?.total) && progress.total >= progressCurrent ? progress.total : null;

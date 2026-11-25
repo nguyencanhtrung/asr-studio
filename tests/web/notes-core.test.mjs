@@ -423,10 +423,8 @@ test("canceling a running task: one request, then polling continues until the wo
   env.dispatch("cancel-clicked");
   env.dispatch("cancel-clicked"); // busy: ignored
   assert.equal(env.requests.filter(env.is("POST", "/api/tasks/t1/cancel")).length, 1);
-  assert.equal(notes(env).canceling, true);
   assert.equal(selectView(env.state()).task.cancelDisabled, true);
   await env.answer(env.is("POST", "/api/tasks/t1/cancel"), 200, { ...TASK, status: "stopping" });
-  assert.equal(notes(env).canceling, false);
   assert.equal(notes(env).task.status, "stopping");
   env.fire(1000);
   await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([], { ...TASK, status: "canceled" }));
@@ -451,12 +449,38 @@ test("a late cancellation receipt leaves a different active task and its lock in
   assert.equal(posts(env, "/cancel").at(-1).url, "/api/tasks/task-newer/cancel");
 });
 
+test("Cancel remains available for the current task while an older cancellation is pending", async () => {
+  for (const oldStatus of [200, 503]) {
+    const env = setup();
+    await opened(env, { task: TASK });
+    env.dispatch("cancel-clicked");
+    const later = { ...TASK, id: "task-newer", request_id: "other-operator" };
+    env.dispatch("meeting-change-received", { meetingId: "m1" });
+    await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()], later));
+
+    assert.equal(selectView(env.state()).task.cancelDisabled, false);
+    env.dispatch("cancel-clicked");
+    env.dispatch("cancel-clicked");
+    assert.deepEqual(posts(env, "/cancel").map(({ url }) => url), [
+      "/api/tasks/t1/cancel", "/api/tasks/task-newer/cancel",
+    ]);
+
+    await env.answer(env.is("POST", "/api/tasks/t1/cancel"), oldStatus, { ...TASK, status: "canceled" });
+    assert.equal(notes(env).task.id, later.id);
+    assert.equal(selectView(env.state()).task.cancelDisabled, true);
+    assert.equal(text(notes(env).runError), "");
+    await env.fail(env.is("POST", "/api/tasks/task-newer/cancel"));
+    assert.equal(selectView(env.state()).task.cancelDisabled, false);
+    assert.ok(text(notes(env).runError));
+  }
+});
+
 test("a failed cancel request is reported and the button works again", async () => {
   const env = setup();
   await opened(env, { task: TASK });
   env.dispatch("cancel-clicked");
   await env.fail(env.is("POST", "/api/tasks/t1/cancel"));
-  assert.equal(notes(env).canceling, false);
+  assert.equal(selectView(env.state()).task.cancelDisabled, false);
   assert.equal(notes(env).runError.text, "Không kết nối được với máy chủ trên máy này.");
   env.dispatch("cancel-clicked");
   assert.equal(env.waiting(env.is("POST", "/api/tasks/t1/cancel")).length, 1);
@@ -991,7 +1015,7 @@ test("an invalid cancel answer is a failed cancel", async () => {
   await opened(env, { task: TASK });
   env.dispatch("cancel-clicked");
   await env.answer(env.is("POST", "/cancel"), 200, { nonsense: true });
-  assert.equal(notes(env).canceling, false);
+  assert.equal(selectView(env.state()).task.cancelDisabled, false);
   assert.ok(text(notes(env).runError) !== "");
 });
 

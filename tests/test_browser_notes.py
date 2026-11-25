@@ -1126,6 +1126,58 @@ def test_late_notes_admission_receipt_keeps_cancel_on_the_newer_active_task(
     assert canceled.value.url == f"{live.url}/api/tasks/{second_task['id']}/cancel"
 
 
+def test_current_notes_task_can_be_canceled_while_an_older_cancel_reply_is_pending(live, signed_in):
+    _context, page = signed_in()
+    data_dir = live.settings.data_dir
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(data_dir)
+    _open_saved_notes(live, page, meeting_id)
+    cancel = page.locator("#notes-cancel")
+    refresh = "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)"
+
+    first = _accept(
+        data_dir, meeting_id, snapshot["generation_id"], request_id="cancel-first-notes"
+    )
+    first_url = f"{live.url}/api/tasks/{first['id']}/cancel"
+    held_first = []
+    page.route(first_url, lambda route: held_first.append(route))
+    page.evaluate(refresh, meeting_id)
+    expect(cancel).to_be_enabled()
+    with page.expect_request(first_url, timeout=5_000):
+        cancel.click()
+    expect(cancel).to_have_text("Đang dừng…")
+    first_route = held_first.pop()
+    first_response = first_route.fetch(timeout=5_000)
+    assert first_response.status == 200
+    assert first_response.json()["status"] == "canceled"
+
+    second = _accept(
+        data_dir, meeting_id, snapshot["generation_id"], request_id="cancel-next-notes"
+    )
+    second_url = f"{live.url}/api/tasks/{second['id']}/cancel"
+    held_second = []
+    page.route(second_url, lambda route: held_second.append(route))
+    with page.expect_response(f"{live.url}/api/meetings/{meeting_id}/notes", timeout=5_000):
+        page.evaluate(refresh, meeting_id)
+    expect(cancel).to_have_text("Hủy")
+    expect(cancel).to_be_enabled()
+    with page.expect_request(second_url, timeout=5_000):
+        cancel.click()
+    expect(cancel).to_have_text("Đang dừng…")
+    expect(cancel).to_be_disabled()
+
+    with page.expect_response(first_url, timeout=5_000) as old_response:
+        first_route.fulfill(response=first_response)
+    old_response.value.finished()
+    expect(cancel).to_have_text("Đang dừng…")
+    expect(page.locator("#notes-lock-status")).to_be_visible()
+    with page.expect_response(second_url, timeout=5_000) as accepted:
+        held_second.pop().continue_()
+    assert accepted.value.json()["id"] == second["id"]
+    assert accepted.value.json()["status"] == "canceled"
+    expect(cancel).to_be_hidden()
+    expect(page.locator("#notes-lock-status")).to_be_hidden()
+
+
 def test_regenerate_waits_for_a_concurrent_notes_task_without_losing_the_draft(
     live, signed_in, fake_notes_provider
 ):
