@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -147,7 +148,8 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     expect(page.locator("#transcription-model-help")).to_contain_text("Không dành cho English")
     page.get_by_role("button", name="Chạy lại").click()
     expect(page.get_by_role("button", name="Hủy")).to_be_visible()
-    expect(selector).to_have_value("pho-whisper-large")
+    expect(page.locator("#transcription-rerun-model")).to_have_value("pho-whisper-large")
+    page.locator("#transcription-rerun-submit").click()
     second_generation = finish_run(live, "Bản chép lời thứ hai.")
     expect(page.locator("#generation-title")).to_have_text("Transcript #2", timeout=8_000)
     expect(meta).to_contain_text("pho-whisper-large · GPU · CUDA · float16")
@@ -174,6 +176,166 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     assert read_runtime_profile(data_dir).model_path == worker
     page.reload()
     expect(selector).to_have_value("auto")
+
+
+@pytest.mark.parametrize(
+    ("viewport", "artifact_name"),
+    [
+        ({"width": 1440, "height": 1000}, "desktop"),
+        ({"width": 390, "height": 844}, "mobile"),
+    ],
+)
+def test_completed_transcript_rerun_uses_server_confirmed_diarization_choices(
+    live, signed_in, worker, viewport, artifact_name
+):
+    """Exercise the bounded rerun modal against the real capability endpoint."""
+    _context, page = signed_in(viewport=viewport)
+    meeting_id, generation_id, _segments = seed_completed_transcript(
+        live.settings.data_dir, title="Diarization rerun fixture"
+    )
+    accepted_id = "a" * 32
+    requests = []
+
+    def start_task(route):
+        body = route.request.post_data_json
+        requests.append(body)
+        route.fulfill(
+            status=202,
+            content_type="application/json",
+            json={
+                "id": accepted_id,
+                "request_id": body["request_id"],
+                "meeting_id": meeting_id,
+                "kind": "transcription",
+                "model_name": "qwen3-asr-1.7b",
+                "language_hint": body["language_hint"],
+                "device": "cuda",
+                "compute_type": "float16",
+                "status": "accepted",
+                "worker_state": "idle",
+                "stage": "accepted",
+                "result_scope": None,
+                "audio_duration_seconds": 30.0,
+                "transcript_end_seconds": 0.0,
+                "segment_count": 0,
+                "elapsed_seconds": 0.0,
+                "error_code": None,
+                "error_message": None,
+            },
+        )
+
+    page.route(f"{live.url}/api/tasks", start_task)
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    page.get_by_role("button", name="Chạy lại", exact=True).click()
+
+    dialog = page.locator("#transcription-rerun-dialog")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#rerun-capability-status")).to_contain_text("Lựa chọn được xác nhận")
+    expect(page.get_by_role("radio", name=re.compile("Community-1"))).to_be_checked()
+    expect(page.get_by_role("radio", name=re.compile("Tắt nhận dạng người nói"))).to_be_visible()
+
+    evidence_dir = Path(
+        os.environ.get("ASR_UI_EVIDENCE_DIR", "/tmp/asr-ux-handoff/issue-261/frontend-artifacts")
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=evidence_dir / f"{artifact_name}-rerun-modal.png", animations="disabled")
+
+    page.get_by_role("radio", name=re.compile("Tắt nhận dạng người nói")).check()
+    with page.expect_request(
+        lambda request: request.method == "POST" and request.url.endswith("/api/tasks")
+    ):
+        page.locator("#transcription-rerun-submit").click()
+    assert len(requests) == 1
+    assert requests[0]["meeting_id"] == meeting_id
+    assert requests[0]["language_hint"] == "en"
+    assert requests[0]["asr_model"] == "auto"
+    assert requests[0]["diarization_mode"] == "off"
+    assert requests[0]["expected_generation_id"] == generation_id
+    assert set(requests[0]) == {
+        "meeting_id",
+        "request_id",
+        "language_hint",
+        "asr_model",
+        "diarization_mode",
+        "expected_generation_id",
+    }
+
+
+def test_restored_rerun_replays_unavailable_original_choices_and_refreshes_capability(
+    live, signed_in, worker
+):
+    _context, page = signed_in()
+    meeting_id, generation_id, _segments = seed_completed_transcript(
+        live.settings.data_dir, title="Restored rerun fixture"
+    )
+    storage_key = f"asr-studio:transcription-request:{meeting_id}"
+    storage_value = json.dumps(
+        {
+            "requestId": "admitted-browser-rerun",
+            "languageHint": "vi",
+            "asrModel": "pho-whisper-large",
+            "diarizationMode": "off",
+            "expectedGenerationId": generation_id,
+        }
+    )
+    page.add_init_script(
+        f"sessionStorage.setItem({json.dumps(storage_key)}, JSON.stringify({storage_value}))"
+    )
+    capability_requests = []
+    bodies = []
+
+    def capability(route):
+        capability_requests.append(route.request)
+        route.fulfill(
+            content_type="application/json",
+            json={
+                "contract_version": 1,
+                "default_mode": "community-1",
+                "explicit_mode_scope": "manual_transcript_rerun",
+                "community_1": {"id": "community-1", "ready": True, "state": "ready"},
+                "off": {
+                    "id": "off",
+                    "ready": False,
+                    "state": "unavailable",
+                    "reason": "worker_unavailable",
+                },
+            },
+        )
+
+    def uncertain_start(route):
+        bodies.append(route.request.post_data_json)
+        route.abort("connectionfailed")
+
+    page.route(f"{live.url}/api/diarization-capability", capability)
+    page.route(f"{live.url}/api/tasks", uncertain_start)
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    page.get_by_role("button", name="Chạy lại", exact=True).click()
+
+    expect(page.locator("#transcription-rerun-model")).to_have_value("pho-whisper-large")
+    expect(page.locator("#transcription-rerun-model")).to_be_disabled()
+    expect(page.locator("#transcription-rerun-language")).to_have_value("vi")
+    expect(page.locator("#transcription-rerun-language")).to_be_disabled()
+    off = page.get_by_role("radio", name=re.compile("Tắt nhận dạng người nói"))
+    expect(off).to_be_disabled()
+    expect(page.locator("#transcription-rerun-submit")).to_have_text("Xác minh yêu cầu chạy lại")
+    expect(page.locator("#transcription-rerun-submit")).to_be_enabled()
+
+    page.locator("#transcription-rerun-submit").click()
+    expect(page.locator("#transcription-error")).to_be_visible()
+    page.get_by_role("button", name="Chạy lại", exact=True).click()
+    expect(page.locator("#transcription-rerun-dialog")).to_be_visible()
+    assert len(capability_requests) >= 2
+    page.locator("#transcription-rerun-submit").click()
+    assert len(bodies) == 2
+    assert bodies[0] == bodies[1]
+    assert bodies[0] == {
+        "meeting_id": meeting_id,
+        "request_id": "admitted-browser-rerun",
+        "language_hint": "vi",
+        "asr_model": "pho-whisper-large",
+        "diarization_mode": "off",
+        "expected_generation_id": generation_id,
+    }
 
 
 def test_an_unprepared_model_cannot_start_and_says_how_to_prepare_it(live, signed_in, worker):
@@ -373,6 +535,7 @@ def test_automatic_runs_the_default_from_settings_and_one_run_can_still_differ(
     selector.select_option("whisper-large-v3")
     page.get_by_role("button", name="Chạy lại").click()
     expect(page.get_by_role("button", name="Hủy")).to_be_visible()
+    page.locator("#transcription-rerun-submit").click()
     finish_run(live, "Một lần khác.")
     expect(meta).to_contain_text("whisper-large-v3 · GPU · CUDA · float16", timeout=8_000)
     body = page.request.get(f"{live.url}/api/asr-models").json()
