@@ -28,7 +28,7 @@ from asr_studio.notes import (
 )
 from asr_studio.notes_document import render_markdown
 from asr_studio.storage import database_path
-from asr_studio.tasks import claim_next_task, transcription_state
+from asr_studio.tasks import claim_next_task, finish_canceled_task, transcription_state
 
 pytestmark = pytest.mark.browser
 
@@ -1126,12 +1126,16 @@ def test_late_notes_admission_receipt_keeps_cancel_on_the_newer_active_task(
     assert canceled.value.url == f"{live.url}/api/tasks/{second_task['id']}/cancel"
 
 
-def test_current_notes_task_can_be_canceled_while_an_older_cancel_reply_is_pending(live, signed_in):
+@pytest.mark.parametrize("second_state", ["accepted", "running"])
+def test_current_notes_task_can_be_canceled_while_an_older_cancel_reply_is_pending(
+    live, signed_in, second_state
+):
     _context, page = signed_in()
     data_dir = live.settings.data_dir
     meeting_id, _revision, snapshot, _segments = _seed_saved_notes(data_dir)
     _open_saved_notes(live, page, meeting_id)
     cancel = page.locator("#notes-cancel")
+    notes_url = f"{live.url}/api/meetings/{meeting_id}/notes"
     refresh = "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)"
 
     first = _accept(
@@ -1153,13 +1157,23 @@ def test_current_notes_task_can_be_canceled_while_an_older_cancel_reply_is_pendi
     second = _accept(
         data_dir, meeting_id, snapshot["generation_id"], request_id="cancel-next-notes"
     )
+    owner = "cancel-browser-worker"
+    if second_state == "running":
+        assert claim_next_task(data_dir, owner_id=owner)["id"] == second["id"]
     second_url = f"{live.url}/api/tasks/{second['id']}/cancel"
     held_second = []
     page.route(second_url, lambda route: held_second.append(route))
-    with page.expect_response(f"{live.url}/api/meetings/{meeting_id}/notes", timeout=5_000):
+    with page.expect_response(notes_url, timeout=5_000):
         page.evaluate(refresh, meeting_id)
     expect(cancel).to_have_text("Hủy")
     expect(cancel).to_be_enabled()
+    if second_state == "running":
+        old_read = page.request.get(notes_url).json()
+        assert old_read["task"]["id"] == second["id"]
+        assert old_read["task"]["status"] == "running"
+        held_reads = []
+        with page.expect_request(notes_url, timeout=5_000):
+            page.route(notes_url, lambda route: held_reads.append(route))
     with page.expect_request(second_url, timeout=5_000):
         cancel.click()
     expect(cancel).to_have_text("Đang dừng…")
@@ -1173,7 +1187,17 @@ def test_current_notes_task_can_be_canceled_while_an_older_cancel_reply_is_pendi
     with page.expect_response(second_url, timeout=5_000) as accepted:
         held_second.pop().continue_()
     assert accepted.value.json()["id"] == second["id"]
-    assert accepted.value.json()["status"] == "canceled"
+    if second_state == "running":
+        assert accepted.value.json()["status"] == "stopping"
+        with page.expect_request(notes_url, timeout=5_000):
+            held_reads.pop(0).fulfill(json=old_read)
+        expect(cancel).to_have_text("Đang dừng…")
+        expect(cancel).to_be_disabled()
+        expect(page.locator("#notes-lock-status")).to_be_visible()
+        assert finish_canceled_task(data_dir, second["id"], owner_id=owner, elapsed_seconds=0.1)
+        held_reads.pop(0).continue_()
+    else:
+        assert accepted.value.json()["status"] == "canceled"
     expect(cancel).to_be_hidden()
     expect(page.locator("#notes-lock-status")).to_be_hidden()
 

@@ -420,14 +420,22 @@ test("a run that arrives for an active task of the meeting clears the pending re
 test("canceling a running task: one request, then polling continues until the worker confirms", async () => {
   const env = setup();
   await opened(env, { task: TASK });
+  const read = env.is("GET", "/api/meetings/m1/notes");
+  env.fire(1000); // The worker was running when this poll started.
   env.dispatch("cancel-clicked");
   env.dispatch("cancel-clicked"); // busy: ignored
   assert.equal(env.requests.filter(env.is("POST", "/api/tasks/t1/cancel")).length, 1);
   assert.equal(selectView(env.state()).task.cancelDisabled, true);
   await env.answer(env.is("POST", "/api/tasks/t1/cancel"), 200, { ...TASK, status: "stopping" });
+  await env.answer(read, 200, notesBody([], TASK));
   assert.equal(notes(env).task.status, "stopping");
+  assert.equal(selectView(env.state()).task.cancelDisabled, true);
+  assert.equal(notes(env).sourceLocked, true);
+  env.dispatch("cancel-clicked");
+  assert.equal(posts(env, "/cancel").length, 1);
+
   env.fire(1000);
-  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([], { ...TASK, status: "canceled" }));
+  await env.answer(read, 200, notesBody([], { ...TASK, status: "canceled" }));
   assert.equal(notes(env).task.status, "canceled");
   assert.equal(notes(env).sourceLocked, false);
 });

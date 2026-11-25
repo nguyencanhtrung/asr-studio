@@ -2625,7 +2625,8 @@ function cancelNotes(state) {
   const meetingId = state.meetingId;
   const data = currentEntry(state);
   const task = data && data.task;
-  if (!meetingId || task?.kind !== "notes" || !isActiveStatus(task.status) || data.cancelingTaskId === task.id) return out(state);
+  if (!meetingId || task?.kind !== "notes" || !isActiveStatus(task.status)
+    || task.status === "stopping" || data.cancelingTaskId === task.id) return out(state);
   return out(patchNotes(state, meetingId, { cancelingTaskId: task.id }), [
     request(`notes/cancel/${task.id}`, `/api/tasks/${encodeURIComponent(task.id)}/cancel`, "POST", "{}", "cancel", { meetingId, taskId: task.id }),
   ]);
@@ -2647,7 +2648,10 @@ function cancelAnswered(state, action) {
   });
   let result = out(next);
   if (state.meetingId === meetingId) {
-    result = !keepObserved && active ? startPolling(next, meetingId, task) : readNotes(next, meetingId);
+    // A poll sent before this acknowledgement can still describe the task as running.
+    result = !keepObserved && active
+      ? startPolling({ ...next, readId: next.readId + 1 }, meetingId, task)
+      : readNotes(next, meetingId);
   }
   result.effects.push(meetingChangeEffect(meetingId, "notes"));
   return result;
