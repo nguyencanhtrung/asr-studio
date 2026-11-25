@@ -68,7 +68,7 @@ from asr_studio.recordings import (
     release_upload,
     update_meeting,
 )
-from asr_studio.runtime import read_runtime_profile
+from asr_studio.runtime import RuntimeProfile, read_runtime_profile
 from asr_studio.tasks import (
     TaskError,
     accept_transcription_task,
@@ -106,9 +106,15 @@ _RangeResult = tuple[int, int] | Literal["ignore", "unsatisfiable"]
 DIARIZATION_CAPABILITY_VERSION = 1
 
 
+def _usable_transcription_runtime(data_dir: Path) -> RuntimeProfile | None:
+    if not worker_is_healthy(data_dir):
+        return None
+    return read_runtime_profile(data_dir)
+
+
 def diarization_capability(settings: Settings) -> dict[str, object]:
     """Report the local Community-1 capability without changing application state."""
-    worker_ready = worker_is_healthy(settings.data_dir)
+    worker_ready = _usable_transcription_runtime(settings.data_dir) is not None
     rollback_fenced = diarization_rollback_fence_enabled()
     model_ready = True
     try:
@@ -1112,8 +1118,7 @@ def install_routes(
                 "expected_generation_id",
             },
         )
-        worker_ready = worker_is_healthy(settings.data_dir)
-        profile = read_runtime_profile(settings.data_dir) if worker_ready else None
+        profile = _usable_transcription_runtime(settings.data_dir)
         asr_model = payload.get("asr_model", AUTO)
         if asr_model not in selectable_models():
             _raise_task_error(
@@ -1125,7 +1130,7 @@ def install_routes(
             **resolve_run(settings, profile, asr_model),
             "asr_choice": asr_model,
             "diarization_model_path": settings.diarization_model_path,
-            "worker_ready": worker_ready and profile is not None,
+            "worker_ready": profile is not None,
         }
         if "language_hint" in payload:
             task_options["language_hint"] = payload["language_hint"]

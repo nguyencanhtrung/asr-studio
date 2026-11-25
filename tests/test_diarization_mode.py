@@ -9,6 +9,7 @@ from seeding import prepare_diarization_model, seed_meeting
 
 from asr_studio import routes
 from asr_studio.config import Settings
+from asr_studio.runtime import RuntimeProfile, write_runtime_profile
 from asr_studio.storage import database_path, initialize
 from asr_studio.tasks import (
     TaskError,
@@ -365,6 +366,10 @@ def test_diarization_capability_reports_real_file_and_worker_readiness(tmp_path,
         data_dir=tmp_path / "data",
         auth_dir=tmp_path / "auth",
         diarization_model_path=tmp_path / "community-1",
+    )
+    write_runtime_profile(
+        settings.data_dir,
+        RuntimeProfile(device="cpu", compute_type="int8", model_path=tmp_path / "asr"),
     )
     monkeypatch.setattr(routes, "worker_is_healthy", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(

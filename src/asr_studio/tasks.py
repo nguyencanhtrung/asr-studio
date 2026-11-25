@@ -170,7 +170,6 @@ def _task_summary(row: sqlite3.Row) -> dict[str, object]:
         "request_id": row["request_id"],
         "meeting_id": row["meeting_id"],
         "kind": row["kind"],
-        "diarization_mode": row["diarization_mode"],
         "model_name": row["model_name"],
         "language_hint": row["language_hint"],
         "device": row["device"],
@@ -203,6 +202,7 @@ def _task_summary(row: sqlite3.Row) -> dict[str, object]:
     )
     if row["kind"] == "transcription":
         summary["asr_model"] = row["asr_model"]
+        summary["diarization_mode"] = row["diarization_mode"]
     if row["kind"] == "notes":
         summary["output_language"] = row["notes_output_language"]
         summary["provider"] = row["notes_provider"]

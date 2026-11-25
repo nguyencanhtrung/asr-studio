@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from notes_helpers import seed_completed_transcript
 from seeding import prepare_diarization_model, seed_meeting
 
 from asr_studio import routes
 from asr_studio.app import create_app
 from asr_studio.auth import AuthStore
 from asr_studio.config import Settings
-from asr_studio.runtime import RuntimeProfile, write_runtime_profile
+from asr_studio.runtime import RuntimeProfile, runtime_profile_path, write_runtime_profile
+from asr_studio.storage import database_path
 from asr_studio.tasks import (
     accept_transcription_task,
     claim_next_task,
@@ -20,7 +24,12 @@ from asr_studio.tasks import (
     transcription_state,
     update_task_progress,
 )
-from asr_studio.worker import acquire_worker_lock, write_heartbeat
+from asr_studio.worker import (
+    acquire_transcription_lock,
+    acquire_worker_lock,
+    write_heartbeat,
+    write_transcription_heartbeat,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -150,6 +159,9 @@ async def test_task_routes_accept_poll_cancel_and_rediscover_meeting_state(tmp_p
                 claimed = claim_next_task(settings.data_dir, owner_id="api-test-worker")
                 assert claimed and claimed["id"] == accepted.json()["id"]
                 running = await client.get(f"/api/tasks/{accepted.json()['id']}")
+                assert running.status_code == 200
+                assert running.json()["kind"] == "transcription"
+                assert running.json()["diarization_mode"] == "community-1"
                 assert running.json()["status"] == "running"
                 assert running.json()["worker_state"] == "healthy"
                 stopping = await client.post(
@@ -195,9 +207,19 @@ async def test_asr_models_route_requires_auth_and_matches_meeting_choices(tmp_pa
             ] == meeting.json()["transcription"]["asr_models"]
 
 
-async def test_diarization_capability_route_is_authoritative_and_authenticated(
-    tmp_path, monkeypatch
-):
+def _admission_state(data_dir):
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute("BEGIN")
+        return (
+            connection.execute("SELECT id, current_generation_id FROM meetings").fetchall(),
+            connection.execute("SELECT * FROM transcript_generations ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM transcript_segments ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM tasks ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM processing_slot").fetchall(),
+        )
+
+
+async def test_diarization_capability_route_is_authoritative_and_authenticated(tmp_path):
     diarization_model_dir = prepare_diarization_model(tmp_path / "diarization-model")
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -206,7 +228,6 @@ async def test_diarization_capability_route_is_authoritative_and_authenticated(
         asr_model_path=_prepared_model(tmp_path / "model"),
         diarization_model_path=diarization_model_dir,
     )
-    monkeypatch.setattr(routes, "worker_is_healthy", lambda *_args, **_kwargs: True)
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
@@ -214,27 +235,145 @@ async def test_diarization_capability_route_is_authoritative_and_authenticated(
             unauthorized = await client.get("/api/diarization-capability")
             assert unauthorized.status_code == 401
             headers = await _authorize(client, settings)
+            meeting_id, generation_id, _ = seed_completed_transcript(settings.data_dir)
+            before = _admission_state(settings.data_dir)
+            lock_fd = acquire_transcription_lock(settings.data_dir)
+            assert lock_fd is not None
+            try:
+                write_transcription_heartbeat(settings.data_dir, "idle")
+                response = await client.get("/api/diarization-capability", headers=headers)
+                assert response.status_code == 200
+                capability = response.json()
+                assert capability["community_1"]["operator_prepared"] is True
+                for key, mode in (("community_1", "community-1"), ("off", "off")):
+                    refused = await client.post(
+                        "/api/tasks",
+                        headers=headers,
+                        json={
+                            "meeting_id": meeting_id,
+                            "request_id": f"missing-profile-{mode}",
+                            "expected_generation_id": generation_id,
+                            "diarization_mode": mode,
+                        },
+                    )
+                    assert refused.status_code == 503
+                    assert refused.json()["detail"]["code"] == "worker_unavailable"
+                    assert capability[key]["ready"] is False
+                    assert capability[key]["reason"] == "worker_unavailable"
+                assert _admission_state(settings.data_dir) == before
+
+                write_runtime_profile(
+                    settings.data_dir,
+                    RuntimeProfile(
+                        device="cpu", compute_type="int8", model_path=settings.asr_model_path
+                    ),
+                )
+                response = await client.get("/api/diarization-capability", headers=headers)
+                assert response.status_code == 200
+                assert response.json() == {
+                    "contract_version": 1,
+                    "default_mode": "community-1",
+                    "explicit_mode_scope": "manual_transcript_rerun",
+                    "community_1": {
+                        "id": "community-1",
+                        "ready": True,
+                        "state": "ready",
+                        "reason": None,
+                        "operator_prepared": True,
+                    },
+                    "off": {
+                        "id": "off",
+                        "ready": True,
+                        "state": "ready",
+                        "reason": None,
+                        "allowed_on": "manual_transcript_rerun",
+                    },
+                }
+            finally:
+                os.close(lock_fd)
+
             response = await client.get("/api/diarization-capability", headers=headers)
             assert response.status_code == 200
-            assert response.json() == {
-                "contract_version": 1,
-                "default_mode": "community-1",
-                "explicit_mode_scope": "manual_transcript_rerun",
-                "community_1": {
-                    "id": "community-1",
-                    "ready": True,
-                    "state": "ready",
-                    "reason": None,
-                    "operator_prepared": True,
-                },
-                "off": {
-                    "id": "off",
-                    "ready": True,
-                    "state": "ready",
-                    "reason": None,
-                    "allowed_on": "manual_transcript_rerun",
-                },
-            }
+            for mode in ("community_1", "off"):
+                assert response.json()[mode]["ready"] is False
+                assert response.json()[mode]["reason"] == "worker_unavailable"
+
+
+@pytest.mark.parametrize("file_change", ["missing", "lfs_pointer"])
+async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
+    tmp_path, file_change
+):
+    community = prepare_diarization_model(tmp_path / "diarization")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_model_path=_prepared_model(tmp_path / "asr"),
+        diarization_model_path=community,
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url=settings.public_url) as client:
+            headers = await _authorize(client, settings)
+            meeting_id, generation_id, _ = seed_completed_transcript(
+                settings.data_dir, title="Stale Community-1 readiness fixture"
+            )
+            before = _admission_state(settings.data_dir)
+            lock_fd = acquire_transcription_lock(settings.data_dir)
+            assert lock_fd is not None
+            try:
+                write_runtime_profile(
+                    settings.data_dir,
+                    RuntimeProfile(
+                        device="cpu", compute_type="int8", model_path=settings.asr_model_path
+                    ),
+                )
+                write_transcription_heartbeat(settings.data_dir, "idle")
+                capability = await client.get("/api/diarization-capability", headers=headers)
+                assert capability.status_code == 200
+                assert capability.json()["community_1"]["ready"] is True
+                model = community / "embedding" / "pytorch_model.bin"
+                if file_change == "missing":
+                    model.unlink()
+                else:
+                    model.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid fixture\n")
+                payload = {
+                    "meeting_id": meeting_id,
+                    "request_id": f"catalog-stale-community-{file_change}",
+                    "expected_generation_id": generation_id,
+                    "diarization_mode": "community-1",
+                }
+                refused = await client.post("/api/tasks", headers=headers, json=payload)
+                assert refused.status_code == 503
+                assert refused.json()["detail"]["code"] == "diarization_model_unavailable"
+                assert _admission_state(settings.data_dir) == before
+
+                capability = await client.get("/api/diarization-capability", headers=headers)
+                assert capability.status_code == 200
+                assert capability.json()["community_1"]["ready"] is False
+                assert capability.json()["community_1"]["reason"] == "model_unavailable"
+                assert capability.json()["off"]["ready"] is True
+                off_payload = {
+                    **payload,
+                    "request_id": f"off-{file_change}",
+                    "diarization_mode": "off",
+                }
+                accepted = await client.post("/api/tasks", headers=headers, json=off_payload)
+                assert accepted.status_code == 202
+                task = await client.get(f"/api/tasks/{accepted.json()['id']}", headers=headers)
+                assert task.status_code == 200
+                assert task.json()["kind"] == "transcription"
+                assert task.json()["diarization_mode"] == "off"
+
+                runtime_profile_path(settings.data_dir).unlink()
+                after_accept = _admission_state(settings.data_dir)
+                replay = await client.post("/api/tasks", headers=headers, json=off_payload)
+                assert replay.status_code == 202
+                assert replay.json() == accepted.json()
+                assert _admission_state(settings.data_dir) == after_accept
+            finally:
+                os.close(lock_fd)
 
 
 async def test_task_route_persists_per_run_language_and_checks_idempotency(tmp_path, monkeypatch):
