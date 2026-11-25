@@ -8,7 +8,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -910,6 +910,24 @@ def _migrate_v20(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_v21(connection: sqlite3.Connection) -> None:
+    """Pin the resolved diarization mode on tasks and new generations."""
+    task_columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
+    if "diarization_mode" not in task_columns:
+        connection.execute(
+            "ALTER TABLE tasks ADD COLUMN diarization_mode TEXT NOT NULL "
+            "DEFAULT 'community-1' CHECK(diarization_mode IN ('community-1', 'off'))"
+        )
+    generation_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(transcript_generations)")
+    }
+    if "diarization_mode" not in generation_columns:
+        connection.execute(
+            "ALTER TABLE transcript_generations ADD COLUMN diarization_mode TEXT "
+            "CHECK(diarization_mode IS NULL OR diarization_mode IN ('community-1', 'off'))"
+        )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -1073,6 +1091,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 20:
             _migrate_v20(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (20)")
+        if current_version < 21:
+            _migrate_v21(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (21)")
         connection.commit()
     finally:
         connection.close()

@@ -1423,7 +1423,7 @@ def test_create_dialog_fits_360px_and_stays_legible_in_both_themes(live, signed_
     content.evaluate("el => { el.scrollTop = el.scrollHeight; }")
     expect(page.locator("#workflow-state")).to_be_visible()
     dialog_box = dialog.bounding_box()
-    footer_box = page.locator(".dialog-actions").bounding_box()
+    footer_box = dialog.locator(".dialog-actions").bounding_box()
     assert footer_box["y"] + footer_box["height"] <= dialog_box["y"] + dialog_box["height"] + 1
     assert page.locator("#workflow-state").evaluate("el => el.closest('.dialog-actions') !== null")
 

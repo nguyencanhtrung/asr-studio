@@ -69,14 +69,14 @@ def safe_diarization_error(code: object, message: object) -> tuple[str, str]:
 
 
 def prepared_diarization_directory(path: Path) -> Path:
-    model_path = Path(path).expanduser()
     try:
-        resolved = model_path.resolve(strict=True)
-    except OSError as error:
+        resolved = Path(path).expanduser().resolve(strict=True)
+        is_directory = resolved.is_dir()
+    except (OSError, RuntimeError) as error:
         raise DiarizationConfigurationError(
             "The local Community-1 model directory is unavailable."
         ) from error
-    if not resolved.is_dir():
+    if not is_directory:
         raise DiarizationConfigurationError("The local Community-1 model directory is incomplete.")
     for relative_path in COMMUNITY_1_REQUIRED_FILES:
         try:
@@ -85,14 +85,16 @@ def prepared_diarization_directory(path: Path) -> Path:
             if not candidate.is_file():
                 raise OSError
             with candidate.open("rb") as model_file:
-                is_lfs_pointer = model_file.read(len(_GIT_LFS_POINTER_PREFIX)).startswith(
-                    _GIT_LFS_POINTER_PREFIX
-                )
-        except (OSError, ValueError):
+                prefix = model_file.read(len(_GIT_LFS_POINTER_PREFIX))
+        except (OSError, RuntimeError, ValueError):
             raise DiarizationConfigurationError(
                 f"The local Community-1 model is missing {relative_path.as_posix()}."
             ) from None
-        if is_lfs_pointer:
+        if not prefix:
+            raise DiarizationConfigurationError(
+                f"The local Community-1 file {relative_path.as_posix()} is empty."
+            )
+        if prefix.startswith(_GIT_LFS_POINTER_PREFIX):
             raise DiarizationConfigurationError(
                 f"The local Community-1 file {relative_path.as_posix()} is still a Git LFS pointer."
             )

@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import stat
 import sys
 import uuid
 import zlib
@@ -16,6 +17,7 @@ from typing import Any
 
 from asr_studio.safe_logging import emit_safe_log
 
+_GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
 _REQUIRED_MODEL_FILES = (
     "model.bin",
     "config.json",
@@ -51,16 +53,38 @@ class ModelConfigurationError(RuntimeError):
     """The configured local model path is missing or is not a prepared ASR model."""
 
 
-def prepared_model_directory(path: Path) -> Path:
-    model_path = Path(path).expanduser()
+def _check_model_weights(path: Path) -> None:
     try:
-        resolved = model_path.resolve(strict=True)
+        # A replacement FIFO must not block preflight. Follow symlinks to regular files.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ModelConfigurationError("The local model weights must be a regular file.")
+            prefix = os.read(descriptor, len(_GIT_LFS_POINTER_PREFIX))
+        finally:
+            os.close(descriptor)
     except OSError as error:
+        raise ModelConfigurationError("The local model weights are unreadable.") from error
+    if not prefix:
+        raise ModelConfigurationError("The local model weights are empty.")
+    if prefix == _GIT_LFS_POINTER_PREFIX:
+        raise ModelConfigurationError("The local model weights are still a Git LFS pointer.")
+
+
+def _resolve_model_directory(path: Path) -> Path:
+    try:
+        return Path(path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as error:
         raise ModelConfigurationError("The local model directory is unavailable.") from error
+
+
+def prepared_model_directory(path: Path) -> Path:
+    resolved = _resolve_model_directory(path)
     if not resolved.is_dir():
         raise ModelConfigurationError("The local model path must be a directory.")
     if any(not (resolved / filename).is_file() for filename in _REQUIRED_MODEL_FILES):
         raise ModelConfigurationError("The local model directory is incomplete.")
+    _check_model_weights(resolved / "model.bin")
     try:
         tokenizer_config = json.loads((resolved / "tokenizer.json").read_text(encoding="utf-8"))
         model_config = json.loads((resolved / "config.json").read_text(encoding="utf-8"))
@@ -101,13 +125,10 @@ def prepared_model_directory(path: Path) -> Path:
 
 
 def prepared_qwen_directory(path: Path) -> Path:
-    model_path = Path(path).expanduser()
-    try:
-        resolved = model_path.resolve(strict=True)
-    except OSError as error:
-        raise ModelConfigurationError("The local model directory is unavailable.") from error
+    resolved = _resolve_model_directory(path)
     if any(not (resolved / filename).is_file() for filename in _QWEN_REQUIRED_FILES):
         raise ModelConfigurationError("The local model directory is incomplete.")
+    _check_model_weights(resolved / "model.safetensors")
     try:
         config = json.loads((resolved / "config.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:

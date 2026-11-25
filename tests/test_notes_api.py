@@ -382,6 +382,11 @@ async def test_source_edit_routes_answer_409_until_the_stopped_worker_releases_t
         expected_metadata_version=1,
         worker_ready=True,
     )
+    response = await client.get(f"/api/tasks/{accepted['id']}", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["kind"] == "notes"
+    assert response.json()["result_scope"] == "notes_only"
+    assert "diarization_mode" not in response.json()
     assert claim_next_task(settings.data_dir, owner_id="api-lock-worker") is not None
     meeting = f"/api/meetings/{meeting_id}"
     generation = f"{meeting}/transcript-generations/{generation_id}"
