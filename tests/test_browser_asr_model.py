@@ -179,52 +179,20 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
 
 
 @pytest.mark.parametrize(
-    ("viewport", "artifact_name"),
+    ("viewport", "artifact_name", "scheme"),
     [
-        ({"width": 1440, "height": 1000}, "desktop"),
-        ({"width": 390, "height": 844}, "mobile"),
+        ({"width": 1440, "height": 1000}, "desktop", "light"),
+        ({"width": 390, "height": 844}, "mobile", "dark"),
     ],
 )
 def test_completed_transcript_rerun_uses_server_confirmed_diarization_choices(
-    live, signed_in, worker, viewport, artifact_name
+    live, signed_in, worker, viewport, artifact_name, scheme, tmp_path
 ):
     """Exercise the bounded rerun modal against the real capability endpoint."""
-    _context, page = signed_in(viewport=viewport)
+    _context, page = signed_in(viewport=viewport, color_scheme=scheme)
     meeting_id, generation_id, _segments = seed_completed_transcript(
         live.settings.data_dir, title="Diarization rerun fixture"
     )
-    accepted_id = "a" * 32
-    requests = []
-
-    def start_task(route):
-        body = route.request.post_data_json
-        requests.append(body)
-        route.fulfill(
-            status=202,
-            content_type="application/json",
-            json={
-                "id": accepted_id,
-                "request_id": body["request_id"],
-                "meeting_id": meeting_id,
-                "kind": "transcription",
-                "model_name": "qwen3-asr-1.7b",
-                "language_hint": body["language_hint"],
-                "device": "cuda",
-                "compute_type": "float16",
-                "status": "accepted",
-                "worker_state": "idle",
-                "stage": "accepted",
-                "result_scope": None,
-                "audio_duration_seconds": 30.0,
-                "transcript_end_seconds": 0.0,
-                "segment_count": 0,
-                "elapsed_seconds": 0.0,
-                "error_code": None,
-                "error_message": None,
-            },
-        )
-
-    page.route(f"{live.url}/api/tasks", start_task)
     page.goto(f"{live.url}/meetings/{meeting_id}")
     page.get_by_role("button", name="Chạy lại", exact=True).click()
 
@@ -234,24 +202,26 @@ def test_completed_transcript_rerun_uses_server_confirmed_diarization_choices(
     expect(page.get_by_role("radio", name=re.compile("Community-1"))).to_be_checked()
     expect(page.get_by_role("radio", name=re.compile("Tắt nhận dạng người nói"))).to_be_visible()
 
-    evidence_dir = Path(
-        os.environ.get("ASR_UI_EVIDENCE_DIR", "/tmp/asr-ux-handoff/issue-261/frontend-artifacts")
-    )
+    evidence_dir = Path(os.environ.get("ASR_UI_EVIDENCE_DIR", str(tmp_path)))
     evidence_dir.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=evidence_dir / f"{artifact_name}-rerun-modal.png", animations="disabled")
 
     page.get_by_role("radio", name=re.compile("Tắt nhận dạng người nói")).check()
-    with page.expect_request(
-        lambda request: request.method == "POST" and request.url.endswith("/api/tasks")
-    ):
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as response:
         page.locator("#transcription-rerun-submit").click()
-    assert len(requests) == 1
-    assert requests[0]["meeting_id"] == meeting_id
-    assert requests[0]["language_hint"] == "en"
-    assert requests[0]["asr_model"] == "auto"
-    assert requests[0]["diarization_mode"] == "off"
-    assert requests[0]["expected_generation_id"] == generation_id
-    assert set(requests[0]) == {
+    assert response.value.status == 202
+    accepted = response.value.json()
+    assert accepted["diarization_mode"] == "off"
+    assert accepted["status"] == "accepted"
+    request = response.value.request.post_data_json
+    assert request["meeting_id"] == meeting_id
+    assert request["language_hint"] == "en"
+    assert request["asr_model"] == "auto"
+    assert request["diarization_mode"] == "off"
+    assert request["expected_generation_id"] == generation_id
+    assert set(request) == {
         "meeting_id",
         "request_id",
         "language_hint",
@@ -318,6 +288,7 @@ def test_restored_rerun_replays_unavailable_original_choices_and_refreshes_capab
     off = page.get_by_role("radio", name=re.compile("Tắt nhận dạng người nói"))
     expect(off).to_be_disabled()
     expect(page.locator("#transcription-rerun-submit")).to_have_text("Xác minh yêu cầu chạy lại")
+    expect(page.locator("#rerun-capability-status")).to_contain_text("Chưa có xác nhận từ server")
     expect(page.locator("#transcription-rerun-submit")).to_be_enabled()
 
     page.locator("#transcription-rerun-submit").click()

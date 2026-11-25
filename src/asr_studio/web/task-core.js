@@ -317,6 +317,22 @@ function modeReady(capability, mode) {
   return Boolean(choice && choice.ready === true);
 }
 
+function rerunCapability(state, shown) {
+  const capability = state.capability;
+  return capability?.meetingId === shown.id && capability.generationId === shown.currentGenerationId
+    ? capability : null;
+}
+
+function rerunBlock(state, shown, draft) {
+  if (state.start || shown.blocked || isActive(shown.task)) return "busy";
+  if (draft.replay) {
+    return pendingFor(state, shown.id)?.requestId === draft.requestId ? "" : "changed";
+  }
+  if (shown.currentGenerationId !== draft.generationId) return "changed";
+  if (!readyRerunModels(shown).some((entry) => entry.id === draft.asrModel)) return "model";
+  return modeReady(rerunCapability(state, shown)?.value, draft.diarizationMode) ? "" : "capability";
+}
+
 function openRerun(state, shown, requestId) {
   if (!shown || !shown.generation || !shown.currentGenerationId || state.start) return out(state);
   const pending = pendingFor(state, shown.id);
@@ -398,7 +414,7 @@ function startRequest(state, shown, requestId, auto) {
   const pending = pendingFor(state, shown && shown.id);
   const replay = Boolean(rerun?.replay && pending && pending.requestId === rerun.requestId);
   if (!shown || state.start || shown.blocked || (!auto && !rerun && modelBlocked(state, shown))) return out(state);
-  if (rerun && !replay && (shown.currentGenerationId !== rerun.generationId || !rerun.asrModel || !modeReady(state.capability?.value, rerun.diarizationMode))) return out(state);
+  if (rerun && rerunBlock(state, shown, rerun)) return out(state);
   let result = out(state);
   let request = pending;
   if (rerun && !replay && request?.expectedGenerationId !== rerun.generationId) request = null;
@@ -730,30 +746,26 @@ function selectModel(state, shown, disabled) {
 
 function selectRerun(state, shown) {
   if (!shown || !shown.generation || !shown.currentGenerationId) return null;
-  const capability = state.capability
-    && state.capability.meetingId === shown.id
-    && state.capability.generationId === shown.currentGenerationId
-    ? state.capability
-    : null;
+  const capability = rerunCapability(state, shown);
   const draft = state.rerun && state.rerun.meetingId === shown.id ? state.rerun : null;
-  const original = draft?.replay ? (shown.asrModels || []).find((entry) => entry?.id === draft.asrModel) : null;
-  const models = draft?.replay
-    ? [{
+  const models = draft?.replay ? [] : readyRerunModels(shown).map((entry) => ({
+    id: entry.id,
+    label: asrModelText(entry).label,
+    ready: true,
+  }));
+  if (draft?.asrModel && !models.some((option) => option.id === draft.asrModel)) {
+    const original = (shown.asrModels || []).find((entry) => entry?.id === draft.asrModel);
+    models.unshift({
       id: draft.asrModel,
       label: original ? asrModelText(original).label : draft.asrModel,
       ready: original?.ready === true,
-      reason: original?.reason || "replay_admitted",
-    }]
-    : readyRerunModels(shown).map((entry) => ({
-      id: entry.id,
-      label: asrModelText(entry).label,
-      ready: true,
-    }));
+      reason: original?.reason || "not_prepared",
+    });
+  }
   const languageHint = draft?.languageHint || displayedLanguage(state, shown);
-  const asrModel = draft?.asrModel && models.some((entry) => entry.id === draft.asrModel)
-    ? draft.asrModel
-    : models[0]?.id || null;
+  const asrModel = draft ? draft.asrModel : models[0]?.id || null;
   const diarizationMode = draft?.diarizationMode || "community-1";
+  const block = draft ? rerunBlock(state, shown, draft) : "";
   const modeOptions = capability?.status === "ready"
     ? [capability.value.community1, capability.value.off]
     : [];
@@ -775,11 +787,8 @@ function selectRerun(state, shown) {
     models,
     diarizationMode,
     modes: modeOptions.map((choice) => ({ id: choice.id, ready: choice.ready, reason: choice.reason })),
-    canSubmit: draft?.replay
-      ? Boolean(asrModel)
-      : capability?.status === "ready"
-        && Boolean(asrModel)
-        && modeOptions.some((choice) => choice.id === diarizationMode && choice.ready === true),
+    block,
+    canSubmit: Boolean(draft && !block),
   };
 }
 

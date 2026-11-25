@@ -2690,14 +2690,19 @@ function renderRerunDialog(view) {
     return;
   }
 
+  const interrupted = {
+    busy: t("Cuộc họp đang bận hoặc bản ghi chưa sẵn sàng. Chờ rồi thử lại."),
+    changed: t("Cuộc họp đã thay đổi. Đóng hộp thoại và mở lại để xem lựa chọn hiện tại."),
+    model: t("Model đã chọn chưa sẵn sàng. Chọn một model sẵn sàng để tiếp tục."),
+  };
   const status = rerun.replay
-    ? t("Yêu cầu này đã được chấp nhận trước đó. Xác minh sẽ gửi lại đúng request ID và lựa chọn đã lưu.")
+    ? t("Chưa có xác nhận từ server. Xác minh gửi lại đúng request ID và lựa chọn đã lưu.")
     : rerun.capability.status === "loading"
       ? t("Đang kiểm tra khả năng nhận dạng người nói…")
       : rerun.capability.status === "error"
         ? tr(rerun.capability.error)
         : t("Lựa chọn được xác nhận từ server. Community-1 và Off chỉ áp dụng cho lần chạy lại này.");
-  setProp($("#rerun-capability-status"), "textContent", status);
+  setProp($("#rerun-capability-status"), "textContent", tr(interrupted[rerun.block]) || status);
   setProp($("#rerun-capability-retry"), "hidden", rerun.capability.status !== "error");
 
   const language = $("#transcription-rerun-language");
@@ -2708,6 +2713,7 @@ function renderRerunDialog(view) {
     model.replaceChildren(...rerun.models.map((option) => {
       const element = document.createElement("option");
       element.value = option.id;
+      element.disabled = !option.ready;
       element.textContent = `${tr(option.label)}${option.ready ? "" : ` · ${t("chưa sẵn sàng")}`}`;
       return element;
     }));
@@ -2748,9 +2754,9 @@ function renderRerunDialog(view) {
     rerun.legacyReplay
       ? t("Yêu cầu cũ này không có lựa chọn nhận dạng người nói. Xác minh sẽ gửi lại đúng payload cũ.")
       : rerun.replay
-        ? t("Các control đã khóa để giữ nguyên model, ngôn ngữ, mode và generation của yêu cầu đã gửi.")
+        ? t("Các lựa chọn đã được khóa theo yêu cầu đã gửi.")
         : rerun.capability.status === "ready"
-          ? t("Community-1 giữ cách tách người nói hiện tại. Off giữ timestamp và text nhưng không tạo speaker rows.")
+          ? t("Community-1 giữ cách tách người nói hiện tại. Chế độ Tắt giữ văn bản và mốc thời gian, để trống tên người nói.")
           : t("Chờ server xác nhận lựa chọn trước khi chạy lại."),
   );
   setProp(language, "disabled", rerun.capability.status !== "ready" || rerun.pending);

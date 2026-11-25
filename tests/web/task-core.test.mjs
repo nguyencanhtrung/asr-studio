@@ -1467,3 +1467,29 @@ test("a poll answer for a followed task while another meeting is shown ends the 
   const next = reduce(followed, { type: "task/poll-loaded", meta: { meetingId: "m1", taskId: "t1" }, response: { body: task("t1", "running") }, shown: { id: "m2", task: null } });
   assert.equal(next.state.poll, null);
 });
+
+test("a refreshed model catalog blocks a stale rerun choice until the operator picks a ready model", async () => {
+  const env = await opened(withGenerationChoices());
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "rerun-open" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/rerun-choice", { asrModel: "qwen3-asr-1.7b", languageHint: "vi" });
+  assert.equal(env.view().rerun.canSubmit, true);
+
+  const choices = CHOICES.map((choice) => choice.id === "qwen3-asr-1.7b"
+    ? { ...choice, ready: false } : choice);
+  env.send("history/meeting-fetched", { meeting: withGenerationChoices(choices) });
+  const stale = env.view().rerun;
+  assert.equal(stale.asrModel, "qwen3-asr-1.7b");
+  assert.equal(stale.models.find((item) => item.id === stale.asrModel).ready, false);
+  assert.equal(stale.canSubmit, false);
+  env.send("task/rerun-submitted", { requestId: "rerun-blocked" });
+  assert.equal(env.sent("/api/tasks").length, 0);
+
+  env.send("task/rerun-choice", { asrModel: "auto" });
+  assert.equal(env.view().rerun.canSubmit, true);
+  env.send("task/rerun-submitted", { requestId: "rerun-allowed" });
+  assert.equal(env.sent("/api/tasks").length, 1);
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "auto");
+  assert.equal(env.sent("/api/tasks")[0].body.language_hint, "vi");
+});
