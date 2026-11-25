@@ -736,6 +736,7 @@ def test_two_active_devices_revoke_one_keeps_the_other_authorized(browser_runtim
         },
     )
     assert fresh_a.status == 401
+    assert fresh_a.json()["error"]["code"] == "invalid_device_credential"
 
     extension_json(
         page,
