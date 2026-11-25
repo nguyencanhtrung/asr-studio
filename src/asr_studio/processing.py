@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from asr_studio import notes_service
+from asr_studio.antigravity import is_antigravity_model_id
 from asr_studio.asr_models import AUTO, engine_of, resolve_run, selectable_models
 from asr_studio.config import Settings
 from asr_studio.diarization_runner import (
@@ -214,7 +215,12 @@ def _validate_notes_owner(
 ) -> tuple[str | None, str | None]:
     if notes_provider is None:
         return None, None
-    if not isinstance(notes_model, str) or not notes_model or len(notes_model) > 200:
+    if (
+        not isinstance(notes_model, str)
+        or not notes_model
+        or (notes_provider == "antigravity" and not is_antigravity_model_id(notes_model))
+        or (notes_provider == "chatgpt" and len(notes_model) > 200)
+    ):
         raise ProcessingError(
             409,
             "notes_owner_unconfigured",

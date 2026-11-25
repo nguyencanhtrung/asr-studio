@@ -236,6 +236,82 @@ async def test_processing_preferences_patch_materializes_owner_pair_without_muta
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("length", [201, 240])
+async def test_processing_preferences_patch_preserves_persisted_long_antigravity_owner(
+    client, settings, length
+):
+    token = AuthStore(settings.auth_dir).load().token
+    origin = {"Origin": settings.public_url}
+    assert (
+        await client.post("/api/access/session", headers=origin, json={"token": token})
+    ).status_code == 204
+
+    model = "g" * length
+    owner_saved = await client.put(
+        "/api/notes-preferences",
+        headers=origin,
+        json={"provider": "antigravity", "model": model, "reasoning_effort": "medium"},
+    )
+    assert owner_saved.status_code == 200, owner_saved.text
+    owner_before = owner_saved.json()
+    assert owner_before["models"]["antigravity"] == model
+
+    before = (await client.get("/api/processing-preferences")).json()
+    assert before["notes"] == {
+        "provider": "antigravity",
+        "model": model,
+        "reasoning_effort": "medium",
+        "output_language": "en",
+    }
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        migration_before = connection.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0]
+
+    legacy_put = await client.put(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "asr_choice": before["asr"]["choice"],
+            "asr_language": before["asr"]["language"],
+            "notes_provider": "antigravity",
+            "notes_model": model,
+            "notes_reasoning_effort": "medium",
+            "notes_output_language": before["notes"]["output_language"],
+        },
+    )
+    assert legacy_put.status_code == 400, legacy_put.text
+    assert legacy_put.json()["detail"]["code"] == "invalid_notes_model"
+    assert (await client.get("/api/processing-preferences")).json() == before
+
+    changed = await client.patch(
+        "/api/processing-preferences",
+        headers=origin,
+        json={
+            "expected_version": before["version"],
+            "asr_language": "en",
+            "notes_provider": "antigravity",
+            "notes_output_language": before["notes"]["output_language"],
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    after = changed.json()
+    assert after["version"] == before["version"] + 1
+    assert after["asr"] == {"choice": before["asr"]["choice"], "language": "en"}
+    assert after["notes"] == {
+        "provider": "antigravity",
+        "model": model,
+        "reasoning_effort": "medium",
+        "output_language": "en",
+    }
+    assert (await client.get("/api/notes-preferences")).json() == owner_before
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == (
+            migration_before
+        )
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("provider", [[], {}])
 async def test_processing_preferences_patch_rejects_unstructured_provider_without_write(
     client, settings, provider

@@ -19,7 +19,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
 from asr_studio.notes_document import (
     NotesBudget,
@@ -873,6 +873,11 @@ class OmpRpcAdapter:
         return result.returncode == 0
 
 
+def is_antigravity_model_id(value: object) -> TypeGuard[str]:
+    """Check the ID format used by the Antigravity model catalog and owner store."""
+    return isinstance(value, str) and _SAFE_ID.fullmatch(value) is not None
+
+
 THINKING_LEVELS = ("high", "medium")
 
 
@@ -1306,7 +1311,7 @@ class AntigravityProvider:
             state["verification"] = None
 
     def set_preference(self, model: str, reasoning_effort: str | None = None) -> dict[str, Any]:
-        if not isinstance(model, str) or not _SAFE_ID.fullmatch(model):
+        if not is_antigravity_model_id(model):
             raise AntigravityError(400, "invalid_model", "Choose an Antigravity model.")
         effort = None if reasoning_effort is None else normalize_effort(reasoning_effort)
         catalog = self.list_models()
@@ -1337,7 +1342,7 @@ class AntigravityProvider:
 
     def save_notes_preference(self, model: str, reasoning_effort: str = "default") -> None:
         """Save the next-run model after static validation only; never touches OMP."""
-        if not isinstance(model, str) or not _SAFE_ID.fullmatch(model):
+        if not is_antigravity_model_id(model):
             raise AntigravityError(400, "invalid_model", "Choose an Antigravity model.")
         effort = normalize_effort(reasoning_effort)
         with self.store.locked(write=True) as state:

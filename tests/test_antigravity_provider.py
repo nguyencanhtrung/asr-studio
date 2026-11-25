@@ -255,6 +255,29 @@ def test_invalid_model_and_disconnected_catalog_fail_without_calling_adapter(tmp
     assert invalid.value.code == "invalid_model"
 
 
+def test_antigravity_owner_id_boundary_is_shared_by_preference_saves(tmp_path):
+    model = "g" * 240
+    adapter = FakeAntigravityAdapter()
+    adapter.models[0]["id"] = model
+    adapter.models[0]["name"] = "Long Antigravity model"
+    provider = AntigravityProvider(tmp_path / "provider", adapter=adapter)
+    provider.ensure()
+    with provider.store.locked(write=True) as state:
+        state["connection_status"] = "connected"
+
+    assert provider.set_preference(model)["model"] == model
+    provider.save_notes_preference(model, "medium")
+    assert provider.saved_notes_model() == model
+
+    for save in (
+        lambda: provider.set_preference("g" * 241),
+        lambda: provider.save_notes_preference("g" * 241, "medium"),
+    ):
+        with pytest.raises(AntigravityError) as invalid:
+            save()
+        assert invalid.value.code == "invalid_model"
+
+
 def test_real_rpc_transport_handles_login_catalog_and_synthetic_inference(tmp_path):
     executable = tmp_path / "fake-omp"
     executable.write_text(
