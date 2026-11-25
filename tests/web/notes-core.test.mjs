@@ -56,7 +56,8 @@ function setup() {
   const hostResults = {};
   const fetch = (url, init) =>
     new Promise((resolve, reject) => {
-      requests.push({ url, method: init.method, body: init.body && JSON.parse(init.body), resolve, reject, done: false, signal: init.signal });
+      const raw = init.body;
+      requests.push({ url, method: init.method, raw, body: raw && JSON.parse(raw), resolve, reject, done: false, signal: init.signal });
     });
   const calls = new Proxy({}, {
     get: (_, name) => (...args) => {
@@ -3300,6 +3301,7 @@ test("late toolbar Verify keeps the error in Notes without opening a modal over 
   env.dispatch("regenerate-clicked");
   env.dispatch("regenerate-submit", { requestId: "scoped-verify-first" });
   const original = posts(env, "/notes-runs")[0].raw;
+  assert.ok(typeof original === "string" && original.length > 0);
   await env.fail(env.is("POST", "/notes-runs"));
   env.dispatch("regenerate-cancelled");
   env.dispatch("start-clicked", { requestId: "ignored-toolbar-id" });
