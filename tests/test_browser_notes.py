@@ -924,30 +924,50 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     meeting_id, _revision, snapshot, _segment_ids = _seed_saved_notes(live.settings.data_dir)
     rerun_transcript(live.settings.data_dir, meeting_id)
     requests: list[str] = []
+    waiting = []
 
-    def notes_request(route) -> None:
-        requests.append(route.request.post_data or "")
+    def reject(route) -> None:
         route.fulfill(
             status=503,
             json={"detail": {"code": "temporary_failure", "message": "Try again."}},
         )
 
+    def notes_request(route) -> None:
+        requests.append(route.request.post_data or "")
+        if len(requests) <= 2:
+            waiting.append(route)
+        else:
+            reject(route)
+
     page.route(f"{live.url}/api/meetings/{meeting_id}/notes-runs", notes_request)
     _open_saved_notes(live, page, meeting_id)
     page.locator("#notes-start").click()
-    page.locator("#notes-regenerate-submit").click()
-    expect(page.locator("#notes-regenerate-dialog")).to_be_visible()
+    dialog = page.locator("#notes-regenerate-dialog")
+    submit = page.locator("#notes-regenerate-submit")
+    with page.expect_request(lambda request: request.url.endswith("/notes-runs")):
+        submit.click()
+    expect(dialog).to_be_visible()
+    expect(dialog).to_have_attribute("aria-busy", "true")
+    expect(submit).to_be_disabled()
+    reject(waiting.pop())
     expect(page.locator("#notes-regenerate-error")).to_be_visible()
     expect(page.locator("#notes-regenerate-error")).to_contain_text("Hãy thử lại")
     expect(page.locator("#notes-start")).to_have_text("Xác minh yêu cầu notes")
     assert len(requests) == 1
     first_body = requests[0]
-    expect(page.locator("#notes-regenerate-submit")).to_have_text("Xác minh yêu cầu notes")
+    expect(submit).to_have_text("Xác minh yêu cầu notes")
+    expect(submit).to_be_enabled()
+    expect(page.locator("#notes-regenerate-model")).to_be_disabled()
+    expect(dialog).to_have_attribute("aria-busy", "false")
 
     page.reload()
     expect(page.locator("#notes-start")).to_have_text("Xác minh yêu cầu notes")
-    page.locator("#notes-start").click()
-    expect(page.locator("#notes-regenerate-dialog")).to_be_visible()
+    with page.expect_request(lambda request: request.url.endswith("/notes-runs")):
+        page.locator("#notes-start").click()
+    reject(waiting.pop())
+    expect(dialog).to_be_visible()
+    expect(submit).to_be_enabled()
+    expect(dialog).to_have_attribute("aria-busy", "false")
     assert len(requests) == 2
     assert requests[1] == first_body
 

@@ -3814,6 +3814,7 @@ function regenerateView(state, data, pending) {
     sourceRefresh,
     outputLanguage: values.outputLanguage,
     locked,
+    busy: Boolean(data?.starting),
     status: admissionBlock || (pendingRun
       ? t("Yêu cầu này đã được giữ nguyên. Thử lại sẽ dùng cùng các lựa chọn.")
       : loading ? t("Đang đọc trạng thái nhà cung cấp và danh sách model…") : ""),

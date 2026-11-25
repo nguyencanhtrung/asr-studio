@@ -401,7 +401,7 @@ function renderRegenerateDialog(view) {
   setProp(els.regenerateSubmit, "textContent", tr(regenerate.submitLabel));
   setProp(els.regenerateSubmit, "disabled", regenerate.submitDisabled);
   setProp(els.regenerateCancel, "textContent", tr(regenerate.cancelLabel));
-  setAttr(dialog, "aria-busy", String(Boolean(regenerate.locked && regenerate.status)));
+  setAttr(dialog, "aria-busy", String(regenerate.busy));
   if (dialog.open && (opening || dialog.dataset.focusToken !== String(regenerate.focus))) {
     setData(dialog, "focusToken", String(regenerate.focus));
     const target = !regenerate.locked ? els.regenerateProvider

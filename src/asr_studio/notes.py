@@ -8,7 +8,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -482,12 +482,25 @@ def accept_notes_task(
     # Acceptance and account changes share this cross-process lock. Lock order is
     # provider operation lock, then SQLite. Explicit-run catalog I/O completes before
     # the SQLite transaction begins; no provider I/O occurs inside that transaction.
-    with _notes_provider_operation(
-        provider,
-        explicit_run=explicit_run,
-        model=confirmed_model if explicit_run else None,
-        reasoning_effort=confirmed_effort if explicit_run else None,
-    ) as pin:
+    with ExitStack() as operation:
+        try:
+            pin = operation.enter_context(
+                _notes_provider_operation(
+                    provider,
+                    explicit_run=explicit_run,
+                    model=confirmed_model if explicit_run else None,
+                    reasoning_effort=confirmed_effort if explicit_run else None,
+                )
+            )
+        except (ChatGPTError, AntigravityError):
+            # Another caller can admit this request while this one waits for the provider.
+            # Resolve the committed receipt before reporting a provider admission error.
+            if explicit_run:
+                existing = _existing_task(data_dir, normalized_request_id, request_hash, meeting_id)
+                if existing is not None:
+                    return existing
+            raise
+
         if pin["provider"] != chosen_provider:
             raise TaskError(500, "provider_mismatch", "The notes provider could not be selected.")
         if chosen_provider == "antigravity" and confirmed_effort == "default":

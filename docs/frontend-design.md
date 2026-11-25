@@ -613,7 +613,7 @@ Core `notes-core.js` (`initialState`, `reduce`, `selectView`, `hasUnsavedDraft` 
 | bất kỳ | `booted` | `mode` từ localStorage, `hidden`, `origin` | |
 | bất kỳ | `context` không có meeting | `meetingId = null`, `poll.token + 1` | hủy `notes/poll` |
 | bất kỳ | `context` có meeting | `meetingId`, `meeting`; đổi meeting: dừng poll, đóng ô chọn, `sourceLockKnown/known = false`; nhận khóa nguồn từ meeting; nhận request và ngôn ngữ đã lưu nếu chưa có | `call setNotesSourceLock`, `fetch` notes; đổi meeting hoặc chưa tải lựa chọn: tải lựa chọn; xử lý địa chỉ trang (mở/đóng nguồn); `call setNotesSummary` |
-| đang đọc | `read` ok hợp lệ, id/meeting/poll khớp | `revisions`, `task`, khóa nguồn, `known`; chọn revision đầu nếu chưa chọn; xóa `pending` nếu task trùng `request_id` hoặc đang chạy; task vừa kết thúc: tải lại lựa chọn | `call setNotesSourceLock`; task đang chạy: `schedule notes/poll` nếu chưa có, không thì hủy poll |
+| đang đọc | `read` ok hợp lệ, id/meeting/poll khớp | `revisions`, `task`, khóa nguồn, `known`; chọn revision đầu nếu chưa chọn; xóa `pending` nếu task trùng `request_id`. Riêng request cũ, task đang chạy cũng có thể xác nhận. Request có recipe riêng chỉ được xác nhận bởi đúng `request_id`. Task vừa kết thúc: tải lại lựa chọn | `call setNotesSourceLock`; task đang chạy: `schedule notes/poll` nếu chưa có, không thì hủy poll |
 | đang đọc | `read` ok sai hình dạng, hoặc lỗi mạng/HTTP | `known = true`, `readError` | chưa biết khóa: `call setNotesSourceLock false`; poll: `schedule` 3000 |
 | bất kỳ | `read` với id/meeting/poll cũ | không đổi | |
 | có task đang chạy | `poll-due` (đúng token, meeting, task còn chạy) | | `fetch` notes (poll) |

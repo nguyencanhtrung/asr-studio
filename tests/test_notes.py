@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from notes_helpers import (
     seed_completed_transcript,
 )
 
+from asr_studio.antigravity import AntigravityError, AntigravityProvider
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
 from asr_studio.notes import (
     accept_notes_task,
@@ -441,6 +443,92 @@ def test_busy_precheck_rechecks_a_request_accepted_after_initial_lookup(
         with pytest.raises(TaskError) as conflict:
             accept_notes_task(data_dir, **kwargs)
         assert conflict.value.code == "idempotency_conflict"
+
+
+@pytest.mark.parametrize("provider_id", ["chatgpt", "antigravity"])
+@pytest.mark.parametrize("case", ["same_body", "changed_body", "different_request"])
+def test_parallel_explicit_admission_resolves_replay_at_the_real_provider_guard(
+    tmp_path, monkeypatch, provider_id, case
+):
+    from test_antigravity_provider import FakeAntigravityAdapter
+    from test_chatgpt_provider import connect, provider_for
+
+    from asr_studio import notes
+
+    data_dir = tmp_path / "data"
+    meeting_id, generation_id, _ = seed_completed_transcript(data_dir)
+
+    def guard():
+        assert_provider_mutation_allowed(data_dir, provider_id)
+
+    if provider_id == "chatgpt":
+        provider = provider_for(tmp_path)
+        connect(provider)
+        monkeypatch.setattr(provider, "_active_task_guard", guard)
+        model = "gpt-6.1-sol"
+    else:
+        provider = AntigravityProvider(
+            tmp_path / "provider", adapter=FakeAntigravityAdapter(), active_task_guard=guard
+        )
+        provider.ensure()
+        with provider.store.locked(write=True) as state:
+            state["connection_status"] = "connected"
+            state["connection_version"] = 4
+        model = "gemini-3-pro-high"
+
+    both_idle = threading.Barrier(2, timeout=10)
+    slot_is_busy = notes._processing_slot_is_busy
+
+    def synchronize_idle_read(directory):
+        busy = slot_is_busy(directory)
+        both_idle.wait()
+        return busy
+
+    monkeypatch.setattr(notes, "_processing_slot_is_busy", synchronize_idle_read)
+    first_id = "concurrent-explicit-notes"
+    second_id = "distinct-explicit-notes" if case == "different_request" else first_id
+    second_language = "vi" if case == "changed_body" else "en"
+
+    def submit(request_id, language):
+        try:
+            task = accept_notes_task(
+                data_dir,
+                provider=provider,
+                meeting_id=meeting_id,
+                request_id=request_id,
+                expected_generation_id=generation_id,
+                expected_source_version=1,
+                expected_metadata_version=1,
+                worker_ready=True,
+                output_language=language,
+                run={
+                    "provider": provider_id,
+                    "model": model,
+                    "reasoning_effort": "high",
+                    "generation_id": generation_id,
+                    "source_version": 1,
+                },
+            )
+        except (TaskError, ChatGPTError, AntigravityError) as error:
+            return ("error", error.code)
+        return ("accepted", task["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(submit, first_id, "en")
+        second = executor.submit(submit, second_id, second_language)
+        outcomes = [first.result(timeout=15), second.result(timeout=15)]
+
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        admitted = connection.execute("SELECT id FROM tasks WHERE kind = 'notes'").fetchall()
+        snapshots = connection.execute("SELECT COUNT(*) FROM notes_sources").fetchone()
+    assert len(admitted) == 1
+    assert snapshots == (1,)
+    accepted = ("accepted", admitted[0][0])
+    if case == "same_body":
+        assert outcomes == [accepted, accepted]
+    else:
+        error_code = "idempotency_conflict" if case == "changed_body" else "provider_in_use"
+        assert sorted(outcomes) == [accepted, ("error", error_code)]
 
 
 def test_notes_output_language_is_pinned_and_part_of_idempotency(tmp_path):
