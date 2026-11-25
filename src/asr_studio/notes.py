@@ -241,7 +241,7 @@ def notes_preferences(
 ) -> dict[str, object]:
     """Preselection for the next run; each provider keeps its own saved model."""
     chatgpt_model, chatgpt_effort = chatgpt_provider.saved_notes_settings()
-    antigravity_model = antigravity_provider.saved_notes_model()
+    antigravity_model, antigravity_effort = antigravity_provider.saved_notes_settings()
     models: dict[str, str] = {}
     if chatgpt_model is not None:
         models["chatgpt"] = chatgpt_model
@@ -253,7 +253,7 @@ def notes_preferences(
         "reasoning_effort": chatgpt_effort,
         "reasoning_efforts": {
             "chatgpt": chatgpt_effort,
-            "antigravity": antigravity_provider.saved_notes_effort(),
+            "antigravity": antigravity_effort,
         },
     }
 

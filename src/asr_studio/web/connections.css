@@ -1005,6 +1005,10 @@ button.provider-overview-row:focus-visible {
   gap: 5px;
 }
 
+.automatic-preferences-section .connection-help {
+  overflow-wrap: anywhere;
+}
+
 .automatic-preferences-section .connection-field > label {
   color: var(--ink-2);
   font-size: var(--text-small);

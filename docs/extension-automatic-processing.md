@@ -6,13 +6,27 @@ Automatic processing starts when an extension recording reaches the ready handof
 
 Open Settings, then Devices, then Automatic processing. The settings are explicit:
 
-- ASR model choice and transcript language (`en` or `vi`)
+- transcript language (`en` or `vi`)
 - optional notes provider (`chatgpt` or `antigravity`)
-- notes model, reasoning effort, and output language
+- notes output language
+
+The ASR default belongs to the ASR Model panel. The notes model and reasoning effort belong to
+the selected provider panel. Automatic Processing reports those committed owner values and does
+not render duplicate model or effort selectors. A missing owner value remains unconfigured. A
+disconnected provider remains disconnected. The UI does not choose a provider or model.
 
 When no notes provider is selected, the UI explains that the transcript can finish while notes wait. A disconnected provider remains disconnected. The UI does not fall back to another provider or silently choose a model.
 
-The settings read uses `GET /api/processing-preferences`. A save sends exactly these fields to `PUT /api/processing-preferences`: `asr_choice`, `asr_language`, `notes_provider`, `notes_model`, `notes_reasoning_effort`, and `notes_output_language`. The response version is retained and is used when a meeting adopts current settings.
+The settings read uses `GET /api/processing-preferences`. The legacy `PUT /api/processing-preferences`
+contract still accepts exactly these six fields: `asr_choice`, `asr_language`, `notes_provider`,
+`notes_model`, `notes_reasoning_effort`, and `notes_output_language`.
+
+The Automatic Processing form uses the additive `PATCH /api/processing-preferences` contract with
+`expected_version`, `asr_language`, `notes_provider`, and `notes_output_language`. The server reads
+the selected provider's committed model and effort under one provider-store snapshot. It stores
+that pair in the workflow defaults without changing provider stores or existing pinned workflows.
+A stale version returns an explicit conflict. The response version is retained and is used when a
+meeting adopts current settings.
 
 ## Meeting status
 

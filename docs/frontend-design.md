@@ -459,7 +459,7 @@ Store: `combine({ chatgpt, antigravity, launcher })`; mọi reducer thấy mọi
 
 `GET /api/providers` thêm `in_use` và `in_use_reason` cho từng provider. Chỉ provider được ghim bởi notes task đang ở trạng thái active có `in_use = true` và `in_use_reason = "notes"`; provider còn lại vẫn thao tác được. `selectView` dùng cùng metadata để khóa model, effort, lưu, kiểm tra và ngắt kết nối của provider bị ghim, đồng thời gắn lý do vào `aria-describedby` của các control. Lỗi catalog `provider_in_use` giữ status, account, badge và model đã biết; không biến provider connected thành unavailable.
 
-**Id chống response cũ** (trong state mỗi provider): `loadId` (một lượt tải: trạng thái, preferences, catalog; mọi bước mang id), `loginGen` (một lượt đăng nhập/poll/hủy; tăng khi ChatGPT bắt đầu, khi hủy và khi kết thúc; Google không tăng lúc bắt đầu), `headerGen` (giá trị `loadId` lúc đọc trạng thái khi tải trang). Action mang id khác bị bỏ. Key effect: `<provider>/load`, `/poll`, `/poll-wait` (schedule), `/login-start`, `/login-cancel`, `/login-input`, `/login-window`, `/save`, `/verify`, `/disconnect`, `/refresh-load|save|verify`; `provider/header`.
+**Id chống response cũ** (trong state mỗi provider): `loadId` (một lượt tải: trạng thái, preferences, catalog; mọi bước mang id), `ownerFence` (tăng sau mỗi owner save thành công; các đọc `providers`, `preferences`, `models` và `refresh` mang fence), `loginGen` (một lượt đăng nhập/poll/hủy; tăng khi ChatGPT bắt đầu, khi hủy và khi kết thúc; Google không tăng lúc bắt đầu), `headerGen` (giá trị `loadId` lúc đọc trạng thái khi tải trang). Action mang id khác bị bỏ. Reply owner có fence cũ vẫn có thể kết thúc việc đọc trạng thái hoặc catalog, nhưng không được ghi đè cặp model/effort đã xác nhận hoặc giá trị form. Khi đọc catalog cần đăng nhập lại, `refresh` giữ operation ban đầu để lỗi status kết thúc đúng catalog; save/verify/disconnect vẫn giữ lỗi gốc và lời hướng dẫn của thao tác đó. Key effect: `<provider>/load`, `/poll`, `/poll-wait` (schedule), `/login-start`, `/login-cancel`, `/login-input`, `/login-window`, `/save`, `/verify`, `/disconnect`, `/refresh-load|save|verify`; `provider/header`.
 
 **Tải trạng thái** (`dialog-opened` từ nút launcher, hoặc sau đăng nhập `connected`):
 
@@ -468,8 +468,8 @@ Store: `combine({ chatgpt, antigravity, launcher })`; mọi reducer thấy mọi
 | bất kỳ | `dialog-opened` | `loading`, `loadId + 1`; ChatGPT: badge và nút `loading`, xóa thông báo | `fetch providers` |
 | `loading` | `providers` hợp lệ | trạng thái mới (badge, launcher, tóm tắt kiểm tra) | ChatGPT: `fetch preferences`; Google: `fetch models` nếu `connected`, không thì xóa danh sách model và xong |
 | `loading` | `providers` thiếu hoặc trạng thái lạ (ChatGPT) | lỗi `INVALID_PROVIDER_STATUS` | xem dòng lỗi |
-| `loading` | `preferences` (ChatGPT) | lưu preferences | `fetch models` nếu `connected`, không thì placeholder "kết nối để tải" và xong |
-| `loading` | `models` | danh sách model, lựa chọn đã lưu, effort; model đã lưu không còn thì hiện mục vô hiệu và báo | xong |
+| `loading` | `preferences` (ChatGPT) | lưu preferences; reply có owner fence cũ chỉ hoàn tất catalog và giữ cặp owner/form đã xác nhận | `fetch models` nếu `connected`, không thì placeholder "kết nối để tải" và xong |
+| `loading` | `models` | danh sách model; reply có owner fence cũ không thay lựa chọn đã lưu hoặc effort; model đã lưu không còn thì hiện mục vô hiệu và báo | xong |
 | `loading` | catalog trả `provider_in_use` | giữ status/account/badge và model đã biết; hiện lý do chờ notes task, không đổi provider thành unavailable | xong |
 | `loading` | lỗi mạng/HTTP, body không phải object | lỗi hiện ra; ChatGPT giữ trạng thái cuối nếu có, không thì badge `error`; Google badge `error` trừ khi cần đăng nhập lại | xong |
 | bất kỳ | kết quả với `loadId` cũ | không đổi | |
@@ -526,7 +526,7 @@ Fixture Chromium kiểm tra catalog tổng hợp, badge trùng tên, focus sau l
 | --- | --- | --- | --- |
 | tải/lưu/kiểm tra | lỗi cần đăng nhập lại | Google: ngay `reconnect_required` hoặc `disconnected`, xóa model; vẫn bận | `fetch refresh-<tác vụ>` (đọc lại trạng thái) |
 | chờ refresh | `refresh` ok có provider hợp lệ | áp trạng thái mới (Google không `connected`: xóa model) | |
-| chờ refresh | `refresh` lỗi | giữ state | |
+| chờ refresh | `refresh` lỗi | giữ state; với operation catalog (`providers`, `preferences`, `models`) đặt `catalogStatus = error`; operation khác giữ lỗi gốc | |
 | chờ refresh | `refresh` xong | tác vụ kết thúc, hết bận, lỗi hiện ra; thao tác không được gửi lại | |
 | tải | `refresh` của `loadId` cũ | không đổi | |
 
@@ -1109,17 +1109,35 @@ bản người dùng đã thấy trước khi bấm. Server vẫn kiểm tra epo
 
 Core sở hữu lát `processingPreferences` trong store provider. State có
 `idle|loading|ready|saving|error`, `open`, bản `saved`, bản `draft`, định danh
-`request`/`mutation`, lỗi và thông báo. Catalog chỉ cung cấp lựa chọn để vẽ;
-đổi provider không tự chọn model hoặc account khác.
+`request`/`mutation`, `refreshPending`, lỗi và thông báo. Catalog chỉ cung cấp
+lựa chọn để vẽ; cặp owner đã commit và recipe workflow đã lưu là hai nguồn dữ
+liệu khác nhau. Đổi provider không tự chọn model hoặc account khác.
 
 | Sự kiện | Chuyển trạng thái | Hiệu ứng |
 | --- | --- | --- |
-| `provider/dialog-opened` | `open=true`, `loading`, tăng request, xóa lỗi/thông báo | GET processing preferences |
-| `provider/processing-preferences-loaded` đúng request khi đang mở | Hợp lệ: `ready`, thay saved/draft bằng bản server; sai: `error`, hiện `invalid_response` | Không tự lưu |
-| `provider/processing-preferences-failed` đúng request khi đang mở | `error`, hiện lỗi, xóa thông báo | Không ghi đè saved/draft |
-| `provider/processing-preference-edited` có draft và chưa saving | Sửa trường hợp lệ trong draft, xóa lỗi/thông báo. Đổi hoặc bỏ provider xóa model/effort | Không request mạng |
-| `provider/processing-preferences-save-requested` đang mở, có draft khác saved, chưa saving | `saving`, tăng mutation, xóa lỗi/thông báo | PUT `/api/processing-preferences` với 6 trường của draft; không gửi version, server trả version mới (save đồng thời dùng bản ghi cuối) |
-| `provider/processing-preferences-saved` đúng mutation khi đang mở | Hợp lệ: `ready`, thay saved/draft, hiện thông báo; sai: `ready`, giữ dữ liệu, hiện `invalid_response` | Chỉ phản hồi hợp lệ gọi `asr.settings-changed` qua runner |
-| `provider/processing-preferences-save-failed` đúng mutation khi đang mở | `ready`, giữ draft để sửa/thử lại, hiện lỗi, xóa thông báo | Không thông báo đã lưu |
-| `provider/dialog-closed` | `open=false`, về ready nếu có saved hoặc idle; tăng cả request và mutation | Hủy read/save; phản hồi muộn không đổi state |
-| Save khi đang saving, draft không đổi/không có, dialog đóng; edit khi saving/không draft; response sai định danh hoặc dialog đã đóng | Giữ state | Không effect |
+| `provider/dialog-opened` | `open=true`, `loading`, tăng request, reset saved/draft của phiên dialog, xóa lỗi/thông báo | GET processing preferences |
+| `provider/settings-section-selected` vào `processing`, hoặc `provider/notes-owner-changed` / `provider/asr-settings-changed` từ nguồn ngoài | Nếu GET chưa có hoặc đang chạy: giữ `refreshPending`; nếu đã `ready`: `loading` và tăng request. Sau lỗi đầu tiên không có baseline, cùng-dialog re-entry bắt đầu đúng một GET đầu mới và các notification trong lượt đó chỉ coalesced | GET reconciliation, không rơi notification hoặc lặp vô hạn |
+| `provider/processing-preferences-loaded` đúng request khi đang mở | Lượt đầu: `ready`, baseline=saved=draft. Reconciliation: cập nhật baseline/version, rồi merge ba chiều chỉ giữ field local đã sửa; nếu payload 2xx sai, không đổi saved/draft, giữ lỗi mutation và tiêu thụ tối đa một GET đang chờ; retry đã dùng thì settle `error` và xóa `refreshPending` | Không tự lưu; response cũ bị bỏ theo request |
+| `provider/processing-preferences-failed` đúng request khi đang mở | Lỗi hiển thị, giữ saved/draft và lỗi mutation; nếu còn `refreshPending` thì xếp lại tối đa một GET sau khi giữ thông tin owner đã biết | Không ghi đè saved/draft; focus save giữ qua lượt đọc |
+| `provider/processing-preference-edited` có draft và chưa saving | Sửa ngôn ngữ, provider hoặc ngôn ngữ đầu ra trong draft. Đổi hoặc bỏ provider chỉ xóa bản sao model/effort trong draft. Selector owner không còn trong form | Không request mạng |
+| `provider/processing-preferences-save-requested` đang mở, draft dirty và pure eligibility cho biết owner pair đã commit hợp lệ (kể cả disconnected/catalog error), chưa saving | `saving`, tăng mutation, xóa lỗi/thông báo; eligibility sai thì giữ state | PATCH `/api/processing-preferences` với `expected_version`, `asr_language`, `notes_provider` và `notes_output_language`. Không gửi bản sao ASR/model/effort. Server materialize cặp owner đã commit hoặc trả conflict |
+| `provider/processing-preferences-saved` đúng mutation khi đang mở | Chỉ acknowledge envelope đúng kiểu, revision đúng `expected_version + 1` và đúng ba field workflow đã gửi; khi hợp lệ: `ready`, thay saved/draft, hiện thông báo; nếu owner/re-entry đã tới trong lúc save thì chuyển ngay sang reconciliation. Payload 2xx sai hoặc stale: không acknowledge write, giữ draft/baseline, hiện lỗi mutation và xếp đúng một GET reconciliation; GET sai tiếp theo settle `error`, xóa `refreshPending`, giữ focus/error và không phát lại PATCH | Chỉ phản hồi hợp lệ gọi `asr.settings-changed` với source `processing-preferences-save` qua runner |
+| `provider/processing-preferences-save-failed` đúng mutation khi đang mở | `ready`, giữ draft để sửa/thử lại, hiện lỗi; refresh pending vẫn được xếp lại và không được xóa lỗi mutation (kể cả `preferences_changed`/`notes_owner_unconfigured`) cho đến khi edit hoặc save thành công | Không thông báo đã lưu |
+| `provider/dialog-closed` | `open=false`, `idle`, reset draft/baseline/notification và tăng cả request/mutation | Hủy read/save; phản hồi muộn không đổi state; cùng dialog vẫn giữ edit qua section switch |
+| Save khi đang saving, draft không đổi/không có, owner pair chưa xác nhận, dialog đóng; edit khi saving/không draft; response sai định danh hoặc dialog đã đóng | Giữ state | Không effect |
+
+#### Đồng bộ cài đặt model khi vào Xử lý tự động
+
+`ownerSnapshot` giữ trạng thái `idle`, `loading`, `ready` hoặc `error`, số thứ tự
+lần đọc, yêu cầu đọc lại đang chờ và hai cặp model/effort cuối cùng đã xác nhận.
+Đọc owner dùng `GET /api/notes-preferences` từ server cục bộ. Catalog và trạng
+thái kết nối cung cấp tên model và khả năng sử dụng. Luồng đọc recipe workflow
+vẫn giữ version và hợp nhất các trường người dùng đã sửa.
+
+| Sự kiện | Chuyển trạng thái | Hiệu ứng |
+| --- | --- | --- |
+| Vào tab Xử lý tự động hoặc nhận thông báo owner đã lưu sau khi phần đồng bộ bắt đầu | Đặt owner Notes ở trạng thái đang đọc. Nếu một lần đọc đang chạy, đánh dấu cần đọc lại và bỏ dữ liệu từ lần đọc đó khi nó về | GET cấu hình Notes cục bộ theo khóa riêng. Gộp các thông báo trùng thành một lần đọc tiếp theo |
+| Phản hồi Notes đúng lần đọc và dialog còn mở | Nếu có yêu cầu mới, bỏ dữ liệu cũ và đọc lại. Dữ liệu đúng cập nhật cặp owner. Lỗi giữ cặp đã xác nhận và hiện trạng thái lỗi | Trong lúc đọc hoặc lỗi, chỉ cho lưu workflow không phụ thuộc vào cặp Notes. Vào lại tab sẽ đọc lại |
+| PATCH workflow hợp lệ xác nhận cặp Notes khác với owner đang hiển thị, hoặc owner đang có lần đọc cũ chưa xong | Giữ thông báo lưu, focus, version và recipe đã xác nhận. Ẩn lời mời đồng bộ dựa trên owner cũ trong lúc đọc | Đồng bộ lại owner Notes theo cùng khóa đọc. Cặp đã khớp giữ trạng thái sẵn sàng |
+| Vào tab Xử lý tự động để đọc ASR | Dùng lần đọc catalog đang tải ở lượt vào đầu tiên. Lượt quay lại phát sinh số thứ tự mới. Trong lúc đang lưu ASR, dùng lần đọc tiếp theo của chính thao tác lưu | GET `/api/asr-models` theo khóa hiện có. Phản hồi lỗi hiện trạng thái lỗi ở tóm tắt. Luồng cài model, poll và form ASR dùng trạng thái hiện có |
+| Đóng dialog | Xóa trạng thái đọc của phiên dialog và tăng số thứ tự lần đọc Notes | Hủy đọc Notes. Phản hồi từ phiên cũ không đổi cài đặt đang hiển thị |

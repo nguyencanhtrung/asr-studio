@@ -1044,11 +1044,13 @@ def test_provider_overview_secondary_lines_share_one_line_height(live, signed_in
     _context, page = signed_in(viewport={"width": 390, "height": 640})
     page.goto(f"{live.url}/")
     open_section(page, "AI Provider")
-    processing = page.get_by_text(
-        "Chọn rõ model chép lời, ngôn ngữ và công thức notes cho các bản ghi mới từ extension.",
-        exact=True,
+    overview = page.get_by_role("list", name="Các nhà cung cấp AI")
+    processing = overview.get_by_role("button", name=re.compile(r"^Xử lý tự động:")).locator(
+        ".provider-overview-status"
     )
-    model = page.locator("#provider-overview-list").get_by_text("Chưa chọn model", exact=True).first
+    model = overview.get_by_role("button", name=re.compile(r"^OpenAI:")).locator(
+        ".provider-overview-model"
+    )
     expect(processing).to_be_visible()
     expect(model).to_be_visible()
     line_box_height = """element => {

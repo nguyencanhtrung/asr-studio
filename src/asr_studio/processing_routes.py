@@ -18,6 +18,7 @@ from asr_studio.processing import (
     processing_state,
     retry_notes,
     save_processing_preferences,
+    save_workflow_preferences,
     use_current_source,
     validate_processing_preferences,
 )
@@ -102,6 +103,40 @@ def install_processing_routes(
                 settings.data_dir,
                 **validated,
             )
+        except (ProcessingError, ChatGPTError, AntigravityError) as error:
+            _raise(error)
+
+    @app.patch("/api/processing-preferences")
+    async def patch_processing_preferences(request: Request) -> dict[str, object]:
+        payload = await _json(
+            request,
+            {
+                "expected_version",
+                "asr_language",
+                "notes_provider",
+                "notes_output_language",
+            },
+        )
+        try:
+
+            def save_with_owner() -> dict[str, object]:
+                provider = payload["notes_provider"]
+                model = effort = None
+                if provider == "chatgpt":
+                    model, effort = chatgpt_provider.saved_notes_settings()
+                elif provider == "antigravity":
+                    model, effort = antigravity_provider.saved_notes_settings()
+                return save_workflow_preferences(
+                    settings.data_dir,
+                    expected_version=payload["expected_version"],
+                    asr_language=payload["asr_language"],
+                    notes_provider=provider,
+                    notes_output_language=payload["notes_output_language"],
+                    notes_model=model,
+                    notes_reasoning_effort=effort,
+                )
+
+            return await run_in_threadpool(save_with_owner)
         except (ProcessingError, ChatGPTError, AntigravityError) as error:
             _raise(error)
 

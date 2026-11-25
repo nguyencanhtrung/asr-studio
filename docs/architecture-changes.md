@@ -4,6 +4,16 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #258 — Separate Auto Processing workflow settings from owner defaults
+
+**Problem.** Auto Processing exposed three owner mirrors beside its workflow controls. Those mirrors could lag the committed ASR and provider settings, and saving an owner value with the dialog open could advance the workflow-preferences revision. The Chromium fixture verifies exactly three rendered comboboxes by accessible role and name—`Ngôn ngữ transcript`, `Provider notes`, and `Ngôn ngữ đầu ra notes`—and verifies the owner links are visible. The Node fixture verifies that the workflow PATCH sends exactly four fields.
+
+**Design.** The legacy six-field `PUT /api/processing-preferences` remains available. A four-field, version-checked `PATCH` writes the workflow language, provider, and output language. The server reads the selected provider's committed model and effort together and passes them to one workflow-row update. ASR owner persistence updates its ASR choice and version in one transaction. The Automation panel links to the provider and ASR owner panels and reports model availability separately from the saved owner pair. Re-entering Automation refreshes the committed pair through the existing local `GET /api/notes-preferences`, which reads each provider store separately. The workflow read reconciles the revision while preserving local edits.
+
+**Owner saves.** Saving the ASR default updates the next workflow's ASR selection and revision. OpenAI's ordinary `PUT /api/notes-preferences` also updates the next workflow's Notes provider, model, effort, and revision. Antigravity's provider-specific save commits the owner pair. To adopt that pair in a configured workflow, save from Automation. Existing runs retain their pinned recipes and source revisions. Version conflicts return 409 for explicit recovery.
+
+**Evidence.** `tests/test_browser_automatic_processing.py` covers the rendered controls and settings flow. `tests/test_browser_processing_repair.py` and `tests/test_browser_processing_owner_refresh.py` exercise ordered provider responses, local owner reads, and saved workflow state. `tests/web/processing-preferences-core.test.mjs` covers the owner-read and versioned workflow transitions. `tests/test_processing.py` verifies legacy API and pinned snapshot compatibility. [Issue #258](https://github.com/nguyencanhtrung/asr-studio/issues/258).
+
 ## #257 — Filter transcript without changing source or draft identity
 
 Transcript search and review navigation belong to the existing `transcript-core` slice.
