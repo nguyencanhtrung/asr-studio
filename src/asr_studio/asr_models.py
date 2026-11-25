@@ -7,6 +7,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 from asr_studio.config import Settings
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
@@ -31,6 +32,13 @@ class AsrModel:
     @property
     def required_bytes(self) -> int:
         return self.download_bytes + self.extra_bytes
+
+
+class AsrRun(TypedDict):
+    asr_model: str
+    model_path: Path
+    device: str
+    compute_type: str
 
 
 CATALOG = {
@@ -128,15 +136,17 @@ def write_default_model(settings: Settings, asr_model: str | None) -> None:
 
 def model_path(settings: Settings, asr_model: str) -> Path:
     if asr_model == "whisper-large-v3":
-        gpu_path = Path(settings.asr_gpu_model_path).expanduser().resolve(strict=False)
+        try:
+            gpu_path = settings.asr_gpu_model_path.expanduser().resolve(strict=False)
+        except (OSError, RuntimeError):
+            # Keep the configured target so preflight can mark this choice unavailable.
+            return settings.asr_gpu_model_path
         if engine_for_path(settings, gpu_path) == "qwen":
             return gpu_path.parent / asr_model
     return getattr(settings, CATALOG[asr_model].path_setting)
 
 
-def resolve_run(
-    settings: Settings, profile: RuntimeProfile | None, asr_model: str
-) -> dict[str, object]:
+def resolve_run(settings: Settings, profile: RuntimeProfile | None, asr_model: str) -> AsrRun:
     """The model files and runtime one run uses; auto is the chosen default, else the hardware's."""
     if asr_model == AUTO:
         asr_model = read_default_model(settings) or AUTO

@@ -407,6 +407,72 @@ Whisper models need valid `model.bin`, `config.json`, `tokenizer.json` and, wher
 | `ASR_DEVICE`                                 | `auto` (default), `cpu` or `cuda`. |
 | `ASR_MODEL_PATH`, `ASR_COMPUTE_TYPE`       | Explicit overrides for special tests.    |
 
+### Fresh server and model lifecycle
+
+Before the first start of a new online server, install Docker Engine and Compose 2.30 or later.
+Give the operator write access to the checkout's `.asr-studio` directory and `ASR_MODEL_HOST_PATH`,
+and check available disk space for the selected model. For GPU operation, install an NVIDIA
+driver and the NVIDIA Container Toolkit. Prepare Community-1 by accepting its gated conditions,
+authenticating with Hugging Face, installing Git LFS, and cloning it to the host directory that
+maps to `ASR_DIARIZATION_MODEL_PATH`. Whisper small is publicly downloadable.
+
+```sh
+test -e .env || cp .env.example .env
+mkdir -p ./models
+git lfs install
+git clone https://hf.co/pyannote/speaker-diarization-community-1 \
+  ./models/speaker-diarization-community-1
+./scripts/start.sh
+```
+
+`ASR_DIARIZATION_MODEL_PATH` is a container path under `/models`. Its default is
+`/models/speaker-diarization-community-1`. Compose mounts `ASR_MODEL_HOST_PATH` at `/models`, so
+the default container path corresponds to `./models/speaker-diarization-community-1` on the host.
+Reuse that host path and the existing `.env` when recreating a deployment. Give the operator
+write access to the host model directory. `start.sh` passes the operator's UID/GID to the installer.
+
+Set custom paths in the existing `.env` for Compose to read, or provide them through the
+Compose environment. For example, `ASR_MODEL_HOST_PATH=/srv/asr/models` together with
+`ASR_DIARIZATION_MODEL_PATH=/models/diar/community` means prepare the host directory
+`/srv/asr/models/diar/community`. Compose presents it to the containers as
+`/models/diar/community`.
+
+Online `./scripts/start.sh` first uses a one-shot worker preparation override with network access
+and a temporary writable `/models` mount to prepare the missing hardware default. After startup,
+**Settings → ASR Model** is the catalog-backed server installer: it submits the selected catalog ID
+to the long-running `model-installer`, which downloads the pinned revision, checks free space,
+publishes through a staging directory and one rename, and then exposes the result to the app and
+worker through their read-only `/models` mount. During normal operation the installer mounts
+only the model directory as `/models:rw` and its own coordination volume. Use `--offline` with
+prepared models to start the stack with the downloader stopped.
+
+The lightweight catalog choice is `whisper-small`. The MIT-licensed revision
+`536b0662742c02347bc0e980a01041f333bce120` has an estimated download of 486,215,847 bytes
+(about 486 MB). The CPU hardware profile selects it with `int8`.
+[`Systran/faster-whisper-small` model card](https://huggingface.co/Systran/faster-whisper-small/blob/536b0662742c02347bc0e980a01041f333bce120/README.md)
+
+When Docker exposes an NVIDIA GPU, `ASR_DEVICE=auto` selects the CUDA hardware profile with
+Qwen3-ASR-1.7B and `bfloat16`. With CUDA requested or selected by `auto`, startup requires
+Docker to expose the GPU.
+An explicit model path sets the runtime profile. A saved catalog choice applies to new
+**Automatic** runs ahead of the hardware profile.
+
+On a fresh GPU host, an operator who wants the lightweight CPU setup can set `ASR_DEVICE=cpu` in
+the new `.env` before starting. This selects CPU for that deployment.
+
+Reuse the existing `.env`, Compose project identity and model directory when recreating a server.
+Copy `.env.example` only when creating `.env` for the first time. This preserves
+`ASR_*_MODEL_PATH` values and any saved catalog default in `data/asr-default.json`.
+Use `docker compose down` for a normal stop. It retains the named `data`, `auth`, `provider`
+and `model-install` volumes. Adding `-v` removes those named volumes. The model directory is a
+separate host bind mount.
+
+If an install is interrupted, restart the services and use **Try again**. The installer marks a
+running job as `interrupted`, removes orphan staging, and retains any already-published model.
+**Cancel** stops the active download and removes its partial staging. Already-prepared models
+remain available. Uninstall is deferred. A future uninstall needs safeguards for defaults,
+active and queued jobs, exact catalog paths and recovery.
+
 ### Check the ASR models
 
 **Settings → ASR Model** lists Whisper large-v3, Whisper small, PhoWhisper-large and Qwen3-ASR-1.7B as

@@ -637,7 +637,7 @@ def _publish_manual_transcript(
     data_dir: Path, meeting_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> dict[str, object]:
     monkeypatch.setattr("asr_studio.tasks.prepared_engine_directory", lambda *_args: None)
-    monkeypatch.setattr("asr_studio.tasks.prepared_diarization_directory", lambda *_args: None)
+    monkeypatch.setattr("asr_studio.tasks.prepared_diarization_directory", lambda path: path)
     accepted = accept_transcription_task(
         data_dir,
         meeting_id=meeting_id,
@@ -1872,7 +1872,7 @@ def test_scheduler_gui_grace_spans_sequential_asr_and_notes_passes(tmp_path, mon
     monkeypatch.setattr(processing_module, "prepared_engine_directory", lambda *_args: None)
     monkeypatch.setattr(processing_module, "prepared_diarization_directory", lambda *_args: None)
     monkeypatch.setattr("asr_studio.tasks.prepared_engine_directory", lambda *_args: None)
-    monkeypatch.setattr("asr_studio.tasks.prepared_diarization_directory", lambda *_args: None)
+    monkeypatch.setattr("asr_studio.tasks.prepared_diarization_directory", lambda path: path)
     grace_sleeps: list[float] = []
     manual_task: dict[str, object] = {}
 

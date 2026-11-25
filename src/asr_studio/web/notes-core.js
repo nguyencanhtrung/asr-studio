@@ -66,6 +66,16 @@ const OUTPUT_LANGUAGE_LABELS = {
   vi: t("Tiếng Việt"),
 };
 const PROVIDER_LABELS = { chatgpt: "ChatGPT", antigravity: "Google Antigravity" };
+const RUN_EFFORT_LABELS = {
+  default: t("Mặc định"),
+  none: t("Không suy nghĩ thêm"),
+  low: t("Thấp"),
+  medium: t("Vừa"),
+  high: t("Cao"),
+  xhigh: t("Rất cao"),
+  max: t("Tối đa"),
+};
+const RUN_FIELDS = ["provider", "model", "reasoning_effort", "generation_id", "source_version"];
 const NEXT_STEP = t("Hệ thống không tự đổi nhà cung cấp, tài khoản hay model. Bạn có thể chọn nhà cung cấp hoặc model khác rồi bắt đầu một lần chạy mới.");
 // Each entry names the pinned provider; the operator decides what to do next.
 const FAILURE_MESSAGES = {
@@ -220,10 +230,11 @@ const activeTask = (data) => Boolean(data && data.task && isActiveStatus(data.ta
 function parseNotes(meetingId, payload) {
   const notes = unwrappedNotesPayload(payload);
   if (!notes || !Array.isArray(notes.revisions) || typeof notes.source_locked !== "boolean") return null;
+  const task = isNotesTask(notes.task) ? notes.task : null;
   return {
     revisions: notes.revisions.map((revision) => normalizeRevision(revision, meetingId)).filter(Boolean),
-    task: isNotesTask(notes.task) ? notes.task || null : null,
-    sourceLocked: notes.source_locked,
+    task,
+    sourceLocked: notes.source_locked || isActiveStatus(task?.status),
   };
 }
 
@@ -273,6 +284,25 @@ function catalogUnavailableReason(provider, status) {
 
 const validRequestId = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{8,128}$/.test(value);
 
+function validRunObject(value) {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).length === RUN_FIELDS.length
+    && RUN_FIELDS.every((key) => Object.hasOwn(value, key))
+    && PROVIDER_IDS.includes(value.provider)
+    && typeof value.model === "string"
+    && value.model.length > 0
+    && typeof value.reasoning_effort === "string"
+    && value.reasoning_effort.length > 0
+    && typeof value.generation_id === "string"
+    && value.generation_id.length > 0
+    && Number.isInteger(value.source_version)
+    && value.source_version >= 1,
+  );
+}
+
 export function normalizePendingRequest(value, { legacy = false } = {}) {
   if (typeof value !== "string" || !value) return null;
   let parsed = value;
@@ -285,6 +315,23 @@ export function normalizePendingRequest(value, { legacy = false } = {}) {
   }
   if (isJson && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     if (!validRequestId(parsed.request_id) || !["en", "vi"].includes(parsed.output_language)) return null;
+    if (Object.hasOwn(parsed, "run")) {
+      const expected = ["expected_generation_id", "expected_source_version", "expected_metadata_version"];
+      if (
+        !validRunObject(parsed.run)
+        || expected.some((key) => !Object.hasOwn(parsed, key))
+        || typeof parsed.expected_generation_id !== "string"
+        || !parsed.expected_generation_id
+        || !Number.isInteger(parsed.expected_source_version)
+        || parsed.expected_source_version < 1
+        || !Number.isInteger(parsed.expected_metadata_version)
+        || parsed.expected_metadata_version < 1
+        || ["provider", "expected_model", "expected_reasoning_effort"].some((key) => Object.hasOwn(parsed, key))
+        || Object.keys(parsed).length !== 6
+      ) return null;
+      // Storage contains the original POST serialization. Retain its validated field order on retry.
+      return parsed;
+    }
     if (parsed.provider !== undefined && !PROVIDER_IDS.includes(parsed.provider)) return null;
     // Stored requests from before provider choice were always ChatGPT requests.
     const result = {
@@ -1604,11 +1651,12 @@ const EMPTY_NOTES = Object.freeze({
   known: false, // the server has answered a notes read (or failed one) since the meeting opened
   selectedNoteId: null,
   starting: false,
-  canceling: false,
+  cancelingTaskId: null,
   saving: {}, // revision id -> true while its PATCH runs
   readError: "",
   runError: "",
   runErrorUncertain: false,
+  regenerateCorrection: null,
   actionMessage: "",
 });
 
@@ -1650,13 +1698,28 @@ export const initialState = {
   drafts: {}, // revision id -> { value, baselineMarkdown, expectedEditVersion, conflict, generatedEntities }
   outputLanguages: {},
   pending: {}, // meeting id -> the request waiting for its answer
+  regenerate: {
+    open: false,
+    meetingId: "",
+    provider: "",
+    model: "",
+    reasoningEffort: "",
+    touched: { provider: false, model: false, reasoningEffort: false },
+    confirmed: { model: false, reasoningEffort: false },
+    generationId: "",
+    sourceVersion: 0,
+    outputLanguage: "en",
+    error: "",
+    focus: 0,
+  },
+  startAttempts: {}, // the latest attempt token for each meeting id
   // The step each notes task was last seen running, by task id: the backend overwrites
   // the stage when a run fails, is canceled or is interrupted.
   taskSteps: {},
   snapshots: {}, // saved transcript snapshots by id
   readId: 0, // id of the latest notes read
   selectionId: 0, // changes even when the operator switches away and back
-  previewContextId: 0, // rich/email previews are valid only while this Notes context is active
+  previewContextId: 0, // dialog and clipboard results belong to the Notes context that opened them
   copyPreview: null,
   previewLoading: false,
   poll: { token: 0, scheduled: false },
@@ -1670,9 +1733,11 @@ const patchNotes = (state, meetingId, patch) => ({
   notes: { ...state.notes, [meetingId]: { ...entryOf(state, meetingId), ...patch } },
 });
 const patchChoice = (state, patch) => ({ ...state, choice: { ...state.choice, ...patch } });
+const patchRegenerate = (state, patch) => ({ ...state, regenerate: { ...state.regenerate, ...patch } });
 const patchSource = (state, patch) => ({ ...state, source: { ...state.source, ...patch } });
 const pendingOf = (state, meetingId = state.meetingId) => (meetingId ? state.pending[meetingId] ?? null : null);
 const languageOf = (state, meetingId) => state.outputLanguages[meetingId] ?? "en";
+const nextStartAttempt = (state, meetingId) => (state.startAttempts[meetingId] || 0) + 1;
 
 const HOST = "notes/host";
 const call = (name, args, extra) => ({ type: "call", key: extra ? extra.key : HOST, name, args, ...extra });
@@ -1705,6 +1770,44 @@ function then(result, step) {
 export function currentGeneration(meeting) {
   const generation = meeting && meeting.transcription && meeting.transcription.generation;
   return generation && generation.status === "complete" ? generation : null;
+}
+
+// The meeting payload already contains the current generation and every complete saved historical
+// generation. Keep the source selector read-only. It never fetches transcript data or invents a source.
+export function generationChoices(meeting) {
+  const transcription = meeting && meeting.transcription;
+  const current = transcription && transcription.generation;
+  const history = transcription && Array.isArray(transcription.generation_history)
+    ? transcription.generation_history : [];
+  const seen = new Set();
+  const choices = [];
+  for (const [generation, isCurrent] of [[current, true], ...history.map((item) => [item, false])]) {
+    if (
+      !generation
+      || typeof generation !== "object"
+      || typeof generation.id !== "string"
+      || !generation.id
+      || !Number.isInteger(generation.source_version)
+      || generation.source_version < 1
+      || (isCurrent ? generation.status !== "complete" : (generation.status !== undefined && generation.status !== "complete"))
+      || seen.has(generation.id)
+    ) continue;
+    seen.add(generation.id);
+    choices.push({
+      id: generation.id,
+      sourceVersion: generation.source_version,
+      generationNumber: Number.isInteger(generation.generation_number) ? generation.generation_number : null,
+      segmentCount: Number.isInteger(generation.segment_count) ? generation.segment_count : null,
+      current: isCurrent,
+      generation,
+    });
+  }
+  choices.sort((left, right) => {
+    const leftNumber = left.generationNumber ?? Number.MAX_SAFE_INTEGER;
+    const rightNumber = right.generationNumber ?? Number.MAX_SAFE_INTEGER;
+    return leftNumber - rightNumber || Number(left.current) - Number(right.current);
+  });
+  return choices;
 }
 
 function transcriptionBusy(state, meeting) {
@@ -1750,11 +1853,33 @@ function effortFor(state, provider, modelId) {
   return typeof effort === "string" ? effort : "default";
 }
 
+function explicitEffortItems(state, provider, modelId) {
+  const models = catalogModels(state, provider);
+  const model = models && models.find((item) => item.id === modelId);
+  let values = Array.isArray(model?.reasoning_efforts)
+    ? model.reasoning_efforts.filter((value) => Object.hasOwn(RUN_EFFORT_LABELS, value))
+    : provider === "antigravity" ? ["medium", "high"] : ["default"];
+  values = [...new Set(["default", ...values])];
+  return values.map((value) => ({ value, text: RUN_EFFORT_LABELS[value] || value }));
+}
+
+function defaultExplicitEffort(state, provider, modelId) {
+  const items = explicitEffortItems(state, provider, modelId);
+  const available = new Set(items.map((item) => item.value));
+  const saved = effortFor(state, provider, modelId);
+  if (available.has(saved)) return saved;
+  for (const preferred of ["high", "medium", "default"]) {
+    if (available.has(preferred)) return preferred;
+  }
+  return items[0]?.value || "default";
+}
+
 // The provider for the next run: a pending retry keeps its provider, then the operator's choice,
 // the last saved provider, the only connected provider, and finally ChatGPT.
 export function selectedProvider(state, pending) {
   const choice = state.choice;
-  if (pending && PROVIDER_IDS.includes(pending.provider)) return pending.provider;
+  const retryProvider = pending?.run?.provider ?? pending?.provider;
+  if (PROVIDER_IDS.includes(retryProvider)) return retryProvider;
   if (PROVIDER_IDS.includes(choice.localProvider)) return choice.localProvider;
   if (PROVIDER_IDS.includes(choice.preferences.provider)) return choice.preferences.provider;
   const connected = PROVIDER_IDS.filter((id) => choice.status[id] === "connected");
@@ -1778,26 +1903,29 @@ function newRunChoiceReady(state, meeting) {
   return readiness.ready && Boolean(readiness.model);
 }
 
-function canStartNotes(state) {
+function notesAdmissionBlock(state) {
   const meeting = state.meeting;
   const data = currentEntry(state);
   const generation = currentGeneration(meeting);
-  if (
-    !meeting
-    || !data
-    || !generation
-    || !recordingReady(meeting)
-    || transcriptionBusy(state, meeting)
-    || !hasRequestVersions(meeting, generation)
-    || !data.sourceLockKnown
-    || data.sourceLocked
-    || activeTask(data)
-    || data.starting
-    || state.choice.saving
-  ) return false;
+  if (!meeting || !data || !generation || !recordingReady(meeting) || !hasRequestVersions(meeting, generation)) {
+    return t("Cần bản ghi và transcript đã lưu để tạo notes.");
+  }
+  if (transcriptionBusy(state, meeting)) return t("Đang xử lý transcript. Chờ tác vụ kết thúc để tạo notes.");
+  if (data.sourceLocked || activeTask(data)) {
+    return t("Cuộc họp đang có tác vụ notes. Chờ tác vụ kết thúc để tạo notes.");
+  }
+  if (!data.sourceLockKnown) return t("Đang kiểm tra trạng thái notes…");
+  if (data.starting) return t("Đang gửi yêu cầu notes. Bạn có thể đóng hộp thoại; yêu cầu sẽ được giữ để xác minh lại nếu cần.");
+  if (state.choice.saving) return t("Đang lưu lựa chọn nhà cung cấp…");
+  return "";
+}
+
+function canStartNotes(state) {
+  if (notesAdmissionBlock(state)) return false;
+  const { meeting, choice } = state;
   const pending = pendingOf(state, meeting.id);
   return Boolean(
-    (!state.choice.loading || isCompletePendingRequest(pending))
+    (!choice.loading || isCompletePendingRequest(pending))
     && (pending || newRunChoiceReady(state, meeting)),
   );
 }
@@ -1823,6 +1951,140 @@ function needsModelChoice(state, data, provider, readiness, pending) {
     && choice.status[provider] === "connected"
     && models !== null
     && (!readiness.ready || !readiness.model);
+}
+
+function connectedRunProvider(state) {
+  const candidates = [
+    state.choice.localProvider,
+    state.choice.preferences.provider,
+    ...PROVIDER_IDS.filter((provider) => state.choice.status[provider] === "connected"),
+  ];
+  return candidates.find((provider) => PROVIDER_IDS.includes(provider) && state.choice.status[provider] === "connected")
+    || candidates.find((provider) => PROVIDER_IDS.includes(provider))
+    || "chatgpt";
+}
+
+function catalogModel(state, provider, requested = "") {
+  const models = catalogModels(state, provider);
+  if (!models) return requested || savedModel(state, provider);
+  if (models.some((item) => item.id === requested)) return requested;
+  const saved = savedModel(state, provider);
+  if (models.some((item) => item.id === saved)) return saved;
+  return models[0]?.id || "";
+}
+
+function generationChoice(state, generationId) {
+  return generationChoices(state.meeting).find((item) => item.id === generationId) || null;
+}
+
+function explicitRunError(state, values) {
+  const meeting = state.meeting;
+  const current = currentGeneration(meeting);
+  if (!meeting || !state.meetingId || !current || !hasRequestVersions(meeting, current)) {
+    return t("Transcript hiện tại không còn sẵn sàng. Hãy đóng hộp thoại rồi tải lại cuộc họp.");
+  }
+  if (!state.choice.loaded) {
+    return state.choice.loading
+      ? t("Đang đọc trạng thái nhà cung cấp và danh sách model. Hãy đợi rồi thử lại.")
+      : t("Chưa đọc được trạng thái nhà cung cấp và danh sách model. Hãy tải lại lựa chọn rồi thử lại.");
+  }
+  if (!PROVIDER_IDS.includes(values.provider)) return t("Chưa chọn nhà cung cấp.");
+  if (state.choice.status[values.provider] !== "connected") {
+    return t("{provider} chưa sẵn sàng. Hãy kết nối lại rồi thử lại.", { provider: providerLabel(values.provider) });
+  }
+  const catalog = state.choice.catalogs[values.provider];
+  if (!catalog) {
+    return state.choice.catalogErrors[values.provider]
+      || t("Chưa tải được danh sách model của {provider}. Hãy tải lại lựa chọn rồi thử lại.", { provider: providerLabel(values.provider) });
+  }
+  const model = catalog.models.find((item) => item.id === values.model);
+  if (!model) return t("Model đã chọn không còn trong danh sách của {provider}.", { provider: providerLabel(values.provider) });
+  const efforts = explicitEffortItems(state, values.provider, values.model);
+  if (!efforts.some((item) => item.value === values.reasoningEffort)) {
+    return t("Mức suy nghĩ đã chọn không còn được model hỗ trợ. Chọn mức khác rồi thử lại.");
+  }
+  const source = generationChoice(state, values.generationId);
+  if (!source || source.sourceVersion !== values.sourceVersion) {
+    return t("Bản transcript đã chọn không còn sẵn sàng. Chọn bản hiện tại hoặc tải lại cuộc họp.");
+  }
+  return "";
+}
+
+function submittedRegenerateValues(request) {
+  if (!validRunObject(request?.run)) return null;
+  return {
+    provider: request.run.provider,
+    model: request.run.model,
+    reasoningEffort: request.run.reasoning_effort,
+    generationId: request.run.generation_id,
+    sourceVersion: request.run.source_version,
+    outputLanguage: request.output_language,
+  };
+}
+
+function initialRegenerateValues(state) {
+  const submitted = submittedRegenerateValues(pendingOf(state)) || currentEntry(state)?.regenerateCorrection;
+  if (submitted) return submitted;
+  const current = currentGeneration(state.meeting);
+  const provider = connectedRunProvider(state);
+  const model = catalogModel(state, provider);
+  const generations = generationChoices(state.meeting);
+  const generation = generations.find((item) => item.current) || generations.at(-1);
+  return {
+    provider,
+    model,
+    reasoningEffort: defaultExplicitEffort(state, provider, model),
+    generationId: generation?.id || current?.id || "",
+    sourceVersion: generation?.sourceVersion || current?.source_version || 0,
+    outputLanguage: pendingOf(state)?.output_language || languageOf(state, state.meetingId),
+  };
+}
+
+function confirmedRegenerateChoices(state, provider, model, reasoningEffort) {
+  const knownModel = Boolean(catalogModels(state, provider)?.some((item) => item.id === model));
+  return {
+    model: knownModel,
+    reasoningEffort: knownModel && explicitEffortItems(state, provider, model).some((item) => item.value === reasoningEffort),
+  };
+}
+
+// Fill provisional defaults once; refreshes cannot replace confirmed or explicit choices.
+function reconcileRegenerateChoices(state) {
+  const values = state.regenerate;
+  if (!values.open || values.meetingId !== state.meetingId || pendingOf(state)?.run || currentEntry(state)?.starting) return state;
+  const touched = values.touched;
+  const providerPicked = touched.provider || touched.model || touched.reasoningEffort
+    || values.confirmed.model || values.confirmed.reasoningEffort;
+  const provider = !providerPicked && state.choice.status[values.provider] !== "connected"
+    ? connectedRunProvider(state) : values.provider;
+  const prior = provider === values.provider ? values.confirmed : { model: false, reasoningEffort: false };
+  const model = touched.model || prior.model
+    ? values.model : catalogModel(state, provider, provider === values.provider ? values.model : "");
+  const reasoningEffort = touched.reasoningEffort || prior.reasoningEffort
+    ? values.reasoningEffort : defaultExplicitEffort(state, provider, model);
+  const known = confirmedRegenerateChoices(state, provider, model, reasoningEffort);
+  const confirmed = {
+    model: prior.model || known.model,
+    reasoningEffort: prior.reasoningEffort || known.reasoningEffort,
+  };
+  return patchRegenerate(state, { provider, model, reasoningEffort, confirmed });
+}
+
+function openRegenerateDialog(state) {
+  if (state.activeTab !== "notes" || !state.meetingId || !currentGeneration(state.meeting)) return out(state);
+  const values = initialRegenerateValues(state);
+  const correcting = Boolean(currentEntry(state)?.regenerateCorrection);
+  let result = out(patchRegenerate(state, {
+    ...values,
+    meetingId: state.meetingId,
+    confirmed: confirmedRegenerateChoices(state, values.provider, values.model, values.reasoningEffort),
+    touched: { provider: correcting, model: correcting, reasoningEffort: correcting },
+    open: true,
+    error: "",
+    focus: state.regenerate.focus + 1,
+  }));
+  if (!state.choice.loaded && !state.choice.loading) result = then(result, (next) => loadChoice(next, state.meetingId));
+  return result;
 }
 
 function selectedRevision(state) {
@@ -1983,8 +2245,18 @@ function installNotes(state, meetingId, parsed, broadcast = false) {
   });
   const pending = pendingOf(result.state, meetingId);
   const task = entryOf(result.state, meetingId).task;
-  if (task && pending && (task.request_id === pending.request_id || isActiveStatus(task.status))) {
-    result = then(result, (s) => clearPending(s, meetingId));
+  const sameRequest = Boolean(task && pending && task.request_id && task.request_id === pending.request_id);
+  const legacyActiveTask = Boolean(task && pending && !validRunObject(pending.run) && isActiveStatus(task.status));
+  if (sameRequest || legacyActiveTask) {
+    result = then(result, (s) => {
+      const receipt = sameRequest ? { runError: "", runErrorUncertain: false } : {};
+      let next = patchNotes(s, meetingId, { starting: false, ...receipt });
+      if (sameRequest && validRunObject(pending.run) && s.meetingId === meetingId && s.regenerate.meetingId === meetingId) {
+        next = patchRegenerate(next, { open: false, error: "" });
+      }
+      return clearPending(next, meetingId);
+    });
+    if (sameRequest) result.effects.push({ type: "cancel", key: `notes/start/${meetingId}` });
   }
   result.effects.push(lockEffect(meetingId, parsed.sourceLocked, true));
   if (broadcast && notesChanged(before, parsed)) result.effects.push(meetingChangeEffect(meetingId, "notes"));
@@ -2047,7 +2319,7 @@ function applyChoiceBase(state) {
     }
   }
   return out(
-    patchChoice(state, {
+    reconcileRegenerateChoices(patchChoice(state, {
       status,
       catalogs,
       catalogErrors,
@@ -2062,7 +2334,7 @@ function applyChoiceBase(state) {
       loadedFor: meetingId,
       loading: effects.length > 0,
       load: { ...state.choice.load, phase: effects.length ? "catalogs" : "idle", waiting: effects.length },
-    }),
+    })),
     effects,
   );
 }
@@ -2086,12 +2358,12 @@ function choiceResponse(state, action, failed) {
       catalogErrors[meta.provider] = "";
     }
     const waiting = load.waiting - 1;
-    return out(patchChoice(state, {
+    return out(reconcileRegenerateChoices(patchChoice(state, {
       catalogs,
       catalogErrors,
       loading: waiting > 0,
       load: { ...load, waiting, phase: waiting > 0 ? "catalogs" : "idle" },
-    }));
+    })));
   }
   if (load.phase !== "base") return out(state);
   if (failed) return choiceFailed(state);
@@ -2170,13 +2442,15 @@ function requestPayload(state, pending, meeting, generation) {
   return savePending(state, meeting.id, complete);
 }
 
-function startNotes(state, requestId) {
+function startNotes(state, requestId, { explicit = false } = {}) {
   const meeting = state.meeting;
   const meetingId = state.meetingId;
   const generation = currentGeneration(meeting);
   if (!canStartNotes(state) || !generation || !meetingId) return out(state);
+  const existing = pendingOf(state, meetingId);
+  explicit ||= Boolean(existing && existing.run);
   let result = out(state);
-  if (!pendingOf(state, meetingId)) {
+  if (!existing) {
     result = savePending(state, meetingId, {
       request_id: requestId,
       output_language: languageOf(state, meetingId),
@@ -2192,9 +2466,88 @@ function startNotes(state, requestId) {
   });
   // The run's progress, errors and result all live in the notes tab, wherever the run was started from.
   result.effects.push(call("history.selectTab", ["notes"]));
-  result = then(result, (s) => out(patchNotes(s, meetingId, { starting: true, runError: "", runErrorUncertain: false, actionMessage: "" })));
-  result.effects.push(request(`notes/start/${meetingId}`, `/api/meetings/${encodeURIComponent(meetingId)}/notes-runs`, "POST", JSON.stringify(body), "start", { meetingId, provider: body.provider }));
+  const attempt = nextStartAttempt(state, meetingId);
+  result = then(result, (s) => out({
+    ...patchNotes(s, meetingId, { starting: true, runError: "", runErrorUncertain: false, actionMessage: "" }),
+    startAttempts: { ...s.startAttempts, [meetingId]: attempt },
+  }));
+  result.effects.push(request(
+    `notes/start/${meetingId}`,
+    `/api/meetings/${encodeURIComponent(meetingId)}/notes-runs`,
+    "POST",
+    JSON.stringify(body),
+    "start",
+    {
+      meetingId,
+      provider: body.provider || body.run?.provider,
+      requestId: body.request_id,
+      taskIdAtStart: entryOf(state, meetingId).task?.id,
+      explicit,
+      contextId: state.previewContextId,
+      attempt,
+    },
+  ));
   return result;
+}
+
+function startExplicitNotes(state, requestId) {
+  const meeting = state.meeting;
+  const meetingId = state.meetingId;
+  const generation = currentGeneration(meeting);
+  if (notesAdmissionBlock(state)) return out(state);
+  const pending = pendingOf(state, meetingId);
+  if (pending && validRunObject(pending.run)) return startNotes(state, requestId, { explicit: true });
+  const values = state.regenerate;
+  const error = explicitRunError(state, values);
+  if (error) return out(patchRegenerate(state, { error }));
+  const body = {
+    request_id: requestId,
+    expected_generation_id: generation.id,
+    expected_source_version: generation.source_version,
+    expected_metadata_version: meeting.metadata_version,
+    output_language: ["en", "vi"].includes(values.outputLanguage) ? values.outputLanguage : "en",
+    run: {
+      provider: values.provider,
+      model: values.model,
+      reasoning_effort: values.reasoningEffort,
+      generation_id: values.generationId,
+      source_version: values.sourceVersion,
+    },
+  };
+  let result = savePending(state, meetingId, body);
+  result.effects.push(call("history.selectTab", ["notes"]));
+  const attempt = nextStartAttempt(state, meetingId);
+  result = then(result, (s) => out({
+    ...patchNotes(s, meetingId, {
+      starting: true, runError: "", runErrorUncertain: false, regenerateCorrection: null, actionMessage: "",
+    }),
+    startAttempts: { ...s.startAttempts, [meetingId]: attempt },
+  }));
+  result.effects.push(request(
+    `notes/start/${meetingId}`,
+    `/api/meetings/${encodeURIComponent(meetingId)}/notes-runs`,
+    "POST",
+    JSON.stringify(body),
+    "start",
+    {
+      meetingId,
+      provider: body.run.provider,
+      requestId: body.request_id,
+      taskIdAtStart: entryOf(state, meetingId).task?.id,
+      explicit: true,
+      contextId: state.previewContextId,
+      attempt,
+    },
+  ));
+  return result;
+}
+
+function staleTaskRequest(state, meta) {
+  if (meta.op === "cancel") return entryOf(state, meta.meetingId).cancelingTaskId !== meta.taskId;
+  if (meta.op !== "start") return false;
+  if (Number.isInteger(meta.attempt) && meta.attempt !== (state.startAttempts[meta.meetingId] || 0)) return true;
+  const pending = pendingOf(state, meta.meetingId);
+  return Boolean(meta.requestId && (!pending || pending.request_id !== meta.requestId));
 }
 
 function startAccepted(state, action) {
@@ -2202,65 +2555,137 @@ function startAccepted(state, action) {
   const parsed = parseTask(object(action.response.body));
   if (parsed.error) return startRejected(state, action.meta, { message: parsed.error, status: 0, payload: null });
   const { task } = parsed;
+  const observed = entryOf(state, meetingId).task;
+  // The receipt settles this request. A different task already observed during it remains the displayed task.
+  const keepObserved = observed && observed.id !== task.id && observed.id !== action.meta.taskIdAtStart;
   const locked = isActiveStatus(task.status);
-  let result = clearPending(state, meetingId);
+  // A read started before the receipt may still describe the old task. The next poll is fresh.
+  const afterReceipt = !keepObserved && locked && state.meetingId === meetingId
+    ? { ...state, readId: state.readId + 1 }
+    : state;
+  let result = clearPending(afterReceipt, meetingId);
   result = then(result, (s) => out(patchNotes(s, meetingId, {
-    task,
-    sourceLocked: locked,
-    sourceLockKnown: true,
+    ...(keepObserved ? {} : { task, sourceLocked: locked, sourceLockKnown: true }),
     actionMessage: t("Yêu cầu notes đã được worker xác nhận."),
     starting: false,
   })));
-  result.effects.push(lockEffect(meetingId, locked, true));
+  if (action.meta.explicit) {
+    result = then(result, (s) => s.meetingId === meetingId && s.regenerate.meetingId === meetingId
+      ? out(patchRegenerate(s, { open: false, error: "" }))
+      : out(s));
+  }
+  if (!keepObserved) result.effects.push(lockEffect(meetingId, locked, true));
   result.effects.push(meetingChangeEffect(meetingId, "notes"));
-  return then(result, (s) => (locked ? startPolling(s, meetingId, task) : readNotes(s, meetingId)));
+  return then(result, (s) => {
+    if (s.meetingId !== meetingId) return out(s);
+    return !keepObserved && locked ? startPolling(s, meetingId, task) : readNotes(s, meetingId);
+  });
 }
 
 function startRejected(state, meta, error) {
   const { meetingId } = meta;
   const definitive = isDefinitive(error);
+  const showDialog = meta.explicit
+    && state.meetingId === meetingId
+    && state.activeTab === "notes"
+    && meta.contextId === state.previewContextId;
+  const submitted = meta.explicit ? submittedRegenerateValues(pendingOf(state, meetingId)) : null;
+  const reopenedValues = showDialog ? (submitted || initialRegenerateValues(state)) : null;
   let result = definitive ? clearPending(state, meetingId) : out(state);
   const mapped = definitive ? failureMessage(error.code, meta.provider) : "";
+  const message = mapped || errorMessageForCode(error.code, error.status, meta.provider) || error.message || t("Không thể xác nhận yêu cầu notes.");
   result = then(result, (s) => out(patchNotes(s, meetingId, {
-    runError: mapped || errorMessageForCode(error.code, error.status, meta.provider) || error.message || t("Không thể xác nhận yêu cầu notes."),
+    runError: showDialog ? "" : message,
     runErrorUncertain: !definitive,
+    ...(definitive && submitted ? { regenerateCorrection: submitted } : {}),
     actionMessage: "",
   })));
-  if (mapped) result = then(result, (s) => loadChoice(s, meetingId));
-  if (definitive && error.status === 409) {
+  if (showDialog) {
+    result = then(result, (s) => out(patchRegenerate(s, {
+      ...reopenedValues,
+      meetingId,
+      confirmed: confirmedRegenerateChoices(s, reopenedValues.provider, reopenedValues.model, reopenedValues.reasoningEffort),
+      // The operator already submitted this recipe. A catalog refresh can validate it without replacing it.
+      touched: { provider: true, model: true, reasoningEffort: true },
+      open: true,
+      error: message,
+    })));
+  }
+  if (mapped && state.meetingId === meetingId) result = then(result, (s) => loadChoice(s, meetingId));
+  if (definitive && error.status === 409 && state.meetingId === meetingId) {
     result.effects.push(call("history.refreshMeeting", [meetingId]));
     result = then(result, (s) => readNotes(s, meetingId));
   }
   return then(result, (s) => out(patchNotes(s, meetingId, { starting: false })));
 }
 
+function cancelRegenerateDialog(state) {
+  const meetingId = state.meetingId;
+  const data = currentEntry(state);
+  const wasStarting = Boolean(meetingId && data && data.starting);
+  let next = patchRegenerate(state, { open: false, error: "" });
+  const effects = [];
+  if (state.regenerate.open && state.regenerate.meetingId === meetingId && data?.regenerateCorrection) {
+    next = patchNotes(next, meetingId, { regenerateCorrection: null, runError: "" });
+  }
+  if (wasStarting) {
+    next = {
+      ...patchNotes(next, meetingId, {
+        starting: false,
+        runError: t("Yêu cầu notes chưa được xác nhận. Bạn có thể thử lại với cùng các lựa chọn."),
+        runErrorUncertain: true,
+      }),
+      startAttempts: { ...state.startAttempts, [meetingId]: nextStartAttempt(state, meetingId) },
+    };
+    effects.push({ type: "cancel", key: `notes/start/${meetingId}` });
+  }
+  return out(next, effects);
+}
+
 function cancelNotes(state) {
   const meetingId = state.meetingId;
   const data = currentEntry(state);
   const task = data && data.task;
-  if (!meetingId || !task || task.kind !== "notes" || !isActiveStatus(task.status) || data.canceling) return out(state);
-  return out(patchNotes(state, meetingId, { canceling: true }), [
-    request(`notes/cancel/${task.id}`, `/api/tasks/${encodeURIComponent(task.id)}/cancel`, "POST", "{}", "cancel", { meetingId }),
+  if (!meetingId || task?.kind !== "notes" || !isActiveStatus(task.status)
+    || task.status === "stopping" || data.cancelingTaskId === task.id) return out(state);
+  return out(patchNotes(state, meetingId, { cancelingTaskId: task.id }), [
+    request(`notes/cancel/${task.id}`, `/api/tasks/${encodeURIComponent(task.id)}/cancel`, "POST", "{}", "cancel", { meetingId, taskId: task.id }),
   ]);
 }
 
 function cancelAnswered(state, action) {
-  const { meetingId } = action.meta;
+  const { meetingId, taskId } = action.meta;
   const parsed = parseTask(object(action.response.body));
-  if (parsed.error) return cancelFailed(state, action.meta, { message: parsed.error });
+  if (parsed.error || parsed.task.id !== taskId) {
+    return cancelFailed(state, action.meta, { message: parsed.error || t("Máy chủ không trả về task notes hợp lệ.") });
+  }
   const { task } = parsed;
-  const next = patchNotes(state, meetingId, { task, runError: "", canceling: false });
-  const result = isActiveStatus(task.status) ? startPolling(next, meetingId, task) : readNotes(next, meetingId);
+  const observed = entryOf(state, meetingId).task;
+  const active = isActiveStatus(task.status);
+  const keepObserved = observed && (observed.id !== taskId || (active && !isActiveStatus(observed.status)));
+  const next = patchNotes(state, meetingId, {
+    ...(keepObserved ? {} : { task, runError: "" }),
+    cancelingTaskId: null,
+  });
+  let result = out(next);
+  if (state.meetingId === meetingId) {
+    // A poll sent before this acknowledgement can still describe the task as running.
+    result = !keepObserved && active
+      ? startPolling({ ...next, readId: next.readId + 1 }, meetingId, task)
+      : readNotes(next, meetingId);
+  }
   result.effects.push(meetingChangeEffect(meetingId, "notes"));
   return result;
 }
 
 function cancelFailed(state, meta, error) {
-  return out(patchNotes(state, meta.meetingId, {
+  const data = entryOf(state, meta.meetingId);
+  const sameActiveTask = data.task?.id === meta.taskId && activeTask(data);
+  const status = sameActiveTask ? {
     runError: error.message || t("Không thể gửi yêu cầu hủy. Trạng thái worker chưa được xác nhận là đã đổi."),
     runErrorUncertain: false,
-    canceling: false,
-  }));
+  } : {};
+  return out(patchNotes(state, meta.meetingId, { ...status, cancelingTaskId: null }));
 }
 
 // ---- saving a revision and the saved copy ----
@@ -2628,7 +3053,9 @@ function adoptStored(state, meetingId, stored) {
   return then(result, (s) => {
     if (Object.hasOwn(s.outputLanguages, meetingId)) return out(s);
     const pending = pendingOf(s, meetingId);
-    const language = pending ? pending.output_language : ["en", "vi"].includes(stored.language) ? stored.language : "en";
+    const storedLanguage = ["en", "vi"].includes(stored.language) ? stored.language : "en";
+    // An explicit recipe owns its language until that run settles. It does not set the next run's default.
+    const language = pending && !validRunObject(pending.run) ? pending.output_language : storedLanguage;
     return out({ ...s, outputLanguages: { ...s.outputLanguages, [meetingId]: language } });
   });
 }
@@ -2656,7 +3083,7 @@ function meetingContext(state, action) {
   }
   const meetingId = meeting && meeting.id;
   if (!meetingId) {
-    const stopped = stopPolling({ ...next, meetingId: null });
+    const stopped = stopPolling(patchRegenerate({ ...next, meetingId: null }, { open: false, error: "" }));
     stopped.effects.push(...previewEffects);
     return stopped;
   }
@@ -2667,12 +3094,16 @@ function meetingContext(state, action) {
     if (state.meetingId) result = then(result, (s) => out(patchNotes(s, state.meetingId, { actionMessage: "" })));
     result = then(result, stopPolling);
     result = then(result, (s) => out(patchChoice(s, { open: false })));
+    result = then(result, (s) => out(patchRegenerate(s, { open: false, error: "" })));
     result = then(result, (s) => out(patchNotes(s, meetingId, { sourceLockKnown: false, known: false })));
   }
+  if (leavingNotes && !changed) result = then(result, (s) => out(patchRegenerate(s, { open: false, error: "" })));
   result = then(result, (s) => {
     const data = entryOf(s, meetingId);
-    const lockKnown = (changed || previousMeeting !== meeting || !data.sourceLockKnown) && typeof meeting.notes_source_locked === "boolean";
-    return out(lockKnown ? patchNotes(s, meetingId, { sourceLocked: meeting.notes_source_locked, sourceLockKnown: true }) : patchNotes(s, meetingId, {}));
+    const running = activeTask(data);
+    const fromMeeting = (changed || previousMeeting !== meeting || !data.sourceLockKnown) && typeof meeting.notes_source_locked === "boolean";
+    const lock = running || fromMeeting ? { sourceLocked: running || meeting.notes_source_locked, sourceLockKnown: true } : {};
+    return out(patchNotes(s, meetingId, lock));
   });
   const data = entryOf(result.state, meetingId);
   result.effects.push(lockEffect(meetingId, data.sourceLocked, data.sourceLockKnown));
@@ -2689,6 +3120,7 @@ function meetingContext(state, action) {
 function response(state, action) {
   const { meta } = action;
   if (staleAuthoritativeRead(state, meta)) return out(state);
+  if (staleTaskRequest(state, meta)) return out(state);
   switch (meta.op) {
     case "read": {
       if (meta.id !== state.readId || meta.meetingId !== state.meetingId || (meta.poll !== null && meta.poll !== state.poll.token)) return out(state);
@@ -2723,6 +3155,7 @@ function response(state, action) {
 function requestFailed(state, action) {
   const { meta } = action;
   if (staleAuthoritativeRead(state, meta)) return out(state);
+  if (staleTaskRequest(state, meta)) return out(state);
   if (isWorkspaceAuthenticationFailure(action.error?.status, action.error?.body)) {
     const meetingId = state.meetingId || meta.meetingId;
     const next = meetingId ? patchNotes(state, meetingId, {
@@ -2813,6 +3246,64 @@ function transition(state, action) {
       return action.meetingId === state.meetingId ? readNotes(state, state.meetingId) : out(state);
     case "notes/start-clicked":
       return startNotes(state, action.requestId);
+    case "notes/regenerate-clicked":
+    case "notes/regenerate-dialog-opened":
+      return openRegenerateDialog(state);
+    case "notes/regenerate-submit":
+    case "notes/regenerate-submitted":
+      return startExplicitNotes(state, action.requestId);
+    case "notes/regenerate-cancelled":
+    case "notes/regenerate-dialog-cancelled":
+      return cancelRegenerateDialog(state);
+    case "notes/regenerate-reload-clicked":
+      return state.meetingId ? loadChoice(state, state.meetingId) : out(state);
+    case "notes/regenerate-provider-picked": {
+      if (!PROVIDER_IDS.includes(action.provider)) return out(state);
+      const pending = pendingOf(state);
+      const data = currentEntry(state);
+      if (pending?.run || data?.starting) return out(state);
+      const model = catalogModel(state, action.provider);
+      return out(patchRegenerate(state, {
+        provider: action.provider,
+        touched: { provider: true, model: false, reasoningEffort: false },
+        confirmed: confirmedRegenerateChoices(state, action.provider, model, defaultExplicitEffort(state, action.provider, model)),
+        model,
+        reasoningEffort: defaultExplicitEffort(state, action.provider, model),
+        error: "",
+      }));
+    }
+    case "notes/regenerate-model-picked": {
+      const pending = pendingOf(state);
+      const data = currentEntry(state);
+      if (pending?.run || data?.starting || typeof action.model !== "string") return out(state);
+      return out(patchRegenerate(state, {
+        model: action.model,
+        touched: { ...state.regenerate.touched, model: true, reasoningEffort: false },
+        confirmed: confirmedRegenerateChoices(state, state.regenerate.provider, action.model, defaultExplicitEffort(state, state.regenerate.provider, action.model)),
+        reasoningEffort: defaultExplicitEffort(state, state.regenerate.provider, action.model),
+        error: "",
+      }));
+    }
+    case "notes/regenerate-effort-picked":
+      if (pendingOf(state)?.run || currentEntry(state)?.starting || typeof action.reasoningEffort !== "string") return out(state);
+      return out(patchRegenerate(state, { reasoningEffort: action.reasoningEffort, touched: { ...state.regenerate.touched, reasoningEffort: true }, error: "" }));
+    case "notes/regenerate-source-adopted": {
+      if (!state.regenerate.open || pendingOf(state)?.run || currentEntry(state)?.starting) return out(state);
+      const source = generationChoice(state, state.regenerate.generationId);
+      return source && source.sourceVersion !== state.regenerate.sourceVersion
+        ? out(patchRegenerate(state, { sourceVersion: source.sourceVersion, error: "" }))
+        : out(state);
+    }
+    case "notes/regenerate-source-picked": {
+      if (pendingOf(state)?.run || currentEntry(state)?.starting) return out(state);
+      const source = generationChoice(state, action.generationId);
+      return source
+        ? out(patchRegenerate(state, { generationId: source.id, sourceVersion: source.sourceVersion, error: "" }))
+        : out(state);
+    }
+    case "notes/regenerate-language-picked":
+      if (pendingOf(state)?.run || currentEntry(state)?.starting || !["en", "vi"].includes(action.language)) return out(state);
+      return out(patchRegenerate(state, { outputLanguage: action.language, error: "" }));
     case "notes/cancel-clicked":
       return cancelNotes(state);
     case "notes/change-toggled":
@@ -3079,7 +3570,7 @@ function taskView(state, data) {
   else status = t("Đang đọc trạng thái tác vụ notes.");
   const taskFailure = errorMessageForCode(task.error_code, undefined, provider);
   if (taskFailure && !["failed", "interrupted"].includes(task.status)) status = [status, " ", taskFailure];
-  const stopping = task.status === "stopping" || data.canceling;
+  const stopping = task.status === "stopping" || data.cancelingTaskId === task.id;
   const progress = task.progress && typeof task.progress === "object" ? task.progress : null;
   const progressCurrent = Number.isSafeInteger(progress?.current) && progress.current >= 0 ? progress.current : null;
   const progressTotal = Number.isSafeInteger(progress?.total) && progress.total >= progressCurrent ? progress.total : null;
@@ -3119,11 +3610,14 @@ function taskView(state, data) {
 function choiceView(state, data, pending) {
   const choice = state.choice;
   const provider = selectedProvider(state, pending);
+  const retry = pending?.run;
+  const retryModel = retry ? modelName(state, provider, retry.model) : "";
   const readiness = modelReadiness(state, provider);
   const models = catalogModels(state, provider);
   const locked = Boolean(pending) || Boolean(data && data.starting) || choice.saving;
   const items = [];
-  if (models === null) items.push({ value: readiness.model, text: readiness.model || t("Chưa có model") });
+  if (retry) items.push({ value: retry.model, text: retryModel });
+  else if (models === null) items.push({ value: readiness.model, text: readiness.model || t("Chưa có model") });
   else {
     if (!readiness.ready) items.push({ value: "", text: readiness.model ? t("Chọn model khác") : t("Chọn model") });
     for (const item of models) items.push({ value: item.id, text: item.display_name });
@@ -3133,7 +3627,13 @@ function choiceView(state, data, pending) {
     ? ` · effort ${choice.preferences.reasoning_effort}` : "";
   if (provider === "antigravity") effort = t(" · mức suy nghĩ {effort}", { effort: effortLabel(effortFor(state, "antigravity")) });
   let plan;
-  if (!choice.loaded && !choice.loading && !pending) {
+  if (retry) {
+    plan = t("Yêu cầu cần xác minh dùng {name} · {model} · mức suy nghĩ {effort}.", {
+      name,
+      model: retryModel,
+      effort: RUN_EFFORT_LABELS[retry.reasoning_effort] || retry.reasoning_effort,
+    });
+  } else if (!choice.loaded && !choice.loading && !pending) {
     plan = t("Chưa đọc được lựa chọn đã lưu nên chưa thể tạo notes mới. Hãy bấm “Tải lại lựa chọn”.");
   } else if (readiness.ready && readiness.model && models !== null) {
     plan = t("Lần chạy tiếp theo dùng {name} · {model}{effort}.", { name, model: modelName(state, provider, readiness.model), effort });
@@ -3148,7 +3648,7 @@ function choiceView(state, data, pending) {
       error: choice.catalogErrors[provider],
     });
   }
-  // The plan line belongs to the open choice, except when the action cannot simply run and it says why.
+  // Keep the destination visible next to Verify even when the choice is collapsed.
   const configure = needsModelChoice(state, data, provider, readiness, pending);
   const catalogBlocked = Boolean(choice.catalogErrors[provider]);
   const stuck = needsConnection(state, data, provider, readiness, pending)
@@ -3159,12 +3659,14 @@ function choiceView(state, data, pending) {
     provider,
     readiness,
     providerDisabled: locked,
-    modelKey: `${provider}\u0000${readiness.model}\u0000${models ? models.map((item) => item.id).join("\u0001") : "-"}`,
+    modelKey: retry
+      ? `retry\u0000${provider}\u0000${retry.model}\u0000${retryModel}`
+      : `${provider}\u0000${readiness.model}\u0000${models ? models.map((item) => item.id).join("\u0001") : "-"}`,
     modelItems: items,
-    modelValue: readiness.ready || models === null ? readiness.model : "",
+    modelValue: retry?.model ?? (readiness.ready || models === null ? readiness.model : ""),
     modelDisabled: locked || models === null || models.length === 0,
     plan,
-    planHidden: !stuck && !choice.open,
+    planHidden: !retry && !stuck && !choice.open,
     reloadHidden: choice.loaded || !state.meetingId,
     reloadDisabled: choice.loading,
     message: choice.message,
@@ -3268,6 +3770,113 @@ function sourceView(state) {
   };
 }
 
+function providerStatusLabel(status) {
+  if (status === "connected") return t("Đã kết nối");
+  if (status === "reconnect_required") return t("Cần kết nối lại");
+  if (status === "disconnected") return t("Chưa kết nối");
+  return t("Không khả dụng");
+}
+
+function regenerateView(state, data, pending) {
+  const submitted = submittedRegenerateValues(pending);
+  const values = submitted ? { ...state.regenerate, ...submitted } : state.regenerate;
+  const sourceChoices = generationChoices(state.meeting);
+  const sourceItems = sourceChoices.map((source, index) => {
+    const version = source.id === values.generationId
+      ? values.sourceVersion
+      : source.sourceVersion;
+    return {
+      value: source.id,
+      text: source.current
+        ? t("Bản transcript hiện tại · nguồn {version}", { version })
+        : t("Bản transcript lịch sử {number} · nguồn {version}", {
+          number: source.generationNumber ?? index + 1,
+          version,
+        }),
+    };
+  });
+  if (values.generationId && !sourceChoices.some((source) => source.id === values.generationId)) {
+    sourceItems.unshift({
+      value: values.generationId,
+      text: t("Bản transcript đã lưu {id} · nguồn {version} — không khả dụng", {
+        id: values.generationId,
+        version: values.sourceVersion,
+      }),
+      disabled: true,
+    });
+  }
+  const providerItems = PROVIDER_IDS.map((provider) => ({
+    value: provider,
+    text: [providerLabel(provider), " · ", providerStatusLabel(state.choice.status[provider])],
+    disabled: state.choice.status[provider] !== "connected",
+  }));
+  const catalog = state.choice.catalogs[values.provider];
+  const modelItems = catalog
+    ? catalog.models.map((model) => ({ value: model.id, text: model.display_name }))
+    : [{
+      value: values.model || "",
+      text: values.model
+        ? t("{model} — danh sách model chưa sẵn sàng", { model: values.model })
+        : t("Danh sách model chưa sẵn sàng"),
+      disabled: true,
+    }];
+  if (catalog && values.model && !catalog.models.some((model) => model.id === values.model)) {
+    modelItems.unshift({
+      value: values.model,
+      text: t("{model} — không khả dụng với tài khoản này", { model: values.model }),
+      disabled: true,
+    });
+  }
+  const effortItems = explicitEffortItems(state, values.provider, values.model);
+  if (values.reasoningEffort && !effortItems.some((item) => item.value === values.reasoningEffort)) {
+    effortItems.unshift({
+      value: values.reasoningEffort,
+      text: t("Mức suy nghĩ {effort} — không khả dụng với model này", {
+        effort: RUN_EFFORT_LABELS[values.reasoningEffort] || values.reasoningEffort,
+      }),
+      disabled: true,
+    });
+  }
+  const locked = Boolean(submitted || data?.starting);
+  const admissionBlock = state.regenerate.open ? notesAdmissionBlock(state) : "";
+  const validationError = !locked && state.regenerate.open ? explicitRunError(state, values) : "";
+  const error = validationError || state.regenerate.error;
+  const selectedSource = generationChoice(state, values.generationId);
+  const sourceRefresh = values.open && !locked && selectedSource && selectedSource.sourceVersion !== values.sourceVersion
+    ? { generationId: selectedSource.id, sourceVersion: selectedSource.sourceVersion } : null;
+  const loading = state.choice.loading && !state.choice.loaded;
+  const reloadVisible = !state.choice.loaded || Boolean(state.choice.catalogErrors[values.provider]);
+  return {
+    open: state.activeTab === "notes" && state.regenerate.open,
+    focus: state.regenerate.focus,
+    provider: values.provider,
+    providerItems,
+    model: values.model,
+    modelItems,
+    reasoningEffort: values.reasoningEffort,
+    effortItems,
+    generationId: values.generationId,
+    sourceVersion: values.sourceVersion,
+    sourceItems,
+    sourceRefresh,
+    sourceRefreshLabel: sourceRefresh
+      ? t("Dùng nguồn transcript đã cập nhật (phiên bản {version})", { version: sourceRefresh.sourceVersion })
+      : "",
+    outputLanguage: values.outputLanguage,
+    locked,
+    busy: Boolean(data?.starting),
+    status: admissionBlock || (submitted
+      ? t("Yêu cầu này đã được giữ nguyên. Thử lại sẽ dùng cùng các lựa chọn.")
+      : loading ? t("Đang đọc trạng thái nhà cung cấp và danh sách model…") : ""),
+    error,
+    reloadVisible,
+    reloadDisabled: state.choice.loading,
+    submitLabel: data?.starting ? t("Đang gửi…") : submitted ? t("Xác minh yêu cầu notes") : t("Tạo lại notes"),
+    submitDisabled: Boolean(admissionBlock || (!submitted && (loading || !sourceItems.length || validationError))),
+    cancelLabel: data?.starting ? t("Đóng") : t("Hủy"),
+  };
+}
+
 // Everything the view draws, derived from the state. The speaker reminder and the copy status are
 // the view's: an empty action message leaves the old text.
 export function selectView(state) {
@@ -3287,9 +3896,17 @@ export function selectView(state) {
   const connect = needsConnection(state, data, provider, readiness, pending);
   const configure = choice.configure;
   const revisions = data ? data.revisions : [];
+  const needsAnyConnection = connect && !PROVIDER_IDS.some((id) => state.choice.status[id] === "connected");
+  const correction = Boolean(data?.regenerateCorrection);
+  const canRegenerate = (revisions.length > 0 || correction) && !pending && !data?.starting;
+  const regenerate = canRegenerate && !needsAnyConnection;
+  const regenerateBlocked = canRegenerate && (Boolean(notesAdmissionBlock(state)) || state.choice.loading);
+  const savedRecipeReady = regenerate && !correction && newRunChoiceReady(state, meeting) && state.choice.status[provider] === "connected"
+    && catalogModels(state, provider) !== null;
   let runLabel;
-  if (connect) runLabel = t("Kết nối {provider} để tạo notes", { provider: providerLabel(provider) });
-  else if (configure) runLabel = t("Chọn hoặc đổi model để tạo notes.");
+  if (regenerate && !savedRecipeReady) runLabel = t("Tạo lại notes");
+  else if (!regenerate && connect) runLabel = t("Kết nối {provider} để tạo notes", { provider: providerLabel(provider) });
+  else if (!regenerate && configure) runLabel = t("Chọn hoặc đổi model để tạo notes.");
   else if (data && data.starting) runLabel = t("Đang gửi yêu cầu…");
   else if (pending) runLabel = t("Xác minh yêu cầu notes");
   else {
@@ -3313,6 +3930,10 @@ export function selectView(state) {
   }
   const failedTranscription = meeting && meeting.transcription && meeting.transcription.task;
   const savedWork = savedWorkView(state, data);
+  let describedBy = "notes-status";
+  if (regenerate) describedBy = "notes-regenerate-intro";
+  else if (connect || configure) describedBy = "notes-run-plan";
+  else if (pending?.run) describedBy = "notes-run-plan notes-status";
   return {
     needed,
     emptyCopy: needed
@@ -3326,9 +3947,13 @@ export function selectView(state) {
     languageDisabled: Boolean(wait || (data && data.starting) || activeTask(data) || pending),
     choice,
     run: {
-      action: connect ? "connect" : configure ? "configure" : "start",
-      describedBy: connect || configure ? "notes-run-plan" : "notes-status",
-      disabled: !connect && !configure && !canStartNotes(state),
+      action: regenerate ? "regenerate" : connect ? "connect" : configure ? "configure" : "start",
+      describedBy,
+      disabled: regenerate
+        ? regenerateBlocked
+        : !connect && !configure && !canStartNotes(state),
+      correctionVisible: correction && canRegenerate && needsAnyConnection,
+      correctionDisabled: regenerateBlocked,
       title: !connect && !configure && wait ? waitMessage : "",
       label: runLabel,
       inToolbar: Boolean(selectedRevision(state)),
@@ -3337,6 +3962,7 @@ export function selectView(state) {
     status,
     task,
     error: data ? data.runError || data.readError : "",
+    regenerateDialog: regenerateView(state, data, pending),
     savedWork,
     actionMessage: data?.actionMessage || (state.previewLoading ? t("Đang đọc phiên bản đã lưu mới nhất…") : ""),
     copyPreview: state.copyPreview,

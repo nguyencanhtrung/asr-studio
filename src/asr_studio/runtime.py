@@ -31,11 +31,16 @@ class RuntimeConfigurationError(RuntimeError):
 def engine_for_path(settings: Settings, model_path: Path) -> str:
     """Use Qwen only for the configured Qwen catalog path; custom paths stay Whisper."""
     try:
-        configured = Path(settings.asr_qwen_model_path).expanduser().resolve(strict=False)
         selected = Path(model_path).expanduser().resolve(strict=False)
-    except OSError:
+    except (OSError, RuntimeError):
         return "whisper"
-    return "qwen" if selected == configured or selected.name == "qwen3-asr-1.7b" else "whisper"
+    if selected.name == "qwen3-asr-1.7b":
+        return "qwen"
+    try:
+        configured = settings.asr_qwen_model_path.expanduser().resolve(strict=False)
+    except (OSError, RuntimeError):
+        return "whisper"
+    return "qwen" if selected == configured else "whisper"
 
 
 @dataclass(frozen=True, slots=True)

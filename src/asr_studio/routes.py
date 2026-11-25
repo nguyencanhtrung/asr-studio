@@ -22,6 +22,7 @@ from asr_studio.antigravity import AntigravityError, AntigravityProvider
 from asr_studio.asr_models import (
     AUTO,
     CATALOG,
+    AsrRun,
     default_model_damaged,
     model_choices,
     model_path,
@@ -39,6 +40,10 @@ from asr_studio.auth import (
 )
 from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
 from asr_studio.config import PROJECT_REPOSITORY, PROJECT_WEBSITE, Settings
+from asr_studio.diarization_runner import (
+    DiarizationConfigurationError,
+    prepared_diarization_directory,
+)
 from asr_studio.extension_ingest import ExtensionIngestError, retry_recording_session
 from asr_studio.media import ALLOWED_EXTENSIONS, OUTPUT_BITRATE, OUTPUT_CODEC
 from asr_studio.meeting_deletion import MeetingDeletionError, delete_meeting
@@ -64,12 +69,13 @@ from asr_studio.recordings import (
     release_upload,
     update_meeting,
 )
-from asr_studio.runtime import read_runtime_profile
+from asr_studio.runtime import RuntimeProfile, read_runtime_profile
 from asr_studio.tasks import (
     TaskError,
     accept_transcription_task,
     add_current_generation_speaker,
     cancel_task,
+    diarization_rollback_fence_enabled,
     get_task,
     reassign_current_generation_speaker,
     update_current_generation_segment_text,
@@ -98,6 +104,57 @@ _UPLOAD_IDLE_TIMEOUT_SECONDS = 60
 _MEDIA_VALIDATION_CONCURRENCY = 2
 _CHATGPT_CALLBACK_BODY_BYTES = 16 * 1024
 _RangeResult = tuple[int, int] | Literal["ignore", "unsatisfiable"]
+DIARIZATION_CAPABILITY_VERSION = 1
+
+
+def _usable_transcription_runtime(data_dir: Path) -> RuntimeProfile | None:
+    if not worker_is_healthy(data_dir):
+        return None
+    return read_runtime_profile(data_dir)
+
+
+def diarization_capability(settings: Settings) -> dict[str, object]:
+    """Report the local Community-1 capability without changing application state."""
+    worker_ready = _usable_transcription_runtime(settings.data_dir) is not None
+    rollback_fenced = diarization_rollback_fence_enabled()
+    model_ready = True
+    try:
+        prepared_diarization_directory(settings.diarization_model_path)
+    except DiarizationConfigurationError:
+        model_ready = False
+    if model_ready and worker_ready:
+        state = "ready"
+        reason = None
+    elif not model_ready:
+        state = "unavailable"
+        reason = "model_unavailable"
+    else:
+        state = "unavailable"
+        reason = "worker_unavailable"
+    off_reason = None
+    if rollback_fenced:
+        off_reason = "rollback_fence"
+    elif not worker_ready:
+        off_reason = "worker_unavailable"
+    return {
+        "contract_version": DIARIZATION_CAPABILITY_VERSION,
+        "default_mode": "community-1",
+        "explicit_mode_scope": "manual_transcript_rerun",
+        "community_1": {
+            "id": "community-1",
+            "ready": model_ready and worker_ready,
+            "state": state,
+            "reason": reason,
+            "operator_prepared": model_ready,
+        },
+        "off": {
+            "id": "off",
+            "ready": off_reason is None,
+            "state": "unavailable" if off_reason else "ready",
+            "reason": off_reason,
+            "allowed_on": "manual_transcript_rerun",
+        },
+    }
 
 
 async def _await_owned(task: asyncio.Task[Any]) -> tuple[Any, bool]:
@@ -513,6 +570,10 @@ def install_routes(
     async def list_asr_models() -> dict[str, Any]:
         profile = await healthy_runtime_profile()
         return await run_in_threadpool(asr_models_view, profile)
+
+    @app.get("/api/diarization-capability")
+    async def read_diarization_capability() -> dict[str, object]:
+        return await run_in_threadpool(diarization_capability, settings)
 
     def refuse(status_code: int, code: str, message: str) -> HTTPException:
         return HTTPException(status_code=status_code, detail={"code": code, "message": message})
@@ -1051,25 +1112,36 @@ def install_routes(
         payload = await _json_object(
             request,
             required={"meeting_id", "request_id"},
-            optional={"language_hint", "asr_model"},
+            optional={
+                "language_hint",
+                "asr_model",
+                "diarization_mode",
+                "expected_generation_id",
+            },
         )
-        worker_ready = worker_is_healthy(settings.data_dir)
-        profile = read_runtime_profile(settings.data_dir) if worker_ready else None
         asr_model = payload.get("asr_model", AUTO)
         if asr_model not in selectable_models():
             _raise_task_error(
                 TaskError(400, "invalid_asr_model", "Choose an ASR model from the list.")
             )
+
+        def resolve_recipe() -> AsrRun | None:
+            profile = _usable_transcription_runtime(settings.data_dir)
+            return resolve_run(settings, profile, asr_model) if profile is not None else None
+
         task_options = {
             "meeting_id": payload["meeting_id"],
             "request_id": payload["request_id"],
-            **resolve_run(settings, profile, asr_model),
             "asr_choice": asr_model,
             "diarization_model_path": settings.diarization_model_path,
-            "worker_ready": worker_ready and profile is not None,
+            "resolve_recipe": resolve_recipe,
         }
         if "language_hint" in payload:
             task_options["language_hint"] = payload["language_hint"]
+        if "diarization_mode" in payload:
+            task_options["diarization_mode"] = payload["diarization_mode"]
+        if "expected_generation_id" in payload:
+            task_options["expected_generation_id"] = payload["expected_generation_id"]
         try:
             return await run_in_threadpool(
                 accept_transcription_task,

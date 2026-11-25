@@ -46,6 +46,10 @@ def test_compose_separates_services_volumes_and_loopback_publish():
     assert app["environment"]["ASR_DIARIZATION_MODEL_PATH"].endswith(
         "speaker-diarization-community-1}"
     )
+    for service in (app, worker):
+        assert service["environment"]["ASR_DIARIZATION_ROLLBACK_FENCE"] == (
+            "${ASR_DIARIZATION_ROLLBACK_FENCE:-0}"
+        )
     assert "HF_TOKEN" not in app["environment"] and "HF_TOKEN" not in worker["environment"]
     for service in (app, worker, notes):
         assert service["environment"]["DO_NOT_TRACK"] == "1"

@@ -911,18 +911,24 @@ def recording_path(data_dir: Path, meeting_id: str) -> Path:
 
 def open_audio(data_dir: Path, storage_key: str) -> tuple[int, BinaryIO]:
     path = _path_for_key(data_dir, storage_key)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # A FIFO at the managed path must not block the open before we can check its type.
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
+        try:
+            file_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise RecordingError(
+                    500, "recording_unavailable", "Recording audio is unavailable."
+                )
+            return file_stat.st_size, os.fdopen(descriptor, "rb")
+        except BaseException:
+            os.close(descriptor)
+            raise
     except OSError as exc:
         raise RecordingError(
             500, "recording_unavailable", "Recording audio is unavailable."
         ) from exc
-    file_stat = os.fstat(descriptor)
-    if not stat.S_ISREG(file_stat.st_mode):
-        os.close(descriptor)
-        raise RecordingError(500, "recording_unavailable", "Recording audio is unavailable.")
-    return file_stat.st_size, os.fdopen(descriptor, "rb")
 
 
 def recover_recordings(data_dir: Path) -> None:

@@ -132,11 +132,16 @@ def test_request_id_returns_original_task_and_rejects_payload_reuse(tmp_path):
     data_dir, model_dir, (first_meeting, second_meeting) = _task_store(tmp_path, meeting_count=2)
     accepted = _accept(data_dir, model_dir, first_meeting, "request-0001")
 
+    model_loop = tmp_path / "changed-server-model"
+    diarizer_loop = tmp_path / "changed-server-diarizer"
+    model_loop.symlink_to(model_loop, target_is_directory=True)
+    diarizer_loop.symlink_to(diarizer_loop, target_is_directory=True)
     retry = accept_transcription_task(
         data_dir,
         meeting_id=first_meeting,
         request_id="request-0001",
-        model_path=tmp_path / "changed-server-model",
+        model_path=model_loop,
+        diarization_model_path=diarizer_loop,
         device="cuda",
         compute_type="float16",
         worker_ready=False,

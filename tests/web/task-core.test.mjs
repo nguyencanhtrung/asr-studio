@@ -78,6 +78,7 @@ function setup(path = "/meetings/m1") {
       task: transcription.task || null,
       generation: Boolean(generation),
       generationLanguage: generation ? generation.language_hint : null,
+      currentGenerationId: generation ? generation.id : null,
       blocked: !state.notes.lockKnown || state.notes.locked,
     };
   };
@@ -145,6 +146,14 @@ function setup(path = "/meetings/m1") {
 
 const GET_MEETING = (id) => (r) => r.method === "GET" && r.url === `/api/meetings/${id}`;
 const GET_TASK = (id) => (r) => r.method === "GET" && r.url === `/api/tasks/${id}`;
+const GET_CAPABILITY = (r) => r.method === "GET" && r.url === "/api/diarization-capability";
+const CAPABILITY = {
+  contract_version: 1,
+  default_mode: "community-1",
+  explicit_mode_scope: "manual_transcript_rerun",
+  community_1: { id: "community-1", ready: true, state: "ready", reason: null, operator_prepared: true },
+  off: { id: "off", ready: true, state: "ready", reason: null, allowed_on: "manual_transcript_rerun" },
+};
 
 // Open a meeting the way the page does: boot at its address, answer the list and the meeting.
 async function opened(body, { path = "/meetings/m1", stored = {}, lock = true } = {}) {
@@ -603,6 +612,219 @@ const CHOICES = [
   { id: "qwen3-asr-1.7b", model_name: "qwen3-asr-1.7b", ready: true, reason: null, prepare_command: null },
 ];
 const withChoices = (extra = {}, choices = CHOICES) => meeting("m1", {}, { asr_models: choices, ...extra });
+const withGenerationChoices = (choices = CHOICES) => meeting("m1", {}, { generation: GENERATION, asr_models: choices });
+
+test("a completed transcript loads the server capability and opens a rerun with ready choices", async () => {
+  const env = await opened(withGenerationChoices());
+  assert.equal(env.waiting(GET_CAPABILITY).length, 1);
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+
+  env.send("task/start-clicked", { requestId: "rerun-open" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  assert.equal(env.sent("/api/tasks").length, 0);
+  assert.equal(env.view().rerun.open, true);
+  assert.deepEqual(env.view().rerun.models.map((option) => option.id), ["auto", "whisper-large-v3", "qwen3-asr-1.7b"]);
+  assert.deepEqual(env.view().rerun.modes.map((option) => option.id), ["community-1", "off"]);
+  assert.equal(env.view().rerun.diarizationMode, "community-1");
+});
+
+test("a rerun submits the current generation, selected mode and model, then replays the same payload after an uncertain response", async () => {
+  const env = await opened(withGenerationChoices());
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "rerun-open" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/rerun-choice", { languageHint: "vi", asrModel: "qwen3-asr-1.7b", diarizationMode: "off" });
+  env.send("task/rerun-submitted", { requestId: "rerun-request" });
+
+  const first = env.sent("/api/tasks")[0];
+  assert.deepEqual(first.body, {
+    meeting_id: "m1",
+    request_id: "rerun-request",
+    language_hint: "vi",
+    asr_model: "qwen3-asr-1.7b",
+    diarization_mode: "off",
+    expected_generation_id: "g1",
+  });
+  assert.deepEqual(JSON.parse(env.stored.get(requestStorageKey("m1"))), {
+    requestId: "rerun-request",
+    languageHint: "vi",
+    asrModel: "qwen3-asr-1.7b",
+    diarizationMode: "off",
+    expectedGenerationId: "g1",
+  });
+
+  const storageKey = requestStorageKey("m1");
+  const frozen = env.stored.get(storageKey);
+  await env.answer((r) => r.url === "/api/tasks", 503, { detail: "gateway timeout" });
+  assert.equal(env.stored.get(storageKey), frozen);
+  env.send("task/start-clicked", { requestId: "new-id-must-not-win" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/rerun-choice", { languageHint: "en", asrModel: "auto", diarizationMode: "community-1" });
+  assert.equal(env.view().rerun.replay, true);
+  assert.equal(env.view().rerun.diarizationMode, "off");
+  assert.equal(env.view().rerun.languageHint, "vi");
+  assert.equal(env.view().rerun.asrModel, "qwen3-asr-1.7b");
+  env.send("task/rerun-submitted", { requestId: "new-id-must-not-win" });
+  const replay = env.sent("/api/tasks")[1];
+  assert.deepEqual(replay.body, first.body);
+});
+
+test("a typed rollback fence clears the pending Off request and requires a fresh choice", async () => {
+  const env = await opened(withGenerationChoices());
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "first-open" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  const staleCapability = env.task().capability.requestId;
+  env.send("task/rerun-choice", { diarizationMode: "off" });
+  env.send("task/rerun-submitted", { requestId: "off-request" });
+
+  await env.answer((r) => r.url === "/api/tasks", 503, {
+    detail: { code: "diarization_rollback_fence", message: "Explicit Off runs are temporarily disabled." },
+  });
+  assert.equal(env.stored.has(requestStorageKey("m1")), false);
+  assert.equal(env.view().rerun.open, false);
+  assert.equal(env.sent("/api/tasks").length, 1);
+
+  env.send("task/start-clicked", { requestId: "second-open" });
+  env.send("task/capability-loaded", {
+    meta: { meetingId: "m1", generationId: "g1", requestId: staleCapability },
+    response: { body: CAPABILITY },
+  });
+  assert.equal(env.view().rerun.capability.status, "loading");
+  assert.equal(env.view().rerun.canSubmit, false);
+  await env.answer(GET_CAPABILITY, 200, {
+    ...CAPABILITY,
+    off: { ...CAPABILITY.off, ready: false, state: "unavailable", reason: "rollback_fence" },
+  });
+  assert.equal(env.view().rerun.replay, false);
+  assert.equal(env.view().rerun.diarizationMode, "community-1");
+  assert.equal(env.view().rerun.canSubmit, true);
+  assert.equal(env.sent("/api/tasks").length, 1);
+
+  env.send("task/rerun-submitted", { requestId: "community-request" });
+  assert.deepEqual(env.sent("/api/tasks").map(({ body }) => [body.request_id, body.diarization_mode]), [
+    ["off-request", "off"],
+    ["community-request", "community-1"],
+  ]);
+});
+
+test("capability failure is retryable and a stale capability answer cannot replace the retry", async () => {
+  const env = await opened(withGenerationChoices());
+  env.send("task/start-clicked", { requestId: "open" });
+  const oldRequestId = env.task().capability.requestId;
+  await env.answer(GET_CAPABILITY, 503, { detail: "offline" });
+  assert.equal(env.view().rerun.capability.status, "error");
+  env.send("task/capability-retry", { requestId: "capability-retry" });
+  assert.notEqual(env.task().capability.requestId, oldRequestId);
+  env.send("task/capability-loaded", {
+    meta: { meetingId: "m1", generationId: "g1", requestId: oldRequestId },
+    response: { body: CAPABILITY },
+  });
+  assert.equal(env.view().rerun.capability.status, "loading");
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  assert.equal(env.view().rerun.capability.status, "ready");
+});
+
+test("a restored rerun displays and verifies its unavailable original choices without readiness re-admission", async () => {
+  const stored = JSON.stringify({
+    requestId: "admitted-rerun",
+    languageHint: "vi",
+    asrModel: "pho-whisper-large",
+    diarizationMode: "off",
+    expectedGenerationId: "g1",
+  });
+  const env = await opened(withGenerationChoices(), { stored: { [requestStorageKey("m1")]: stored } });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "open" });
+  await env.answer(GET_CAPABILITY, 200, {
+    ...CAPABILITY,
+    off: { ...CAPABILITY.off, ready: false, state: "unavailable", reason: "worker_unavailable" },
+  });
+
+  assert.equal(env.view().rerun.replay, true);
+  assert.equal(env.view().rerun.pending, true);
+  assert.equal(env.view().rerun.asrModel, "pho-whisper-large");
+  assert.deepEqual(env.view().rerun.models, [{
+    id: "pho-whisper-large",
+    label: "PhoWhisper-large",
+    ready: false,
+    reason: "not_prepared",
+  }]);
+  assert.equal(env.view().rerun.canSubmit, true);
+
+  env.send("task/rerun-submitted", { requestId: "must-not-replace" });
+  assert.deepEqual(env.sent("/api/tasks")[0].body, {
+    meeting_id: "m1",
+    request_id: "admitted-rerun",
+    language_hint: "vi",
+    asr_model: "pho-whisper-large",
+    diarization_mode: "off",
+    expected_generation_id: "g1",
+  });
+});
+
+test("a restored legacy rerun verifies the old payload without adding a mode or generation fence", async () => {
+  const stored = JSON.stringify({ requestId: "legacy-rerun", languageHint: "en", asrModel: "whisper-small" });
+  const env = await opened(withGenerationChoices(), { stored: { [requestStorageKey("m1")]: stored } });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "open" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+
+  assert.equal(env.view().rerun.legacyReplay, true);
+  assert.equal(env.view().rerun.canSubmit, true);
+  env.send("task/rerun-submitted", { requestId: "must-not-replace" });
+  assert.deepEqual(env.sent("/api/tasks")[0].body, {
+    meeting_id: "m1",
+    request_id: "legacy-rerun",
+    language_hint: "en",
+    asr_model: "whisper-small",
+  });
+});
+
+test("reopening a rerun refreshes a previously ready capability", async () => {
+  const env = await opened(withGenerationChoices());
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "first-open" });
+  assert.equal(env.waiting(GET_CAPABILITY).length, 1);
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/rerun-cancelled");
+  env.send("task/start-clicked", { requestId: "second-open" });
+  assert.equal(env.waiting(GET_CAPABILITY).length, 1);
+  await env.answer(GET_CAPABILITY, 200, {
+    ...CAPABILITY,
+    off: { ...CAPABILITY.off, ready: false, state: "unavailable", reason: "worker_unavailable" },
+  });
+  assert.equal(env.view().rerun.modes[1].ready, false);
+  assert.equal(env.view().rerun.modes[1].reason, "worker_unavailable");
+});
+
+test("rerun submission without an open matching dialog does not start a legacy request", async () => {
+  const env = await opened(withGenerationChoices());
+  env.send("task/rerun-submitted", { requestId: "forged-submit" });
+  assert.equal(env.sent("/api/tasks").length, 0);
+  assert.equal(env.view().rerun.open, false);
+});
+
+test("Off stays visible but disabled when the server capability reports it unavailable", async () => {
+  const env = await opened(withGenerationChoices());
+  await env.answer(GET_CAPABILITY, 200, {
+    ...CAPABILITY,
+    off: { ...CAPABILITY.off, ready: false, state: "unavailable", reason: "worker_unavailable" },
+  });
+  env.send("task/start-clicked", { requestId: "open" });
+  await env.answer(GET_CAPABILITY, 200, {
+    ...CAPABILITY,
+    off: { ...CAPABILITY.off, ready: false, state: "unavailable", reason: "worker_unavailable" },
+  });
+  assert.deepEqual(env.view().rerun.modes.map((option) => option.id), ["community-1", "off"]);
+  assert.deepEqual(env.view().rerun.modes[1], {
+    id: "off",
+    ready: false,
+    reason: "worker_unavailable",
+  });
+  env.send("task/rerun-choice", { diarizationMode: "off" });
+  assert.equal(env.view().rerun.diarizationMode, "community-1");
+});
 
 test("the selector starts on Tự động and names what the hardware default is", async () => {
   const env = await opened(withChoices());
@@ -1290,4 +1512,30 @@ test("a poll answer for a followed task while another meeting is shown ends the 
   const followed = { ...initialState, poll: { meetingId: "m1", taskId: "t1", phase: "fetching" } };
   const next = reduce(followed, { type: "task/poll-loaded", meta: { meetingId: "m1", taskId: "t1" }, response: { body: task("t1", "running") }, shown: { id: "m2", task: null } });
   assert.equal(next.state.poll, null);
+});
+
+test("a refreshed model catalog blocks a stale rerun choice until the operator picks a ready model", async () => {
+  const env = await opened(withGenerationChoices());
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "rerun-open" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/rerun-choice", { asrModel: "qwen3-asr-1.7b", languageHint: "vi" });
+  assert.equal(env.view().rerun.canSubmit, true);
+
+  const choices = CHOICES.map((choice) => choice.id === "qwen3-asr-1.7b"
+    ? { ...choice, ready: false } : choice);
+  env.send("history/meeting-fetched", { meeting: withGenerationChoices(choices) });
+  const stale = env.view().rerun;
+  assert.equal(stale.asrModel, "qwen3-asr-1.7b");
+  assert.equal(stale.models.find((item) => item.id === stale.asrModel).ready, false);
+  assert.equal(stale.canSubmit, false);
+  env.send("task/rerun-submitted", { requestId: "rerun-blocked" });
+  assert.equal(env.sent("/api/tasks").length, 0);
+
+  env.send("task/rerun-choice", { asrModel: "auto" });
+  assert.equal(env.view().rerun.canSubmit, true);
+  env.send("task/rerun-submitted", { requestId: "rerun-allowed" });
+  assert.equal(env.sent("/api/tasks").length, 1);
+  assert.equal(env.sent("/api/tasks")[0].body.asr_model, "auto");
+  assert.equal(env.sent("/api/tasks")[0].body.language_hint, "vi");
 });

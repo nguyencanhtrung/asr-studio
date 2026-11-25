@@ -14,3 +14,13 @@ hành có thể chọn en hoặc vi cho riêng lần chạy đó. Đây chỉ l�
 của decoder, và request retry phải giữ nguyên request ID, ngôn ngữ và model đã chọn. Model cũng được chọn theo từng lần chạy, xem [ADR 0011](0011-asr-model-per-run.md).
 
 Giữ thế hệ cũ giải quyết việc chạy lại âm thanh. Việc bảo toàn nguồn khi sửa ngay trong cùng thế hệ được quyết định riêng tại [ADR 0008](0008-notes-source-snapshots.md).
+
+## Diarization trong một lần chạy lại
+
+Yêu cầu chép lời cũ và các lượt tự động tiếp tục dùng Community-1. Rerun từ generation hiện tại có thể khai báo Community-1 hoặc Off. Task lưu lựa chọn đã được server chấp nhận. Off bỏ bước diarization của lần chạy đó và publish transcript không có speaker được sinh tự động. Các tín hiệu ASR, nguồn Notes và generation đã lưu trước đó vẫn truy cập được.
+
+Gửi lại cùng request ID và cấu hình trả về cùng task ID và cấu hình đã lưu. Response cho biết trạng thái mới nhất của chính task đó, kể cả khi task đã chạy hoặc đã hoàn tất. Server không tạo thêm task khi xác minh.
+
+Danh mục hiện tại dùng model Community-1 đã được operator chuẩn bị. Capability cho biết worker có thể nhận việc và server đã chuẩn bị artifact cần thiết. Community-1 vẫn được kiểm tra khi worker khởi động. Off cũng yêu cầu worker chép lời khỏe và model ASR đã sẵn sàng. Lỗi Community-1 giữ trạng thái lỗi của lần chạy và không tự chuyển qua Off.
+
+Khi quay lui, đặt `ASR_DIARIZATION_ROLLBACK_FENCE=1` cho cả app và worker. Compose truyền cùng giá trị từ môi trường triển khai cho hai service. Cổng này chặn nhận Off mới và chặn claim Off đang chờ. Để hoàn tất tác vụ đã chạy hoặc hủy tác vụ Off bằng thao tác hiện có, sau đó xác minh hàng đợi Off đã hết trước khi đổi bản chạy. Bản quay lui phải giữ migration và metadata mới. Binary trước migration từ chối mở schema đã nâng. Các kiểm tra ở đây chạy trên cơ sở dữ liệu thử nghiệm với worker runner tổng hợp.

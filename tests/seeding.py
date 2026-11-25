@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import uuid
 from pathlib import Path
+
+from media_tools import require_media_tools
 
 from asr_studio.diarization_runner import COMMUNITY_1_REQUIRED_FILES
 from asr_studio.storage import database_path
@@ -55,3 +58,34 @@ def seed_meeting(
         )
     connection.close()
     return meeting_id
+
+
+def prepare_recording(data_dir: Path, meeting_id: str) -> Path:
+    """Give a seeded meeting a short, playable managed recording."""
+    require_media_tools()
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        (key,) = connection.execute(
+            "SELECT storage_key FROM recordings WHERE meeting_id = ?", (meeting_id,)
+        ).fetchone()
+    audio = data_dir / key
+    audio.parent.mkdir(exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=16000",
+            "-t",
+            "0.25",
+            "-c:a",
+            "aac",
+            str(audio),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    return audio

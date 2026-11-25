@@ -26,6 +26,7 @@ export const autoStartStorageKey = (meetingId) => `${AUTO_TRANSCRIBE_HANDOFF_PRE
 
 const KEY = {
   start: "task/start",
+  capability: "task/diarization-capability",
   pollTimer: "task/poll-timer",
   poll: "task/poll",
   copy: "task/copy",
@@ -33,6 +34,7 @@ const KEY = {
 };
 const cancelKey = (taskId) => `task/cancel/${taskId}`;
 const refreshKey = (origin) => `task/refresh/${origin}`;
+const CAPABILITY_ERROR = t("Không thể đọc khả năng nhận dạng người nói. Hãy thử lại.");
 
 const SAFE_TASK_ID = /^[0-9a-f]{32}$/;
 
@@ -57,7 +59,11 @@ const AUTO_START_REASONS = {
 
 // Refused by the app before it created a task, whatever the HTTP status: a retry has nothing to verify. A 503 without
 // one of these codes may come from something in front of the app, and stays uncertain.
-const REFUSED_BEFORE_ACCEPT = new Set([...Object.keys(AUTO_START_REASONS), "model_requires_gpu"]);
+const REFUSED_BEFORE_ACCEPT = new Set([
+  ...Object.keys(AUTO_START_REASONS),
+  "model_requires_gpu",
+  "diarization_rollback_fence",
+]);
 const MODEL_REFUSALS = {
   model_unavailable: t("Model đã chọn chưa được chuẩn bị. Tải lại trang để xem cách chuẩn bị, hoặc chọn model khác."),
   model_requires_gpu: t("Model đã chọn chỉ chạy trên GPU NVIDIA. Hãy chọn model khác."),
@@ -74,9 +80,11 @@ export const ASR_MODEL_GUIDANCE = {
 export const initialState = {
   hidden: false, // the page is in the background: the poll slows down
   poll: null, // { meetingId, taskId, phase: waiting | fetching }: the one task being followed
-  pending: null, // { meetingId, requestId, languageHint, asrModel }: a start whose answer is not known yet (also kept in sessionStorage)
+  pending: null, // { meetingId, requestId, languageHint, asrModel, diarizationMode?, expectedGenerationId? }: an unanswered start
   language: null, // { meetingId, selection }: the language the user chose for the next run
   asrModel: null, // { meetingId, selection }: the model the user chose for the next run; never a system default
+  capability: null, // { meetingId, generationId, requestId, status, value, error }: server capability for manual reruns
+  rerun: null, // { meetingId, generationId, requestId, languageHint, asrModel, diarizationMode, replay, legacyReplay }: open draft
   start: null, // { meetingId, requestId, auto, refreshing }: a start request on the wire (global, as the old flag was)
   cancelling: [], // ids of tasks with a cancel request on the wire
   error: null, // { meetingId, message }: the last start or cancel refusal
@@ -146,12 +154,15 @@ function modelBlocked(state, shown) {
 
 // ---- the pending request id ----
 
-// The stored record: JSON {requestId, languageHint, asrModel}, or the plain request id that older pages wrote.
+// The stored record: JSON {requestId, languageHint, asrModel, diarizationMode, expectedGenerationId},
+// or the plain request id that older pages wrote.
 function parseStored(raw, fallbackLanguage) {
   if (!raw) return null;
   let requestId = raw;
   let languageHint = fallbackLanguage;
   let asrModel = "auto";
+  let diarizationMode = null;
+  let expectedGenerationId = null;
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === "string") {
@@ -160,12 +171,24 @@ function parseStored(raw, fallbackLanguage) {
       requestId = parsed.requestId;
       languageHint = validLanguage(parsed.languageHint) || fallbackLanguage;
       asrModel = validModel(parsed.asrModel) || "auto";
+      diarizationMode = parsed.diarizationMode === "community-1" || parsed.diarizationMode === "off"
+        ? parsed.diarizationMode
+        : null;
+      expectedGenerationId = typeof parsed.expectedGenerationId === "string" && parsed.expectedGenerationId
+        ? parsed.expectedGenerationId
+        : null;
     }
   } catch {
     // an older page stored the request id as plain text
   }
   if (typeof requestId !== "string" || !requestId) return null;
-  return { requestId, languageHint: validLanguage(languageHint) || "en", asrModel };
+  return {
+    requestId,
+    languageHint: validLanguage(languageHint) || "en",
+    asrModel,
+    ...(diarizationMode ? { diarizationMode } : {}),
+    ...(expectedGenerationId ? { expectedGenerationId } : {}),
+  };
 }
 
 const rememberEffect = (pending) => ({
@@ -173,7 +196,13 @@ const rememberEffect = (pending) => ({
   key: requestStorageKey(pending.meetingId),
   area: "session",
   op: "write",
-  value: JSON.stringify({ requestId: pending.requestId, languageHint: pending.languageHint, asrModel: pending.asrModel }),
+  value: JSON.stringify({
+    requestId: pending.requestId,
+    languageHint: pending.languageHint,
+    asrModel: pending.asrModel,
+    ...(pending.diarizationMode ? { diarizationMode: pending.diarizationMode } : {}),
+    ...(pending.expectedGenerationId ? { expectedGenerationId: pending.expectedGenerationId } : {}),
+  }),
 });
 
 function remember(state, pending) {
@@ -241,6 +270,108 @@ const refreshFetch = (meetingId, origin) => ({
   meta: { meetingId, origin },
 });
 
+const capabilityFetch = (meetingId, generationId, requestId) => ({
+  type: "fetch",
+  key: KEY.capability,
+  url: "/api/diarization-capability",
+  init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" },
+  ok: "task/capability-loaded",
+  error: "task/capability-failed",
+  meta: { meetingId, generationId, requestId },
+});
+
+function capabilityChoice(value, id) {
+  if (!isObject(value) || value.id !== id || typeof value.ready !== "boolean") return null;
+  return {
+    id,
+    ready: value.ready,
+    state: typeof value.state === "string" ? value.state : "unavailable",
+    reason: typeof value.reason === "string" ? value.reason : null,
+  };
+}
+
+function normalizeCapability(body) {
+  if (!isObject(body) || body.contract_version !== 1) return null;
+  const community1 = capabilityChoice(body.community_1, "community-1");
+  const off = capabilityChoice(body.off, "off");
+  if (!community1 || !off) return null;
+  return {
+    defaultMode: body.default_mode === "off" ? "off" : "community-1",
+    community1,
+    off,
+  };
+}
+
+function requestCapability(state, shown, requestId, refresh = false) {
+  if (!shown || !shown.generation || !shown.currentGenerationId) return out(state);
+  const current = state.capability;
+  if (current && current.meetingId === shown.id && current.generationId === shown.currentGenerationId) {
+    if (current.status === "loading" || (current.status === "ready" && !refresh)) return out(state);
+  }
+  const capability = { meetingId: shown.id, generationId: shown.currentGenerationId, requestId, status: "loading", value: null, error: null };
+  return out(repaint({ ...state, capability }), [capabilityFetch(shown.id, shown.currentGenerationId, requestId)]);
+}
+
+function readyRerunModels(shown) {
+  return (shown.asrModels || []).filter((entry) => isAsrModelRow(entry) && entry.ready === true);
+}
+
+function modeReady(capability, mode) {
+  const choice = mode === "off" ? capability?.off : capability?.community1;
+  return Boolean(choice && choice.ready === true);
+}
+
+function rerunCapability(state, shown) {
+  const capability = state.capability;
+  return capability?.meetingId === shown.id && capability.generationId === shown.currentGenerationId
+    ? capability : null;
+}
+
+function rerunBlock(state, shown, draft) {
+  if (state.start || shown.blocked || isActive(shown.task)) return "busy";
+  if (draft.replay) {
+    return pendingFor(state, shown.id)?.requestId === draft.requestId ? "" : "changed";
+  }
+  if (shown.currentGenerationId !== draft.generationId) return "changed";
+  if (!readyRerunModels(shown).some((entry) => entry.id === draft.asrModel)) return "model";
+  return modeReady(rerunCapability(state, shown)?.value, draft.diarizationMode) ? "" : "capability";
+}
+
+function openRerun(state, shown, requestId) {
+  if (!shown || !shown.generation || !shown.currentGenerationId || state.start) return out(state);
+  const pending = pendingFor(state, shown.id);
+  const replay = Boolean(pending);
+  const models = readyRerunModels(shown);
+  const preferredModel = pending ? pending.asrModel : displayedModel(state, shown);
+  const asrModel = models.some((entry) => entry.id === preferredModel) ? preferredModel : models[0]?.id || null;
+  const rerun = {
+    meetingId: shown.id,
+    generationId: pending?.expectedGenerationId || shown.currentGenerationId,
+    requestId: pending?.requestId || null,
+    replay,
+    legacyReplay: replay && !pending.expectedGenerationId && !pending.diarizationMode,
+    languageHint: pending?.languageHint || displayedLanguage(state, shown),
+    asrModel: replay ? pending.asrModel : asrModel,
+    diarizationMode: pending?.diarizationMode || "community-1",
+  };
+  let result = requestCapability(state, shown, requestId, true);
+  return then(result, (s) => out(repaint({ ...s, rerun })));
+}
+
+function capabilityLoaded(state, action) {
+  const current = state.capability;
+  if (!current || current.meetingId !== action.meta.meetingId || current.generationId !== action.meta.generationId || current.requestId !== action.meta.requestId) return out(state);
+  const value = normalizeCapability(action.response?.body);
+  if (!value) return out(repaint({ ...state, capability: { ...current, status: "error", value: null, error: CAPABILITY_ERROR } }));
+  return out(repaint({ ...state, capability: { ...current, status: "ready", value, error: null } }));
+}
+
+function capabilityFailed(state, action) {
+  const current = state.capability;
+  if (!current || current.meetingId !== action.meta.meetingId || current.generationId !== action.meta.generationId || current.requestId !== action.meta.requestId) return out(state);
+  return out(repaint({ ...state, capability: { ...current, status: "error", value: null, error: CAPABILITY_ERROR } }));
+}
+
 function pollDue(state, action) {
   const { poll } = state;
   const { meetingId, taskId } = action;
@@ -283,13 +414,33 @@ function pollLoaded(state, action) {
 // ---- start ----
 
 function startRequest(state, shown, requestId, auto) {
-  if (!shown || state.start || shown.blocked || (!auto && modelBlocked(state, shown))) return out(state);
+  const rerun = state.rerun && shown && state.rerun.meetingId === shown.id ? state.rerun : null;
+  const pending = pendingFor(state, shown && shown.id);
+  const replay = Boolean(rerun?.replay && pending && pending.requestId === rerun.requestId);
+  if (!shown || state.start || shown.blocked || (!auto && !rerun && modelBlocked(state, shown))) return out(state);
+  if (rerun && rerunBlock(state, shown, rerun)) return out(state);
   let result = out(state);
-  let pending = pendingFor(state, shown.id);
-  if (!pending) {
-    pending = { meetingId: shown.id, requestId, languageHint: displayedLanguage(state, shown), asrModel: displayedModel(state, shown) };
-    result = remember(state, pending);
+  let request = pending;
+  if (rerun && !replay && request?.expectedGenerationId !== rerun.generationId) request = null;
+  if (!request) {
+    request = {
+      meetingId: shown.id,
+      requestId,
+      languageHint: rerun?.languageHint || displayedLanguage(state, shown),
+      asrModel: rerun?.asrModel || displayedModel(state, shown),
+      ...(rerun ? { diarizationMode: rerun.diarizationMode, expectedGenerationId: rerun.generationId } : {}),
+    };
+    result = remember(state, request);
   }
+  const payload = {
+    meeting_id: shown.id,
+    request_id: request.requestId,
+    language_hint: request.languageHint,
+    asr_model: request.asrModel,
+    ...(rerun && request.expectedGenerationId && request.diarizationMode
+      ? { diarization_mode: request.diarizationMode, expected_generation_id: request.expectedGenerationId }
+      : {}),
+  };
   const startEffect = {
     type: "fetch",
     key: KEY.start,
@@ -299,14 +450,14 @@ function startRequest(state, shown, requestId, auto) {
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
-      body: JSON.stringify({ meeting_id: shown.id, request_id: pending.requestId, language_hint: pending.languageHint, asr_model: pending.asrModel }),
+      body: JSON.stringify(payload),
     },
     ok: "task/start-succeeded",
     error: "task/start-failed",
-    meta: { meetingId: shown.id, requestId: pending.requestId },
+    meta: { meetingId: shown.id, requestId: request.requestId },
   };
-  const start = { meetingId: shown.id, requestId: pending.requestId, auto, refreshing: false };
-  return then(result, (s) => out(repaint({ ...s, start, error: clearedError(s, shown.id), notice: null, copy: null }), [startEffect]));
+  const start = { meetingId: shown.id, requestId: request.requestId, auto, refreshing: false };
+  return then(result, (s) => out(repaint({ ...s, rerun: null, start, error: clearedError(s, shown.id), notice: null, copy: null }), [startEffect]));
 }
 
 function startFailed(state, error, auto) {
@@ -318,8 +469,15 @@ function startFailed(state, error, auto) {
     ? t("Bấm lại để gửi một yêu cầu mới.")
     : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   let message = [failure.message, " ", guidance];
-  const selectedModel = pendingFor(state, meetingId)?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
-  if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
+  const pending = pendingFor(state, meetingId);
+  const selectedModel = pending?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
+  if (failure.code === "recording_unavailable") {
+    message = t("Không thể mở bản ghi gốc. Khôi phục bản ghi rồi chạy lại.");
+  } else if (failure.code === "diarization_rollback_fence") {
+    message = t("Chạy với chế độ tắt nhận dạng người nói đang tạm khóa. Mở Chạy lại để chọn Community-1 nếu đã sẵn sàng.");
+  } else if (failure.code === "diarization_model_unavailable" && pending?.diarizationMode === "community-1") {
+    message = t("Community-1 chưa sẵn sàng. Chuẩn bị model trên máy chủ, hoặc mở Chạy lại và tắt nhận dạng người nói nếu có thể chọn.");
+  } else if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
     // A named model has its own preparation/GPU guidance, including for an automatic handoff.
     message = MODEL_REFUSALS[failure.code];
   } else if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
@@ -330,7 +488,7 @@ function startFailed(state, error, auto) {
   }
   const base = definitive ? forget(state, meetingId) : out(state);
   // A request restored after a reload is the only record of its model: the selector must keep showing what was refused.
-  const refused = definitive && pendingFor(state, meetingId);
+  const refused = definitive && pending;
   return then(base, (s) => out(repaint({
     ...s,
     start: null,
@@ -457,6 +615,7 @@ export function reduce(state, action) {
       }
       result = then(result, (s) => rotate(s, shown.id, task));
       result = then(result, (s) => startPolling(s, shown.id, task));
+      result = then(result, (s) => requestCapability(s, shown, `meeting:${action.requestId}`));
       if (action.autoStart) {
         const handoff = { type: "storage", key: autoStartStorageKey(shown.id), area: "session", op: "remove" };
         const taken = then(result, (s) => out({ ...s, autoDone: shown.id }, [handoff]));
@@ -471,7 +630,15 @@ export function reduce(state, action) {
     }
 
     case "task/meeting-left":
-      return stopPolling({ ...state, notice: null, copy: null });
+      return stopPolling({ ...state, capability: null, rerun: null, notice: null, copy: null });
+
+    case "task/capability-retry":
+      return requestCapability(state, action.shown, action.requestId);
+
+    case "task/capability-loaded":
+      return capabilityLoaded(state, action);
+    case "task/capability-failed":
+      return capabilityFailed(state, action);
 
     case "task/language-chosen": {
       const language = validLanguage(action.language);
@@ -488,7 +655,26 @@ export function reduce(state, action) {
     }
 
     case "task/start-clicked":
-      return startRequest(state, action.shown, action.requestId, false);
+      return action.shown?.generation && action.shown.currentGenerationId
+        ? openRerun(state, action.shown, action.requestId)
+        : startRequest(state, action.shown, action.requestId, false);
+    case "task/rerun-clicked":
+      return openRerun(state, action.shown, action.requestId);
+    case "task/rerun-cancelled":
+      return state.rerun ? out(repaint({ ...state, rerun: null })) : out(state);
+    case "task/rerun-choice": {
+      const rerun = state.rerun;
+      if (!rerun || rerun.replay || !action.shown || action.shown.id !== rerun.meetingId) return out(state);
+      const next = { ...rerun };
+      if (action.languageHint && validLanguage(action.languageHint)) next.languageHint = action.languageHint;
+      if (action.asrModel && readyRerunModels(action.shown).some((entry) => entry.id === action.asrModel)) next.asrModel = action.asrModel;
+      if (action.diarizationMode && modeReady(state.capability?.value, action.diarizationMode)) next.diarizationMode = action.diarizationMode;
+      return out(repaint({ ...state, rerun: next }));
+    }
+    case "task/rerun-submitted":
+      return state.rerun && action.shown && state.rerun.meetingId === action.shown.id
+        ? startRequest(state, action.shown, action.requestId, false)
+        : out(state);
     case "task/start-succeeded":
       return startSucceeded(state, action);
     case "task/start-failed":
@@ -569,6 +755,54 @@ function selectModel(state, shown, disabled) {
   };
 }
 
+function selectRerun(state, shown) {
+  if (!shown || !shown.generation || !shown.currentGenerationId) return null;
+  const capability = rerunCapability(state, shown);
+  const draft = state.rerun && state.rerun.meetingId === shown.id ? state.rerun : null;
+  const models = draft?.replay ? [] : readyRerunModels(shown).map((entry) => ({
+    id: entry.id,
+    label: asrModelText(entry).label,
+    ready: true,
+  }));
+  if (draft?.asrModel && !models.some((option) => option.id === draft.asrModel)) {
+    const original = (shown.asrModels || []).find((entry) => entry?.id === draft.asrModel);
+    models.unshift({
+      id: draft.asrModel,
+      label: original ? asrModelText(original).label : draft.asrModel,
+      ready: original?.ready === true,
+      reason: original?.reason || "not_prepared",
+    });
+  }
+  const languageHint = draft?.languageHint || displayedLanguage(state, shown);
+  const asrModel = draft ? draft.asrModel : models[0]?.id || null;
+  const diarizationMode = draft?.diarizationMode || "community-1";
+  const block = draft ? rerunBlock(state, shown, draft) : "";
+  const modeOptions = capability?.status === "ready"
+    ? [capability.value.community1, capability.value.off]
+    : [];
+  if (draft?.replay && draft.diarizationMode && !modeOptions.some((choice) => choice.id === draft.diarizationMode)) {
+    modeOptions.push({ id: draft.diarizationMode, ready: false, reason: "replay_admitted" });
+  }
+  return {
+    open: Boolean(draft),
+    generationId: shown.currentGenerationId,
+    pending: Boolean(draft?.replay),
+    replay: Boolean(draft?.replay),
+    legacyReplay: Boolean(draft?.legacyReplay),
+    capability: {
+      status: capability?.status || "idle",
+      error: capability?.error || null,
+    },
+    languageHint,
+    asrModel,
+    models,
+    diarizationMode,
+    modes: modeOptions.map((choice) => ({ id: choice.id, ready: choice.ready, reason: choice.reason })),
+    block,
+    canSubmit: Boolean(draft && !block),
+  };
+}
+
 // What the task half of the page shows for the meeting on screen. `shown` is the same facts the view stamps on actions.
 export function selectTask(state, shown) {
   const task = shown ? shown.task : null;
@@ -594,6 +828,7 @@ export function selectTask(state, shown) {
     progress: active ? progressOf(task) : null,
     language: shown ? { value: displayedLanguage(state, shown), disabled: active || Boolean(pending) } : null,
     model: shown ? selectModel(state, shown, active || Boolean(pending)) : null,
+    rerun: selectRerun(state, shown),
     error: { visible: failed || Boolean(refusal), message, diagnostic },
     notice,
     copy: how,
