@@ -11,6 +11,7 @@ import shutil
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,7 +23,14 @@ from test_transcription_api import _authorize
 
 from asr_studio import model_installer, routes
 from asr_studio.app import create_app
-from asr_studio.asr_models import CATALOG
+from asr_studio.asr_models import (
+    CATALOG,
+    model_choices,
+    read_default_model,
+    resolve_run,
+    write_default_model,
+)
+from asr_studio.auth import AuthStore
 from asr_studio.config import Settings
 from asr_studio.model_install import STALE_SECONDS, InstallStore
 from asr_studio.model_installer import Installer
@@ -501,6 +509,54 @@ def test_stopping_the_service_ends_the_job_as_interrupted(rig):
     assert rig.store.job(PHO)["error"] == "interrupted"
     assert not _alive(helper)
     assert rig.leftovers() == []
+
+
+@pytest.mark.parametrize("explicit_model", [None, PHO])
+def test_recreation_reopens_prepared_models_and_keeps_existing_default(rig, explicit_model):
+    small = "whisper-small"
+    assert rig.run(small)["state"] == "idle"
+    assert rig.run(PHO)["state"] == "idle"
+    if explicit_model is not None:
+        rig.settings.data_dir.mkdir(parents=True, exist_ok=True)
+        write_default_model(rig.settings, explicit_model)
+
+    auth = AuthStore(rig.settings.auth_dir)
+    auth.ensure()
+    old_signing_state = auth.state_path.read_bytes()
+    rig.settings.provider_dir.mkdir(parents=True, exist_ok=True)
+    marker = rig.settings.provider_dir / "recreation-fixture"
+    marker.write_bytes(b"synthetic saved provider data")
+    old_files = {path: path.read_bytes() for path in rig.target(small).rglob("*") if path.is_file()}
+    old_files |= {path: path.read_bytes() for path in rig.target(PHO).rglob("*") if path.is_file()}
+
+    rig.store.request(QWEN)
+    stale = rig.store.pending()[0]
+    rig.store.report(stale, state="running", phase="downloading", bytes_done=1, bytes_total=2)
+    stage = rig.models / f".install-{QWEN}-{stale['id']}"
+    stage.mkdir()
+    (stage / "partial").write_bytes(b"incomplete fixture")
+    spawned_before = rig.spawned
+
+    settings = replace(rig.settings)
+    store = InstallStore(settings.install_dir)
+    recreated = Installer(settings, store, argv=rig.argv, poll_seconds=0.02)
+    recreated.recover()
+    profile = RuntimeProfile("cpu", "int8", settings.asr_cpu_model_path)
+    entries = {entry["id"]: entry for entry in model_choices(settings, profile)}
+
+    assert entries[small]["ready"] is True
+    assert entries[PHO]["ready"] is True
+    assert read_default_model(settings) == explicit_model
+    assert resolve_run(settings, profile, "auto")["model_path"] == rig.target(
+        explicit_model or small
+    )
+    assert AuthStore(settings.auth_dir).state_path.read_bytes() == old_signing_state
+    assert (settings.provider_dir / marker.name).read_bytes() == b"synthetic saved provider data"
+    assert {path: path.read_bytes() for path in old_files} == old_files
+    assert store.job(QWEN)["error"] == "interrupted"
+    assert store.pending() == []
+    assert not stage.exists()
+    assert rig.spawned == spawned_before
 
 
 # -- the heartbeat ----------------------------------------------------------------------------

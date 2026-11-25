@@ -407,6 +407,80 @@ Whisper models need valid `model.bin`, `config.json`, `tokenizer.json` and, wher
 | `ASR_DEVICE`                                 | `auto` (default), `cpu` or `cuda`. |
 | `ASR_MODEL_PATH`, `ASR_COMPUTE_TYPE`       | Explicit overrides for special tests.    |
 
+### Fresh server and model lifecycle
+
+For a new online server, use the existing startup and installer flow; do not add a second model
+downloader. Before the first start, ensure Docker Engine and Compose 2.30 or later are installed,
+the checkout's `.asr-studio` directory and `ASR_MODEL_HOST_PATH` are writable by the operator, and
+the host has enough space for the selected model. For GPU operation, install an NVIDIA driver and
+the NVIDIA Container Toolkit. The first local startup also needs a prepared Community-1 directory:
+accept its gated conditions, authenticate with Hugging Face, install Git LFS, and clone it under the
+configured `ASR_DIARIZATION_MODEL_PATH`. Whisper small is public and does not need a model token.
+
+For the default paths (`ASR_MODEL_HOST_PATH=./models` and
+`ASR_DIARIZATION_MODEL_PATH=/models/speaker-diarization-community-1`):
+
+```sh
+test -e .env || cp .env.example .env
+mkdir -p ./models
+git lfs install
+git clone https://hf.co/pyannote/speaker-diarization-community-1 \
+  ./models/speaker-diarization-community-1
+./scripts/start.sh
+```
+
+`ASR_DIARIZATION_MODEL_PATH` is the container path and must stay below `/models`; its default is
+`/models/speaker-diarization-community-1`. Compose mounts `ASR_MODEL_HOST_PATH` at `/models`, so
+the default container path corresponds to `./models/speaker-diarization-community-1` on the host.
+Keep that host path and the existing `.env` unchanged when recreating a deployment. The operator
+must be able to write the host model directory; `start.sh` passes its UID/GID to the long-running
+installer.
+
+For custom paths, set the values in the existing `.env` or Compose environment without sourcing the
+dotenv file as shell code. For example, `ASR_MODEL_HOST_PATH=/srv/asr/models` together with
+`ASR_DIARIZATION_MODEL_PATH=/models/diar/community` means prepare the host directory
+`/srv/asr/models/diar/community`; Compose presents it to the containers as
+`/models/diar/community`.
+
+Online `./scripts/start.sh` first uses a one-shot worker preparation override with network access
+and a temporary writable `/models` mount to prepare the missing hardware default. After startup,
+**Settings → ASR Model** is the catalog-backed server installer: it submits the selected catalog ID
+to the long-running `model-installer`, which downloads the pinned revision, checks free space,
+publishes through a staging directory and one rename, and then exposes the result to the app and
+worker through their read-only `/models` mount. During normal service operation, it is the only
+service with `/models:rw`; it does not mount recordings, transcripts, auth or provider data.
+`--offline` skips all downloads and leaves this service stopped.
+
+The lightweight catalog choice is `whisper-small`: the pinned
+[`Systran/faster-whisper-small` model card](https://huggingface.co/Systran/faster-whisper-small/blob/536b0662742c02347bc0e980a01041f333bce120/README.md)
+is MIT-licensed, and the catalog revision is
+`536b0662742c02347bc0e980a01041f333bce120` with an estimated download of 486,215,847 bytes
+(about 486 MB). It is the CPU-compatible automatic choice and runs with `int8`. On a host where
+Docker exposes an NVIDIA GPU, `ASR_DEVICE=auto` selects CUDA and the existing automatic choice is
+Qwen3-ASR-1.7B with `bfloat16`; it does not silently fall back to CPU when GPU setup was requested
+but is unavailable. These are hardware defaults, not a replacement for an operator's saved
+default or explicit model path.
+
+On a fresh GPU host, an operator who explicitly wants the lightweight CPU setup may set
+`ASR_DEVICE=cpu` in the newly created `.env` before starting. This is an operator override for that
+deployment; it does not change the `auto` defaults, and an existing `.env` must not be rewritten.
+
+Keep the existing `.env` and Compose project identity when recreating a server. `.env.example` is
+not copied over an existing `.env`; therefore previous `ASR_*_MODEL_PATH` values remain in force,
+and a saved choice in `data/asr-default.json` still wins for new **Automatic** runs. The named
+`data`, `auth`, `provider` and `model-install` volumes, plus the host model directory, are the
+managed persistence boundary. `docker compose down` keeps them; `docker compose down -v` removes
+all named volumes, including data/auth/provider and installer coordination state. The host model
+directory is not an uninstall operation.
+
+If an install is interrupted, restart the services and use **Try again**. The installer marks a
+running job as `interrupted`, removes orphan staging, and retains any already-published model.
+**Cancel** is narrower: it stops the active download, removes its partial staging, and leaves an
+already-prepared model untouched. The current delete/cancel action is not uninstall. This release
+does not support removing prepared model directories; do not treat `Cancel` or `docker compose
+down -v` as a model-removal workflow. An explicit uninstall needs a separately approved preflight
+for defaults, active/queued jobs, exact catalog paths and recovery.
+
 ### Check the ASR models
 
 **Settings → ASR Model** lists Whisper large-v3, Whisper small, PhoWhisper-large and Qwen3-ASR-1.7B as
