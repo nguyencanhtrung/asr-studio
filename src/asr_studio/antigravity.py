@@ -1302,6 +1302,60 @@ class AntigravityProvider:
                 seen.add(model["id"])
         return {"models": models, "selected_model": selected, "reasoning_effort": effort}
 
+    @contextmanager
+    def notes_task_pin_for_run(
+        self, *, model: object, reasoning_effort: object
+    ) -> Iterator[dict[str, Any]]:
+        """Validate an explicit Notes recipe against the connected runtime catalog.
+
+        The operation lock remains held while the caller admits the SQLite task.  The selected
+        global model and effort are never consulted or changed by this explicit-run path.
+        """
+        if not isinstance(model, str) or not _SAFE_ID.fullmatch(model):
+            raise AntigravityError(
+                400, "invalid_model", "Choose an available Google Antigravity model."
+            )
+        effort = normalize_effort(reasoning_effort)
+        self._assert_mutation_allowed()
+        with self._operation():
+            self._assert_mutation_allowed()
+            self.assert_notes_acceptable()
+            with self.store.locked() as state:
+                error = self._connection_error(state)
+                if error is not None:
+                    raise error
+                connection_version = state.get("connection_version")
+                if (
+                    isinstance(connection_version, bool)
+                    or not isinstance(connection_version, int)
+                    or connection_version < 0
+                ):
+                    raise AntigravityError(
+                        503, "provider_invalid_state", "Antigravity connection state is invalid."
+                    )
+            try:
+                raw_models = self.adapter.list_models()
+            except AntigravityError as error:
+                self._record_provider_failure(error)
+                raise
+            models: list[dict[str, str]] = []
+            seen: set[str] = set()
+            for item in raw_models:
+                catalog_model = self._catalog_model(item)
+                if catalog_model is not None and catalog_model["id"] not in seen:
+                    models.append(catalog_model)
+                    seen.add(catalog_model["id"])
+            if not any(item["id"] == model for item in models):
+                raise AntigravityError(
+                    422, "model_unavailable", "Antigravity model is unavailable."
+                )
+            yield {
+                "provider": "antigravity",
+                "connection_version": connection_version,
+                "model": model,
+                "reasoning_effort": effort,
+            }
+
     def _record_provider_failure(self, error: AntigravityError) -> None:
         if error.code != "reconnect_required":
             return

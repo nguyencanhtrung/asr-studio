@@ -533,6 +533,50 @@ def test_startup_migrates_legacy_disconnected_account_binding(tmp_path):
     }
 
 
+def test_explicit_notes_recipe_uses_live_catalog_without_saved_model_or_preference_writes(tmp_path):
+    adapter = FakeChatGPTAdapter()
+    provider = provider_for(tmp_path, adapter)
+    connect(provider)
+    before = provider.store._read()
+
+    with provider.notes_task_pin_for_run(model="gpt-6.1-sol", reasoning_effort="high") as pin:
+        assert pin == {
+            "provider": "chatgpt",
+            "connection_version": 1,
+            "model": "gpt-6.1-sol",
+            "reasoning_effort": "high",
+        }
+
+    after = provider.store._read()
+    assert len(adapter.model_calls) == 1
+    assert after["selected_model"] == before["selected_model"] is None
+    assert after["selected_reasoning_effort"] == before["selected_reasoning_effort"]
+    assert after["notes_provider"] == before["notes_provider"]
+
+    with (
+        pytest.raises(ChatGPTError) as unavailable,
+        provider.notes_task_pin_for_run(model="gpt-not-listed", reasoning_effort="default"),
+    ):
+        pass
+    assert (unavailable.value.status_code, unavailable.value.code) == (422, "model_unavailable")
+
+    with (
+        pytest.raises(ChatGPTError) as unsupported_effort,
+        provider.notes_task_pin_for_run(model="gpt-6.1-sol", reasoning_effort="none"),
+    ):
+        pass
+    assert unsupported_effort.value.code == "invalid_reasoning_effort"
+
+    with provider.store.locked(write=True) as state:
+        state["connection_status"] = "disconnected"
+    with (
+        pytest.raises(ChatGPTError) as disconnected,
+        provider.notes_task_pin_for_run(model="gpt-6.1-sol", reasoning_effort="high"),
+    ):
+        pass
+    assert disconnected.value.code == "provider_disconnected"
+
+
 def test_missing_direct_scope_requires_reconnect_without_inference(tmp_path):
     adapter = FakeChatGPTAdapter()
     adapter.scopes = "openid profile offline_access"

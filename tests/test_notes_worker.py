@@ -7,11 +7,16 @@ import sqlite3
 import sys
 import threading
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import pytest
-from notes_helpers import StubNotesProvider, seed_cited_notes, seed_completed_transcript
+from notes_helpers import (
+    StubNotesProvider,
+    rerun_transcript,
+    seed_cited_notes,
+    seed_completed_transcript,
+)
 
 from asr_studio import worker
 from asr_studio.config import Settings
@@ -22,6 +27,7 @@ from asr_studio.tasks import (
     TaskError,
     cancel_task,
     claim_next_task,
+    transcription_state,
     update_current_generation_segment_text,
 )
 from asr_studio.worker import acquire_worker_lock, heartbeat_path
@@ -65,6 +71,76 @@ def _accept(
         worker_ready=True,
         output_language=output_language,
     )
+
+
+class _ExplicitWorkerProvider:
+    def assert_notes_acceptable(self):
+        return None
+
+    @contextmanager
+    def notes_task_pin_for_run(self, *, model: str, reasoning_effort: str):
+        yield {
+            "provider": "chatgpt",
+            "connection_version": 17,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+        }
+
+
+def test_notes_worker_reads_pinned_historical_snapshot_and_task_recipe(
+    tmp_path, monkeypatch, capsys
+):
+    from asr_studio import notes_runner
+
+    data_dir = tmp_path / "data"
+    meeting_id, historical_generation_id, _ = seed_completed_transcript(data_dir)
+    rerun_transcript(data_dir, meeting_id)
+    current = transcription_state(data_dir, meeting_id)["generation"]
+    run = {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "high",
+        "generation_id": historical_generation_id,
+        "source_version": 1,
+    }
+    accepted = accept_notes_task(
+        data_dir,
+        provider=_ExplicitWorkerProvider(),
+        meeting_id=meeting_id,
+        request_id="worker-explicit-historical-001",
+        expected_generation_id=current["id"],
+        expected_source_version=current["source_version"],
+        expected_metadata_version=1,
+        worker_ready=True,
+        run=run,
+    )
+    claimed = claim_next_task(data_dir, owner_id="worker-explicit-owner")
+    assert claimed is not None and claimed["id"] == accepted["id"]
+    monkeypatch.setenv("ASR_PROVIDER_DIR", str(tmp_path / "provider"))
+    calls = []
+
+    class StubProvider:
+        def __init__(self, _directory, *, callback_url):
+            assert callback_url == ""
+
+        def generate_notes_document(self, *, snapshot, **kwargs):
+            calls.append({"snapshot": snapshot, **kwargs})
+            return {"schema_version": 1}
+
+    monkeypatch.setattr(notes_runner, "ChatGPTProvider", StubProvider)
+    monkeypatch.setattr(notes_runner, "render_markdown", lambda *_args, **_kwargs: "# Notes\n")
+    monkeypatch.setattr(notes_runner, "build_citations", lambda *_args, **_kwargs: [])
+
+    assert notes_runner.run_notes_task(data_dir, accepted["id"], "worker-explicit-owner") == 0
+    assert calls[0]["connection_version"] == 17
+    assert calls[0]["model"] == "gpt-6.1-sol"
+    assert calls[0]["reasoning_effort"] == "high"
+    assert calls[0]["snapshot"]["generation_id"] == historical_generation_id
+    assert [segment["text"] for segment in calls[0]["snapshot"]["segments"]] == [
+        "We need a launch plan.",
+        "Morgan will send a draft.",
+    ]
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["type"] == "result"
 
 
 def test_notes_runner_uses_the_durable_language_pin_for_provider_and_render(

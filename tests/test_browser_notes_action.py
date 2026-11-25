@@ -559,11 +559,27 @@ def test_the_action_area_fits_360px_in_both_themes(live, signed_in, scheme):
     page.locator("#notes-change").click()
     assert_fits_and_reads(page)
 
-    # And the prompt to connect, in the same place.
+    # A different connected provider can be used for just this run without changing defaults.
     mock_providers(page, live, antigravity="disconnected")
+    announce_choice_change(page)
+    expect(start).to_have_text("Tạo lại notes")
+    assert_fits_and_reads(page)
+    start.click()
+    expect(page.locator("#notes-regenerate-provider")).to_have_value("chatgpt")
+    expect(page.locator("#notes-regenerate-provider option[value=antigravity]")).to_be_disabled()
+    page.keyboard.press("Escape")
+    expect(start).to_be_focused()
+    expect(page.locator("#notes-provider")).to_have_value("antigravity")
+
+    # When none is connected, the same action still opens the saved provider's connection page.
+    mock_providers(page, live, chatgpt="disconnected", antigravity="disconnected")
     announce_choice_change(page)
     expect(start).to_have_text("Kết nối Google Antigravity để tạo notes")
     assert_fits_and_reads(page)
+    start.click()
+    expect(page.locator("#settings-page-antigravity")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(start).to_be_focused()
 
 
 def test_at_360px_the_action_takes_the_whole_row_and_change_sits_below_it(live, signed_in):

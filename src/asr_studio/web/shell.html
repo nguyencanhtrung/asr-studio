@@ -309,6 +309,7 @@
             <div class="notes-run" id="notes-run">
               <div class="notes-run-actions">
                 <button class="primary-button" id="notes-start" type="button" aria-describedby="notes-status" disabled>Tạo notes</button>
+                <button class="text-button" id="notes-review-correction" type="button" hidden>Xem lại lựa chọn bị từ chối</button>
                 <button class="secondary-button" id="notes-cancel" type="button" hidden>Hủy</button>
                 <button class="text-button" id="notes-change" type="button" aria-expanded="false" aria-controls="notes-choice">Đổi…</button>
               </div>
@@ -670,6 +671,49 @@
       <div class="notes-copy-controls">
         <button class="primary-button" id="notes-copy-confirm" type="button">Sao chép</button>
         <button class="secondary-button" id="notes-copy-close" type="button">Đóng</button>
+      </div>
+    </dialog>
+
+    <dialog class="notes-regenerate-dialog" id="notes-regenerate-dialog" aria-labelledby="notes-regenerate-title" aria-describedby="notes-regenerate-intro">
+      <div class="notes-regenerate-header">
+        <h2 id="notes-regenerate-title" tabindex="-1">Tạo lại notes</h2>
+        <p id="notes-regenerate-intro">Chọn công thức và bản transcript đã lưu cho lần chạy này. Lựa chọn này không đổi cài đặt cho lần chạy sau.</p>
+      </div>
+      <div class="notes-regenerate-fields">
+        <div class="notes-regenerate-field">
+          <label for="notes-regenerate-provider">Nhà cung cấp</label>
+          <select id="notes-regenerate-provider" aria-describedby="notes-regenerate-provider-help"></select>
+          <p class="notes-regenerate-help" id="notes-regenerate-provider-help">Chỉ provider đang kết nối mới gửi được yêu cầu.</p>
+        </div>
+        <div class="notes-regenerate-field">
+          <label for="notes-regenerate-model">Model</label>
+          <select id="notes-regenerate-model" aria-describedby="notes-regenerate-model-help"></select>
+          <p class="notes-regenerate-help" id="notes-regenerate-model-help">Danh sách model lấy từ nhà cung cấp.</p>
+        </div>
+        <div class="notes-regenerate-field">
+          <label for="notes-regenerate-effort">Mức suy nghĩ</label>
+          <select id="notes-regenerate-effort"></select>
+        </div>
+        <div class="notes-regenerate-field notes-regenerate-source-field">
+          <label for="notes-regenerate-source">Nguồn transcript</label>
+          <select id="notes-regenerate-source" aria-describedby="notes-regenerate-source-help"></select>
+          <p class="notes-regenerate-help" id="notes-regenerate-source-help">Nguồn lịch sử là bản đã lưu, không bị thay đổi bởi chỉnh sửa hiện tại.</p>
+          <button class="text-button notes-regenerate-source-adopt" id="notes-regenerate-source-adopt" type="button" hidden>Dùng nguồn transcript đã cập nhật</button>
+        </div>
+        <div class="notes-regenerate-field">
+          <label for="notes-regenerate-language">Ngôn ngữ đầu ra</label>
+          <select id="notes-regenerate-language">
+            <option value="en">English</option>
+            <option value="vi">Tiếng Việt</option>
+          </select>
+        </div>
+      </div>
+      <p class="notes-regenerate-status" id="notes-regenerate-status" role="status" aria-live="polite"></p>
+      <p class="notes-regenerate-error" id="notes-regenerate-error" role="alert" hidden></p>
+      <button class="text-button notes-regenerate-reload" id="notes-regenerate-reload" type="button" hidden>Tải lại provider và model</button>
+      <div class="notes-regenerate-controls">
+        <button class="secondary-button" id="notes-regenerate-cancel" type="button">Hủy</button>
+        <button class="primary-button" id="notes-regenerate-submit" type="button">Tạo lại notes</button>
       </div>
     </dialog>
 
