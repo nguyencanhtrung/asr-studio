@@ -899,7 +899,7 @@ test("explicit regeneration keeps the exact request across an uncertain retry an
   const cancelledMessage = notes(env).runError;
   env.store.dispatch({
     type: "notes/response",
-    meta: { op: "start", meetingId: "m1", requestId: firstBody.request_id, explicit: true, attempt: beforeCancel.startAttempt },
+    meta: { op: "start", meetingId: "m1", requestId: firstBody.request_id, explicit: true, attempt: beforeCancel.startAttempts.m1 },
     response: { status: 202, body: { ...TASK, status: "accepted" } },
   });
   assert.equal(notes(env).runError, cancelledMessage);
@@ -2912,4 +2912,134 @@ test("regenerate model or effort picks pin their provider across status refresh 
     assert.match(text(view.error), /ChatGPT chưa sẵn sàng/);
     assert.equal(posts(env, "/notes-runs").length, 0);
   }
+});
+
+test("a background failure settles the originating Notes request without changing the other dialog", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-language-picked", { language: "vi" });
+  env.dispatch("regenerate-submit", { requestId: TASK.request_id });
+  const frozen = env.state().pending.m1;
+
+  env.context(meeting("m2"));
+  await env.answer(env.is("GET", "/api/meetings/m2/notes"), 200, notesBody([revision({ id: "r2", meeting_id: "m2" })]));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: "req-other-meeting" });
+  const otherDialog = env.state().regenerate;
+  await env.fail(env.is("POST", "/api/meetings/m1/notes-runs"));
+
+  assert.equal(env.state().meetingId, "m2");
+  assert.deepEqual(env.state().regenerate, otherDialog);
+  assert.equal(notes(env, "m2").starting, true);
+  assert.equal(env.state().pending.m2.request_id, "req-other-meeting");
+  assert.equal(notes(env).starting, false);
+  assert.deepEqual(env.state().pending.m1, frozen);
+
+  env.context(meeting());
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+  assert.equal(selectView(env.state()).run.disabled, false);
+  env.dispatch("start-clicked", { requestId: "ignored-retry-id" });
+  assert.deepEqual(posts(env, "/notes-runs").at(-1).body, frozen);
+});
+
+test("a Notes read confirming the exact request settles its dialog before a late POST response", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: TASK.request_id });
+  const post = env.waiting(env.is("POST", "/notes-runs"))[0];
+  assert.ok(post);
+
+  env.context(meeting());
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()], TASK, true));
+  assert.equal(env.state().pending.m1, undefined);
+  assert.equal(notes(env).starting, false);
+  assert.equal(notes(env).task.id, TASK.id);
+  assert.equal(selectView(env.state()).regenerateDialog.open, false);
+
+  // The confirming read wins even if the old POST callback arrives with a network error.
+  post.done = true;
+  post.reject(new TypeError("offline"));
+  await tick();
+  assert.equal(notes(env).task.id, TASK.id);
+  assert.equal(selectView(env.state()).regenerateDialog.open, false);
+  assert.equal(env.state().pending.m1, undefined);
+});
+
+test("an uncertain retry after reload displays the exact frozen recipe even without current options", async () => {
+  const env = setup();
+  const frozen = {
+    request_id: TASK.request_id,
+    expected_generation_id: "g1",
+    expected_source_version: 2,
+    expected_metadata_version: 3,
+    output_language: "vi",
+    run: {
+      provider: "chatgpt",
+      model: "previous-model",
+      reasoning_effort: "high",
+      generation_id: "saved-transcript",
+      source_version: 7,
+    },
+  };
+  env.context(meeting(), { stored: { pending: JSON.stringify(frozen) } });
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+
+  env.dispatch("start-clicked", { requestId: "ignored-retry-id" });
+  assert.deepEqual(posts(env, "/notes-runs").at(-1).body, frozen);
+  await env.fail(env.is("POST", "/notes-runs"));
+
+  const view = selectView(env.state()).regenerateDialog;
+  assert.equal(view.open, true);
+  assert.equal(view.locked, true);
+  assert.equal(view.provider, frozen.run.provider);
+  assert.equal(view.model, frozen.run.model);
+  assert.equal(view.reasoningEffort, frozen.run.reasoning_effort);
+  assert.equal(view.generationId, frozen.run.generation_id);
+  assert.equal(view.sourceVersion, frozen.run.source_version);
+  assert.equal(view.outputLanguage, frozen.output_language);
+  assert.ok(view.modelItems.some((item) => item.value === frozen.run.model));
+  assert.ok(view.sourceItems.some((item) => item.value === frozen.run.generation_id));
+  assert.deepEqual(env.state().pending.m1, frozen);
+});
+
+test("a locked recovered recipe names its pinned version when the same generation has changed", async () => {
+  const env = setup();
+  const frozen = {
+    request_id: TASK.request_id,
+    expected_generation_id: "g1",
+    expected_source_version: 2,
+    expected_metadata_version: 3,
+    output_language: "vi",
+    run: {
+      provider: "chatgpt",
+      model: "m1",
+      reasoning_effort: "default",
+      generation_id: "g1",
+      source_version: 1,
+    },
+  };
+  env.context(meeting(), { stored: { pending: JSON.stringify(frozen) } });
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+  env.dispatch("regenerate-clicked");
+
+  const view = selectView(env.state()).regenerateDialog;
+  assert.equal(view.locked, true);
+  assert.equal(view.sourceVersion, 1);
+  const displayed = view.sourceItems.find((item) => item.value === view.generationId);
+  assert.match(text(displayed.text), /nguồn 1(?:\D|$)/);
+  assert.deepEqual(env.state().pending.m1, frozen);
 });

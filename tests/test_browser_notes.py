@@ -1739,3 +1739,54 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     normal = page.evaluate(durations)
     assert normal[:2] == [0, 0]  # Xem and Viết switch instantly whatever the preference
     assert min(normal[3:]) > 0.001  # the original copy and export icons still animate
+
+
+def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(live, signed_in):
+    _context, page = signed_in(viewport={"width": 390, "height": 900})
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
+    body = {
+        "request_id": "fixture-restored-run",
+        "expected_generation_id": snapshot["generation_id"],
+        "expected_source_version": 1,
+        "expected_metadata_version": 1,
+        "output_language": "vi",
+        "run": {
+            "provider": "chatgpt",
+            "model": "previous-model",
+            "reasoning_effort": "high",
+            "generation_id": snapshot["generation_id"],
+            "source_version": 1,
+        },
+    }
+
+    page.evaluate(
+        """([id, body]) => sessionStorage.setItem(
+            `asr-studio:notes-request-v2:${id}`,
+            JSON.stringify(body)
+        )""",
+        [meeting_id, body],
+    )
+    page.route(
+        f"{live.url}/api/meetings/{meeting_id}/notes-runs",
+        lambda route: route.fulfill(
+            status=503, json={"detail": {"code": "temporary_failure", "message": "Try again."}}
+        ),
+    )
+    _open_saved_notes(live, page, meeting_id)
+    start = page.locator("#notes-start")
+    expect(start).to_have_text("Xác minh yêu cầu notes")
+    with page.expect_request(lambda request: request.url.endswith("/notes-runs")) as sent:
+        start.click()
+    assert sent.value.post_data_json == body
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    for name, value in (
+        ("provider", body["run"]["provider"]),
+        ("model", body["run"]["model"]),
+        ("effort", body["run"]["reasoning_effort"]),
+        ("source", body["run"]["generation_id"]),
+        ("language", body["output_language"]),
+    ):
+        field = page.locator(f"#notes-regenerate-{name}")
+        expect(field).to_have_value(value)
+        expect(field).to_be_disabled()
+    expect(page.locator("#notes-regenerate-submit")).to_have_text("Xác minh yêu cầu notes")

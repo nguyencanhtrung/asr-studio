@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,13 @@ from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 
 from asr_studio import notes_routes
-from asr_studio.notes import accept_notes_task, get_note, publish_notes_revision, update_note
+from asr_studio.notes import (
+    ABSENT,
+    accept_notes_task,
+    get_note,
+    publish_notes_revision,
+    update_note,
+)
 from asr_studio.storage import database_path
 from asr_studio.tasks import claim_next_task, fail_task
 
@@ -51,19 +58,26 @@ class PinnedStub(StubNotesProvider):
             }
         return super().notes_task_pin()
 
+    @contextmanager
+    def notes_task_pin_for_run(self, *, model: str, reasoning_effort: str):
+        with self.store.operation():
+            yield {**self.notes_task_pin(), "model": model, "reasoning_effort": reasoning_effort}
+
 
 @pytest.fixture
 def fake_notes_provider(monkeypatch):
     original_accept = notes_routes.accept_notes_task
 
-    def accept_with_stub(data_dir, *, provider, provider_id="chatgpt", **kwargs):
+    def accept_with_stub(data_dir, *, provider, provider_id="chatgpt", run=ABSENT, **kwargs):
+        selected = provider_id if run is ABSENT else run["provider"]
         return original_accept(
             data_dir,
             provider=PinnedStub(
-                provider_id,
-                provider.saved_notes_effort() if provider_id == "antigravity" else "high",
+                selected,
+                provider.saved_notes_effort() if selected == "antigravity" else "high",
             ),
             provider_id=provider_id,
+            run=run,
             **kwargs,
         )
 
@@ -289,12 +303,19 @@ def test_antigravity_run_produces_labelled_revision_and_regeneration_keeps_edits
     expect(page.locator("#notes-start")).to_have_text(
         "Tạo lại notes · English · ChatGPT GPT 6.1 Sol"
     )
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-regenerate-provider")).to_have_value("chatgpt")
+    expect(page.locator("#notes-regenerate-model")).to_have_value(CHATGPT_MODEL)
+    assert len(runs) == 1
     with page.expect_response(
         lambda response: response.url.endswith("/notes-runs") and response.request.method == "POST"
     ) as second_response:
-        page.locator("#notes-start").click()
+        page.locator("#notes-regenerate-submit").click()
+    assert second_response.value.status == 202
     second_task = second_response.value.json()
-    assert runs[1]["provider"] == "chatgpt" and second_task["provider"] == "chatgpt"
+    assert runs[1]["run"]["provider"] == "chatgpt"
+    assert runs[1]["run"]["model"] == CHATGPT_MODEL
+    assert second_task["provider"] == "chatgpt"
     second = complete(live.settings.data_dir, second_task["id"], "# Second\n\nChatGPT notes.\n")
     expect(page.locator("#notes-revision-selector option")).to_have_count(2, timeout=10_000)
     options = page.locator("#notes-revision-selector option").all_text_contents()

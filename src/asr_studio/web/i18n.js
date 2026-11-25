@@ -1269,6 +1269,8 @@ const { t, UI_LOCALE } = (() => {
       "Chỉ provider đang kết nối mới gửi được yêu cầu.": "Only a connected provider can send a request.",
       "Chọn công thức và bản transcript đã lưu cho lần chạy này. Lựa chọn này không đổi cài đặt cho lần chạy sau.": "Choose the recipe and saved transcript for this run. This choice does not change the setting for the next run.",
       "Danh sách model chưa sẵn sàng": "The model list is not ready",
+      "{model} — danh sách model chưa sẵn sàng": "{model} — the model list is not ready",
+      "Bản transcript đã lưu {id} · nguồn {version} — không khả dụng": "Saved transcript {id} · source {version} — unavailable",
       "Danh sách model lấy từ nhà cung cấp.": "The model list comes from the provider.",
       "Không suy nghĩ thêm": "No extra reasoning",
       "Model đã chọn không còn trong danh sách của {provider}.": "The selected model is no longer in {provider}'s list.",

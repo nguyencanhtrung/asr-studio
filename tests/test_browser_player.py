@@ -1297,7 +1297,10 @@ def test_delayed_saved_source_card_does_not_override_newer_timestamp_seek(
     )
 
 
-def test_newer_notes_source_cancels_an_older_historical_metadata_wait(live, signed_in, tmp_path):
+@pytest.mark.parametrize("media_first", [True, False], ids=["metadata-first", "source-first"])
+def test_newer_notes_source_cancels_an_older_historical_metadata_wait(
+    live, signed_in, tmp_path, media_first
+):
     meeting_id, old_revision, old_snapshot, segment_ids = seed_long_cited_notes(live, tmp_path)
 
     def newer_document(ids):
@@ -1343,15 +1346,34 @@ def test_newer_notes_source_cancels_an_older_historical_metadata_wait(live, sign
     page.route(new_snapshot_url, lambda route: held_snapshot.append(route))
     page.locator(CHIP).filter(has_text="00:02").click()
     assert held_audio and held_snapshot
-    for route in held_audio[:]:
-        route.continue_()
-    page.unroute(audio_url)
+    # Only the superseded seek saw the synthetic unready value. The next seek must see
+    # the native readiness whether metadata is delivered before or after its source.
+    audio = page.locator("#meeting-audio")
+    audio.evaluate("element => delete element.readyState")
+
+    def deliver_audio():
+        for route in held_audio[:]:
+            route.continue_()
+        page.unroute(audio_url)
+
+    if media_first:
+        deliver_audio()
+        page.wait_for_function(
+            "() => document.querySelector('#meeting-audio').readyState "
+            ">= HTMLMediaElement.HAVE_METADATA"
+        )
+        # The old wait was already superseded. Delivering metadata cannot run its seek.
+        assert audio.evaluate("element => element.currentTime") < 1.0
+
     for route in held_snapshot[:]:
         route.continue_()
     page.unroute(new_snapshot_url)
     page.wait_for_function(
         "() => document.querySelector('#notes-source-time').textContent === '00:00:02'"
     )
+    if not media_first:
+        assert audio.evaluate("element => element.readyState") == 0
+        deliver_audio()
     page.wait_for_function(
         "() => !document.querySelector('#meeting-audio').seeking "
         "&& document.querySelector('#meeting-audio').currentTime >= 1.7 "
