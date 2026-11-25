@@ -85,14 +85,16 @@ def prepared_diarization_directory(path: Path) -> Path:
             if not candidate.is_file():
                 raise OSError
             with candidate.open("rb") as model_file:
-                is_lfs_pointer = model_file.read(len(_GIT_LFS_POINTER_PREFIX)).startswith(
-                    _GIT_LFS_POINTER_PREFIX
-                )
+                prefix = model_file.read(len(_GIT_LFS_POINTER_PREFIX))
         except (OSError, ValueError):
             raise DiarizationConfigurationError(
                 f"The local Community-1 model is missing {relative_path.as_posix()}."
             ) from None
-        if is_lfs_pointer:
+        if not prefix:
+            raise DiarizationConfigurationError(
+                f"The local Community-1 file {relative_path.as_posix()} is empty."
+            )
+        if prefix.startswith(_GIT_LFS_POINTER_PREFIX):
             raise DiarizationConfigurationError(
                 f"The local Community-1 file {relative_path.as_posix()} is still a Git LFS pointer."
             )

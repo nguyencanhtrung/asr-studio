@@ -302,7 +302,7 @@ async def test_diarization_capability_route_is_authoritative_and_authenticated(t
                 assert response.json()[mode]["reason"] == "worker_unavailable"
 
 
-@pytest.mark.parametrize("file_change", ["missing", "lfs_pointer"])
+@pytest.mark.parametrize("file_change", ["missing", "lfs_pointer", "empty"])
 async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
     tmp_path, file_change
 ):
@@ -319,8 +319,11 @@ async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url=settings.public_url) as client:
             headers = await _authorize(client, settings)
-            meeting_id, generation_id, _ = seed_completed_transcript(
+            meeting_id, generation_id, segment_ids = seed_completed_transcript(
                 settings.data_dir, title="Stale Community-1 readiness fixture"
+            )
+            _, revision, _, _ = seed_cited_notes(
+                settings.data_dir, existing=(meeting_id, generation_id, segment_ids)
             )
             prepare_recording(settings.data_dir, meeting_id)
             before = _admission_state(settings.data_dir)
@@ -337,32 +340,63 @@ async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
                 capability = await client.get("/api/diarization-capability", headers=headers)
                 assert capability.status_code == 200
                 assert capability.json()["community_1"]["ready"] is True
+                assert capability.json()["off"]["ready"] is True
                 model = community / "embedding" / "pytorch_model.bin"
                 if file_change == "missing":
                     model.unlink()
-                else:
+                elif file_change == "lfs_pointer":
                     model.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid fixture\n")
+                else:
+                    model.write_bytes(b"")
                 payload = {
                     "meeting_id": meeting_id,
                     "request_id": f"catalog-stale-community-{file_change}",
                     "expected_generation_id": generation_id,
                     "diarization_mode": "community-1",
                 }
-                refused = await client.post("/api/tasks", headers=headers, json=payload)
-                assert refused.status_code == 503
-                assert refused.json()["detail"]["code"] == "diarization_model_unavailable"
-                assert _admission_state(settings.data_dir) == before
-
                 capability = await client.get("/api/diarization-capability", headers=headers)
                 assert capability.status_code == 200
-                assert capability.json()["community_1"]["ready"] is False
-                assert capability.json()["community_1"]["reason"] == "model_unavailable"
+                refused = await client.post("/api/tasks", headers=headers, json=payload)
+                community_1 = capability.json()["community_1"]
+                assert (community_1["ready"], refused.status_code) == (False, 503)
+                assert community_1 == {
+                    "id": "community-1",
+                    "ready": False,
+                    "state": "unavailable",
+                    "reason": "model_unavailable",
+                    "operator_prepared": False,
+                }
+                assert refused.json() == {
+                    "detail": {
+                        "code": "diarization_model_unavailable",
+                        "message": "The configured local Community-1 model is not prepared.",
+                    }
+                }
+                assert _admission_state(settings.data_dir) == before
+
+                meeting = await client.get(f"/api/meetings/{meeting_id}", headers=headers)
+                assert meeting.status_code == 200
+                generation = meeting.json()["transcription"]["generation"]
+                assert generation["id"] == generation_id
+                assert generation["segments"][0]["text"] == "We need a launch plan."
+                notes = await client.get(f"/api/notes/{revision['id']}/export", headers=headers)
+                assert notes.status_code == 200
+                assert notes.text == revision["markdown"]
+
                 assert capability.json()["off"]["ready"] is True
                 off_payload = {
                     **payload,
                     "request_id": f"off-{file_change}",
                     "diarization_mode": "off",
                 }
+                asr_weights = settings.asr_model_path / "model.bin"
+                saved_weights = asr_weights.rename(tmp_path / "saved-asr.bin")
+                unavailable = await client.post("/api/tasks", headers=headers, json=off_payload)
+                assert unavailable.status_code == 503
+                assert unavailable.json()["detail"]["code"] == "model_unavailable"
+                assert _admission_state(settings.data_dir) == before
+                saved_weights.rename(asr_weights)
+
                 accepted = await client.post("/api/tasks", headers=headers, json=off_payload)
                 assert accepted.status_code == 202
                 task = await client.get(f"/api/tasks/{accepted.json()['id']}", headers=headers)
@@ -463,20 +497,19 @@ async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypa
                 if loss == "fifo":
                     audio.unlink()
                 backup.rename(audio)
-            accepted = await client.post(
-                "/api/tasks",
-                headers=headers,
-                json={**request, "request_id": "recording-accepted"},
-            )
+            accepted_request = {**request, "request_id": "recording-accepted"}
+            accepted = await client.post("/api/tasks", headers=headers, json=accepted_request)
             assert accepted.status_code == 202
             assert accepted.json()["diarization_mode"] == mode
-            audio.unlink()
             after_accept = _admission_state(settings.data_dir)
-            replay = await client.post(
-                "/api/tasks",
-                headers=headers,
-                json={**request, "request_id": "recording-accepted"},
-            )
+            if mode == "community-1":
+                (settings.diarization_model_path / "embedding/pytorch_model.bin").write_bytes(b"")
+                replay = await client.post("/api/tasks", headers=headers, json=accepted_request)
+                assert replay.status_code == 202
+                assert replay.json() == accepted.json()
+                assert _admission_state(settings.data_dir) == after_accept
+            audio.unlink()
+            replay = await client.post("/api/tasks", headers=headers, json=accepted_request)
             assert replay.status_code == 202
             assert replay.json() == accepted.json()
             assert _admission_state(settings.data_dir) == after_accept
