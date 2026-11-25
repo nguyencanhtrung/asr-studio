@@ -861,6 +861,7 @@ const RERUN_MODE_REASONS = {
   model_unavailable: t("Community-1 chưa sẵn sàng trên máy này."),
   worker_unavailable: t("Worker chưa sẵn sàng để xác nhận Community-1."),
   off_worker_unavailable: t("Worker chưa sẵn sàng để xác nhận Off."),
+  rollback_fence: t("Chế độ tắt đang tạm khóa."),
 };
 
 function formatElapsedSeconds(value) {
@@ -1627,7 +1628,11 @@ function renderTranscriptGeneration(generation, editable) {
   if (segments.length && segments.every((segment) => segment.avg_logprob === null)) {
     meta.push(t("“cần kiểm tra” không xét độ tin cậy của chữ"));
   }
-  if (generation.diarization_model_name) meta.push(`Diarization · ${generation.diarization_model_name}`);
+  if (generation.diarization_mode === "off") {
+    meta.push(t("Đã tắt nhận dạng người nói"));
+  } else if (generation.diarization_model_name) {
+    meta.push(`Diarization · ${generation.diarization_model_name}`);
+  }
   const reviewCount = segments.filter(needsReview).length;
   $("#generation-summary").textContent = reviewCount
     ? t("{count} đoạn · {review} cần kiểm tra", { count: generation.segment_count, review: reviewCount })
@@ -2581,7 +2586,6 @@ function renderTranscription(transcription) {
 
   renderLanguageControl(view);
   renderModelControl(view);
-  renderRerunDialog(view);
   renderRuntimeProfile(transcription && transcription.runtime);
 
   startButton.hidden = view.active;
@@ -2635,6 +2639,7 @@ function renderTranscription(transcription) {
   const status = $("#transcription-status");
   status.dataset.workerState = task && task.worker_state ? task.worker_state : "";
   status.classList.toggle("is-checking-worker", workerChecking);
+  renderRerunDialog(view, startButton, status);
   renderMeetingProcessingStatus(task, generation);
   for (const timestamp of $("#transcript-segments").querySelectorAll("button[data-seek-seconds]")) {
     timestamp.disabled = !recording.ready;
@@ -2676,16 +2681,20 @@ function renderModelControl(view) {
   setProp($("#transcription-model-command"), "value", model.command);
 }
 
-function renderRerunDialog(view) {
+function renderRerunDialog(view, opener, taskStatus) {
   const dialog = $("#transcription-rerun-dialog");
   const rerun = view.rerun;
   if (!rerun || !rerun.open) {
     if (dialog.open) {
       dialog.close();
-      const opener = $("#start-transcription");
-      if (!view.active && !view.requestBusy && opener && !opener.hidden && !opener.disabled) {
+      if (view.requestBusy) {
+        taskStatus.tabIndex = -1;
+        taskStatus.focus({ preventScroll: true });
+      } else if (!opener.hidden && !opener.disabled) {
         opener.focus({ preventScroll: true });
       }
+    } else if (view.error.visible && document.activeElement === taskStatus && !opener.hidden && !opener.disabled) {
+      opener.focus({ preventScroll: true });
     }
     return;
   }

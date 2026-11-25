@@ -653,13 +653,59 @@ test("a rerun submits the current generation, selected mode and model, then repl
     expectedGenerationId: "g1",
   });
 
+  const storageKey = requestStorageKey("m1");
+  const frozen = env.stored.get(storageKey);
   await env.answer((r) => r.url === "/api/tasks", 503, { detail: "gateway timeout" });
+  assert.equal(env.stored.get(storageKey), frozen);
   env.send("task/start-clicked", { requestId: "new-id-must-not-win" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/rerun-choice", { languageHint: "en", asrModel: "auto", diarizationMode: "community-1" });
+  assert.equal(env.view().rerun.replay, true);
+  assert.equal(env.view().rerun.diarizationMode, "off");
+  assert.equal(env.view().rerun.languageHint, "vi");
+  assert.equal(env.view().rerun.asrModel, "qwen3-asr-1.7b");
   env.send("task/rerun-submitted", { requestId: "new-id-must-not-win" });
   const replay = env.sent("/api/tasks")[1];
-  assert.equal(replay.body.request_id, "rerun-request");
-  assert.equal(replay.body.expected_generation_id, "g1");
-  assert.equal(replay.body.diarization_mode, "off");
+  assert.deepEqual(replay.body, first.body);
+});
+
+test("a typed rollback fence clears the pending Off request and requires a fresh choice", async () => {
+  const env = await opened(withGenerationChoices());
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  env.send("task/start-clicked", { requestId: "first-open" });
+  await env.answer(GET_CAPABILITY, 200, CAPABILITY);
+  const staleCapability = env.task().capability.requestId;
+  env.send("task/rerun-choice", { diarizationMode: "off" });
+  env.send("task/rerun-submitted", { requestId: "off-request" });
+
+  await env.answer((r) => r.url === "/api/tasks", 503, {
+    detail: { code: "diarization_rollback_fence", message: "Explicit Off runs are temporarily disabled." },
+  });
+  assert.equal(env.stored.has(requestStorageKey("m1")), false);
+  assert.equal(env.view().rerun.open, false);
+  assert.equal(env.sent("/api/tasks").length, 1);
+
+  env.send("task/start-clicked", { requestId: "second-open" });
+  env.send("task/capability-loaded", {
+    meta: { meetingId: "m1", generationId: "g1", requestId: staleCapability },
+    response: { body: CAPABILITY },
+  });
+  assert.equal(env.view().rerun.capability.status, "loading");
+  assert.equal(env.view().rerun.canSubmit, false);
+  await env.answer(GET_CAPABILITY, 200, {
+    ...CAPABILITY,
+    off: { ...CAPABILITY.off, ready: false, state: "unavailable", reason: "rollback_fence" },
+  });
+  assert.equal(env.view().rerun.replay, false);
+  assert.equal(env.view().rerun.diarizationMode, "community-1");
+  assert.equal(env.view().rerun.canSubmit, true);
+  assert.equal(env.sent("/api/tasks").length, 1);
+
+  env.send("task/rerun-submitted", { requestId: "community-request" });
+  assert.deepEqual(env.sent("/api/tasks").map(({ body }) => [body.request_id, body.diarization_mode]), [
+    ["off-request", "off"],
+    ["community-request", "community-1"],
+  ]);
 });
 
 test("capability failure is retryable and a stale capability answer cannot replace the retry", async () => {

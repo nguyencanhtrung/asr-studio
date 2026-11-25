@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -18,10 +19,13 @@ from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 
 from asr_studio.runtime import RuntimeProfile, read_runtime_profile, write_runtime_profile
+from asr_studio.storage import database_path
 from asr_studio.tasks import (
+    add_current_generation_speaker,
     claim_next_task,
     finish_interrupted_task,
     publish_complete_generation,
+    reassign_current_generation_speaker,
     update_task_progress,
 )
 from asr_studio.worker import acquire_worker_lock, write_heartbeat
@@ -291,12 +295,20 @@ def test_restored_rerun_replays_unavailable_original_choices_and_refreshes_capab
     expect(page.locator("#rerun-capability-status")).to_contain_text("Chưa có xác nhận từ server")
     expect(page.locator("#transcription-rerun-submit")).to_be_enabled()
 
+    alert = page.locator("#transcription-error")
+    status = page.locator("#transcription-status")
+    start = page.locator("#start-transcription")
     page.locator("#transcription-rerun-submit").click()
-    expect(page.locator("#transcription-error")).to_be_visible()
-    page.get_by_role("button", name="Chạy lại", exact=True).click()
+    expect(alert).to_contain_text("Bấm lại để xác minh")
+    expect(status).to_have_text("Transcript đã được lưu hoàn chỉnh.")
+    expect(start).to_be_focused()
+    start.click()
     expect(page.locator("#transcription-rerun-dialog")).to_be_visible()
     assert len(capability_requests) >= 2
     page.locator("#transcription-rerun-submit").click()
+    expect(alert).to_contain_text("Bấm lại để xác minh")
+    expect(status).to_have_text("Transcript đã được lưu hoàn chỉnh.")
+    expect(start).to_be_focused()
     assert len(bodies) == 2
     assert bodies[0] == bodies[1]
     assert bodies[0] == {
@@ -307,6 +319,245 @@ def test_restored_rerun_replays_unavailable_original_choices_and_refreshes_capab
         "diarization_mode": "off",
         "expected_generation_id": generation_id,
     }
+
+
+@pytest.mark.parametrize("lang", ["vi", "en"])
+def test_rollback_refusal_reopens_with_fresh_choices_and_request(
+    live, signed_in, worker, monkeypatch, lang
+):
+    english = lang == "en"
+    viewport = {"width": 390, "height": 844} if english else {"width": 1440, "height": 1000}
+    _context, page = signed_in(viewport=viewport, color_scheme="dark" if english else "light")
+    if english:
+        page.get_by_role("button", name="Switch to English").click()
+    monkeypatch.setenv("ASR_DIARIZATION_ROLLBACK_FENCE", "0")
+    meeting_id, generation_id, _segments = seed_completed_transcript(live.settings.data_dir)
+    requests = []
+    page.on(
+        "request",
+        lambda request: (
+            requests.append(request.post_data_json)
+            if request.method == "POST" and request.url.endswith("/api/tasks")
+            else None
+        ),
+    )
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    start = page.locator("#start-transcription")
+    dialog = page.locator("#transcription-rerun-dialog")
+    submit = page.locator("#transcription-rerun-submit")
+    cancel = page.locator("#transcription-rerun-cancel")
+    status = dialog.get_by_role("status")
+    off = dialog.get_by_role(
+        "radio",
+        name=re.compile("Turn off speaker recognition" if english else "Tắt nhận dạng người nói"),
+    )
+    community = dialog.get_by_role("radio", name=re.compile("Community-1"))
+    start.click()
+    expect(cancel).to_be_focused()
+    off.check()
+
+    monkeypatch.setenv("ASR_DIARIZATION_ROLLBACK_FENCE", "1")
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as refusal:
+        submit.click()
+    assert refusal.value.status == 503
+    assert refusal.value.json()["detail"]["code"] == "diarization_rollback_fence"
+    explanation = (
+        "Running with speaker recognition off is temporarily unavailable. "
+        "Open Run again to choose Community-1 if it is ready."
+        if english
+        else "Chạy với chế độ tắt nhận dạng người nói đang tạm khóa. "
+        "Mở Chạy lại để chọn Community-1 nếu đã sẵn sàng."
+    )
+    expect(page.locator("#transcription-error-message")).to_have_text(explanation)
+    expect(page.locator("#transcription-status")).to_have_text(
+        "The complete transcript is saved." if english else "Transcript đã được lưu hoàn chỉnh."
+    )
+    expect(start).to_be_focused()
+    storage_key = f"asr-studio:transcription-request:{meeting_id}"
+    assert page.evaluate("key => sessionStorage.getItem(key)", storage_key) is None
+
+    start.click()
+    expect(cancel).to_be_focused()
+    expect(off).to_be_disabled()
+    expect(off).to_have_accessible_name(
+        "Turn off speaker recognition · Off is temporarily unavailable."
+        if english
+        else "Tắt nhận dạng người nói · Chế độ tắt đang tạm khóa."
+    )
+    expect(community).to_be_checked()
+    expect(community).to_be_enabled()
+    expect(status).to_contain_text(
+        "The server confirmed these choices" if english else "Lựa chọn được xác nhận từ server"
+    )
+    expect(submit).to_have_text("Run again" if english else "Chạy lại")
+    expect(submit).to_be_enabled()
+    assert len(requests) == 1
+
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as accepted:
+        submit.click()
+    assert accepted.value.status == 202
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#transcription-error")).to_be_hidden()
+    expect(page.locator("#transcription-status")).to_have_text(
+        "Checking the worker before processing starts."
+        if english
+        else "Đang kiểm tra worker trước khi bắt đầu xử lý."
+    )
+    expect(page.locator("#transcription-status")).to_be_focused()
+    assert len(requests) == 2
+    assert [body["diarization_mode"] for body in requests] == ["off", "community-1"]
+    assert all(body["expected_generation_id"] == generation_id for body in requests)
+    assert requests[0]["request_id"] != requests[1]["request_id"]
+
+
+def publish_fixture_run(data_dir, task_id, segments, **metadata):
+    owner_id = "browser-fixture-run"
+    task = claim_next_task(data_dir, owner_id=owner_id)
+    assert task and task["id"] == task_id
+    assert update_task_progress(
+        data_dir,
+        task_id,
+        owner_id=owner_id,
+        stage="publishing",
+        elapsed_seconds=1.0,
+        transcript_end_seconds=segments[-1]["end_seconds"] if segments else 0.0,
+        segment_count=len(segments),
+    )
+    result = publish_complete_generation(
+        data_dir,
+        task_id,
+        owner_id=owner_id,
+        segments=segments,
+        language_probability=None,
+        elapsed_seconds=1.0,
+        **metadata,
+    )
+    assert result
+    return result
+
+
+@pytest.mark.parametrize("lang", ["vi", "en"])
+def test_transcript_details_follow_saved_diarization_provenance(live, signed_in, worker, lang):
+    english = lang == "en"
+    _context, page = signed_in()
+    if english:
+        page.get_by_role("button", name="Switch to English").click()
+    data_dir = live.settings.data_dir
+    meeting_id, legacy, _segments = seed_completed_transcript(data_dir)
+    with sqlite3.connect(database_path(data_dir)) as db:
+        db.execute(
+            "UPDATE transcript_generations SET diarization_model_name = NULL, "
+            "regular_turn_count = 0, alignment_policy = NULL WHERE id = ?",
+            (legacy,),
+        )
+        db.execute(
+            "UPDATE transcript_segments SET speaker_id = NULL WHERE generation_id = ?", (legacy,)
+        )
+
+    accepted = page.request.post(
+        f"{live.url}/api/tasks",
+        headers={"Origin": live.url},
+        data={
+            "meeting_id": meeting_id,
+            "request_id": "browser-fixture-off",
+            "diarization_mode": "off",
+            "expected_generation_id": legacy,
+        },
+    )
+    assert accepted.status == 202
+    segments = [
+        {"id": uuid.uuid4().hex, "text": text, "start_seconds": start, "end_seconds": start + 1}
+        for start, text in enumerate(["Unassigned speech.", "Manually assigned speech."])
+    ]
+    off = publish_fixture_run(
+        data_dir,
+        accepted.json()["id"],
+        segments,
+        alignment_policy=None,
+        diarization_model_name=None,
+    )["id"]
+    speaker = add_current_generation_speaker(
+        data_dir,
+        meeting_id,
+        expected_generation_id=off,
+        expected_source_version=1,
+        display_name="Morgan",
+    )
+    reassign_current_generation_speaker(
+        data_dir,
+        meeting_id,
+        segments[1]["id"],
+        expected_generation_id=off,
+        expected_source_version=speaker["source_version"],
+        expected_assignment_version=1,
+        speaker_id=speaker["speaker_id"],
+    )
+
+    off_label = "Speaker recognition off" if english else "Đã tắt nhận dạng người nói"
+    unknown = "Unknown" if english else "Chưa xác định"
+    summary = page.get_by_text(
+        "Transcript details" if english else "Chi tiết transcript", exact=True
+    )
+    meta = page.locator("#generation-meta")
+    speakers = page.locator(".segment-speaker")
+    generations = page.locator("#generation-selector")
+    evidence_dir = os.environ.get("ASR_UI_EVIDENCE_DIR")
+
+    page.goto(f"{live.url}/meetings/{meeting_id}")
+    expect(summary).to_be_visible()
+    summary.press("Enter")
+    expect(summary).to_be_focused()
+    expect(meta).to_be_visible()
+    expect(generations).to_have_value(off)
+    expect(meta).to_contain_text(off_label)
+    expect(speakers).to_have_text([unknown, "Morgan"])
+    if evidence_dir:
+        page.locator("#transcript-generation").screenshot(
+            path=Path(evidence_dir) / f"{lang}-current-off.png"
+        )
+    generations.select_option(legacy)
+    expect(page.locator("#generation-title")).to_have_text("Transcript #1")
+    expect(meta).not_to_contain_text(off_label)
+    expect(meta).not_to_contain_text("Diarization")
+    expect(speakers).to_have_text([unknown, unknown])
+    if evidence_dir:
+        page.locator("#transcript-generation").screenshot(
+            path=Path(evidence_dir) / f"{lang}-legacy-unknown.png"
+        )
+
+    # Publish a synthetic no-speech run through the same task and generation APIs.
+    generations.select_option(off)
+    page.locator("#start-transcription").click()
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as accepted:
+        page.locator("#transcription-rerun-submit").click()
+    assert accepted.value.status == 202
+    community = publish_fixture_run(data_dir, accepted.value.json()["id"], [])
+    expect(generations).to_have_value(community["id"], timeout=8_000)
+    expect(meta).to_contain_text("Diarization · Community-1")
+    expect(page.locator("#transcript-empty")).to_be_visible()
+    expect(page.locator("#transcript-empty")).to_have_text(
+        "The model returned no speech segments."
+        if english
+        else "Model không trả về đoạn lời nói nào."
+    )
+
+    generations.select_option(off)
+    expect(page.locator("#generation-mode")).to_have_text(
+        "Historical version · Read-only." if english else "Bản lịch sử · Chỉ đọc."
+    )
+    expect(meta).to_be_visible()
+    expect(meta).to_contain_text(off_label)
+    expect(speakers).to_have_text([unknown, "Morgan"])
+    if evidence_dir:
+        page.locator("#transcript-generation").screenshot(
+            path=Path(evidence_dir) / f"{lang}-historical-off.png"
+        )
 
 
 def test_an_unprepared_model_cannot_start_and_says_how_to_prepare_it(live, signed_in, worker):

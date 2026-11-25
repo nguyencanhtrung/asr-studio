@@ -59,7 +59,11 @@ const AUTO_START_REASONS = {
 
 // Refused by the app before it created a task, whatever the HTTP status: a retry has nothing to verify. A 503 without
 // one of these codes may come from something in front of the app, and stays uncertain.
-const REFUSED_BEFORE_ACCEPT = new Set([...Object.keys(AUTO_START_REASONS), "model_requires_gpu"]);
+const REFUSED_BEFORE_ACCEPT = new Set([
+  ...Object.keys(AUTO_START_REASONS),
+  "model_requires_gpu",
+  "diarization_rollback_fence",
+]);
 const MODEL_REFUSALS = {
   model_unavailable: t("Model đã chọn chưa được chuẩn bị. Tải lại trang để xem cách chuẩn bị, hoặc chọn model khác."),
   model_requires_gpu: t("Model đã chọn chỉ chạy trên GPU NVIDIA. Hãy chọn model khác."),
@@ -466,7 +470,9 @@ function startFailed(state, error, auto) {
     : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   let message = [failure.message, " ", guidance];
   const selectedModel = pendingFor(state, meetingId)?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
-  if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
+  if (failure.code === "diarization_rollback_fence") {
+    message = t("Chạy với chế độ tắt nhận dạng người nói đang tạm khóa. Mở Chạy lại để chọn Community-1 nếu đã sẵn sàng.");
+  } else if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
     // A named model has its own preparation/GPU guidance, including for an automatic handoff.
     message = MODEL_REFUSALS[failure.code];
   } else if (auto && Object.hasOwn(AUTO_START_REASONS, failure.code)) {
@@ -653,7 +659,7 @@ export function reduce(state, action) {
       return state.rerun ? out(repaint({ ...state, rerun: null })) : out(state);
     case "task/rerun-choice": {
       const rerun = state.rerun;
-      if (!rerun || !action.shown || action.shown.id !== rerun.meetingId) return out(state);
+      if (!rerun || rerun.replay || !action.shown || action.shown.id !== rerun.meetingId) return out(state);
       const next = { ...rerun };
       if (action.languageHint && validLanguage(action.languageHint)) next.languageHint = action.languageHint;
       if (action.asrModel && readyRerunModels(action.shown).some((entry) => entry.id === action.asrModel)) next.asrModel = action.asrModel;
