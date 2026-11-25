@@ -17,6 +17,7 @@ ASR_RUN_BROWSER_TESTS=1 ASR_REQUIRE_MEDIA_TOOLS=1 uv run --no-sync pytest -q \
   tests/test_browser_asr_model.py \
   tests/test_browser_automatic_processing.py \
   tests/test_browser_history.py \
+  tests/test_i18n.py \
   tests/test_browser_settings.py \
   tests/test_recordings.py \
   tests/test_model_install.py::test_install_then_poll_then_cancel_through_the_api \
@@ -39,9 +40,11 @@ ASR_RUN_EXTENSION_TESTS=1 ASR_EXTENSION_DISPOSABLE_XVFB=1 \
   -k 'native_capture_keeps_recording_without_controls_and_finishes_at_raw_receipt or native_capture_runs_transcript_and_notes_after_client_receipt'
 ```
 
+Nếu Xvfb gặp lỗi EGL trên Linux, thêm `-extension GLX` vào tham số `-s` của lệnh native.
+
 | Kiểm tra | Bằng chứng cần quan sát |
 | --- | --- |
-| Đăng nhập và Verify | Thử hủy và hết hạn phiên ở cả hai provider, nhập callback sai và phát lại ở OpenAI, lỗi input và kết nối lại ở Antigravity. Fixture Verify kiểm tra quota, trạng thái bận và số lần gọi. Ca OMP deadline dùng luồng frame giả và đồng hồ điều khiển, còn OpenAI dùng HTTP transport giả để kiểm tra giới hạn đọc. |
+| Đăng nhập và Verify | Thử hủy và hết hạn phiên ở cả hai provider, nhập callback sai và phát lại ở OpenAI, lỗi input và kết nối lại ở Antigravity. Fixture Verify kiểm tra quota, trạng thái bận và số lần gọi. Ca OMP deadline dùng luồng frame giả và đồng hồ điều khiển, còn OpenAI dùng HTTP transport giả để kiểm tra cấu hình giới hạn đọc. |
 | Ghép và thu hồi thiết bị | Ghép hai thiết bị, thu hồi một thiết bị và xác minh chỉ thiết bị còn lại giữ quyền cấp phiên. Thử code hết hạn và re-pair rõ ràng bằng fixture Extension API. |
 | Cài model | Fixture installer tạo lỗi, hủy khi đang tải và retry có chủ ý. Mở lại Settings để đọc readiness từ server, rồi kiểm tra lựa chọn mặc định riêng với cài đặt. |
 | Hủy upload | Giữ transfer đang chạy, bấm Hủy và kiểm tra form còn thông tin để sửa hoặc thử lại. Đếm yêu cầu theo bước và kiểm tra validation sau khi form thay đổi. Fixture backend kiểm tra policy file, 4 GiB, 4 giờ, tiêu đề 200 ký tự và ngày tùy chọn. Các ca browser kiểm tra checkbox auto-ASR và model theo lượt. |
