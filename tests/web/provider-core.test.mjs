@@ -2269,6 +2269,11 @@ const r14ValidModelControls = [
   { id: "chatgpt-200-codepoints", d: CHATGPT, model: "😀".repeat(200), effort: "default" },
 ];
 
+const r15VisibleModelControls = [
+  { id: "antigravity-240-visible", d: ANTIGRAVITY, model: "model/" + "g".repeat(234), effort: "medium" },
+  { id: "chatgpt-200-codepoints-visible", d: CHATGPT, model: "😀".repeat(200), effort: "high" },
+];
+
 for (const { id, d, model: returnedModel, effort: returnedEffort } of r14InvalidModelAcks) {
   test(`R14 ${id} rejects the returned model, preserves the draft, and commits a valid retry`, async () => {
     const env = setup();
@@ -2331,6 +2336,56 @@ for (const { id, d, model: returnedModel, effort: returnedEffort } of r14ValidMo
     assert.equal(current.ownerFence, before.ownerFence + 1);
     assert.equal(current.error, null);
     assert.equal(current.modelStatus.state, "saved");
+    assert.deepEqual(env.events, ["provider.choice-changed"]);
+  });
+}
+
+for (const { id, d, model: returnedModel, effort: returnedEffort } of r15VisibleModelControls) {
+  test(`R15 ${id} projects model and effort after a valid retry`, async () => {
+    const env = setup();
+    await loaded(env);
+    const draft = d === CHATGPT ? "m2" : "g2";
+    const invalidModel = d === CHATGPT ? "g".repeat(201) : "bad model";
+    const catalogReads = env.calls.filter((call) => call.method === "GET" && call.url.includes("/models")).length;
+    const initial = own(env, d);
+    const initialView = selectView(d, initial);
+    assert.equal(initial.modelOptions.find((item) => item.value === initial.selectedModel)?.disabled, false);
+    assert.equal(initialView.effortValue, initial.savedEffort);
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, d === CHATGPT
+      ? { models: { chatgpt: invalidModel }, reasoning_effort: returnedEffort, reasoning_efforts: { chatgpt: returnedEffort } }
+      : { provider: d.id, model: invalidModel, reasoning_effort: returnedEffort });
+    assert.equal(own(env, d).error.code, "provider_invalid_response");
+    assert.equal(own(env, d).modelStatus.state, "error");
+
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, returnedModel, returnedEffort));
+    const current = own(env, d);
+    const option = current.modelOptions.find((item) => item.value === returnedModel);
+    const view = selectView(d, current);
+    assert.equal(current.selectedModel, returnedModel);
+    assert.equal(option?.value, returnedModel);
+    assert.equal(option?.disabled, true);
+    assert.deepEqual(option?.label.params, { model: returnedModel });
+    assert.equal(current.savedEffort, returnedEffort);
+    assert.equal(view.effortValue, returnedEffort);
+    assert.equal(view.saveDisabled, true);
+    assert.equal(view.verifyDisabled, true);
+    if (d === CHATGPT) {
+      const effortOption = view.effortOptions.find((item) => item.value === returnedEffort);
+      assert.equal(effortOption?.disabled, true);
+    }
+    assert.equal(current.modelStatus.state, "saved");
+    assert.equal(current.error, null);
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    const selected = own(env, d);
+    const selectedView = selectView(d, selected);
+    assert.equal(selected.modelOptions.find((item) => item.value === draft)?.disabled, false);
+    assert.equal(selectedView.saveDisabled, false);
+    assert.equal(selectedView.verifyDisabled, false);
+    assert.equal(env.calls.filter((call) => call.method === "GET" && call.url.includes("/models")).length, catalogReads);
+    assert.equal(env.calls.filter((call) => call.method === "PUT" && call.url.includes("preference")).length, 2);
     assert.deepEqual(env.events, ["provider.choice-changed"]);
   });
 }

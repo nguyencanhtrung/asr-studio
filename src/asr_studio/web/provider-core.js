@@ -551,6 +551,16 @@ function supportedEfforts(s, modelId) {
 
 const effortValue = (d, s, modelId, wanted) => (d.effort.kind === "per-model" ? (supportedEfforts(s, modelId).includes(wanted) ? wanted : "default") : wanted);
 
+function modelOptionsFor(d, models, selectedModel) {
+  const options = [];
+  if (!selectedModel) options.push(...placeholderOptions(models.length ? d.copy.choose : d.copy.noModels));
+  else if (!models.some((model) => model.id === selectedModel)) {
+    options.push({ value: selectedModel, label: fill(d.copy.unavailableOption, { model: selectedModel }), disabled: true });
+  }
+  for (const model of models) options.push({ value: model.id, label: model.display_name, disabled: false });
+  return options;
+}
+
 function renderModels(d, s, catalog, { ownerAuthority = true } = {}) {
   const models = (Array.isArray(catalog.models) ? catalog.models : []).filter(
     (model) => model && typeof model.id === "string" && typeof model.display_name === "string",
@@ -571,14 +581,10 @@ function renderModels(d, s, catalog, { ownerAuthority = true } = {}) {
       : (s.ownerModel || "");
     savedEffort = catalog.reasoning_effort === "medium" ? "medium" : "high";
   }
-  const options = [];
   const available = models.some((model) => model.id === selectedModel);
-  if (!selectedModel) options.push(...placeholderOptions(models.length ? d.copy.choose : d.copy.noModels));
-  else if (!available) options.push({ value: selectedModel, label: fill(d.copy.unavailableOption, { model: selectedModel }), disabled: true });
-  for (const model of models) options.push({ value: model.id, label: model.display_name, disabled: false });
   next = {
     ...next,
-    modelOptions: options,
+    modelOptions: modelOptionsFor(d, models, selectedModel),
     catalogStatus: "ready",
   };
   if (ownerAuthority) {
@@ -1093,6 +1099,7 @@ function saveOk(d, s, body) {
     ...setPending(s, "save", false),
     error: s.error?.operation === "save" ? null : s.error,
     ownerFence: s.ownerFence + 1,
+    modelOptions: modelOptionsFor(d, s.models, savedModel),
     savedModel,
     selectedModel: savedModel,
     savedEffort,
@@ -1727,7 +1734,11 @@ export function selectView(d, s) {
   const model = s.selectedModel;
   const available = modelAvailable(s, model);
   const efforts = d.effort.kind === "per-model" ? [{ value: "default", label: DEFAULT_EFFORT_LABEL }, ...supportedEfforts(s, model).map((value) => ({ value, label: EFFORT_LABELS[value] }))] : null;
-  const effort = d.effort.kind === "per-model" ? effortValue(d, s, model, s.selectedEffort) : s.selectedEffort;
+  let effort = efforts ? effortValue(d, s, model, s.selectedEffort) : s.selectedEffort;
+  if (efforts && model && !available && model === s.savedModel && Object.hasOwn(EFFORT_LABELS, s.savedEffort)) {
+    effort = s.savedEffort;
+    efforts.push({ value: effort, label: EFFORT_LABELS[effort], disabled: true });
+  }
   const view = {
     effortOptions: efforts,
     effortValue: effort,
