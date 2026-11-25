@@ -1284,6 +1284,7 @@ const { t, UI_LOCALE } = (() => {
       "Nguồn lịch sử là bản đã lưu, không bị thay đổi bởi chỉnh sửa hiện tại.": "A historical source is a saved version. Current edits do not change it.",
       "Nguồn transcript": "Transcript source",
       "Dùng nguồn transcript đã cập nhật": "Use updated transcript source",
+      "Cao": "High",
       "Rất cao": "Very high",
       "Thấp": "Low",
       "Transcript hiện tại không còn sẵn sàng. Hãy đóng hộp thoại rồi tải lại cuộc họp.": "The current transcript is no longer ready. Close the dialog, then reload the meeting.",

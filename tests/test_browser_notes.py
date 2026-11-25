@@ -1112,10 +1112,29 @@ def test_explicit_regenerate_dialog_uses_english_title_intro_and_error(
         "Choose the recipe and saved transcript for this run. "
         "This choice does not change the setting for the next run."
     )
-    page.locator("#notes-regenerate-submit").click()
+    effort = page.locator("#notes-regenerate-effort")
+    expect(effort.locator("option")).to_have_text(
+        ["Default", "Low", "Medium", "High", "Very high", "Maximum"]
+    )
+    expect(effort).to_have_value("high")
+    expect(effort.locator("option:checked")).to_have_text("High")
+    with page.expect_request(lambda request: request.url.endswith("/notes-runs")) as original:
+        page.locator("#notes-regenerate-submit").click()
     expect(page.locator("#notes-regenerate-error")).to_have_text(
         "The server could not complete the request. Try again later."
     )
+    assert original.value.post_data_json["run"]["reasoning_effort"] == "high"
+    page.locator("#notes-regenerate-cancel").click()
+    verify = page.locator("#notes-start")
+    expect(verify).to_have_text("Verify notes request")
+    plan = "The request to verify uses ChatGPT · GPT 6.1 Sol · thinking level High."
+    expect(page.locator("#notes-run-plan")).to_have_text(plan)
+    expect(verify).to_have_accessible_description(re.compile(rf"^{re.escape(plan)}"))
+    with page.expect_request(lambda request: request.url.endswith("/notes-runs")) as retry:
+        verify.click()
+    assert retry.value.post_data == original.value.post_data
+    expect(dialog).to_be_visible()
+    expect(effort.locator("option:checked")).to_have_text("High")
 
 
 def test_regenerate_native_close_and_descendant_cancel_keep_modal_state_in_sync(live, signed_in):
@@ -1935,8 +1954,13 @@ def test_verify_uses_and_discloses_the_frozen_destination(
     expect(page.locator("#notes-regenerate-provider")).to_have_value("chatgpt")
 
 
-def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(live, signed_in):
+@pytest.mark.parametrize("locale", ["vi", "en"])
+def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(
+    live, signed_in, locale
+):
     _context, page = signed_in(viewport={"width": 390, "height": 900})
+    page.add_init_script(f"localStorage.setItem('asr-studio:lang', '{locale}')")
+    verify_label = "Verify notes request" if locale == "en" else "Xác minh yêu cầu notes"
     meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
     body = {
         "request_id": "fixture-restored-run",
@@ -1968,7 +1992,7 @@ def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(li
     )
     _open_saved_notes(live, page, meeting_id)
     start = page.locator("#notes-start")
-    expect(start).to_have_text("Xác minh yêu cầu notes")
+    expect(start).to_have_text(verify_label)
     with page.expect_request(lambda request: request.url.endswith("/notes-runs")) as sent:
         start.click()
     assert sent.value.post_data_json == body
@@ -1983,7 +2007,13 @@ def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(li
         field = page.locator(f"#notes-regenerate-{name}")
         expect(field).to_have_value(value)
         expect(field).to_be_disabled()
-    expect(page.locator("#notes-regenerate-submit")).to_have_text("Xác minh yêu cầu notes")
+    expect(page.locator("#notes-regenerate-submit")).to_have_text(verify_label)
+    effort_label = (
+        "Reasoning level High — not available for this model"
+        if locale == "en"
+        else "Mức suy nghĩ Cao — không khả dụng với model này"
+    )
+    expect(page.locator("#notes-regenerate-effort option:checked")).to_have_text(effort_label)
 
 
 def test_completed_restored_recipe_keeps_the_meeting_language_for_the_next_run(live, signed_in):
