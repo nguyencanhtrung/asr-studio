@@ -821,7 +821,8 @@ Khi có `autoStart` tới hạn, task-core chỉ áp dụng ID model còn hợp 
 | lỗi capability | `capability-retry` | chờ lượt đọc mới cho generation hiện tại | `GET /api/diarization-capability` |
 | bất kỳ | response có meeting, generation hoặc request ID cũ | giữ state hiện tại | |
 | hộp thoại mới | `rerun-choice` | cập nhật lựa chọn trong danh sách ASR đã ready, ngôn ngữ hợp lệ hoặc chế độ diarization đã ready | |
-| hộp thoại mới | `rerun-submitted` với đúng generation hiện tại, model và chế độ ready, ghi âm sẵn sàng và không có tác vụ hoặc khóa nguồn cản trở | đóng hộp thoại và giữ nguyên recipe trong request chờ | ghi sessionStorage rồi `POST /api/tasks` với ASR, ngôn ngữ, chế độ và `expected_generation_id`. Server kiểm tra lại trước khi nhận task |
+| hộp thoại mới | `rerun-submitted` với đúng generation hiện tại, model và chế độ ready, ghi âm sẵn sàng và không có tác vụ hoặc khóa nguồn cản trở | đóng hộp thoại, đặt focus ở trạng thái task và giữ nguyên recipe trong request chờ | ghi sessionStorage rồi `POST /api/tasks` với ASR, ngôn ngữ, chế độ và `expected_generation_id`. Server kiểm tra lại trước khi nhận task |
+| đang xác minh | `rerun-choice` | giữ các lựa chọn đóng băng | |
 | đang xác minh | `rerun-submitted` đúng request đang chờ và cuộc họp cho phép gửi | đóng hộp thoại và gửi lại đúng ID, ASR, ngôn ngữ, chế độ, generation đã giữ. Request cũ gửi các trường đã có lúc tạo | `POST /api/tasks`. Server xác minh biên nhận của request gốc |
 | hộp thoại | Escape hoặc `rerun-cancelled` | đóng bản nháp, focus về nút Chạy lại còn dùng được. Request chưa rõ kết quả vẫn giữ để xác minh | |
 | có capability hoặc hộp thoại | `meeting-left` | bỏ capability và bản nháp. Kết quả đọc capability cũ bị bỏ qua | hủy poll của cuộc họp |
@@ -836,7 +837,7 @@ Khi có `autoStart` tới hạn, task-core chỉ áp dụng ID model còn hợp 
 | `start` | `start-succeeded` với task đã `succeeded` | như trên nhưng `start.refreshing`: nút Bắt đầu vẫn tắt tới khi đọc lại cuộc họp | `fetch` cuộc họp (`task/refresh/start`) |
 | `start` | `start-succeeded`, cuộc họp khác đã tải xong | request chờ rút, `start = null`; không đổi cuộc họp đang hiện, không poll (ở trang chủ hoặc khi cuộc họp khác đang tải, `shown` vẫn là cuộc họp cũ: câu trả lời áp vào nó như bản cũ) | `storage` xóa |
 | `start` | `start-succeeded` với body không phải object | như `start-failed` không rõ kết quả | |
-| `start` | `start-failed` 4xx hoặc lỗi server xác định chưa tạo task. Rollback fence trả 503 `diarization_rollback_fence` | xóa request chờ và dừng `start`. Hiện lỗi của cuộc họp và hướng dẫn sửa lựa chọn. Lần gửi mới lấy ID mới | xóa sessionStorage của request cũ |
+| `start` | `start-failed` 4xx hoặc lỗi server xác định chưa tạo task. Rollback fence trả 503 `diarization_rollback_fence` | xóa request chờ và dừng `start`. Hiện lỗi của cuộc họp và hướng dẫn sửa lựa chọn. Nếu focus vẫn ở trạng thái task, view trả focus về nút chạy lại. Lần gửi mới lấy ID mới | xóa sessionStorage của request cũ |
 | `start` | mất kết nối hoặc 5xx chưa xác định được đã tạo task | giữ request chờ với toàn bộ payload. Mở lại hộp thoại cho phép xác minh bằng lựa chọn đã lưu. Lỗi đọc lại cuộc họp sau khi start đã được xác nhận giữ cách xử lý của lượt đọc | |
 | `start` tự chạy | `start-failed` có mã `system_busy`, `processing_unavailable`, `worker_unavailable`, `model_unavailable`, `diarization_model_unavailable` | `error` nêu lý do và "Cuộc họp đã được lưu nhưng chưa chép lời…" | |
 | không khớp `start.requestId` | `start-succeeded`, `start-failed` | không đổi | |
