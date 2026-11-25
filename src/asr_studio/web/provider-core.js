@@ -1060,6 +1060,14 @@ function saveChoice(d, s) {
   return done(next, [request]);
 }
 
+function savedEffortSupported(d, s, model, effort) {
+  if (d.effort.kind === "fixed") return Object.hasOwn(d.effortLabels, effort);
+  if (effort === "default") return true;
+  const row = s.models.find((choice) => choice.id === model);
+  return Object.hasOwn(EFFORT_LABELS, effort)
+    && (!Array.isArray(row?.reasoning_efforts) || row.reasoning_efforts.includes(effort));
+}
+
 function saveOk(d, s, body) {
   const reply = isObject(body) ? body : {};
   const notesPreferences = d.catalog === "preferences";
@@ -1069,8 +1077,8 @@ function saveOk(d, s, body) {
   const savedEffort = notesPreferences && Object.hasOwn(reasoningEfforts, d.id)
     ? reasoningEfforts[d.id]
     : reply.reasoning_effort;
-  if (typeof savedModel !== "string" || !savedModel.trim() || typeof savedEffort !== "string" || !savedEffort.trim()
-    || !notesPreferences && reply.provider !== d.id) {
+  if (typeof savedModel !== "string" || !savedModel.trim() || typeof savedEffort !== "string"
+    || !savedEffortSupported(d, s, savedModel, savedEffort) || !notesPreferences && reply.provider !== d.id) {
     const error = { code: "provider_invalid_response", text: errorMessageForCode("provider_invalid_response", undefined, d.id), retryPoll: false, operation: "save" };
     return done({ ...setPending(s, "save", false), error, modelStatus: { state: "error", text: null } });
   }

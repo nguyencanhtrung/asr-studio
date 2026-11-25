@@ -2279,6 +2279,128 @@ for (const { d, other, save } of CASES) {
   }
 }
 
+test("Antigravity rejects an impossible effort acknowledgement and accepts a valid retry", async () => {
+  const env = setup();
+  await loaded(env);
+  const before = own(env, ANTIGRAVITY);
+  dispatch(env, ANTIGRAVITY, "choice-edited", { field: "model", value: "g2" });
+  dispatch(env, ANTIGRAVITY, "choice-edited", { field: "effort", value: "high" });
+  dispatch(env, ANTIGRAVITY, "save-requested");
+  assert.deepEqual(env.pending(env.is("PUT", "/api/providers/antigravity/preference"))[0].body, {
+    model: "g2",
+    reasoning_effort: "high",
+  });
+
+  await env.answer(env.is("PUT", "/api/providers/antigravity/preference"), 200, {
+    provider: "antigravity",
+    model: "g2",
+    reasoning_effort: "low",
+  });
+  let current = own(env, ANTIGRAVITY);
+  assert.equal(current.ownerModel, before.ownerModel);
+  assert.equal(current.ownerEffort, before.ownerEffort);
+  assert.equal(current.ownerFence, before.ownerFence);
+  assert.equal(current.savedModel, before.savedModel);
+  assert.equal(current.savedEffort, before.savedEffort);
+  assert.equal(current.selectedModel, "g2");
+  assert.equal(current.selectedEffort, "high");
+  assert.equal(current.pending.save, false);
+  assert.equal(current.error.code, "provider_invalid_response");
+  assert.equal(current.error.operation, "save");
+  assert.deepEqual(current.error.text, {
+    text: "{provider} trả về phản hồi không hợp lệ.",
+    params: { provider: "Google Antigravity" },
+  });
+  assert.deepEqual(env.events, []);
+
+  dispatch(env, ANTIGRAVITY, "save-requested");
+  assert.deepEqual(env.pending(env.is("PUT", "/api/providers/antigravity/preference"))[0].body, {
+    model: "g2",
+    reasoning_effort: "high",
+  });
+  await env.answer(env.is("PUT", "/api/providers/antigravity/preference"), 200, {
+    provider: "antigravity",
+    model: "g2",
+    reasoning_effort: "medium",
+  });
+  current = own(env, ANTIGRAVITY);
+  assert.equal(current.ownerModel, "g2");
+  assert.equal(current.ownerEffort, "medium");
+  assert.equal(current.ownerFence, before.ownerFence + 1);
+  assert.equal(current.error, null);
+  assert.equal(current.modelStatus.state, "saved");
+  assert.deepEqual(env.events, ["provider.choice-changed"]);
+});
+
+test("OpenAI rejects a known-model effort absent from its current catalog and accepts a valid retry", async () => {
+  const env = setup();
+  await loaded(env);
+  const before = own(env, CHATGPT);
+  dispatch(env, CHATGPT, "choice-edited", { field: "effort", value: "high" });
+  dispatch(env, CHATGPT, "save-requested");
+  await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+    models: { chatgpt: "m1" },
+    reasoning_effort: "xhigh",
+    reasoning_efforts: { chatgpt: "xhigh" },
+  });
+  let current = own(env, CHATGPT);
+  assert.equal(current.ownerModel, before.ownerModel);
+  assert.equal(current.ownerEffort, before.ownerEffort);
+  assert.equal(current.ownerFence, before.ownerFence);
+  assert.equal(current.pending.save, false);
+  assert.equal(current.selectedEffort, "high");
+  assert.equal(current.error.code, "provider_invalid_response");
+  assert.equal(current.error.operation, "save");
+  assert.deepEqual(env.events, []);
+
+  dispatch(env, CHATGPT, "save-requested");
+  await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+    models: { chatgpt: "m1" },
+    reasoning_effort: "high",
+    reasoning_efforts: { chatgpt: "high" },
+  });
+  current = own(env, CHATGPT);
+  assert.equal(current.ownerModel, "m1");
+  assert.equal(current.ownerEffort, "high");
+  assert.equal(current.error, null);
+  assert.equal(current.modelStatus.state, "saved");
+  assert.deepEqual(env.events, ["provider.choice-changed"]);
+});
+
+test("OpenAI accepts global efforts for legacy or concurrent models but rejects unknown efforts", async () => {
+  const cases = [
+    { model: "m2", effort: "xhigh", accepted: true },
+    { model: "future-model", effort: "xhigh", accepted: true },
+    { model: "future-model", effort: "unlisted", accepted: false },
+  ];
+  for (const { model, effort, accepted } of cases) {
+    const env = setup();
+    await loaded(env);
+    const before = own(env, CHATGPT);
+    dispatch(env, CHATGPT, "choice-edited", { field: "effort", value: "high" });
+    dispatch(env, CHATGPT, "save-requested");
+    await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+      models: { chatgpt: model },
+      reasoning_effort: effort,
+      reasoning_efforts: { chatgpt: effort },
+    });
+    const current = own(env, CHATGPT);
+    if (accepted) {
+      assert.equal(current.ownerModel, model);
+      assert.equal(current.ownerEffort, effort);
+      assert.equal(current.error, null);
+      assert.deepEqual(env.events, ["provider.choice-changed"]);
+    } else {
+      assert.equal(current.ownerModel, before.ownerModel);
+      assert.equal(current.ownerEffort, before.ownerEffort);
+      assert.equal(current.ownerFence, before.ownerFence);
+      assert.equal(current.error.code, "provider_invalid_response");
+      assert.equal(current.error.operation, "save");
+      assert.deepEqual(env.events, []);
+    }
+  }
+});
+
 for (const unrelated of ["verify", "login"]) {
   test(`conductor R11 keeps an unrelated Antigravity ${unrelated} error after a valid Save`, async () => {
     const env = setup();
