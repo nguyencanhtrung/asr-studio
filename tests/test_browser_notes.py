@@ -993,40 +993,59 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     assert snapshot["generation_id"]
 
 
+@pytest.mark.parametrize("delayed_read", ["notes", "meeting"])
 def test_notes_admission_keeps_cancel_and_poll_after_a_delayed_read(
-    live, signed_in, fake_notes_provider
+    live, signed_in, fake_notes_provider, delayed_read
 ):
     _context, page = signed_in()
     meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
-    notes_url = f"{live.url}/api/meetings/{meeting_id}/notes"
-    idle_notes = page.request.get(notes_url).json()
+    meeting_url = f"{live.url}/api/meetings/{meeting_id}"
+    notes_url = f"{meeting_url}/notes"
+    delayed_url = meeting_url if delayed_read == "meeting" else notes_url
+    idle = page.request.get(delayed_url).json()
     _open_saved_notes(live, page, meeting_id)
     held_reads = []
     page.route(notes_url, lambda route: held_reads.append(route))
+    held_details = []
+    if delayed_read == "meeting":
+        page.route(meeting_url, lambda route: held_details.append(route))
     start = page.locator("#notes-start")
     cancel = page.locator("#notes-cancel")
+    edit = page.locator(".segment-edit-button").first
+    lock = page.locator("#notes-lock-status")
+    expect(edit).to_be_enabled()
     start.click()
-    with page.expect_request(notes_url):
+    with page.expect_request(delayed_url):
         page.evaluate(
-            "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+            """async id => {
+              const { meetingHistory } = await import('/assets/history.js');
+              void meetingHistory.refreshMeeting(id);
+            }""",
             meeting_id,
         )
     with page.expect_response(lambda response: response.url.endswith("/notes-runs")) as response:
         page.locator("#notes-regenerate-submit").click()
     assert response.value.status == 202
     expect(cancel).to_be_enabled()
+    expect(lock).to_be_visible()
+    expect(edit).to_be_disabled()
 
     # The GET began before admission but its old state arrives after the accepted task.
+    delayed = (held_details if delayed_read == "meeting" else held_reads).pop(0)
     with page.expect_request(notes_url, timeout=5_000):
-        held_reads[0].fulfill(json=idle_notes)
+        delayed.fulfill(json=idle)
     expect(cancel).to_be_visible()
     expect(cancel).to_be_enabled()
     expect(start).to_be_disabled()
+    expect(lock).to_be_visible()
+    expect(edit).to_be_disabled()
 
     task = response.value.json()
     _complete_fake_task(live.settings.data_dir, task["id"], task["request_id"], _markdown(snapshot))
-    held_reads[1].continue_()
+    held_reads[0].continue_()
     expect(cancel).to_be_hidden()
+    expect(lock).to_be_hidden()
+    expect(edit).to_be_enabled()
     expect(page.locator("#notes-revision-selector option")).to_have_count(2)
     expect(start).to_be_enabled()
 
@@ -1850,8 +1869,14 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     assert min(normal[3:]) > 0.001  # the original copy and export icons still animate
 
 
+@pytest.mark.parametrize(
+    ("requested_effort", "effort_label", "admitted_effort"),
+    [("medium", "Vừa", "medium"), ("default", "Mặc định", "high")],
+)
 @pytest.mark.usefixtures("fake_vendor_notes_provider")
-def test_verify_uses_and_discloses_the_frozen_destination(live, signed_in):
+def test_verify_uses_and_discloses_the_frozen_destination(
+    live, signed_in, requested_effort, effort_label, admitted_effort
+):
     _context, page = signed_in()
     meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
     preferences_url = f"{live.url}/api/notes-preferences"
@@ -1871,7 +1896,7 @@ def test_verify_uses_and_discloses_the_frozen_destination(live, signed_in):
     start.click()
     page.locator("#notes-regenerate-provider").select_option("antigravity")
     page.locator("#notes-regenerate-model").select_option(ANTIGRAVITY_MODEL)
-    page.locator("#notes-regenerate-effort").select_option("medium")
+    page.locator("#notes-regenerate-effort").select_option(requested_effort)
     page.locator("#notes-regenerate-submit").click()
     expect(page.locator("#notes-regenerate-error")).to_be_visible()
     page.locator("#notes-regenerate-cancel").click()
@@ -1880,7 +1905,9 @@ def test_verify_uses_and_discloses_the_frozen_destination(live, signed_in):
     expect(start).to_have_attribute("aria-describedby", "notes-run-plan notes-status")
     plan = page.locator("#notes-run-plan")
     expect(plan).to_be_visible()
-    expect(plan).to_contain_text("Google Antigravity · Gemini 3 Pro High · mức suy nghĩ Vừa")
+    expect(plan).to_contain_text(
+        f"Google Antigravity · Gemini 3 Pro High · mức suy nghĩ {effort_label}"
+    )
     page.locator("#notes-change").click()
     provider = page.locator("#notes-provider")
     model = page.locator("#notes-model")
@@ -1897,10 +1924,11 @@ def test_verify_uses_and_discloses_the_frozen_destination(live, signed_in):
     body = json.loads(requests[1])
     assert body["run"]["provider"] == "antigravity"
     assert body["run"]["model"] == ANTIGRAVITY_MODEL
-    assert body["run"]["reasoning_effort"] == "medium"
+    assert body["run"]["reasoning_effort"] == requested_effort
     assert page.request.get(preferences_url).json() == preferences
     task = response.value.json()
     assert task["provider"] == "antigravity"
+    assert task["reasoning_effort"] == admitted_effort
     _complete_fake_task(live.settings.data_dir, task["id"], body["request_id"], _markdown(snapshot))
     expect(start).to_be_enabled(timeout=10_000)
     start.click()

@@ -13,6 +13,7 @@ from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
 
 from asr_studio import notes_routes
+from asr_studio.antigravity import normalize_effort
 from asr_studio.notes import (
     ABSENT,
     accept_notes_task,
@@ -61,7 +62,12 @@ class PinnedStub(StubNotesProvider):
     @contextmanager
     def notes_task_pin_for_run(self, *, model: str, reasoning_effort: str):
         with self.store.operation():
-            yield {**self.notes_task_pin(), "model": model, "reasoning_effort": reasoning_effort}
+            effort = (
+                normalize_effort(reasoning_effort)
+                if self.provider == "antigravity"
+                else reasoning_effort
+            )
+            yield {**self.notes_task_pin(), "model": model, "reasoning_effort": effort}
 
 
 @pytest.fixture

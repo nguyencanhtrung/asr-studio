@@ -230,10 +230,11 @@ const activeTask = (data) => Boolean(data && data.task && isActiveStatus(data.ta
 function parseNotes(meetingId, payload) {
   const notes = unwrappedNotesPayload(payload);
   if (!notes || !Array.isArray(notes.revisions) || typeof notes.source_locked !== "boolean") return null;
+  const task = isNotesTask(notes.task) ? notes.task : null;
   return {
     revisions: notes.revisions.map((revision) => normalizeRevision(revision, meetingId)).filter(Boolean),
-    task: isNotesTask(notes.task) ? notes.task || null : null,
-    sourceLocked: notes.source_locked,
+    task,
+    sourceLocked: notes.source_locked || isActiveStatus(task?.status),
   };
 }
 
@@ -3062,8 +3063,10 @@ function meetingContext(state, action) {
   if (leavingNotes && !changed) result = then(result, (s) => out(patchRegenerate(s, { open: false, error: "" })));
   result = then(result, (s) => {
     const data = entryOf(s, meetingId);
-    const lockKnown = (changed || previousMeeting !== meeting || !data.sourceLockKnown) && typeof meeting.notes_source_locked === "boolean";
-    return out(lockKnown ? patchNotes(s, meetingId, { sourceLocked: meeting.notes_source_locked, sourceLockKnown: true }) : patchNotes(s, meetingId, {}));
+    const running = activeTask(data);
+    const fromMeeting = (changed || previousMeeting !== meeting || !data.sourceLockKnown) && typeof meeting.notes_source_locked === "boolean";
+    const lock = running || fromMeeting ? { sourceLocked: running || meeting.notes_source_locked, sourceLockKnown: true } : {};
+    return out(patchNotes(s, meetingId, lock));
   });
   const data = entryOf(result.state, meetingId);
   result.effects.push(lockEffect(meetingId, data.sourceLocked, data.sourceLockKnown));
