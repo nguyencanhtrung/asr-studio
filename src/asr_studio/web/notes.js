@@ -33,12 +33,14 @@ const els = {
   status: $("#notes-status"),
   start: $("#notes-start"),
   cancel: $("#notes-cancel"),
+  notesTab: $("#meeting-tab-notes"),
   regenerateDialog: $("#notes-regenerate-dialog"),
   regenerateTitle: $("#notes-regenerate-title"),
   regenerateProvider: $("#notes-regenerate-provider"),
   regenerateModel: $("#notes-regenerate-model"),
   regenerateEffort: $("#notes-regenerate-effort"),
   regenerateSource: $("#notes-regenerate-source"),
+  regenerateSourceAdopt: $("#notes-regenerate-source-adopt"),
   regenerateLanguage: $("#notes-regenerate-language"),
   regenerateStatus: $("#notes-regenerate-status"),
   regenerateError: $("#notes-regenerate-error"),
@@ -356,20 +358,32 @@ function renderSelect(select, items, value, disabled) {
   setProp(select, "disabled", Boolean(disabled));
 }
 
+function restoreRegenerateFocus() {
+  // Native restoration finishes after close. Choose an enabled destination on
+  // the next turn, after the accepted task has disabled the launcher.
+  window.setTimeout(() => {
+    if (els.regenerateDialog.open) return;
+    const active = document.activeElement;
+    if (active !== document.body && active !== els.start && !els.regenerateDialog.contains(active)) return;
+    const target = [els.start, els.cancel, els.notesTab].find((element) =>
+      element?.isConnected && !element.disabled && element.getClientRects().length,
+    );
+    target?.focus({ preventScroll: true });
+  }, 0);
+}
+
 function renderRegenerateDialog(view) {
   const dialog = els.regenerateDialog;
   const regenerate = view.regenerateDialog;
   if (!dialog || !regenerate) return;
-  if (regenerate.open && !dialog.open) {
+  const focusedControl = document.activeElement;
+  const opening = regenerate.open && dialog.dataset.openIntent !== "true";
+  setData(dialog, "openIntent", String(regenerate.open));
+  if (opening && !dialog.open) {
     dialog.showModal();
   } else if (!regenerate.open && dialog.open) {
     dialog.close();
-    const opener = els.start;
-    // Native dialog dismissal may restore focus after this render pass; restore it on
-    // the next turn so Escape, cancel, and an uncertain retry all return to the launcher.
-    if (opener?.isConnected) window.setTimeout(() => {
-      if (!dialog.open && opener.isConnected) opener.focus({ preventScroll: true });
-    }, 0);
+    restoreRegenerateFocus();
   }
   renderSelect(dialog.querySelector("#notes-regenerate-provider"), regenerate.providerItems, regenerate.provider, regenerate.locked);
   renderSelect(dialog.querySelector("#notes-regenerate-model"), regenerate.modelItems, regenerate.model, regenerate.locked);
@@ -382,13 +396,21 @@ function renderRegenerateDialog(view) {
   setProp(els.regenerateError, "hidden", !regenerate.error);
   setProp(els.regenerateReload, "hidden", !regenerate.reloadVisible);
   setProp(els.regenerateReload, "disabled", regenerate.reloadDisabled);
+  setProp(els.regenerateSourceAdopt, "hidden", !regenerate.sourceRefresh);
+  setProp(els.regenerateSourceAdopt, "disabled", regenerate.locked);
   setProp(els.regenerateSubmit, "textContent", tr(regenerate.submitLabel));
   setProp(els.regenerateSubmit, "disabled", regenerate.submitDisabled);
   setProp(els.regenerateCancel, "textContent", tr(regenerate.cancelLabel));
   setAttr(dialog, "aria-busy", String(Boolean(regenerate.locked && regenerate.status)));
-  if (regenerate.open && dialog.dataset.focusToken !== String(regenerate.focus)) {
+  if (dialog.open && (opening || dialog.dataset.focusToken !== String(regenerate.focus))) {
     setData(dialog, "focusToken", String(regenerate.focus));
-    els.regenerateProvider.focus({ preventScroll: true });
+    const target = !regenerate.locked ? els.regenerateProvider
+      : !els.regenerateSubmit.disabled ? els.regenerateSubmit : els.regenerateCancel;
+    target.focus({ preventScroll: true });
+  } else if (dialog.open && dialog.contains(focusedControl) && focusedControl?.disabled) {
+    // Submission disables the focused submit button; keep keyboard focus inside
+    // the dialog on its available close action while the request is in flight.
+    els.regenerateCancel.focus({ preventScroll: true });
   }
 }
 
@@ -675,11 +697,19 @@ els.regenerateEffort.addEventListener("change", (event) => dispatch({ type: "not
 els.regenerateSource.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-source-picked", generationId: event.currentTarget.value }));
 els.regenerateLanguage.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-language-picked", language: event.currentTarget.value }));
 els.regenerateReload.addEventListener("click", () => dispatch({ type: "notes/regenerate-reload-clicked" }));
+els.regenerateSourceAdopt.addEventListener("click", () => dispatch({ type: "notes/regenerate-source-adopted" }));
 els.regenerateSubmit.addEventListener("click", () => dispatch({ type: "notes/regenerate-submit", requestId: newRequestId() }));
 els.regenerateCancel.addEventListener("click", () => dispatch({ type: "notes/regenerate-cancelled" }));
 els.regenerateDialog.addEventListener("cancel", (event) => {
+  if (event.target !== els.regenerateDialog) return;
   event.preventDefault();
   dispatch({ type: "notes/regenerate-cancelled" });
+});
+els.regenerateDialog.addEventListener("close", () => {
+  if (!els.regenerateDialog.open && store.getState().regenerate.open) {
+    dispatch({ type: "notes/regenerate-cancelled" });
+    restoreRegenerateFocus();
+  }
 });
 els.change.addEventListener("click", () => dispatch({ type: "notes/change-toggled" }));
 els.nameSpeakers.addEventListener("click", (event) => {

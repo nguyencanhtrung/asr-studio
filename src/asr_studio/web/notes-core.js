@@ -1708,6 +1708,8 @@ export const initialState = {
     provider: "",
     model: "",
     reasoningEffort: "",
+    touched: { provider: false, model: false, reasoningEffort: false },
+    confirmed: { model: false, reasoningEffort: false },
     generationId: "",
     sourceVersion: 0,
     outputLanguage: "en",
@@ -2048,11 +2050,43 @@ function initialRegenerateValues(state) {
   };
 }
 
+function confirmedRegenerateChoices(state, provider, model, reasoningEffort) {
+  const knownModel = Boolean(catalogModels(state, provider)?.some((item) => item.id === model));
+  return {
+    model: knownModel,
+    reasoningEffort: knownModel && explicitEffortItems(state, provider, model).some((item) => item.value === reasoningEffort),
+  };
+}
+
+// Fill provisional defaults once; refreshes cannot replace confirmed or explicit choices.
+function reconcileRegenerateChoices(state) {
+  const values = state.regenerate;
+  if (!values.open || values.meetingId !== state.meetingId || pendingOf(state)?.run || currentEntry(state)?.starting) return state;
+  const touched = values.touched;
+  const providerPicked = touched.provider || touched.model || touched.reasoningEffort
+    || values.confirmed.model || values.confirmed.reasoningEffort;
+  const provider = !providerPicked && state.choice.status[values.provider] !== "connected"
+    ? connectedRunProvider(state) : values.provider;
+  const prior = provider === values.provider ? values.confirmed : { model: false, reasoningEffort: false };
+  const model = touched.model || prior.model
+    ? values.model : catalogModel(state, provider, provider === values.provider ? values.model : "");
+  const reasoningEffort = touched.reasoningEffort || prior.reasoningEffort
+    ? values.reasoningEffort : defaultExplicitEffort(state, provider, model);
+  const known = confirmedRegenerateChoices(state, provider, model, reasoningEffort);
+  const confirmed = {
+    model: prior.model || known.model,
+    reasoningEffort: prior.reasoningEffort || known.reasoningEffort,
+  };
+  return patchRegenerate(state, { provider, model, reasoningEffort, confirmed });
+}
+
 function openRegenerateDialog(state) {
   if (!state.meetingId || !currentGeneration(state.meeting)) return out(state);
   const values = initialRegenerateValues(state);
   let result = out(patchRegenerate(state, {
     ...values,
+    confirmed: confirmedRegenerateChoices(state, values.provider, values.model, values.reasoningEffort),
+    touched: { provider: false, model: false, reasoningEffort: false },
     open: true,
     error: "",
     focus: state.regenerate.focus + 1,
@@ -2283,7 +2317,7 @@ function applyChoiceBase(state) {
     }
   }
   return out(
-    patchChoice(state, {
+    reconcileRegenerateChoices(patchChoice(state, {
       status,
       catalogs,
       catalogErrors,
@@ -2298,7 +2332,7 @@ function applyChoiceBase(state) {
       loadedFor: meetingId,
       loading: effects.length > 0,
       load: { ...state.choice.load, phase: effects.length ? "catalogs" : "idle", waiting: effects.length },
-    }),
+    })),
     effects,
   );
 }
@@ -2322,12 +2356,12 @@ function choiceResponse(state, action, failed) {
       catalogErrors[meta.provider] = "";
     }
     const waiting = load.waiting - 1;
-    return out(patchChoice(state, {
+    return out(reconcileRegenerateChoices(patchChoice(state, {
       catalogs,
       catalogErrors,
       loading: waiting > 0,
       load: { ...load, waiting, phase: waiting > 0 ? "catalogs" : "idle" },
-    }));
+    })));
   }
   if (load.phase !== "base") return out(state);
   if (failed) return choiceFailed(state);
@@ -2532,12 +2566,13 @@ function startRejected(state, meta, error) {
   const definitive = isDefinitive(error);
   let result = definitive ? clearPending(state, meetingId) : out(state);
   const mapped = definitive ? failureMessage(error.code, meta.provider) : "";
+  const message = mapped || errorMessageForCode(error.code, error.status, meta.provider) || error.message || t("Không thể xác nhận yêu cầu notes.");
   result = then(result, (s) => out(patchNotes(s, meetingId, {
-    runError: mapped || errorMessageForCode(error.code, error.status, meta.provider) || error.message || t("Không thể xác nhận yêu cầu notes."),
+    runError: meta.explicit ? "" : message,
     runErrorUncertain: !definitive,
     actionMessage: "",
   })));
-  if (meta.explicit) result = then(result, (s) => out(patchRegenerate(s, { open: true, error: "" })));
+  if (meta.explicit) result = then(result, (s) => out(patchRegenerate(s, { open: true, error: message })));
   if (mapped) result = then(result, (s) => loadChoice(s, meetingId));
   if (definitive && error.status === 409) {
     result.effects.push(call("history.refreshMeeting", [meetingId]));
@@ -3168,6 +3203,8 @@ function transition(state, action) {
       const model = catalogModel(state, action.provider);
       return out(patchRegenerate(state, {
         provider: action.provider,
+        touched: { provider: true, model: false, reasoningEffort: false },
+        confirmed: confirmedRegenerateChoices(state, action.provider, model, defaultExplicitEffort(state, action.provider, model)),
         model,
         reasoningEffort: defaultExplicitEffort(state, action.provider, model),
         error: "",
@@ -3179,13 +3216,22 @@ function transition(state, action) {
       if (pending?.run || data?.starting || typeof action.model !== "string") return out(state);
       return out(patchRegenerate(state, {
         model: action.model,
+        touched: { ...state.regenerate.touched, model: true, reasoningEffort: false },
+        confirmed: confirmedRegenerateChoices(state, state.regenerate.provider, action.model, defaultExplicitEffort(state, state.regenerate.provider, action.model)),
         reasoningEffort: defaultExplicitEffort(state, state.regenerate.provider, action.model),
         error: "",
       }));
     }
     case "notes/regenerate-effort-picked":
       if (pendingOf(state)?.run || currentEntry(state)?.starting || typeof action.reasoningEffort !== "string") return out(state);
-      return out(patchRegenerate(state, { reasoningEffort: action.reasoningEffort, error: "" }));
+      return out(patchRegenerate(state, { reasoningEffort: action.reasoningEffort, touched: { ...state.regenerate.touched, reasoningEffort: true }, error: "" }));
+    case "notes/regenerate-source-adopted": {
+      if (!state.regenerate.open || pendingOf(state)?.run || currentEntry(state)?.starting) return out(state);
+      const source = generationChoice(state, state.regenerate.generationId);
+      return source && source.sourceVersion !== state.regenerate.sourceVersion
+        ? out(patchRegenerate(state, { sourceVersion: source.sourceVersion, error: "" }))
+        : out(state);
+    }
     case "notes/regenerate-source-picked": {
       if (pendingOf(state)?.run || currentEntry(state)?.starting) return out(state);
       const source = generationChoice(state, action.generationId);
@@ -3678,11 +3724,30 @@ function regenerateView(state, data, pending) {
   const modelItems = catalog
     ? catalog.models.map((model) => ({ value: model.id, text: model.display_name }))
     : [{ value: values.model || "", text: t("Danh sách model chưa sẵn sàng"), disabled: true }];
+  if (catalog && values.model && !catalog.models.some((model) => model.id === values.model)) {
+    modelItems.unshift({
+      value: values.model,
+      text: t("{model} — không khả dụng với tài khoản này", { model: values.model }),
+      disabled: true,
+    });
+  }
   const effortItems = explicitEffortItems(state, values.provider, values.model);
+  if (values.reasoningEffort && !effortItems.some((item) => item.value === values.reasoningEffort)) {
+    effortItems.unshift({
+      value: values.reasoningEffort,
+      text: t("Mức suy nghĩ {effort} — không khả dụng với model này", {
+        effort: RUN_EFFORT_LABELS[values.reasoningEffort] || values.reasoningEffort,
+      }),
+      disabled: true,
+    });
+  }
   const pendingRun = pending && validRunObject(pending.run) ? pending.run : null;
   const locked = Boolean(pendingRun || data?.starting);
   const validationError = !locked && state.regenerate.open ? explicitRunError(state, values) : "";
-  const error = state.regenerate.error || data?.runError || validationError;
+  const error = validationError || state.regenerate.error;
+  const selectedSource = generationChoice(state, values.generationId);
+  const sourceRefresh = values.open && !locked && selectedSource && selectedSource.sourceVersion !== values.sourceVersion
+    ? { generationId: selectedSource.id, sourceVersion: selectedSource.sourceVersion } : null;
   const loading = state.choice.loading && !state.choice.loaded;
   const reloadVisible = !state.choice.loaded || Boolean(state.choice.catalogErrors[values.provider]);
   return {
@@ -3697,6 +3762,7 @@ function regenerateView(state, data, pending) {
     generationId: values.generationId,
     sourceVersion: values.sourceVersion,
     sourceItems,
+    sourceRefresh,
     outputLanguage: values.outputLanguage,
     locked,
     status: data?.starting

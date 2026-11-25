@@ -884,8 +884,7 @@ def test_explicit_regenerate_dialog_uses_historical_source_without_saving_prefer
     assert dialog_box is not None and dialog_box["width"] <= width
 
     with page.expect_response(
-        lambda response: response.url.endswith("/notes-runs")
-        and response.request.method == "POST"
+        lambda response: response.url.endswith("/notes-runs") and response.request.method == "POST"
     ) as accepted_response:
         page.locator("#notes-regenerate-submit").click()
     assert accepted_response.value.status == 202
@@ -912,6 +911,8 @@ def test_explicit_regenerate_dialog_uses_historical_source_without_saving_prefer
     }
     assert preference_writes == []
     expect(dialog).to_be_hidden()
+    expect(page.locator("#notes-cancel")).to_be_enabled()
+    expect(page.locator("#notes-cancel")).to_be_focused()
     expect(page.locator("#notes-markdown")).to_have_value(draft)
     assert revision["id"]
 
@@ -950,8 +951,13 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     assert requests[1] == first_body
 
     page.locator("#notes-regenerate-cancel").click()
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-regenerate-provider")).to_be_disabled()
+    expect(page.locator("#notes-regenerate-submit")).to_be_focused()
+
+    page.locator("#notes-regenerate-cancel").click()
     expect(page.locator("#notes-regenerate-dialog")).to_be_hidden()
-    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-start"
+    expect(page.locator("#notes-start")).to_be_focused()
     assert snapshot["generation_id"]
 
 
@@ -975,12 +981,247 @@ def test_explicit_regenerate_dialog_uses_english_title_intro_and_error(
     expect(dialog).to_be_visible()
     expect(page.locator("#notes-regenerate-title")).to_have_text("Recreate notes")
     expect(page.locator("#notes-regenerate-intro")).to_have_text(
-        "Choose the recipe and saved transcript for this run. This choice does not change the setting for the next run."
+        "Choose the recipe and saved transcript for this run. "
+        "This choice does not change the setting for the next run."
     )
     page.locator("#notes-regenerate-submit").click()
     expect(page.locator("#notes-regenerate-error")).to_have_text(
         "The server could not complete the request. Try again later."
     )
+
+
+def test_regenerate_native_close_and_descendant_cancel_keep_modal_state_in_sync(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    dialog = page.locator("#notes-regenerate-dialog")
+    page.locator("#notes-regenerate-provider").evaluate(
+        "el => el.dispatchEvent(new Event('cancel', {bubbles: true, cancelable: true}))"
+    )
+    expect(dialog).to_be_visible()
+    # Force a repaint in the same JS turn, before native close is delivered.
+    # The still-open reducer intent must not reopen the natively closed dialog.
+    assert (
+        page.evaluate(
+            """async () => {
+          const {providerChoice} = await import('/assets/channel.js');
+          const dialog = document.querySelector('#notes-regenerate-dialog');
+          dialog.close();
+          providerChoice.dispatch({type: 'channel/provider-choice-changed'});
+          return dialog.open;
+        }"""
+        )
+        is False
+    )
+    expect(page.locator("#notes-start")).to_be_enabled()
+    expect(dialog).to_be_hidden()
+    # Refresh may still be loading when deferred focus chooses the Notes tab.
+    # Finishing that load must preserve the already viable focus destination.
+    focus = page.locator("#notes-start:focus, #meeting-tab-notes:focus")
+    expect(focus).to_have_count(1)
+    expect(focus).to_be_enabled()
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-regenerate-provider")).to_be_focused()
+    # A close event queued by the previous dismissal cannot cancel a newly
+    # opened native dialog whose current logical intent is open again.
+    dialog.dispatch_event("close")
+    expect(dialog).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#notes-start")).to_be_focused()
+
+
+def test_regenerate_close_focus_falls_back_to_notes_tab_during_provider_refresh(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    _open_saved_notes(live, page, meeting_id)
+    held_providers = []
+    page.route(f"{live.url}/api/providers", lambda route: held_providers.append(route))
+    page.locator("#notes-start").click()
+    page.evaluate(
+        """async () => {
+          const {providerChoice} = await import('/assets/channel.js');
+          document.querySelector('#notes-regenerate-dialog').close();
+          providerChoice.dispatch({type: 'channel/provider-choice-changed'});
+        }"""
+    )
+    expect(page.locator("#notes-regenerate-dialog")).to_be_hidden()
+    expect(page.locator("#notes-start")).to_be_disabled()
+    expect(page.locator("#notes-cancel")).to_be_hidden()
+    expect(page.locator("#meeting-tab-notes")).to_be_focused()
+
+
+def test_regenerate_close_does_not_steal_focus_after_user_moves(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    page.evaluate(
+        """() => {
+          document.querySelector('#notes-regenerate-cancel').click();
+          document.querySelector('#meeting-tab-transcript').focus();
+        }"""
+    )
+    expect(page.locator("#notes-regenerate-dialog")).to_be_hidden()
+    # Wait across the deferred focus callback without a wall-clock sleep.
+    page.evaluate("() => new Promise(resolve => setTimeout(resolve, 0))")
+    expect(page.locator("#meeting-tab-transcript")).to_be_focused()
+
+
+def test_regenerate_native_close_during_submit_preserves_exact_pending_retry(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    held_requests = []
+    page.route(
+        f"{live.url}/api/meetings/{meeting_id}/notes-runs",
+        lambda route: held_requests.append(route),
+    )
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    page.locator("#notes-regenerate-language").select_option("vi")
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-submit")).to_be_disabled()
+    expect(page.locator("#notes-regenerate-cancel")).to_be_focused()
+    page.wait_for_function("document.querySelector('#notes-regenerate-dialog').open")
+    assert len(held_requests) == 1
+    first_body = held_requests[0].request.post_data
+    storage_key = f"asr-studio:notes-request-v2:{meeting_id}"
+    stored = page.evaluate("key => localStorage.getItem(key)", storage_key)
+    assert json.loads(stored) == json.loads(first_body)
+    page.locator("#notes-regenerate-dialog").evaluate("el => el.close()")
+    expect(page.locator("#notes-start")).to_be_enabled()
+    expect(page.locator("#notes-start")).to_be_focused()
+    assert page.evaluate("key => localStorage.getItem(key)", storage_key) == stored
+    held_requests[0].fulfill(status=503, json={"detail": {"code": "temporary_failure"}})
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-start")).to_be_disabled()
+    page.wait_for_function("document.querySelector('#notes-status').textContent.length > 0")
+    assert len(held_requests) == 2
+    assert held_requests[1].request.post_data == first_body
+    held_requests[1].fulfill(status=503, json={"detail": {"code": "temporary_failure"}})
+    expect(page.locator("#notes-regenerate-dialog")).to_be_visible()
+    expect(page.locator("#notes-regenerate-provider")).to_be_disabled()
+    expect(page.locator("#notes-regenerate-submit")).to_be_enabled()
+    expect(page.locator("#notes-regenerate-submit")).to_be_focused()
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    expect(page.locator("#notes-status")).not_to_be_empty()
+    assert page.evaluate("key => localStorage.getItem(key)", storage_key) == stored
+
+
+def test_regenerate_catalog_reload_recovers_empty_default_in_open_dialog(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    page.route(
+        f"{live.url}/api/notes-preferences",
+        lambda route: route.fulfill(json={"provider": "chatgpt", "models": {}}),
+    )
+    catalog_requests = []
+
+    def catalog(route):
+        catalog_requests.append(route)
+        if len(catalog_requests) == 1:
+            route.fulfill(status=503, json={"detail": {"code": "temporary_failure"}})
+        else:
+            route.fulfill(
+                json={
+                    "models": [
+                        {
+                            "id": "gpt-6.1-sol",
+                            "display_name": "GPT 6.1 Sol",
+                            "reasoning_efforts": ["low", "high"],
+                        }
+                    ]
+                }
+            )
+
+    page.route(f"{live.url}/api/providers/chatgpt/models", catalog)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-regenerate-reload")).to_be_visible()
+    page.locator("#notes-regenerate-reload").click()
+    expect(page.locator("#notes-regenerate-model")).to_have_value("gpt-6.1-sol")
+    expect(page.locator("#notes-regenerate-submit")).to_be_enabled()
+    expect(page.locator("#notes-regenerate-error")).to_be_hidden()
+    expect(page.locator("#notes-regenerate-dialog")).to_be_visible()
+
+
+def test_regenerate_rejected_choice_clears_error_on_edit_and_reopen(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    page.route(
+        f"{live.url}/api/meetings/{meeting_id}/notes-runs",
+        lambda route: route.fulfill(
+            status=422, json={"detail": {"code": "model_unavailable", "message": "Unavailable"}}
+        ),
+    )
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    expect(page.locator("#notes-regenerate-cancel")).to_be_focused()
+    expect(page.locator("#notes-status")).not_to_be_empty()
+    page.locator("#notes-regenerate-model").select_option("gpt-6-luna")
+    expect(page.locator("#notes-regenerate-error")).to_be_hidden()
+    expect(page.locator("#notes-regenerate-submit")).to_be_enabled()
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    page.locator("#notes-regenerate-cancel").click()
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-regenerate-error")).to_be_hidden()
+    expect(page.locator("#notes-regenerate-provider")).to_be_focused()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_regenerate_adopts_updated_single_source_only_after_confirmation(live, signed_in, width):
+    _context, page = signed_in(viewport={"width": width, "height": 900})
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
+    requests = []
+    preference_writes = []
+    page.on(
+        "request",
+        lambda request: (
+            preference_writes.append(request.url)
+            if request.method == "PUT" and request.url.endswith("/api/notes-preferences")
+            else None
+        ),
+    )
+
+    def reject_stale_source(route):
+        requests.append(json.loads(route.request.post_data or "{}"))
+        with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
+            connection.execute(
+                "UPDATE transcript_generations SET source_version = 2 WHERE id = ?",
+                (snapshot["generation_id"],),
+            )
+        route.fulfill(status=409, json={"detail": {"code": "source_version_changed"}})
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}/notes-runs", reject_stale_source)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    adopt = page.locator("#notes-regenerate-source-adopt")
+    expect(adopt).to_be_hidden()
+    page.locator("#notes-regenerate-submit").click()
+    expect(adopt).to_be_visible()
+    expect(adopt).to_have_text("Use updated transcript source")
+    expect(page.locator("#notes-regenerate-source option")).to_have_count(1)
+    expect(page.locator("#notes-regenerate-submit")).to_be_disabled()
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    expect(page.locator("#notes-status")).not_to_be_empty()
+    adopt.click()
+    expect(adopt).to_be_hidden()
+    expect(page.locator("#notes-regenerate-error")).to_be_hidden()
+    expect(page.locator("#notes-regenerate-submit")).to_be_enabled()
+    assert len(requests) == 1  # Confirmation only adopts; it never submits.
+    assert requests[0]["run"]["source_version"] == 1
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    assert len(requests) == 2
+    assert requests[1]["run"]["source_version"] == 2
+    assert requests[1]["expected_source_version"] == 2
+    assert requests[1]["request_id"] != requests[0]["request_id"]
+    assert preference_writes == []
 
 
 def _contrast(foreground: str, background: str) -> float:

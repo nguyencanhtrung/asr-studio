@@ -2657,3 +2657,259 @@ test("rich fallback stays in Write through a repair and resets for a new revisio
   assert.equal(selectView(env.state()).savedWork.mode, "rich");
   assert.equal(env.state().richFallback, false);
 });
+
+// Preview repair: exercise asynchronous loading through the real runner.
+async function reloadRunChoices(env, { providers = PROVIDERS, preferences = PREFS, catalog = CATALOG } = {}) {
+  env.dispatch("regenerate-reload-clicked");
+  await env.answer(env.is("GET", "/api/providers"), 200, providers);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, preferences);
+  const provider = providers.providers.find((item) => item.status === "connected").id;
+  await env.answer(env.is("GET", `/api/providers/${provider}/models`), 200, catalog);
+}
+
+test("regenerate catalog retry fills untouched defaults without a global model", async () => {
+  const env = setup();
+  env.context();
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, { models: {} });
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 503, {});
+  env.dispatch("regenerate-clicked");
+  assert.equal(selectView(env.state()).regenerateDialog.reloadVisible, true);
+  await reloadRunChoices(env, { preferences: { models: {}, reasoning_effort: "high" }, catalog: { models: [{ id: "m2", display_name: "M2", reasoning_efforts: ["high"] }] } });
+  const view = selectView(env.state()).regenerateDialog;
+  assert.equal(view.model, "m2");
+  assert.equal(view.reasoningEffort, "high");
+  assert.equal(view.submitDisabled, false);
+  assert.equal(text(view.error), "");
+  assert.deepEqual(env.state().choice.preferences.models, {});
+  assert.equal(env.requests.some((request) => request.method === "PUT"), false);
+});
+
+test("regenerate auto-load replaces an untouched disconnected provider", async () => {
+  const env = setup();
+  env.context();
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await env.answer(env.is("GET", "/api/providers"), 503, {});
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  env.dispatch("regenerate-clicked");
+  await env.answer(env.is("GET", "/api/providers"), 200, { providers: [{ id: "antigravity", status: "connected" }] });
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, { models: {} });
+  await env.answer(env.is("GET", "/api/providers/antigravity/models"), 200, { models: [{ id: "gemini", display_name: "Gemini" }] });
+  const view = selectView(env.state()).regenerateDialog;
+  assert.equal(view.provider, "antigravity");
+  assert.equal(view.model, "gemini");
+  assert.equal(view.submitDisabled, false);
+});
+
+test("regenerate reload retains explicit unavailable provider, model and effort choices", async () => {
+  const env = setup();
+  await opened(env);
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-model-picked", { model: "removed" });
+  env.dispatch("regenerate-effort-picked", { reasoningEffort: "high" });
+  await reloadRunChoices(env);
+  assert.equal(env.state().regenerate.model, "removed");
+  assert.equal(env.state().regenerate.reasoningEffort, "high");
+  assert.match(text(selectView(env.state()).regenerateDialog.error), /Model đã chọn/);
+  env.dispatch("regenerate-provider-picked", { provider: "antigravity" });
+  await reloadRunChoices(env);
+  assert.equal(env.state().regenerate.provider, "antigravity");
+  assert.match(text(selectView(env.state()).regenerateDialog.error), /chưa sẵn sàng/);
+});
+
+test("regenerate confirmed defaults remain visible when a refreshed catalog drops them", async () => {
+  const env = setup();
+  await opened(env, {
+    catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["high"] }] },
+    preferences: { ...PREFS, reasoning_effort: "high" },
+  });
+  env.dispatch("regenerate-clicked");
+  await reloadRunChoices(env, { catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["medium"] }] } });
+  assert.equal(env.state().regenerate.reasoningEffort, "high");
+  assert.match(text(selectView(env.state()).regenerateDialog.error), /Mức suy nghĩ đã chọn/);
+  await reloadRunChoices(env, { catalog: { models: [{ id: "m2", display_name: "M2", reasoning_efforts: ["medium"] }] } });
+  assert.equal(env.state().regenerate.model, "m1");
+  assert.equal(env.state().regenerate.reasoningEffort, "high");
+  assert.match(text(selectView(env.state()).regenerateDialog.error), /Model đã chọn/);
+  const view = selectView(env.state()).regenerateDialog;
+  assert.equal(view.submitDisabled, true);
+  assert.deepEqual(view.modelItems.map((item) => ({ value: item.value, text: text(item.text), disabled: Boolean(item.disabled) })), [
+    { value: "m1", text: "m1 — không khả dụng với tài khoản này", disabled: true },
+    { value: "m2", text: "M2", disabled: false },
+  ]);
+});
+
+test("regenerate output-language edits keep a confirmed model provider across status refresh", async () => {
+  const env = setup();
+  await opened(env, {
+    catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["high"] }] },
+    preferences: { ...PREFS, reasoning_effort: "high" },
+  });
+  env.dispatch("regenerate-clicked");
+  assert.equal(env.state().regenerate.confirmed.model, true);
+  env.dispatch("regenerate-language-picked", { language: "vi" });
+
+  await reloadRunChoices(env, {
+    providers: { providers: [{ id: "chatgpt", status: "disconnected" }, { id: "antigravity", status: "connected" }] },
+    preferences: { provider: "antigravity", models: { antigravity: "gemini" }, reasoning_effort: "medium" },
+    catalog: { models: [{ id: "gemini", display_name: "Gemini", reasoning_efforts: ["medium"] }] },
+  });
+
+  const view = selectView(env.state()).regenerateDialog;
+  assert.equal(view.provider, "chatgpt");
+  assert.equal(view.model, "m1");
+  assert.equal(view.outputLanguage, "vi");
+  assert.ok(view.providerItems.some((item) => item.value === "chatgpt" && item.disabled));
+  assert.equal(view.submitDisabled, true);
+  assert.match(text(view.error), /ChatGPT chưa sẵn sàng/);
+  assert.equal(posts(env, "/notes-runs").length, 0);
+});
+
+test("regenerate stale source requires explicit adoption without submitting", async () => {
+  const env = setup();
+  await opened(env);
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: "req-source-repair" });
+  await env.answer(env.is("POST", "/notes-runs"), 409, { detail: { code: "source_version_changed" } });
+  assert.ok(text(env.state().regenerate.error));
+  assert.equal(text(notes(env).runError), "");
+  env.context({ ...meeting(), transcription: { generation: { ...GENERATION, source_version: 3 }, task: null } });
+  const stale = selectView(env.state()).regenerateDialog;
+  assert.equal(stale.sourceVersion, 2);
+  assert.deepEqual(stale.sourceRefresh, { generationId: "g1", sourceVersion: 3 });
+  assert.equal(stale.submitDisabled, true);
+  const requestCount = env.requests.length;
+  env.dispatch("regenerate-source-adopted");
+  const adopted = selectView(env.state()).regenerateDialog;
+  assert.equal(adopted.sourceVersion, 3);
+  assert.equal(adopted.sourceRefresh, null);
+  assert.equal(adopted.submitDisabled, false);
+  assert.equal(text(adopted.error), "");
+  assert.equal(env.requests.length, requestCount);
+  env.context({ ...meeting(), transcription: { generation: { ...GENERATION, id: "g2" }, task: null } });
+  assert.equal(selectView(env.state()).regenerateDialog.sourceRefresh, null);
+  env.dispatch("regenerate-source-adopted");
+  assert.equal(env.state().regenerate.generationId, "g1");
+  assert.equal(selectView(env.state()).regenerateDialog.submitDisabled, true);
+});
+
+test("regenerate errors clear on unlocked edits and reopening; validation takes precedence", async () => {
+  const env = setup();
+  await opened(env);
+  env.dispatch("start-clicked", { requestId: "req-legacy-error" });
+  await env.answer(env.is("POST", "/notes-runs"), 400, { detail: { code: "invalid_request" } });
+  assert.ok(text(notes(env).runError));
+  env.dispatch("regenerate-clicked");
+  assert.equal(text(selectView(env.state()).regenerateDialog.error), "");
+  for (const [type, extra] of [
+    ["regenerate-provider-picked", { provider: "chatgpt" }],
+    ["regenerate-model-picked", { model: "m1" }],
+    ["regenerate-effort-picked", { reasoningEffort: "default" }],
+    ["regenerate-source-picked", { generationId: "g1" }],
+    ["regenerate-language-picked", { language: "vi" }],
+  ]) {
+    env.dispatch("regenerate-submit", { requestId: `req-error-${type}` });
+    await env.answer(env.is("POST", "/notes-runs"), 400, { detail: { code: "invalid_request" } });
+    assert.ok(text(env.state().regenerate.error));
+    env.dispatch(type, extra);
+    assert.equal(text(selectView(env.state()).regenerateDialog.error), "");
+  }
+  env.dispatch("regenerate-submit", { requestId: "req-error-reopen" });
+  await env.answer(env.is("POST", "/notes-runs"), 400, { detail: { code: "invalid_request" } });
+  env.dispatch("regenerate-cancelled");
+  env.dispatch("regenerate-clicked");
+  assert.equal(text(selectView(env.state()).regenerateDialog.error), "");
+  const state = env.state();
+  const invalid = { ...state, regenerate: { ...state.regenerate, model: "removed", error: "old dialog error" }, notes: { ...state.notes, m1: { ...notes(env), runError: "old legacy error" } } };
+  assert.match(text(selectView(invalid).regenerateDialog.error), /Model đã chọn/);
+});
+
+test("regenerate async reload and adoption preserve frozen uncertain retry", async () => {
+  const env = setup();
+  await opened(env);
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: "req-frozen-repair" });
+  const original = posts(env, "/notes-runs")[0].body;
+  await env.fail(env.is("POST", "/notes-runs"));
+  const values = env.state().regenerate;
+  await reloadRunChoices(env, { catalog: { models: [{ id: "m2", display_name: "M2" }] } });
+  env.context({ ...meeting(), transcription: { generation: { ...GENERATION, source_version: 3 }, task: null } });
+  assert.equal(selectView(env.state()).regenerateDialog.sourceRefresh, null);
+  for (const [type, extra] of [["regenerate-source-adopted", {}], ["regenerate-model-picked", { model: "m2" }], ["regenerate-provider-picked", { provider: "antigravity" }], ["regenerate-effort-picked", { reasoningEffort: "high" }]]) env.dispatch(type, extra);
+  assert.deepEqual(env.state().regenerate, values);
+  env.dispatch("regenerate-submit", { requestId: "req-replacement" });
+  assert.deepEqual(posts(env, "/notes-runs").at(-1).body, original);
+});
+
+test("regenerate retains an explicit effort that a refreshed model no longer supports", async () => {
+  const env = setup();
+  await opened(env, { catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["high"] }] } });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-effort-picked", { reasoningEffort: "high" });
+  await reloadRunChoices(env, { catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["medium"] }] } });
+  assert.equal(env.state().regenerate.reasoningEffort, "high");
+  assert.match(text(selectView(env.state()).regenerateDialog.error), /Mức suy nghĩ đã chọn/);
+  assert.equal(selectView(env.state()).regenerateDialog.submitDisabled, true);
+});
+
+test("regenerate choices picked while catalogs load survive the arriving response", async () => {
+  const env = setup();
+  await opened(env);
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-reload-clicked");
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  env.dispatch("regenerate-model-picked", { model: "" });
+  env.dispatch("regenerate-effort-picked", { reasoningEffort: "high" });
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+  assert.equal(env.state().regenerate.model, "");
+  assert.equal(env.state().regenerate.reasoningEffort, "high");
+  assert.equal(selectView(env.state()).regenerateDialog.submitDisabled, true);
+});
+
+test("regenerate mapped rejection reloads choices and a fresh open clears its submission error", async () => {
+  const env = setup();
+  await opened(env);
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: "req-mapped-recovery" });
+  await env.answer(env.is("POST", "/notes-runs"), 422, { detail: { code: "model_unavailable" } });
+  assert.ok(text(env.state().regenerate.error));
+  assert.equal(text(notes(env).runError), "");
+  env.dispatch("regenerate-cancelled");
+  env.dispatch("regenerate-clicked");
+  assert.match(text(selectView(env.state()).regenerateDialog.error), /Đang đọc trạng thái/);
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+  assert.equal(selectView(env.state()).regenerateDialog.submitDisabled, false);
+  assert.equal(text(selectView(env.state()).regenerateDialog.error), "");
+});
+
+
+test("regenerate model or effort picks pin their provider across status refresh without a provider pick", async () => {
+  for (const [type, extra] of [
+    ["regenerate-model-picked", { model: "m1" }],
+    ["regenerate-effort-picked", { reasoningEffort: "high" }],
+  ]) {
+    const env = setup();
+    await opened(env, { catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["high"] }] } });
+    env.dispatch("regenerate-clicked");
+    env.dispatch(type, extra);
+    const before = env.state().regenerate;
+    assert.equal(before.touched.provider, false);
+    await reloadRunChoices(env, {
+      providers: { providers: [{ id: "chatgpt", status: "disconnected" }, { id: "antigravity", status: "connected" }] },
+      preferences: { provider: "antigravity", models: { antigravity: "gemini" } },
+      catalog: { models: [{ id: "gemini", display_name: "Gemini" }] },
+    });
+    const view = selectView(env.state()).regenerateDialog;
+    assert.equal(view.provider, "chatgpt");
+    assert.ok(view.providerItems.some((item) => item.value === "chatgpt" && item.disabled));
+    assert.equal(view.model, before.model);
+    assert.equal(view.reasoningEffort, before.reasoningEffort);
+    assert.equal(view.submitDisabled, true);
+    assert.match(text(view.error), /ChatGPT chưa sẵn sàng/);
+    assert.equal(posts(env, "/notes-runs").length, 0);
+  }
+});

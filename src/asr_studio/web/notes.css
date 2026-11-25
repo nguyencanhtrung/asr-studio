@@ -1052,6 +1052,11 @@ a.notes-citation-chip:focus-visible {
   grid-column: 1 / -1;
 }
 
+.notes-regenerate-source-adopt {
+  justify-self: start;
+  text-align: start;
+}
+
 .notes-regenerate-help {
   margin: 0;
   color: var(--ink-3);
