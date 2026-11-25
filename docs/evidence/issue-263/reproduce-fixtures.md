@@ -13,7 +13,15 @@ ASR_RUN_BROWSER_TESTS=1 ASR_REQUIRE_MEDIA_TOOLS=1 uv run --no-sync pytest -q \
   tests/test_browser_create_flow.py \
   tests/test_browser_notes.py \
   tests/test_browser_asr_model.py \
-  tests/test_browser_settings.py
+  tests/test_browser_automatic_processing.py \
+  tests/test_browser_history.py \
+  tests/test_browser_settings.py \
+  tests/test_recordings.py
+
+uv run --no-sync pytest -q \
+  tests/test_provider_routes.py \
+  tests/test_antigravity_provider.py::test_prompt_deadline_cuts_a_stream_that_keeps_producing_frames \
+  tests/test_antigravity_provider.py::test_generate_and_verify_use_their_own_inference_deadlines
 
 ASR_RUN_EXTENSION_TESTS=1 ASR_EXTENSION_DISPOSABLE_XVFB=1 \
   xvfb-run -a -s '-screen 0 1280x1024x24' \
@@ -23,10 +31,10 @@ ASR_RUN_EXTENSION_TESTS=1 ASR_EXTENSION_DISPOSABLE_XVFB=1 \
 
 | Kiểm tra | Bằng chứng cần quan sát |
 | --- | --- |
-| Đăng nhập và Verify | Thử callback hết hạn, phát lại hoặc bị hủy trong Connections. Quota, timeout, trạng thái bận và yêu cầu đăng nhập lại có thông báo tương ứng. Đếm số lần fixture gọi adapter. |
+| Đăng nhập và Verify | Thử callback hết hạn, phát lại hoặc bị hủy trong Connections. Quota, timeout, trạng thái bận và yêu cầu đăng nhập lại có thông báo tương ứng. Đếm số lần fixture gọi adapter. Ca OMP deadline dùng luồng frame giả và đồng hồ điều khiển để kiểm tra hạn xử lý. |
 | Ghép và thu hồi thiết bị | Ghép hai thiết bị, thu hồi một thiết bị và xác minh chỉ thiết bị còn lại giữ quyền cấp phiên. Thử code hết hạn và re-pair rõ ràng bằng fixture Extension API. |
 | Cài model | Fixture installer tạo lỗi, hủy khi đang tải và retry có chủ ý. Mở lại Settings để đọc readiness từ server, rồi kiểm tra lựa chọn mặc định riêng với cài đặt. |
-| Hủy upload | Giữ transfer đang chạy, bấm Hủy và kiểm tra form còn thông tin để sửa hoặc thử lại. Đếm yêu cầu theo bước và kiểm tra validation sau khi form thay đổi. |
+| Hủy upload | Giữ transfer đang chạy, bấm Hủy và kiểm tra form còn thông tin để sửa hoặc thử lại. Đếm yêu cầu theo bước và kiểm tra validation sau khi form thay đổi. Fixture backend kiểm tra policy file, 4 GiB, 4 giờ, tiêu đề 200 ký tự và ngày tùy chọn. Các ca browser kiểm tra checkbox auto-ASR và model theo lượt. |
 | Notes nguồn và phiên bản | Lưu bản Notes sửa tay, Regenerate bằng một nguồn transcript đã lưu, rồi mở lại bản cũ. So sánh nội dung và citation của từng bản. |
 | Transcript rerun | Chọn model sẵn sàng, gợi ý ngôn ngữ và chế độ được server cấp. Xác nhận tạo generation mới, rồi mở lại generation trước và đối chiếu sửa tay, mốc thời gian và provenance. |
 | Capture → Notes | Chrome Extension ghi audio mẫu qua HTTP loopback và HTTPS fixture. Đối chiếu raw receipt đã lưu trước khi derivative sẵn sàng, sau đó kiểm tra ASR, diarization, Notes revision và source snapshot. |
