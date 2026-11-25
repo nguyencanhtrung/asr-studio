@@ -817,8 +817,8 @@ Khi có `autoStart` tới hạn, task-core chỉ áp dụng ID model còn hợp 
 `capability` giữ `meetingId`, `generationId`, `requestId`, trạng thái, giá trị hoặc lỗi của lượt đọc. `rerun` giữ meeting và generation, lựa chọn ASR, ngôn ngữ, diarization và định danh request chờ nếu đang xác minh. View dùng `selectTask().rerun` để vẽ hộp thoại và quản lý focus.
 
 Với yêu cầu mới có chế độ Community-1 hoặc Tắt, server mở bản ghi gốc đã quản lý
-để kiểm tra file thường trước khi tạo task hay giữ slot. Server trả biên nhận
-đã có cho request trùng khớp trước bước kiểm tra này. Nếu không mở được file,
+để kiểm tra file thường có dữ liệu trước khi tạo task hay giữ slot. Server trả biên nhận
+đã có cho request trùng khớp trước bước kiểm tra này. Nếu không mở được file hoặc file rỗng,
 `POST /api/tasks` trả `409 recording_unavailable` và giao diện hướng dẫn khôi phục
 bản ghi. Transcript, bản sửa đã lưu và bản Markdown của Notes vẫn đọc và xuất
 được. Worker kiểm tra lại bản ghi khi bắt đầu xử lý.

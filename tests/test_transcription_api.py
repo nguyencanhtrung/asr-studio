@@ -415,7 +415,7 @@ async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
 
 
 @pytest.mark.parametrize("mode", ["community-1", "off"])
-@pytest.mark.parametrize("loss", ["missing", "unreadable", "fifo"])
+@pytest.mark.parametrize("loss", ["missing", "unreadable", "fifo", "empty"])
 async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypatch, mode, loss):
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -478,9 +478,13 @@ async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypa
                     inaccessible.setattr(os, "open", deny_recording)
                 else:
                     backup = tmp_path / "saved.m4a"
-                    audio.rename(backup)
-                    if loss == "fifo":
-                        os.mkfifo(audio)
+                    if loss == "empty":
+                        backup.write_bytes(audio.read_bytes())
+                        audio.write_bytes(b"")
+                    else:
+                        audio.rename(backup)
+                        if loss == "fifo":
+                            os.mkfifo(audio)
                 refused = await client.post("/api/tasks", headers=headers, json=request)
                 after = _admission_state(settings.data_dir)
                 assert (refused.status_code, after == before) == (409, True)
@@ -494,9 +498,7 @@ async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypa
                 }
 
             if loss != "unreadable":
-                if loss == "fifo":
-                    audio.unlink()
-                backup.rename(audio)
+                backup.replace(audio)
             accepted_request = {**request, "request_id": "recording-accepted"}
             accepted = await client.post("/api/tasks", headers=headers, json=accepted_request)
             assert accepted.status_code == 202
@@ -508,7 +510,10 @@ async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypa
                 assert replay.status_code == 202
                 assert replay.json() == accepted.json()
                 assert _admission_state(settings.data_dir) == after_accept
-            audio.unlink()
+            if loss == "empty":
+                audio.write_bytes(b"")
+            else:
+                audio.unlink()
             replay = await client.post("/api/tasks", headers=headers, json=accepted_request)
             assert replay.status_code == 202
             assert replay.json() == accepted.json()

@@ -396,14 +396,16 @@ def accept_transcription_task(
 
         if explicit_diarization_mode:
             try:
-                _, audio = open_audio(data_dir, recording["storage_key"])
+                recording_size, audio = open_audio(data_dir, recording["storage_key"])
                 audio.close()
             except RecordingError:
+                recording_size = 0
+            if recording_size == 0:
                 raise TaskError(
                     409,
                     "recording_unavailable",
                     "The original recording is unavailable. Restore it before rerunning.",
-                ) from None
+                )
 
         slot = connection.execute(
             "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
