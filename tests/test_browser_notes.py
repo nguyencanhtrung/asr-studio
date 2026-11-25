@@ -1050,6 +1050,82 @@ def test_notes_admission_keeps_cancel_and_poll_after_a_delayed_read(
     expect(start).to_be_enabled()
 
 
+def test_late_notes_admission_receipt_keeps_cancel_on_the_newer_active_task(
+    live, signed_in, fake_notes_provider
+):
+    _context, page = signed_in()
+    data_dir = live.settings.data_dir
+    meeting_id, prior_revision, snapshot, _segments = _seed_saved_notes(data_dir)
+    meeting_url = f"{live.url}/api/meetings/{meeting_id}"
+    runs_url = f"{meeting_url}/notes-runs"
+    notes_url = f"{meeting_url}/notes"
+    held_admissions = []
+    _open_saved_notes(live, page, meeting_id)
+    page.route(runs_url, lambda route: held_admissions.append(route))
+
+    dialog = page.locator("#notes-regenerate-dialog")
+    page.locator("#notes-start").click()
+    with page.expect_request(runs_url, timeout=5_000):
+        page.locator("#notes-regenerate-submit").click()
+    expect(dialog).to_have_attribute("aria-busy", "true")
+    admission = held_admissions.pop()
+    receipt = admission.fetch(timeout=5_000)
+    assert receipt.status == 202
+    first_task = receipt.json()
+    first_revision = _complete_fake_task(
+        data_dir, first_task["id"], first_task["request_id"], _markdown(snapshot)
+    )
+    second_task = _accept(
+        data_dir, meeting_id, snapshot["generation_id"], request_id="newer-notes-run"
+    )
+    assert first_task["id"] != second_task["id"]
+
+    canonical_reads = []
+    held_reads = []
+
+    def read_notes(route):
+        if canonical_reads:
+            held_reads.append(route)
+            return
+        response = route.fetch(timeout=5_000)
+        canonical_reads.append(response.json())
+        route.fulfill(response=response)
+
+    # Deliver one authoritative Notes GET, then hold every later read across Cancel.
+    page.route(notes_url, read_notes)
+    page.evaluate(
+        "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+        meeting_id,
+    )
+    revisions = page.locator("#notes-revision-selector")
+    expect(revisions.locator("option")).to_have_count(2)
+    assert canonical_reads[0]["task"]["id"] == second_task["id"]
+    assert canonical_reads[0]["source_locked"] is True
+    lock = page.locator("#notes-lock-status")
+    edit = page.locator(".segment-edit-button").first
+    expect(lock).to_be_visible()
+    expect(edit).to_be_disabled()
+
+    admission.fulfill(response=receipt)
+    expect(dialog).to_be_hidden()
+    expect(lock).to_be_visible()
+    expect(edit).to_be_disabled()
+    assert revisions.locator("option").evaluate_all("options => options.map(o => o.value)") == [
+        first_revision["id"],
+        prior_revision["id"],
+    ]
+    expect(revisions).to_have_value(prior_revision["id"])
+
+    cancel = page.locator("#notes-cancel")
+    expect(cancel).to_be_enabled()
+    with page.expect_request(
+        lambda request: request.method == "POST" and request.url.endswith("/cancel"),
+        timeout=5_000,
+    ) as canceled:
+        cancel.click()
+    assert canceled.value.url == f"{live.url}/api/tasks/{second_task['id']}/cancel"
+
+
 def test_regenerate_waits_for_a_concurrent_notes_task_without_losing_the_draft(
     live, signed_in, fake_notes_provider
 ):
@@ -2014,6 +2090,126 @@ def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(
         else "Mức suy nghĩ Cao — không khả dụng với model này"
     )
     expect(page.locator("#notes-regenerate-effort option:checked")).to_have_text(effort_label)
+
+
+@pytest.mark.usefixtures("fake_vendor_notes_provider")
+def test_restored_run_keeps_disconnected_destination_after_definitive_verify_rejection(
+    live, signed_in
+):
+    _context, page = signed_in()
+    mock_providers(page, live, antigravity="disconnected")
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
+    generation_id = snapshot["generation_id"]
+    preferences_url = f"{live.url}/api/notes-preferences"
+    preferences = page.request.get(preferences_url).json()
+    assert preferences["provider"] == "chatgpt"
+    body = {
+        "request_id": "fixture-restored-antigravity-run",
+        "expected_generation_id": generation_id,
+        "expected_source_version": 1,
+        "expected_metadata_version": 1,
+        "output_language": "vi",
+        "run": {
+            "provider": "antigravity",
+            "model": ANTIGRAVITY_MODEL,
+            "reasoning_effort": "medium",
+            "generation_id": generation_id,
+            "source_version": 1,
+        },
+    }
+    page.evaluate(
+        """([id, body]) => sessionStorage.setItem(
+            `asr-studio:notes-request-v2:${id}`, JSON.stringify(body)
+        )""",
+        [meeting_id, body],
+    )
+    runs_url = f"{live.url}/api/meetings/{meeting_id}/notes-runs"
+    raw_requests = []
+    preference_writes = []
+    allow_submission = False
+
+    def intercept_run(route):
+        raw_requests.append(route.request.post_data_buffer)
+        if len(raw_requests) == 1:
+            route.fulfill(status=503, json={"detail": {"code": "temporary_failure"}})
+        elif len(raw_requests) == 2:
+            route.fulfill(status=409, json={"detail": {"code": "provider_disconnected"}})
+        elif allow_submission:
+            route.continue_()
+        else:
+            route.abort()
+
+    def track_preferences(request):
+        if request.method == "PUT" and request.url == preferences_url:
+            preference_writes.append(request.url)
+
+    page.route(runs_url, intercept_run)
+    page.on("request", track_preferences)
+    _open_saved_notes(live, page, meeting_id)
+    assert raw_requests == []
+    start = page.locator("#notes-start")
+    dialog = page.locator("#notes-regenerate-dialog")
+    submit = page.locator("#notes-regenerate-submit")
+    provider = page.locator("#notes-regenerate-provider")
+    model = page.locator("#notes-regenerate-model")
+    effort = page.locator("#notes-regenerate-effort")
+    language = page.locator("#notes-regenerate-language")
+    error = page.locator("#notes-regenerate-error")
+    reload_choices = page.locator("#notes-regenerate-reload")
+    verify = "Xác minh yêu cầu notes"
+    expect(start).to_have_text(verify)
+    with page.expect_response(runs_url, timeout=5_000) as first:
+        start.click()
+    assert first.value.status == 503
+    expect(dialog).to_be_visible()
+    expect(error).to_be_visible()
+    expect(page.locator("#notes-regenerate-status")).to_contain_text("đã được giữ nguyên")
+    expect(submit).to_have_text(verify)
+    expect(submit).to_be_focused()
+    expect(provider).to_have_value("antigravity")
+    expect(provider).to_be_disabled()
+    expect(reload_choices).to_be_enabled()
+
+    with (
+        page.expect_response(runs_url, timeout=5_000) as second,
+        page.expect_response(f"{live.url}/api/providers/chatgpt/models", timeout=5_000),
+    ):
+        submit.click()
+    assert second.value.status == 409
+    assert second.value.json()["detail"]["code"] == "provider_disconnected"
+    assert len(raw_requests) == 2
+    assert raw_requests[0] == raw_requests[1]
+    assert json.loads(raw_requests[0]) == body
+    expect(reload_choices).to_be_enabled()
+    expect(dialog).to_be_visible()
+    expect(error).to_contain_text("Google Antigravity")
+    expect(page.locator("#notes-regenerate-cancel")).to_be_focused()
+    expect(provider).to_be_enabled()
+    expect(provider).to_have_value("antigravity")
+    expect(model).to_have_value(ANTIGRAVITY_MODEL)
+    expect(effort).to_have_value("medium")
+    expect(language).to_have_value("vi")
+    expect(submit).to_have_text("Tạo lại notes")
+    expect(submit).to_be_disabled()
+
+    provider.select_option("chatgpt")
+    expect(submit).to_be_enabled()
+    assert len(raw_requests) == 2
+    allow_submission = True
+    with page.expect_response(runs_url, timeout=5_000) as admitted:
+        submit.click()
+    assert admitted.value.status == 202
+    assert len(raw_requests) == 3
+    corrected = admitted.value.request.post_data_json
+    task = admitted.value.json()
+    assert corrected["request_id"] != body["request_id"]
+    assert corrected["run"]["provider"] == task["provider"] == "chatgpt"
+    assert task["request_id"] == corrected["request_id"]
+    assert task["output_language"] == corrected["output_language"] == "vi"
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#notes-cancel")).to_be_focused()
+    assert preference_writes == []
+    assert page.request.get(preferences_url).json() == preferences
 
 
 def test_completed_restored_recipe_keeps_the_meeting_language_for_the_next_run(live, signed_in):

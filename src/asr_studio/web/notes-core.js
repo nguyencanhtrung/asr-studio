@@ -2468,6 +2468,7 @@ function startNotes(state, requestId, { explicit = false } = {}) {
       meetingId,
       provider: body.provider || body.run?.provider,
       requestId: body.request_id,
+      taskIdAtStart: entryOf(state, meetingId).task?.id,
       explicit,
       contextId: state.previewContextId,
       attempt,
@@ -2517,6 +2518,7 @@ function startExplicitNotes(state, requestId) {
       meetingId,
       provider: body.run.provider,
       requestId: body.request_id,
+      taskIdAtStart: entryOf(state, meetingId).task?.id,
       explicit: true,
       contextId: state.previewContextId,
       attempt,
@@ -2536,16 +2538,17 @@ function startAccepted(state, action) {
   const parsed = parseTask(object(action.response.body));
   if (parsed.error) return startRejected(state, action.meta, { message: parsed.error, status: 0, payload: null });
   const { task } = parsed;
+  const observed = entryOf(state, meetingId).task;
+  // The receipt settles this request. A different task already observed during it remains the displayed task.
+  const keepObserved = observed && observed.id !== task.id && observed.id !== action.meta.taskIdAtStart;
   const locked = isActiveStatus(task.status);
   // A read started before the receipt may still describe the old task. The next poll is fresh.
-  const afterReceipt = locked && state.meetingId === meetingId
+  const afterReceipt = !keepObserved && locked && state.meetingId === meetingId
     ? { ...state, readId: state.readId + 1 }
     : state;
   let result = clearPending(afterReceipt, meetingId);
   result = then(result, (s) => out(patchNotes(s, meetingId, {
-    task,
-    sourceLocked: locked,
-    sourceLockKnown: true,
+    ...(keepObserved ? {} : { task, sourceLocked: locked, sourceLockKnown: true }),
     actionMessage: t("Yêu cầu notes đã được worker xác nhận."),
     starting: false,
   })));
@@ -2554,11 +2557,11 @@ function startAccepted(state, action) {
       ? out(patchRegenerate(s, { open: false, error: "" }))
       : out(s));
   }
-  result.effects.push(lockEffect(meetingId, locked, true));
+  if (!keepObserved) result.effects.push(lockEffect(meetingId, locked, true));
   result.effects.push(meetingChangeEffect(meetingId, "notes"));
   return then(result, (s) => {
     if (s.meetingId !== meetingId) return out(s);
-    return locked ? startPolling(s, meetingId, task) : readNotes(s, meetingId);
+    return !keepObserved && locked ? startPolling(s, meetingId, task) : readNotes(s, meetingId);
   });
 }
 
@@ -2569,10 +2572,7 @@ function startRejected(state, meta, error) {
     && state.meetingId === meetingId
     && state.activeTab === "notes"
     && meta.contextId === state.previewContextId;
-  const sameOpenDialog = showDialog && state.regenerate.open && state.regenerate.meetingId === meetingId;
-  const reopenedValues = showDialog
-    ? sameOpenDialog ? state.regenerate : initialRegenerateValues(state)
-    : null;
+  const reopenedValues = showDialog ? initialRegenerateValues(state) : null;
   let result = definitive ? clearPending(state, meetingId) : out(state);
   const mapped = definitive ? failureMessage(error.code, meta.provider) : "";
   const message = mapped || errorMessageForCode(error.code, error.status, meta.provider) || error.message || t("Không thể xác nhận yêu cầu notes.");
@@ -2584,12 +2584,9 @@ function startRejected(state, meta, error) {
   if (showDialog) {
     result = then(result, (s) => out(patchRegenerate(s, {
       ...reopenedValues,
-      confirmed: sameOpenDialog
-        ? reopenedValues.confirmed
-        : confirmedRegenerateChoices(s, reopenedValues.provider, reopenedValues.model, reopenedValues.reasoningEffort),
-      touched: sameOpenDialog
-        ? reopenedValues.touched
-        : { provider: false, model: false, reasoningEffort: false },
+      confirmed: confirmedRegenerateChoices(s, reopenedValues.provider, reopenedValues.model, reopenedValues.reasoningEffort),
+      // The operator already submitted this recipe. A catalog refresh can validate it without replacing it.
+      touched: { provider: true, model: true, reasoningEffort: true },
       open: true,
       error: message,
     })));
@@ -2628,27 +2625,40 @@ function cancelNotes(state) {
   const task = data && data.task;
   if (!meetingId || !task || task.kind !== "notes" || !isActiveStatus(task.status) || data.canceling) return out(state);
   return out(patchNotes(state, meetingId, { canceling: true }), [
-    request(`notes/cancel/${task.id}`, `/api/tasks/${encodeURIComponent(task.id)}/cancel`, "POST", "{}", "cancel", { meetingId }),
+    request(`notes/cancel/${task.id}`, `/api/tasks/${encodeURIComponent(task.id)}/cancel`, "POST", "{}", "cancel", { meetingId, taskId: task.id }),
   ]);
 }
 
 function cancelAnswered(state, action) {
-  const { meetingId } = action.meta;
+  const { meetingId, taskId } = action.meta;
   const parsed = parseTask(object(action.response.body));
-  if (parsed.error) return cancelFailed(state, action.meta, { message: parsed.error });
+  if (parsed.error || parsed.task.id !== taskId) {
+    return cancelFailed(state, action.meta, { message: parsed.error || t("Máy chủ không trả về task notes hợp lệ.") });
+  }
   const { task } = parsed;
-  const next = patchNotes(state, meetingId, { task, runError: "", canceling: false });
-  const result = isActiveStatus(task.status) ? startPolling(next, meetingId, task) : readNotes(next, meetingId);
+  const observed = entryOf(state, meetingId).task;
+  const active = isActiveStatus(task.status);
+  const keepObserved = observed && (observed.id !== taskId || (active && !isActiveStatus(observed.status)));
+  const next = patchNotes(state, meetingId, {
+    ...(keepObserved ? {} : { task, runError: "" }),
+    canceling: false,
+  });
+  let result = out(next);
+  if (state.meetingId === meetingId) {
+    result = !keepObserved && active ? startPolling(next, meetingId, task) : readNotes(next, meetingId);
+  }
   result.effects.push(meetingChangeEffect(meetingId, "notes"));
   return result;
 }
 
 function cancelFailed(state, meta, error) {
-  return out(patchNotes(state, meta.meetingId, {
+  const data = entryOf(state, meta.meetingId);
+  const sameActiveTask = data.task?.id === meta.taskId && activeTask(data);
+  const status = sameActiveTask ? {
     runError: error.message || t("Không thể gửi yêu cầu hủy. Trạng thái worker chưa được xác nhận là đã đổi."),
     runErrorUncertain: false,
-    canceling: false,
-  }));
+  } : {};
+  return out(patchNotes(state, meta.meetingId, { ...status, canceling: false }));
 }
 
 // ---- saving a revision and the saved copy ----

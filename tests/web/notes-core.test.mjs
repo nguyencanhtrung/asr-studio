@@ -434,6 +434,23 @@ test("canceling a running task: one request, then polling continues until the wo
   assert.equal(notes(env).sourceLocked, false);
 });
 
+test("a late cancellation receipt leaves a different active task and its lock in place", async () => {
+  const env = setup();
+  await opened(env, { task: TASK });
+  env.dispatch("cancel-clicked");
+  const later = { ...TASK, id: "task-newer", request_id: "other-operator" };
+  const read = env.is("GET", "/api/meetings/m1/notes");
+  env.dispatch("meeting-change-received", { meetingId: "m1" });
+  await env.answer(read, 200, notesBody([revision()], later));
+  await env.answer(env.is("POST", "/api/tasks/t1/cancel"), 200, { ...TASK, status: "canceled" });
+
+  assert.equal(notes(env).task.id, later.id);
+  assert.equal(notes(env).sourceLocked, true);
+  assert.equal(selectView(env.state()).task.cancelDisabled, false);
+  env.dispatch("cancel-clicked");
+  assert.equal(posts(env, "/cancel").at(-1).url, "/api/tasks/task-newer/cancel");
+});
+
 test("a failed cancel request is reported and the button works again", async () => {
   const env = setup();
   await opened(env, { task: TASK });
@@ -2887,6 +2904,51 @@ test("regenerate mapped rejection reloads choices and a fresh open clears its su
 });
 
 
+test("definitive Verify rejection keeps the restored destination until an explicit correction", async () => {
+  const env = setup();
+  const frozen = {
+    request_id: TASK.request_id,
+    expected_generation_id: "g1",
+    expected_source_version: 2,
+    expected_metadata_version: 3,
+    output_language: "vi",
+    run: { provider: "antigravity", model: "previous-gemini", reasoning_effort: "high", generation_id: "g1", source_version: 2 },
+  };
+  env.context(meeting(), { stored: { pending: JSON.stringify(frozen) } });
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+
+  env.dispatch("start-clicked", { requestId: "ignored" });
+  await env.answer(env.is("POST", "/notes-runs"), 503, {});
+  env.dispatch("regenerate-submit", { requestId: "also-ignored" });
+  await env.answer(env.is("POST", "/notes-runs"), 409, { detail: { code: "provider_disconnected" } });
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+
+  const refused = selectView(env.state()).regenerateDialog;
+  assert.equal(refused.provider, frozen.run.provider);
+  assert.equal(refused.model, frozen.run.model);
+  assert.equal(refused.reasoningEffort, frozen.run.reasoning_effort);
+  assert.equal(refused.outputLanguage, frozen.output_language);
+  assert.equal(refused.submitDisabled, true);
+  env.dispatch("regenerate-submit", { requestId: "must-not-send" });
+  assert.deepEqual(posts(env, "/notes-runs").map(({ body }) => body), [frozen, frozen]);
+
+  env.dispatch("regenerate-provider-picked", { provider: "chatgpt" });
+  assert.equal(selectView(env.state()).regenerateDialog.submitDisabled, false);
+  env.dispatch("regenerate-submit", { requestId: "new-corrected-request" });
+  const corrected = posts(env, "/notes-runs").at(-1).body;
+  assert.equal(corrected.request_id, "new-corrected-request");
+  assert.equal(corrected.run.provider, "chatgpt");
+  assert.equal(corrected.run.model, "m1");
+  assert.equal(corrected.output_language, "vi");
+  assert.equal(env.requests.some((entry) => entry.method === "PUT"), false);
+});
+
 test("regenerate model or effort picks pin their provider across status refresh without a provider pick", async () => {
   for (const [type, extra] of [
     ["regenerate-model-picked", { model: "m1" }],
@@ -2970,6 +3032,32 @@ test("a Notes read confirming the exact request settles its dialog before a late
   assert.equal(notes(env).task.id, TASK.id);
   assert.equal(selectView(env.state()).regenerateDialog.open, false);
   assert.equal(env.state().pending.m1, undefined);
+});
+
+test("an older admission receipt settles without replacing the task observed during the request", async () => {
+  for (const status of ["running", "succeeded"]) {
+    const env = setup();
+    await opened(env, { revisions: [revision()] });
+    env.dispatch("regenerate-clicked");
+    env.dispatch("regenerate-submit", { requestId: TASK.request_id });
+    const later = { ...TASK, id: "task-newer", request_id: "other-operator", status };
+    const revisions = [revision({ id: "published-a" }), revision()];
+    const read = env.is("GET", "/api/meetings/m1/notes");
+    env.dispatch("meeting-change-received", { meetingId: "m1" });
+    await env.answer(read, 200, notesBody(revisions, later));
+    await env.answer(env.is("POST", "/notes-runs"), 202, { ...TASK, status: "accepted" });
+
+    assert.equal(notes(env).task.id, later.id);
+    assert.equal(selectView(env.state()).regenerateDialog.open, false);
+    assert.equal(env.state().pending.m1, undefined);
+    assert.equal(selectView(env.state()).savedWork.options.length, 2);
+    assert.equal(notes(env).sourceLocked, status === "running");
+    assert.equal(env.waiting(read).length, 1);
+    if (status === "running") {
+      env.dispatch("cancel-clicked");
+      assert.equal(posts(env, "/cancel").at(-1).url, "/api/tasks/task-newer/cancel");
+    }
+  }
 });
 
 test("a read issued before Notes admission cannot hide the newly accepted run", async () => {
