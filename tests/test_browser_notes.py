@@ -12,7 +12,10 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from notes_helpers import StubNotesProvider, rerun_transcript, seed_completed_transcript
 from playwright.sync_api import expect
+from seeding import prepare_recording
 from test_browser_history import live as live
+from test_browser_history import open_ready_rerun
+from test_browser_history import ready_rerun_worker as ready_rerun_worker
 from test_browser_history import signed_in as browser_signed_in  # noqa: F401
 from test_browser_notes_provider import ANTIGRAVITY_MODEL, mock_providers
 from test_browser_notes_provider import fake_notes_provider as fake_vendor_notes_provider  # noqa: F401
@@ -69,22 +72,28 @@ def signed_in(browser_signed_in, live):  # noqa: F811
     return make
 
 
-def test_notes_recovers_when_transcription_submission_finishes_after_navigation(live, signed_in):
+def test_notes_recovers_when_transcription_submission_finishes_after_navigation(
+    live, signed_in, ready_rerun_worker
+):
     _context, page = signed_in()
-    first_id, _generation, _segments = seed_completed_transcript(live.settings.data_dir)
+    first_id, generation_id, _segments = seed_completed_transcript(live.settings.data_dir)
     other_id, _other_generation, _other_segments = seed_completed_transcript(
         live.settings.data_dir, title="Other meeting"
     )
+    prepare_recording(live.settings.data_dir, first_id)
     held_requests = []
     page.route(f"{live.url}/api/tasks", lambda route: held_requests.append(route))
     page.goto(f"{live.url}/meetings/{first_id}")
     expect(page.locator("#notes-start")).to_be_enabled()
-    page.locator("#start-transcription").click()
+    dialog = open_ready_rerun(page)
+    assert held_requests == []
+    dialog.get_by_role("button", name="Chạy lại", exact=True).click()
     expect(page.locator("#notes-start")).to_be_disabled()
     page.locator(f'a[href="/meetings/{other_id}"]').first.click()
     expect(page.locator("#meeting-title")).to_have_text("Other meeting")
     expect(page.locator("#notes-start")).to_be_disabled()
     assert len(held_requests) == 1
+    assert held_requests[0].request.post_data_json["expected_generation_id"] == generation_id
     held_requests.pop().fulfill(
         status=409, json={"detail": {"code": "system_busy", "message": "Processing is busy."}}
     )
@@ -92,10 +101,13 @@ def test_notes_recovers_when_transcription_submission_finishes_after_navigation(
 
 
 @pytest.mark.parametrize("cached", [True, False])
-def test_notes_waits_for_transcription_request_and_active_task(live, signed_in, cached):
+def test_notes_waits_for_transcription_request_and_active_task(live, signed_in, cached, request):
     _context, page = signed_in()
-    meeting_id, _generation_id, _segments = seed_completed_transcript(live.settings.data_dir)
-    if not cached:
+    meeting_id, generation_id, _segments = seed_completed_transcript(live.settings.data_dir)
+    if cached:
+        request.getfixturevalue("ready_rerun_worker")
+        prepare_recording(live.settings.data_dir, meeting_id)
+    else:
         with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
             connection.execute(
                 "UPDATE meetings SET current_generation_id = NULL WHERE id = ?", (meeting_id,)
@@ -127,12 +139,21 @@ def test_notes_waits_for_transcription_request_and_active_task(live, signed_in, 
     page.goto(f"{live.url}/meetings/{meeting_id}")
     if cached:
         expect(page.locator("#notes-start")).to_be_enabled()
+        dialog = open_ready_rerun(page)
+        assert held_requests == []
+        dialog.get_by_role("button", name="Chạy lại", exact=True).click()
     else:
         expect(page.locator("#notes-status")).to_contain_text("Cần transcript hoàn chỉnh")
-    page.locator("#start-transcription").click()
+        page.locator("#start-transcription").click()
     expect(page.locator("#notes-start")).to_be_disabled()
     expect(page.locator("#notes-status")).to_contain_text("Chờ tác vụ kết thúc")
     assert len(held_requests) == 1
+    body = held_requests[0].request.post_data_json
+    if cached:
+        assert body["expected_generation_id"] == generation_id
+        assert body["diarization_mode"] == "community-1"
+    else:
+        assert set(body) == {"meeting_id", "request_id", "language_hint", "asr_model"}
     started = True
     held_requests.pop().fulfill(status=202, json=task)
     expect(page.locator("#cancel-transcription")).to_be_visible()

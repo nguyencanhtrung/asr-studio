@@ -15,7 +15,7 @@ import pytest
 import uvicorn
 from notes_helpers import StubNotesProvider, seed_completed_transcript
 from playwright.sync_api import expect, sync_playwright
-from seeding import prepare_diarization_model, seed_meeting
+from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 
 from asr_studio import routes as routes_module
 from asr_studio.app import create_app
@@ -222,6 +222,38 @@ def _prepare_browser_qwen_model(path: Path) -> Path:
     ):
         (path / filename).write_bytes(b"model")
     return path
+
+
+@pytest.fixture
+def ready_rerun_worker(live):
+    """Expose real capability responses with disposable ready-model fixtures and no inference."""
+    data_dir = live.settings.data_dir
+    model = _prepare_browser_asr_model(data_dir.parent / "whisper-large-v3")
+    object.__setattr__(live.settings, "asr_gpu_model_path", model)
+    object.__setattr__(
+        live.settings,
+        "diarization_model_path",
+        prepare_diarization_model(data_dir.parent / "diarization-model"),
+    )
+    lock = acquire_worker_lock(data_dir)
+    assert lock is not None
+    try:
+        write_runtime_profile(data_dir, RuntimeProfile("cuda", "float16", model))
+        write_heartbeat(data_dir, "idle")
+        yield
+    finally:
+        os.close(lock)
+
+
+def open_ready_rerun(page):
+    page.get_by_role("button", name="Chạy lại", exact=True).click()
+    dialog = page.locator("#transcription-rerun-dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog.get_by_role("status")).to_contain_text("Lựa chọn được xác nhận từ server")
+    community = dialog.get_by_role("radio", name=re.compile("Community-1"))
+    expect(community).to_be_checked()
+    expect(community).to_be_enabled()
+    return dialog
 
 
 def _publish_browser_generation(live, meeting_id, *, segments=None, speakers=None):
@@ -1339,9 +1371,12 @@ def test_calendar_opens_from_the_sidebar_and_the_mobile_header(live, signed_in):
     expect(page.get_by_text("Meetings and calendar", exact=True)).to_be_visible()
 
 
-def test_diarization_error_shows_sanitized_copyable_diagnostic_command(live, browser_context):
+def test_diarization_error_shows_sanitized_copyable_diagnostic_command(
+    live, browser_context, ready_rerun_worker
+):
     context, page = browser_context
     meeting_id = seed_meeting(live.settings.data_dir, "Diarization failure", "2026-10-14")
+    prepare_recording(live.settings.data_dir, meeting_id)
     task_id = uuid.uuid4().hex
     with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
         connection.execute(
@@ -1486,7 +1521,13 @@ def test_diarization_error_shows_sanitized_copyable_diagnostic_command(live, bro
             ),
         ),
     )
-    page.get_by_role("button", name="Chạy lại").click()
+    dialog = open_ready_rerun(page)
+    with page.expect_response(
+        lambda response: response.request.method == "POST" and response.url.endswith("/api/tasks")
+    ) as refusal:
+        dialog.get_by_role("button", name="Chạy lại", exact=True).click()
+    assert refusal.value.status == 503
+    expect(dialog).to_be_hidden()
     expect(page.locator("#transcription-error-message")).to_contain_text(
         "Máy chủ chưa thể hoàn tất yêu cầu. Hãy thử lại sau."
     )
@@ -3004,10 +3045,11 @@ def test_speaker_add_name_clears_on_meeting_and_generation_switches(live, browse
 
 
 def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun(
-    live, browser_context
+    live, browser_context, ready_rerun_worker
 ):
     context, page = browser_context
     meeting_id = seed_meeting(live.settings.data_dir, "Transcript controls", duration_seconds=30)
+    prepare_recording(live.settings.data_dir, meeting_id)
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     expect(page.locator("#meeting-title")).to_have_text("Transcript controls")
     post_bodies: list[dict[str, object]] = []
@@ -3554,7 +3596,8 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
         "Bản mới nhất đã lưu: Reviewed speaker name."
     )
     assert len(text_updates) == 4  # Reloading never retries the rejected text save.
-    assert post_bodies[0]["request_id"] == post_bodies[1]["request_id"]
+    assert post_bodies[0] == post_bodies[1]
+    assert set(post_bodies[0]) == {"meeting_id", "request_id", "asr_model", "language_hint"}
 
     # The successful name save commits before its response, then the task refresh
     # replaces the meeting object. Its late response must not leave a recovery draft.
@@ -3612,10 +3655,20 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
         == 1
     )
 
-    rerun = page.get_by_role("button", name="Chạy lại")
-    rerun.click()
+    dialog = open_ready_rerun(page)
+    expect(dialog.locator("#transcription-rerun-cancel")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#start-transcription")).to_be_focused()
+    assert len(post_bodies) == 2
+    dialog = open_ready_rerun(page)
+    assert len(post_bodies) == 2
+    dialog.get_by_role("button", name="Chạy lại", exact=True).click()
+    expect(dialog).to_be_hidden()
+    status = page.locator("#transcription-status")
+    expect(status).to_be_focused()
     speaker_select.focus()
-    page.wait_for_timeout(1_200)
+    expect(status).to_contain_text("Đang chép lời bằng model local")
     expect(speaker_select).to_be_focused()
     expect(page.locator("#generation-title")).to_have_text("Transcript #2", timeout=8_000)
     expect(page.locator("#transcript-draft-recovery")).to_be_visible()
@@ -3649,12 +3702,21 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
     expect(page.locator("#generation-title")).to_have_text("Transcript #2")
     assert post_bodies[2]["request_id"] != post_bodies[1]["request_id"]
 
-    rerun.click()
+    dialog = open_ready_rerun(page)
+    dialog.get_by_role("button", name="Chạy lại", exact=True).click()
     expect(page.locator("#transcription-error")).to_be_visible(timeout=5_000)
-    rerun.click()
+    expect(page.locator("#start-transcription")).to_be_focused()
+    dialog = open_ready_rerun(page)
+    dialog.get_by_role("button", name="Chạy lại", exact=True).click()
     expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     assert post_bodies[3]["request_id"] != post_bodies[2]["request_id"]
     assert post_bodies[4]["request_id"] != post_bodies[3]["request_id"]
+    assert [body["diarization_mode"] for body in post_bodies[2:]] == ["community-1"] * 3
+    assert [body["expected_generation_id"] for body in post_bodies[2:]] == [
+        "generation-1",
+        "generation-2",
+        "generation-2",
+    ]
 
     recovery_copy = page.get_by_role("button", name="Sao chép bản nháp").first
     recovery_copy.evaluate("button => { window.__recoveryCopyButton = button; button.focus(); }")
@@ -5801,7 +5863,7 @@ def test_filtered_edits_save_and_speaker_changes_keep_controls_reachable(live, b
 
 
 def test_filtered_transcript_rerun_keeps_ready_language_and_community_contract(
-    live, browser_context
+    live, browser_context, ready_rerun_worker
 ):
     from test_browser_asr_model import finish_run
 
@@ -5813,19 +5875,9 @@ def test_filtered_transcript_rerun_keeps_ready_language_and_community_contract(
     first.locator("textarea").press("Control+Enter")
     expect(first.locator(".segment-text")).to_have_text("Manual revision before rerun")
     data_dir = live.settings.data_dir
-    default_model = _prepare_browser_asr_model(data_dir.parent / "whisper-large-v3")
     pho = _prepare_browser_asr_model(data_dir.parent / "pho-whisper-large")
-    object.__setattr__(live.settings, "asr_gpu_model_path", default_model)
     object.__setattr__(live.settings, "asr_phowhisper_model_path", pho)
-    object.__setattr__(
-        live.settings,
-        "diarization_model_path",
-        prepare_diarization_model(data_dir.parent / "diarization-model"),
-    )
-    lock = acquire_worker_lock(data_dir)
-    assert lock is not None
-    write_runtime_profile(data_dir, RuntimeProfile("cuda", "float16", default_model))
-    write_heartbeat(data_dir, "idle")
+    prepare_recording(data_dir, meeting_id)
     bodies = []
     page.on(
         "request",
@@ -5835,41 +5887,55 @@ def test_filtered_transcript_rerun_keeps_ready_language_and_community_contract(
             else None
         ),
     )
-    try:
-        page.reload(wait_until="networkidle")
-        page.locator("#transcript-search").fill("Manual revision")
-        model = page.locator("#transcription-model")
-        model.select_option("whisper-small")
-        expect(page.get_by_role("button", name="Chạy lại", exact=True)).to_be_disabled()
-        assert bodies == []
-        model.select_option("pho-whisper-large")
-        page.locator("#transcription-language").select_option("vi")
-        page.get_by_role("button", name="Chạy lại", exact=True).click()
-        expect(page.locator("#cancel-transcription")).to_be_visible()
-        assert len(bodies) == 1
-        assert set(bodies[0]) == {"meeting_id", "request_id", "asr_model", "language_hint"}
-        assert bodies[0]["asr_model"] == "pho-whisper-large"
-        assert bodies[0]["language_hint"] == "vi"
-        assert bodies[0]["meeting_id"] == meeting_id
-        new_generation = finish_run(live, "New rerun output")
-        expect(page.locator("#generation-title")).to_have_text("Transcript #2", timeout=8_000)
-        expect(page.locator("#generation-summary")).to_have_text("1 đoạn")
-        details = page.locator("#generation-details")
-        expect(details).to_have_js_property("open", False)
-        summary = details.locator("summary")
-        summary.focus()
-        summary.press("Enter")
-        expect(details).to_have_js_property("open", True)
-        expect(page.locator("#generation-meta")).to_contain_text("Community-1")
-        expect(page.locator(".transcript-segment:visible")).to_have_count(0)
-        page.locator("#generation-selector").select_option(old_generation)
-        expect(page.locator(".segment-text:visible")).to_have_text("Manual revision before rerun")
-        expect(page.locator("#generation-mode")).to_have_text("Bản lịch sử · Chỉ đọc.")
-        page.locator("#generation-selector").select_option(new_generation)
-        page.locator("#transcript-clear-filters").click()
-        expect(page.locator(".segment-text:visible")).to_have_text("New rerun output")
-    finally:
-        os.close(lock)
+    page.reload(wait_until="networkidle")
+    page.locator("#transcript-search").fill("Manual revision")
+    model = page.locator("#transcription-model")
+    model.select_option("whisper-small")
+    expect(page.get_by_role("button", name="Chạy lại", exact=True)).to_be_disabled()
+    assert bodies == []
+    model.select_option("pho-whisper-large")
+    page.locator("#transcription-language").select_option("vi")
+    dialog = open_ready_rerun(page)
+    rerun_model = dialog.locator("#transcription-rerun-model")
+    expect(rerun_model.locator('option[value="whisper-small"]')).to_have_count(0)
+    expect(rerun_model).to_have_value("pho-whisper-large")
+    expect(dialog.locator("#transcription-rerun-language")).to_have_value("vi")
+    assert bodies == []
+    with page.expect_response(
+        lambda response: response.request.method == "POST" and response.url.endswith("/api/tasks")
+    ) as admission:
+        dialog.get_by_role("button", name="Chạy lại", exact=True).click()
+    assert admission.value.status == 202
+    expect(page.locator("#cancel-transcription")).to_be_visible()
+    assert len(bodies) == 1
+    accepted = admission.value.json()
+    assert accepted["request_id"]
+    assert bodies[0] == {
+        "meeting_id": meeting_id,
+        "request_id": accepted["request_id"],
+        "asr_model": "pho-whisper-large",
+        "language_hint": "vi",
+        "diarization_mode": "community-1",
+        "expected_generation_id": old_generation,
+    }
+    assert accepted["diarization_mode"] == "community-1"
+    new_generation = finish_run(live, "New rerun output")
+    expect(page.locator("#generation-title")).to_have_text("Transcript #2", timeout=8_000)
+    expect(page.locator("#generation-summary")).to_have_text("1 đoạn")
+    details = page.locator("#generation-details")
+    expect(details).to_have_js_property("open", False)
+    summary = details.locator("summary")
+    summary.focus()
+    summary.press("Enter")
+    expect(details).to_have_js_property("open", True)
+    expect(page.locator("#generation-meta")).to_contain_text("Community-1")
+    expect(page.locator(".transcript-segment:visible")).to_have_count(0)
+    page.locator("#generation-selector").select_option(old_generation)
+    expect(page.locator(".segment-text:visible")).to_have_text("Manual revision before rerun")
+    expect(page.locator("#generation-mode")).to_have_text("Bản lịch sử · Chỉ đọc.")
+    page.locator("#generation-selector").select_option(new_generation)
+    page.locator("#transcript-clear-filters").click()
+    expect(page.locator(".segment-text:visible")).to_have_text("New rerun output")
 
 
 def test_english_transcript_search_and_no_results_are_translated(live, signed_in):
