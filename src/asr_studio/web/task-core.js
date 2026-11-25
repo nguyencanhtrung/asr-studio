@@ -469,11 +469,14 @@ function startFailed(state, error, auto) {
     ? t("Bấm lại để gửi một yêu cầu mới.")
     : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   let message = [failure.message, " ", guidance];
-  const selectedModel = pendingFor(state, meetingId)?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
+  const pending = pendingFor(state, meetingId);
+  const selectedModel = pending?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
   if (failure.code === "recording_unavailable") {
     message = t("Không thể mở bản ghi gốc. Khôi phục bản ghi rồi chạy lại.");
   } else if (failure.code === "diarization_rollback_fence") {
     message = t("Chạy với chế độ tắt nhận dạng người nói đang tạm khóa. Mở Chạy lại để chọn Community-1 nếu đã sẵn sàng.");
+  } else if (failure.code === "diarization_model_unavailable" && pending?.diarizationMode === "community-1") {
+    message = t("Community-1 chưa sẵn sàng. Chuẩn bị model trên máy chủ, hoặc mở Chạy lại và tắt nhận dạng người nói nếu có thể chọn.");
   } else if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
     // A named model has its own preparation/GPU guidance, including for an automatic handoff.
     message = MODEL_REFUSALS[failure.code];
@@ -485,7 +488,7 @@ function startFailed(state, error, auto) {
   }
   const base = definitive ? forget(state, meetingId) : out(state);
   // A request restored after a reload is the only record of its model: the selector must keep showing what was refused.
-  const refused = definitive && pendingFor(state, meetingId);
+  const refused = definitive && pending;
   return then(base, (s) => out(repaint({
     ...s,
     start: null,

@@ -417,6 +417,72 @@ def test_rollback_refusal_reopens_with_fresh_choices_and_request(
     assert requests[0]["request_id"] != requests[1]["request_id"]
 
 
+@pytest.mark.parametrize("lang", ["vi", "en"])
+def test_community1_lost_after_readiness_offers_recovery(live, signed_in, worker, lang):
+    english = lang == "en"
+    viewport = {"width": 1440, "height": 1000} if english else {"width": 390, "height": 844}
+    _context, page = signed_in(viewport=viewport, color_scheme="light" if english else "dark")
+    if english:
+        page.get_by_role("button", name="Switch to English").click()
+    data_dir = live.settings.data_dir
+    meeting, generation, _segments = seed_completed_transcript(data_dir)
+    prepare_recording(data_dir, meeting)
+    page.goto(f"{live.url}/meetings/{meeting}#transcript")
+    start = page.locator("#start-transcription")
+    dialog = page.locator("#transcription-rerun-dialog")
+    submit = page.locator("#transcription-rerun-submit")
+    community = dialog.locator('[value="community-1"]')
+    off = dialog.locator('[value="off"]')
+    status = page.locator("#transcription-status")
+    completed_status = (
+        "The complete transcript is saved." if english else "Transcript đã được lưu hoàn chỉnh."
+    )
+    expect(status).to_have_text(completed_status)
+    start.press("Enter")
+    expect(page.locator("#transcription-rerun-cancel")).to_be_focused()
+    expect(community).to_be_enabled()
+    expect(community).to_be_checked()
+
+    # Change only the prepared artifact after the real readiness response was rendered.
+    (live.settings.diarization_model_path / "embedding/pytorch_model.bin").unlink()
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as refused:
+        submit.press("Enter")
+    assert refused.value.status == 503
+    assert refused.value.json()["detail"]["code"] == "diarization_model_unavailable"
+    assert refused.value.request.post_data_json["diarization_mode"] == "community-1"
+    expect(dialog).to_be_hidden()
+    expect(start).to_be_focused()
+    expect(status).to_have_text(completed_status)
+    expected = (
+        "Community-1 is unavailable. Prepare the model on the server, or open Run again "
+        "and turn off speaker recognition if that choice is available."
+        if english
+        else "Community-1 chưa sẵn sàng. Chuẩn bị model trên máy chủ, hoặc mở Chạy lại "
+        "và tắt nhận dạng người nói nếu có thể chọn."
+    )
+    expect(page.locator("#transcription-error-message")).to_have_text(expected)
+    storage_key = f"asr-studio:transcription-request:{meeting}"
+    assert page.evaluate("key => sessionStorage.getItem(key)", storage_key) is None
+
+    start.press("Enter")
+    expect(community).to_be_disabled()
+    expect(community).to_be_checked()
+    expect(off).to_be_enabled()
+    expect(submit).to_be_disabled()
+    off.check()
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as accepted:
+        submit.press("Enter")
+    assert accepted.value.status == 202
+    recipe = accepted.value.request.post_data_json
+    assert recipe["diarization_mode"] == "off"
+    assert recipe["expected_generation_id"] == generation
+    assert recipe["request_id"] != refused.value.request.post_data_json["request_id"]
+
+
 @pytest.mark.parametrize(("lang", "mode"), [("vi", "off"), ("en", "community-1")])
 def test_missing_recording_refusal_restores_controls_and_saved_notes(
     live, signed_in, worker, lang, mode

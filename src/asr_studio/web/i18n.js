@@ -266,6 +266,7 @@ const { t, UI_LOCALE } = (() => {
       "Chế độ tắt đang tạm khóa.": "Off is temporarily unavailable.",
       "Không thể mở bản ghi gốc. Khôi phục bản ghi rồi chạy lại.": "The original recording could not be opened. Restore it before running again.",
       "Chạy với chế độ tắt nhận dạng người nói đang tạm khóa. Mở Chạy lại để chọn Community-1 nếu đã sẵn sàng.": "Running with speaker recognition off is temporarily unavailable. Open Run again to choose Community-1 if it is ready.",
+      "Community-1 chưa sẵn sàng. Chuẩn bị model trên máy chủ, hoặc mở Chạy lại và tắt nhận dạng người nói nếu có thể chọn.": "Community-1 is unavailable. Prepare the model on the server, or open Run again and turn off speaker recognition if that choice is available.",
       "Nhận dạng người nói": "Speaker recognition",
       "Community-1 chưa sẵn sàng trên máy này.": "Community-1 is not ready on this machine.",
       "Worker chưa sẵn sàng để xác nhận Community-1.": "The worker is not ready to confirm Community-1.",
