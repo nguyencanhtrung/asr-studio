@@ -22,6 +22,7 @@ from asr_studio.antigravity import AntigravityError, AntigravityProvider
 from asr_studio.asr_models import (
     AUTO,
     CATALOG,
+    AsrRun,
     default_model_damaged,
     model_choices,
     model_path,
@@ -1118,19 +1119,22 @@ def install_routes(
                 "expected_generation_id",
             },
         )
-        profile = _usable_transcription_runtime(settings.data_dir)
         asr_model = payload.get("asr_model", AUTO)
         if asr_model not in selectable_models():
             _raise_task_error(
                 TaskError(400, "invalid_asr_model", "Choose an ASR model from the list.")
             )
+
+        def resolve_recipe() -> AsrRun | None:
+            profile = _usable_transcription_runtime(settings.data_dir)
+            return resolve_run(settings, profile, asr_model) if profile is not None else None
+
         task_options = {
             "meeting_id": payload["meeting_id"],
             "request_id": payload["request_id"],
-            **resolve_run(settings, profile, asr_model),
             "asr_choice": asr_model,
             "diarization_model_path": settings.diarization_model_path,
-            "worker_ready": profile is not None,
+            "resolve_recipe": resolve_recipe,
         }
         if "language_hint" in payload:
             task_options["language_hint"] = payload["language_hint"]

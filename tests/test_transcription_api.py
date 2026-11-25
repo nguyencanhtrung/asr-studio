@@ -13,6 +13,7 @@ from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 
 from asr_studio import routes
 from asr_studio.app import create_app
+from asr_studio.asr_models import write_default_model
 from asr_studio.auth import AuthStore
 from asr_studio.config import Settings
 from asr_studio.runtime import RuntimeProfile, runtime_profile_path, write_runtime_profile
@@ -302,16 +303,21 @@ async def test_diarization_capability_route_is_authoritative_and_authenticated(t
                 assert response.json()[mode]["reason"] == "worker_unavailable"
 
 
-@pytest.mark.parametrize("file_change", ["missing", "lfs_pointer", "empty"])
+@pytest.mark.parametrize(
+    "file_change", ["missing", "lfs_pointer", "empty", "directory_loop", "asset_loop"]
+)
 async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
     tmp_path, file_change
 ):
-    community = prepare_diarization_model(tmp_path / "diarization")
+    snapshot = prepare_diarization_model(tmp_path / "community-snapshot")
+    community = tmp_path / "diarization"
+    community.symlink_to(snapshot, target_is_directory=True)
     settings = Settings(
         data_dir=tmp_path / "data",
         auth_dir=tmp_path / "auth",
         public_url="http://127.0.0.1:8765",
         asr_model_path=_prepared_model(tmp_path / "asr"),
+        asr_qwen_model_path=tmp_path / "qwen",
         diarization_model_path=community,
     )
     app = create_app(settings)
@@ -346,6 +352,12 @@ async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
                     model.unlink()
                 elif file_change == "lfs_pointer":
                     model.write_bytes(b"version https://git-lfs.github.com/spec/v1\noid fixture\n")
+                elif file_change == "directory_loop":
+                    community.unlink()
+                    community.symlink_to(community, target_is_directory=True)
+                elif file_change == "asset_loop":
+                    model.unlink()
+                    model.symlink_to(model)
                 else:
                     model.write_bytes(b"")
                 payload = {
@@ -478,6 +490,139 @@ async def test_explicit_rerun_rejects_weights_lost_after_readiness(tmp_path, mod
             notes = await client.get(f"/api/notes/{revision['id']}/export", headers=headers)
             assert notes.status_code == 200
             assert notes.text == revision["markdown"]
+        finally:
+            os.close(lock_fd)
+
+
+@pytest.mark.parametrize(
+    ("mode", "choice"),
+    [("community-1", "whisper-small"), ("off", "whisper-small"), (None, "auto")],
+)
+async def test_model_directory_loop_preserves_exact_post_retries(tmp_path, mode, choice):
+    selected = tmp_path / "selected"
+    snapshot = _prepared_model(tmp_path / "snapshot")
+    selected.symlink_to(snapshot, target_is_directory=True)
+    alternate = _prepared_model(tmp_path / "alternate")
+    community = prepare_diarization_model(tmp_path / "community")
+    diarizer = tmp_path / "diarization"
+    diarizer.symlink_to(community, target_is_directory=True)
+    uses_small = choice == "whisper-small"
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_cpu_model_path=selected if uses_small else alternate,
+        asr_gpu_model_path=alternate if uses_small else selected,
+        asr_phowhisper_model_path=tmp_path / "pho",
+        asr_qwen_model_path=tmp_path / "qwen",
+        diarization_model_path=diarizer,
+    )
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as client,
+    ):
+        headers = await _authorize(client, settings)
+        meeting, source, segments = seed_completed_transcript(settings.data_dir)
+        seed_cited_notes(settings.data_dir, existing=(meeting, source, segments))
+        prepare_recording(settings.data_dir, meeting)
+        payload = {"meeting_id": meeting, "request_id": "original-recipe"}
+        if mode is not None:
+            payload.update(asr_model=choice, expected_generation_id=source, diarization_mode=mode)
+        lock_fd = acquire_transcription_lock(settings.data_dir)
+        assert lock_fd is not None
+        try:
+            write_runtime_profile(settings.data_dir, RuntimeProfile("cpu", "int8", alternate))
+            write_transcription_heartbeat(settings.data_dir, "idle")
+            if choice == "auto":
+                write_default_model(settings, "whisper-large-v3")
+            accepted = await client.post("/api/tasks", headers=headers, json=payload)
+            assert accepted.status_code == 202
+            receipt = accepted.json()
+            assert receipt["status"] == "accepted"
+            assert receipt["model_name"] == "snapshot"
+            assert receipt["asr_model"] == (choice if uses_small else "whisper-large-v3")
+            assert receipt["diarization_mode"] == (mode or "community-1")
+
+            selected.unlink()
+            selected.symlink_to(selected, target_is_directory=True)
+            profile_path = runtime_profile_path(settings.data_dir)
+            profile_path.chmod(0o640)  # Reading the current profile would chmod it back to 0600.
+            before_retry = _admission_state(settings.data_dir)
+            replay = await client.post("/api/tasks", headers=headers, json=payload)
+            assert (replay.status_code, replay.json()) == (202, receipt)
+            assert profile_path.stat().st_mode & 0o777 == 0o640
+            assert _admission_state(settings.data_dir) == before_retry
+
+            owner = "model-loop-fixture"
+            task_id = receipt["id"]
+            claimed = claim_next_task(settings.data_dir, owner_id=owner)
+            assert claimed and claimed["id"] == task_id
+            assert claimed["model_path"] == str(snapshot)
+            assert claimed["diarization_model_path"] == ("" if mode == "off" else str(community))
+            assert update_task_progress(
+                settings.data_dir,
+                task_id,
+                owner_id=owner,
+                stage="publishing",
+                elapsed_seconds=1.0,
+                transcript_end_seconds=0.2,
+                segment_count=1,
+            )
+            generation = publish_complete_generation(
+                settings.data_dir,
+                task_id,
+                owner_id=owner,
+                segments=[
+                    {"id": "d" * 32, "start_seconds": 0.0, "end_seconds": 0.2, "text": "New."}
+                ],
+                alignment_policy=None if mode == "off" else "community-1-exclusive-max-overlap-v1",
+                diarization_model_name=None if mode == "off" else "Community-1",
+                language_probability=None,
+                elapsed_seconds=1.0,
+            )
+            assert generation and generation["id"] != source
+
+            # Even the completed replay cannot consult the installed diarizer or new runtime.
+            diarizer.unlink()
+            diarizer.symlink_to(diarizer, target_is_directory=True)
+            before_rejection = _admission_state(settings.data_dir)
+            completed = await client.post("/api/tasks", headers=headers, json=payload)
+            task = await client.get(f"/api/tasks/{task_id}")
+            assert (completed.status_code, completed.json()) == (202, task.json())
+            assert completed.json()["status"] == "succeeded"
+            assert completed.json()["model_name"] == receipt["model_name"]
+            conflict = await client.post(
+                "/api/tasks", headers=headers, json={**payload, "language_hint": "vi"}
+            )
+            assert conflict.status_code == 409
+            assert conflict.json()["detail"]["code"] == "idempotency_conflict"
+            assert profile_path.stat().st_mode & 0o777 == 0o640
+
+            fresh = {**payload, "request_id": "fresh-recipe"}
+            if mode is not None:
+                fresh["expected_generation_id"] = generation["id"]
+            refused = await client.post("/api/tasks", headers=headers, json=fresh)
+            assert (refused.status_code, refused.json()) == (
+                503,
+                {
+                    "detail": {
+                        "code": "model_unavailable",
+                        "message": "The selected local ASR model is not prepared.",
+                    }
+                },
+            )
+            response = await client.get("/api/asr-models")
+            assert response.status_code == 200
+            choices = {row["id"]: row for row in response.json()["asr_models"]}
+            broken_choices = ["whisper-small"] if uses_small else ["auto", "whisper-large-v3"]
+            for broken in broken_choices:
+                assert (choices[broken]["ready"], choices[broken]["reason"]) == (
+                    False,
+                    "not_prepared",
+                )
+            assert choices["whisper-large-v3" if uses_small else "whisper-small"]["ready"] is True
+            assert _admission_state(settings.data_dir) == before_rejection
         finally:
             os.close(lock_fd)
 

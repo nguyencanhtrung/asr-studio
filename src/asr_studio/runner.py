@@ -71,12 +71,15 @@ def _check_model_weights(path: Path) -> None:
         raise ModelConfigurationError("The local model weights are still a Git LFS pointer.")
 
 
-def prepared_model_directory(path: Path) -> Path:
-    model_path = Path(path).expanduser()
+def _resolve_model_directory(path: Path) -> Path:
     try:
-        resolved = model_path.resolve(strict=True)
-    except OSError as error:
+        return Path(path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as error:
         raise ModelConfigurationError("The local model directory is unavailable.") from error
+
+
+def prepared_model_directory(path: Path) -> Path:
+    resolved = _resolve_model_directory(path)
     if not resolved.is_dir():
         raise ModelConfigurationError("The local model path must be a directory.")
     if any(not (resolved / filename).is_file() for filename in _REQUIRED_MODEL_FILES):
@@ -122,11 +125,7 @@ def prepared_model_directory(path: Path) -> Path:
 
 
 def prepared_qwen_directory(path: Path) -> Path:
-    model_path = Path(path).expanduser()
-    try:
-        resolved = model_path.resolve(strict=True)
-    except OSError as error:
-        raise ModelConfigurationError("The local model directory is unavailable.") from error
+    resolved = _resolve_model_directory(path)
     if any(not (resolved / filename).is_file() for filename in _QWEN_REQUIRED_FILES):
         raise ModelConfigurationError("The local model directory is incomplete.")
     _check_model_weights(resolved / "model.safetensors")

@@ -9,14 +9,14 @@ import os
 import re
 import sqlite3
 import uuid
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from asr_studio.alignment import ALIGNMENT_POLICY, ASR_UNCERTAINTY_POLICY
-from asr_studio.asr_models import AUTO, engine_of
+from asr_studio.asr_models import AUTO, AsrRun, engine_of
 from asr_studio.diarization_runner import (
     DiarizationConfigurationError,
     prepared_diarization_directory,
@@ -217,21 +217,23 @@ def accept_transcription_task(
     *,
     meeting_id: object,
     request_id: object,
-    model_path: Path,
+    model_path: Path | None = None,
     language_hint: object = _LANGUAGE_HINT_UNSET,
     diarization_model_path: Path = Path("/models/speaker-diarization-community-1"),
-    device: str,
-    compute_type: str,
-    worker_ready: bool,
+    device: str | None = None,
+    compute_type: str | None = None,
+    worker_ready: bool = False,
     asr_model: str = AUTO,
     asr_choice: str | None = None,
     diarization_mode: object = _DIARIZATION_MODE_UNSET,
     expected_generation_id: object = None,
+    resolve_recipe: Callable[[], AsrRun | None] | None = None,
 ) -> dict[str, object]:
     """Accept one request atomically, returning the original row for HTTP retries.
 
     `asr_choice` is what the client asked for, before Automatic became a model. A retry is the same
     request when it asks for the same thing, even if the default changed in between.
+    Pass it with `resolve_recipe` to select the current runtime only for a new admission.
     """
     if not isinstance(meeting_id, str) or not meeting_id:
         raise TaskError(400, "invalid_meeting_id", "Provide a meeting_id.")
@@ -261,15 +263,12 @@ def accept_transcription_task(
             "diarization_mode_requires_rerun",
             "An explicit diarization mode is valid only for a manual transcript rerun.",
         )
-    normalized_model_path = str(Path(model_path).expanduser().resolve())
-    model_name = Path(normalized_model_path).name
-    normalized_diarization_model_path = str(Path(diarization_model_path).expanduser().resolve())
-    task_id = uuid.uuid4().hex
-
+    requested_model = asr_choice or asr_model
     with _connect(data_dir) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         meeting = connection.execute(
-            "SELECT id, language_hint, deletion_requested_at FROM meetings WHERE id = ?",
+            "SELECT language_hint, deletion_requested_at, current_generation_id "
+            "FROM meetings WHERE id = ?",
             (meeting_id,),
         ).fetchone()
         if meeting is None:
@@ -281,42 +280,33 @@ def accept_transcription_task(
                 "This meeting is being deleted. Wait for cleanup to finish before starting "
                 "another task.",
             )
-        if expected_generation_id is not None:
-            existing_rerun = connection.execute(
-                "SELECT id FROM tasks WHERE request_id = ?", (normalized_request_id,)
-            ).fetchone()
-            if existing_rerun is None:
-                current_generation = connection.execute(
-                    "SELECT current_generation_id FROM meetings WHERE id = ?",
-                    (meeting_id,),
-                ).fetchone()
-                current_generation_id = (
-                    current_generation["current_generation_id"]
-                    if current_generation is not None
-                    else None
+        existing = connection.execute(
+            "SELECT * FROM tasks WHERE request_id = ?", (normalized_request_id,)
+        ).fetchone()
+        if existing is None and expected_generation_id is not None:
+            current_generation_id = meeting["current_generation_id"]
+            if current_generation_id is None and explicit_diarization_mode:
+                raise TaskError(
+                    400,
+                    "diarization_mode_requires_rerun",
+                    "An explicit diarization mode is valid only for a manual transcript rerun.",
                 )
-                if current_generation_id is None and explicit_diarization_mode:
-                    raise TaskError(
-                        400,
-                        "diarization_mode_requires_rerun",
-                        "An explicit diarization mode is valid only for a manual transcript rerun.",
-                    )
-                if current_generation_id != expected_generation_id:
-                    raise TaskError(
-                        409,
-                        "rerun_source_changed",
-                        "The current transcript changed. Reload it before rerunning.",
-                    )
-                generation = connection.execute(
-                    "SELECT status FROM transcript_generations WHERE id = ? AND meeting_id = ?",
-                    (expected_generation_id, meeting_id),
-                ).fetchone()
-                if generation is None or generation["status"] != "complete":
-                    raise TaskError(
-                        409,
-                        "rerun_source_changed",
-                        "The current transcript is not complete. Reload it before rerunning.",
-                    )
+            if current_generation_id != expected_generation_id:
+                raise TaskError(
+                    409,
+                    "rerun_source_changed",
+                    "The current transcript changed. Reload it before rerunning.",
+                )
+            generation = connection.execute(
+                "SELECT status FROM transcript_generations WHERE id = ? AND meeting_id = ?",
+                (expected_generation_id, meeting_id),
+            ).fetchone()
+            if generation is None or generation["status"] != "complete":
+                raise TaskError(
+                    409,
+                    "rerun_source_changed",
+                    "The current transcript is not complete. Reload it before rerunning.",
+                )
         normalized_language_hint = (
             meeting["language_hint"]
             if language_hint is _LANGUAGE_HINT_UNSET
@@ -325,29 +315,29 @@ def accept_transcription_task(
         request_hash = _payload_hash(
             meeting_id=meeting_id,
             language_hint=normalized_language_hint,
-            asr_choice=asr_choice or asr_model,
+            asr_choice=requested_model,
             diarization_mode=(normalized_diarization_mode if explicit_diarization_mode else None),
             expected_generation_id=expected_generation_id,
         )
-        # Rows from before the choice was hashed say nothing about it: compare their model instead.
-        legacy_request_hashes = {
-            _payload_hash(meeting_id=meeting_id, language_hint=normalized_language_hint),
-            _payload_hash(meeting_id=meeting_id),
-        }
-        existing = connection.execute(
-            "SELECT * FROM tasks WHERE request_id = ?", (normalized_request_id,)
-        ).fetchone()
         if existing is not None:
             accepted_hashes = {request_hash}
+            # Rows from before the choice was hashed need a separate model comparison.
             if not explicit_diarization_mode and expected_generation_id is None:
-                accepted_hashes.update(legacy_request_hashes)
+                accepted_hashes.update(
+                    {
+                        _payload_hash(
+                            meeting_id=meeting_id, language_hint=normalized_language_hint
+                        ),
+                        _payload_hash(meeting_id=meeting_id),
+                    }
+                )
             if (
                 existing["language_hint"] != normalized_language_hint
                 or existing["request_hash"] not in accepted_hashes
                 or existing["diarization_mode"] != normalized_diarization_mode
                 or (
                     existing["request_hash"] != request_hash
-                    and existing["asr_model"] != (asr_choice or asr_model)
+                    and existing["asr_model"] != requested_model
                 )
             ):
                 raise TaskError(
@@ -418,9 +408,29 @@ def accept_transcription_task(
                 "system_busy",
                 "Another transcription task owns the processing slot.",
             )
+        if resolve_recipe is not None:
+            recipe = resolve_recipe()
+            worker_ready = recipe is not None
+            if recipe is not None:
+                asr_model = recipe["asr_model"]
+                model_path = recipe["model_path"]
+                device = recipe["device"]
+                compute_type = recipe["compute_type"]
         if not worker_ready:
             raise TaskError(503, "worker_unavailable", "The transcription worker is unavailable.")
-        engine = engine_of(asr_model, Path(normalized_model_path))
+        if model_path is None or device is None or compute_type is None:
+            raise TypeError(
+                "A new transcription task requires a model path, device and compute type."
+            )
+        try:
+            normalized_model_path = Path(model_path).expanduser().resolve()
+        except (OSError, RuntimeError):
+            raise TaskError(
+                503,
+                "model_unavailable",
+                "The selected local ASR model is not prepared.",
+            ) from None
+        engine = engine_of(asr_model, normalized_model_path)
         if engine == "qwen" and device != "cuda":
             raise TaskError(
                 503,
@@ -428,16 +438,20 @@ def accept_transcription_task(
                 "The selected ASR model runs only on an NVIDIA GPU.",
             )
         try:
-            prepared_engine_directory(engine, Path(normalized_model_path))
+            prepared_engine_directory(engine, normalized_model_path)
         except ModelConfigurationError:
             raise TaskError(
                 503,
                 "model_unavailable",
                 "The selected local ASR model is not prepared.",
             ) from None
+
+        normalized_diarization_model_path = ""
         if normalized_diarization_mode == DIARIZATION_MODE_COMMUNITY_1:
             try:
-                prepared_diarization_directory(Path(normalized_diarization_model_path))
+                normalized_diarization_model_path = str(
+                    prepared_diarization_directory(diarization_model_path)
+                )
             except DiarizationConfigurationError:
                 raise TaskError(
                     503,
@@ -445,6 +459,7 @@ def accept_transcription_task(
                     "The configured local Community-1 model is not prepared.",
                 ) from None
 
+        task_id = uuid.uuid4().hex
         connection.execute(
             "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
             "diarization_model_path, diarization_mode, "
@@ -458,11 +473,11 @@ def accept_transcription_task(
                 normalized_request_id,
                 request_hash,
                 meeting_id,
-                normalized_model_path,
+                str(normalized_model_path),
                 normalized_diarization_model_path,
                 normalized_diarization_mode,
                 asr_model,
-                model_name,
+                normalized_model_path.name,
                 device,
                 compute_type,
                 normalized_language_hint,

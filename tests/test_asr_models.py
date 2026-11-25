@@ -24,7 +24,7 @@ from asr_studio.asr_models import (
 )
 from asr_studio.config import Settings
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
-from asr_studio.runtime import MODEL_REPOSITORIES, RuntimeProfile
+from asr_studio.runtime import MODEL_REPOSITORIES, RuntimeProfile, engine_for_path
 from asr_studio.storage import initialize
 from asr_studio.tasks import (
     TaskError,
@@ -92,6 +92,39 @@ def _gpu(settings: Settings) -> RuntimeProfile:
 
 def _by_id(settings: Settings, profile: RuntimeProfile | None) -> dict[str, dict]:
     return {choice["id"]: choice for choice in model_choices(settings, profile)}
+
+
+@pytest.mark.parametrize("engine", ["whisper", "qwen"])
+@pytest.mark.parametrize("failure", ["loop", "not_directory"])
+def test_preflight_types_model_path_resolution_failures(tmp_path, engine, failure):
+    if failure == "loop":
+        path = tmp_path / "model"
+        path.symlink_to(path, target_is_directory=True)
+    else:
+        file = tmp_path / "file"
+        file.touch()
+        path = file / "model"
+    with pytest.raises(ModelConfigurationError, match="directory is unavailable"):
+        prepared_engine_directory(engine, path)
+
+
+def test_qwen_loop_leaves_other_catalog_and_runtime_paths_ready(tmp_path):
+    settings = _settings(tmp_path)
+    qwen = settings.asr_qwen_model_path
+    snapshot = _qwen_dir(tmp_path / "snapshot")
+    qwen.symlink_to(snapshot, target_is_directory=True)
+    profile = RuntimeProfile("cuda", "float16", qwen)
+    assert engine_for_path(settings, snapshot) == "qwen"
+    assert _by_id(settings, profile)["qwen3-asr-1.7b"]["ready"] is True
+    assert _by_id(settings, profile)["auto"]["ready"] is True
+
+    qwen.unlink()
+    qwen.symlink_to(qwen, target_is_directory=True)
+    assert runtime_summary(settings, _gpu(settings))["compute_type"] == "float16"
+    choices = _by_id(settings, profile)
+    for choice in ("qwen3-asr-1.7b", "auto"):
+        assert (choices[choice]["ready"], choices[choice]["reason"]) == (False, "not_prepared")
+    assert choices["whisper-large-v3"]["ready"] is True
 
 
 def test_readiness_is_per_model_and_only_unprepared_models_get_a_command(tmp_path):
