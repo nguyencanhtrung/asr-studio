@@ -623,22 +623,23 @@ Core `notes-core.js` (`initialState`, `reduce`, `selectView`, `hasUnsavedDraft` 
 
 **Chọn provider/model** (`choice`): `loadId + 1`, `loading`, `loaded = false`, rồi `providers` và `preferences` song song; cả hai ok thì áp (trạng thái, preferences, `loaded`, `loadedFor`) và tải catalog của provider `connected` (provider khác: `catalogs = null` kèm lý do); catalog xong hết thì `loading = false`. Một trong hai lỗi: `loaded = false`, `loading = false`, `message` (chặn tạo notes tới khi tải lại); catalog lỗi: `provider_in_use` hoặc lỗi chung, model đã lưu vẫn giữ. Mọi kết quả `loadId` cũ bị bỏ. Khi provider connected nhưng model đã lưu không có trong catalog, nút chính là `Chọn hoặc đổi model để tạo notes.` (`action = configure`), mở chính ô chọn hiện có và focus `#notes-model`; không mở luồng kết nối và không tự chọn model. Chọn provider có model đã lưu hoặc chọn model: `saving`, `PUT /api/notes-preferences` (`saveId`); ok: `preferences`, `message` (nói rõ task đang chạy giữ provider cũ), `saving = false`; lỗi: `message`, lựa chọn đã lưu giữ. Chọn provider chưa có model: `localProvider` tới khi chọn model. Ngôn ngữ đầu ra: ghi local+session; bị bỏ khi có `pending`.
 
-**Chạy, hủy**:
+**Chạy, hủy**. Task còn hoạt động khi trạng thái là `accepted`, `running` hoặc `stopping`. Bộ xử lý bỏ phản hồi cũ của yêu cầu tạo hoặc hủy trước khi áp dụng kết quả hay lỗi.
 
 | Từ | Sự kiện | Tới | Effect |
 | --- | --- | --- | --- |
 | sẵn sàng (`canStartNotes`) | `start-clicked {requestId}` | tạo `pending` nếu chưa có và điền phần còn thiếu (generation, version, model, effort); `starting = true`, xóa lỗi | ghi `pending` (local+session); `call selectTab notes`; `fetch POST notes-runs` |
 | không sẵn sàng hoặc `starting` | `start-clicked` | không đổi, không gửi thêm | |
-| `starting` | `start` ok, task hợp lệ | Xóa `pending` và xác nhận yêu cầu. Giữ task và khóa đã quan sát nếu ID task này khác cả ID trong phản hồi và ID lúc gửi. Những trường hợp khác cập nhật task và khóa nguồn từ phản hồi | Xóa storage và báo `meeting.change`. Chỉ điều phối lượt đọc cho cuộc họp đang mở. Khi cài task đang chạy từ phản hồi, tăng `readId` và tiếp tục poll. Khi task đã kết thúc hoặc giữ task đã quan sát, đọc lại Notes |
+| `starting` | `start` ok, task hợp lệ | Xóa `pending` và xác nhận yêu cầu. Giữ task và khóa đã quan sát nếu ID task này khác cả ID trong phản hồi và ID lúc gửi. Những trường hợp khác cập nhật task và khóa nguồn từ phản hồi | Xóa storage và báo `meeting.change`. Chỉ điều phối lượt đọc cho cuộc họp đang mở. Khi cài task còn hoạt động từ phản hồi, tăng `readId` và tiếp tục poll. Khi task đã kết thúc hoặc giữ task đã quan sát, đọc lại Notes |
 | `starting` | `start` ok, task sai hình dạng | `runError` không chắc chắn (giữ `pending`) | |
 | `starting` | `start` lỗi 4xx | xóa `pending`; `runError` theo `error.code` của provider; có mã: tải lại lựa chọn; 409: đọc notes, làm mới meeting | |
 | `starting` | `start` trả mã provider/worker từ chối trước admission (kể cả một số 503 typed) | xóa `pending`, `runError` theo mã và cho phép xử lý lại; không gọi đó là mất mạng | |
 | `starting` | `start` lỗi mạng/5xx chưa rõ kết quả | giữ `pending`, `runErrorUncertain`; nút thành "Xác minh yêu cầu notes" gửi lại cùng request id | |
-| task đang chạy, chưa `stopping`, ID khác `cancelingTaskId` | `cancel-clicked` | Ghi ID của task vào `cancelingTaskId` | `fetch POST` đến endpoint hủy của task này |
+| task `accepted` hoặc `running`, ID khác `cancelingTaskId` | `cancel-clicked` | Ghi ID của task vào `cancelingTaskId` | `fetch POST` đến endpoint hủy của task này |
 | task `stopping` hoặc có ID bằng `cancelingTaskId` | `cancel-clicked` lần nữa | Không đổi | |
 | ID của request khác `cancelingTaskId` | `cancel` trả lời hoặc lỗi | Không đổi | |
-| ID của request khớp `cancelingTaskId` | `cancel` ok, task trả về khớp ID | Xóa `cancelingTaskId`. Giữ task khác đã quan sát. Với cùng ID, giữ task đã kết thúc nếu phản hồi đến muộn vẫn báo task đang chạy hoặc đang dừng. Những trường hợp khác cài task trả về và xóa `runError` | Báo `meeting.change`, kể cả với cuộc họp đang ở nền. Với cuộc họp đang mở, nếu cài task còn hoạt động thì tăng `readId` và tiếp tục poll. Nếu giữ task đã quan sát hoặc cài task đã kết thúc, đọc lại Notes |
-| ID của request khớp `cancelingTaskId` | `cancel` lỗi, trả sai hình dạng hoặc sai ID | Xóa `cancelingTaskId`. Hiện lỗi nếu task cần hủy vẫn là task còn hoạt động | |
+| ID của request khớp `cancelingTaskId` | `cancel` ok, task trả về khớp ID | Xóa `cancelingTaskId`. Giữ task khác đã quan sát. Với cùng ID, giữ task đã kết thúc nếu phản hồi đến muộn vẫn báo task còn hoạt động. Những trường hợp khác cài task trả về và xóa `runError` | Báo `meeting.change`, kể cả với cuộc họp đang ở nền. Với cuộc họp đang mở, nếu cài task còn hoạt động thì tăng `readId` và tiếp tục poll. Nếu giữ task đã quan sát hoặc cài task đã kết thúc, đọc lại Notes |
+| ID của request khớp `cancelingTaskId` | `cancel` lỗi thông thường, trả sai hình dạng hoặc sai ID | Xóa `cancelingTaskId`. Hiện lỗi nếu task cần hủy vẫn là task còn hoạt động | |
+| yêu cầu còn hiệu lực | HTTP 401 hết phiên workspace | Báo lỗi phiên trên cuộc họp đang mở nếu có. Giữ `cancelingTaskId` cho tới khi rời trang | Dừng poll và chuyển tới `/access` |
 
 **Revision và bản nháp** (reducer tạo/đối chiếu bản nháp của revision đang chọn sau mỗi action: chưa có thì tạo; sạch thì theo bản đã lưu; bẩn và `edit_version` khác thì đặt `conflict`):
 
