@@ -2981,7 +2981,7 @@ test("an uncertain retry after reload displays the exact frozen recipe even with
     expected_metadata_version: 3,
     output_language: "vi",
     run: {
-      provider: "chatgpt",
+      provider: "antigravity",
       model: "previous-model",
       reasoning_effort: "high",
       generation_id: "saved-transcript",
@@ -2993,6 +2993,16 @@ test("an uncertain retry after reload displays the exact frozen recipe even with
   await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
   await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
   await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+
+  const retry = selectView(env.state());
+  assert.equal(retry.choice.planHidden, false);
+  assert.equal(retry.choice.provider, frozen.run.provider);
+  assert.equal(retry.choice.providerDisabled, true);
+  assert.equal(retry.choice.modelValue, frozen.run.model);
+  assert.equal(retry.choice.modelDisabled, true);
+  assert.match(text(retry.choice.plan), /Google Antigravity · previous-model · mức suy nghĩ Cao/);
+  assert.match(text(retry.choice.policy), /Google Antigravity/);
+  assert.match(retry.run.describedBy, /notes-run-plan/);
 
   env.dispatch("start-clicked", { requestId: "ignored-retry-id" });
   assert.deepEqual(posts(env, "/notes-runs").at(-1).body, frozen);

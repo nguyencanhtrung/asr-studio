@@ -446,6 +446,7 @@ const { t, UI_LOCALE } = (() => {
       "Lưu tên": "Save name",
       "Lưu đoạn": "Save segment",
       "Lần chép lời gần nhất chưa hoàn tất. Mở Transcript & bản ghi để xem chi tiết và chạy lại.": "The last transcription did not finish. Open Transcript & recording to see details and run it again.",
+      "Yêu cầu cần xác minh dùng {name} · {model} · mức suy nghĩ {effort}.": "The request to verify uses {name} · {model} · thinking level {effort}.",
       "Lần chạy tiếp theo dùng {name} · {model}{effort}.": "The next run uses {name} · {model}{effort}.",
       "Lần chạy tiếp theo dùng {name}{model}. {error}": "The next run uses {name}{model}. {error}",
       "Lần kiểm tra gần nhất": "Last check",

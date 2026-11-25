@@ -1876,7 +1876,8 @@ function defaultExplicitEffort(state, provider, modelId) {
 // the last saved provider, the only connected provider, and finally ChatGPT.
 export function selectedProvider(state, pending) {
   const choice = state.choice;
-  if (pending && PROVIDER_IDS.includes(pending.provider)) return pending.provider;
+  const retryProvider = pending?.run?.provider ?? pending?.provider;
+  if (PROVIDER_IDS.includes(retryProvider)) return retryProvider;
   if (PROVIDER_IDS.includes(choice.localProvider)) return choice.localProvider;
   if (PROVIDER_IDS.includes(choice.preferences.provider)) return choice.preferences.provider;
   const connected = PROVIDER_IDS.filter((id) => choice.status[id] === "connected");
@@ -3565,11 +3566,14 @@ function taskView(state, data) {
 function choiceView(state, data, pending) {
   const choice = state.choice;
   const provider = selectedProvider(state, pending);
+  const retry = pending?.run;
+  const retryModel = retry ? modelName(state, provider, retry.model) : "";
   const readiness = modelReadiness(state, provider);
   const models = catalogModels(state, provider);
   const locked = Boolean(pending) || Boolean(data && data.starting) || choice.saving;
   const items = [];
-  if (models === null) items.push({ value: readiness.model, text: readiness.model || t("Chưa có model") });
+  if (retry) items.push({ value: retry.model, text: retryModel });
+  else if (models === null) items.push({ value: readiness.model, text: readiness.model || t("Chưa có model") });
   else {
     if (!readiness.ready) items.push({ value: "", text: readiness.model ? t("Chọn model khác") : t("Chọn model") });
     for (const item of models) items.push({ value: item.id, text: item.display_name });
@@ -3579,7 +3583,13 @@ function choiceView(state, data, pending) {
     ? ` · effort ${choice.preferences.reasoning_effort}` : "";
   if (provider === "antigravity") effort = t(" · mức suy nghĩ {effort}", { effort: effortLabel(effortFor(state, "antigravity")) });
   let plan;
-  if (!choice.loaded && !choice.loading && !pending) {
+  if (retry) {
+    plan = t("Yêu cầu cần xác minh dùng {name} · {model} · mức suy nghĩ {effort}.", {
+      name,
+      model: retryModel,
+      effort: RUN_EFFORT_LABELS[retry.reasoning_effort] || retry.reasoning_effort,
+    });
+  } else if (!choice.loaded && !choice.loading && !pending) {
     plan = t("Chưa đọc được lựa chọn đã lưu nên chưa thể tạo notes mới. Hãy bấm “Tải lại lựa chọn”.");
   } else if (readiness.ready && readiness.model && models !== null) {
     plan = t("Lần chạy tiếp theo dùng {name} · {model}{effort}.", { name, model: modelName(state, provider, readiness.model), effort });
@@ -3594,7 +3604,7 @@ function choiceView(state, data, pending) {
       error: choice.catalogErrors[provider],
     });
   }
-  // The plan line belongs to the open choice, except when the action cannot simply run and it says why.
+  // Keep the destination visible next to Verify even when the choice is collapsed.
   const configure = needsModelChoice(state, data, provider, readiness, pending);
   const catalogBlocked = Boolean(choice.catalogErrors[provider]);
   const stuck = needsConnection(state, data, provider, readiness, pending)
@@ -3605,12 +3615,14 @@ function choiceView(state, data, pending) {
     provider,
     readiness,
     providerDisabled: locked,
-    modelKey: `${provider}\u0000${readiness.model}\u0000${models ? models.map((item) => item.id).join("\u0001") : "-"}`,
+    modelKey: retry
+      ? `retry\u0000${provider}\u0000${retry.model}\u0000${retryModel}`
+      : `${provider}\u0000${readiness.model}\u0000${models ? models.map((item) => item.id).join("\u0001") : "-"}`,
     modelItems: items,
-    modelValue: readiness.ready || models === null ? readiness.model : "",
+    modelValue: retry?.model ?? (readiness.ready || models === null ? readiness.model : ""),
     modelDisabled: locked || models === null || models.length === 0,
     plan,
-    planHidden: !stuck && !choice.open,
+    planHidden: !retry && !stuck && !choice.open,
     reloadHidden: choice.loaded || !state.meetingId,
     reloadDisabled: choice.loading,
     message: choice.message,
@@ -3878,6 +3890,10 @@ export function selectView(state) {
   }
   const failedTranscription = meeting && meeting.transcription && meeting.transcription.task;
   const savedWork = savedWorkView(state, data);
+  let describedBy = "notes-status";
+  if (regenerate) describedBy = "notes-regenerate-intro";
+  else if (connect || configure) describedBy = "notes-run-plan";
+  else if (pending?.run) describedBy = "notes-run-plan notes-status";
   return {
     needed,
     emptyCopy: needed
@@ -3892,7 +3908,7 @@ export function selectView(state) {
     choice,
     run: {
       action: regenerate ? "regenerate" : connect ? "connect" : configure ? "configure" : "start",
-      describedBy: regenerate ? "notes-regenerate-intro" : connect || configure ? "notes-run-plan" : "notes-status",
+      describedBy,
       disabled: regenerate
         ? Boolean(notesAdmissionBlock(state)) || state.choice.loading
         : !connect && !configure && !canStartNotes(state),

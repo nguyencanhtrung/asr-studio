@@ -14,7 +14,8 @@ from notes_helpers import StubNotesProvider, rerun_transcript, seed_completed_tr
 from playwright.sync_api import expect
 from test_browser_history import live as live
 from test_browser_history import signed_in as browser_signed_in  # noqa: F401
-from test_browser_notes_provider import mock_providers
+from test_browser_notes_provider import ANTIGRAVITY_MODEL, mock_providers
+from test_browser_notes_provider import fake_notes_provider as fake_vendor_notes_provider  # noqa: F401
 
 from asr_studio import notes_routes
 from asr_studio.media import normalize_media
@@ -1809,6 +1810,63 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     normal = page.evaluate(durations)
     assert normal[:2] == [0, 0]  # Xem and Viết switch instantly whatever the preference
     assert min(normal[3:]) > 0.001  # the original copy and export icons still animate
+
+
+@pytest.mark.usefixtures("fake_vendor_notes_provider")
+def test_verify_uses_and_discloses_the_frozen_destination(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
+    preferences_url = f"{live.url}/api/notes-preferences"
+    preferences = page.request.get(preferences_url).json()
+    requests = []
+
+    def intercept(route):
+        requests.append(route.request.post_data)
+        if len(requests) == 1:
+            route.fulfill(status=503, json={"detail": {"code": "temporary_failure"}})
+        else:
+            route.continue_()
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}/notes-runs", intercept)
+    _open_saved_notes(live, page, meeting_id)
+    start = page.locator("#notes-start")
+    start.click()
+    page.locator("#notes-regenerate-provider").select_option("antigravity")
+    page.locator("#notes-regenerate-model").select_option(ANTIGRAVITY_MODEL)
+    page.locator("#notes-regenerate-effort").select_option("medium")
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    page.locator("#notes-regenerate-cancel").click()
+
+    expect(start).to_have_text("Xác minh yêu cầu notes")
+    expect(start).to_have_attribute("aria-describedby", "notes-run-plan notes-status")
+    plan = page.locator("#notes-run-plan")
+    expect(plan).to_be_visible()
+    expect(plan).to_contain_text("Google Antigravity · Gemini 3 Pro High · mức suy nghĩ Vừa")
+    page.locator("#notes-change").click()
+    provider = page.locator("#notes-provider")
+    model = page.locator("#notes-model")
+    expect(provider).to_have_value("antigravity")
+    expect(provider).to_be_disabled()
+    expect(model).to_have_value(ANTIGRAVITY_MODEL)
+    expect(model).to_be_disabled()
+    expect(page.locator("#notes-content-policy")).to_contain_text("gửi tới Google Antigravity")
+
+    with page.expect_response(lambda response: response.url.endswith("/notes-runs")) as response:
+        start.click()
+    assert response.value.status == 202
+    assert len(requests) == 2 and requests[0] == requests[1]
+    body = json.loads(requests[1])
+    assert body["run"]["provider"] == "antigravity"
+    assert body["run"]["model"] == ANTIGRAVITY_MODEL
+    assert body["run"]["reasoning_effort"] == "medium"
+    assert page.request.get(preferences_url).json() == preferences
+    task = response.value.json()
+    assert task["provider"] == "antigravity"
+    _complete_fake_task(live.settings.data_dir, task["id"], body["request_id"], _markdown(snapshot))
+    expect(start).to_be_enabled(timeout=10_000)
+    start.click()
+    expect(page.locator("#notes-regenerate-provider")).to_have_value("chatgpt")
 
 
 def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(live, signed_in):
