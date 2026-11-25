@@ -2536,7 +2536,11 @@ function startAccepted(state, action) {
   if (parsed.error) return startRejected(state, action.meta, { message: parsed.error, status: 0, payload: null });
   const { task } = parsed;
   const locked = isActiveStatus(task.status);
-  let result = clearPending(state, meetingId);
+  // A read started before the receipt may still describe the old task. The next poll is fresh.
+  const afterReceipt = locked && state.meetingId === meetingId
+    ? { ...state, readId: state.readId + 1 }
+    : state;
+  let result = clearPending(afterReceipt, meetingId);
   result = then(result, (s) => out(patchNotes(s, meetingId, {
     task,
     sourceLocked: locked,

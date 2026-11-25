@@ -993,6 +993,44 @@ def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_f
     assert snapshot["generation_id"]
 
 
+def test_notes_admission_keeps_cancel_and_poll_after_a_delayed_read(
+    live, signed_in, fake_notes_provider
+):
+    _context, page = signed_in()
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
+    notes_url = f"{live.url}/api/meetings/{meeting_id}/notes"
+    idle_notes = page.request.get(notes_url).json()
+    _open_saved_notes(live, page, meeting_id)
+    held_reads = []
+    page.route(notes_url, lambda route: held_reads.append(route))
+    start = page.locator("#notes-start")
+    cancel = page.locator("#notes-cancel")
+    start.click()
+    with page.expect_request(notes_url):
+        page.evaluate(
+            "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+            meeting_id,
+        )
+    with page.expect_response(lambda response: response.url.endswith("/notes-runs")) as response:
+        page.locator("#notes-regenerate-submit").click()
+    assert response.value.status == 202
+    expect(cancel).to_be_enabled()
+
+    # The GET began before admission but its old state arrives after the accepted task.
+    with page.expect_request(notes_url, timeout=5_000):
+        held_reads[0].fulfill(json=idle_notes)
+    expect(cancel).to_be_visible()
+    expect(cancel).to_be_enabled()
+    expect(start).to_be_disabled()
+
+    task = response.value.json()
+    _complete_fake_task(live.settings.data_dir, task["id"], task["request_id"], _markdown(snapshot))
+    held_reads[1].continue_()
+    expect(cancel).to_be_hidden()
+    expect(page.locator("#notes-revision-selector option")).to_have_count(2)
+    expect(start).to_be_enabled()
+
+
 def test_regenerate_waits_for_a_concurrent_notes_task_without_losing_the_draft(
     live, signed_in, fake_notes_provider
 ):

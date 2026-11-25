@@ -2972,6 +2972,48 @@ test("a Notes read confirming the exact request settles its dialog before a late
   assert.equal(env.state().pending.m1, undefined);
 });
 
+test("a read issued before Notes admission cannot hide the newly accepted run", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("regenerate-clicked");
+  env.context(meeting());
+  const read = env.is("GET", "/api/meetings/m1/notes");
+  env.dispatch("regenerate-submit", { requestId: TASK.request_id });
+  await env.answer(env.is("POST", "/notes-runs"), 202, TASK);
+  await env.answer(read, 200, notesBody([revision()]));
+
+  const running = selectView(env.state());
+  assert.equal(notes(env).task?.id, TASK.id);
+  assert.equal(notes(env).sourceLocked, true);
+  assert.equal(running.task.cancelHidden, false);
+  assert.equal(running.run.disabled, true);
+  assert.deepEqual(env.live(), [1000]);
+
+  env.fire(1000);
+  await env.answer(read, 200, notesBody([revision({ id: "r2" }), revision()], { ...TASK, status: "succeeded" }));
+  const complete = selectView(env.state());
+  assert.equal(complete.task.cancelHidden, true);
+  assert.equal(complete.savedWork.options.length, 2);
+  assert.equal(notes(env).sourceLocked, false);
+  assert.deepEqual(env.live(), []);
+});
+
+test("a background admission leaves the current meeting's outstanding Notes read valid", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: TASK.request_id });
+  env.context(meeting("m2"));
+  await env.answer(env.is("POST", "/api/meetings/m1/notes-runs"), 202, TASK);
+  await env.answer(env.is("GET", "/api/meetings/m2/notes"), 200, notesBody([revision({ id: "r2", meeting_id: "m2" })]));
+
+  const view = selectView(env.state());
+  assert.equal(notes(env, "m1").task.id, TASK.id);
+  assert.equal(view.savedWork.revision.id, "r2");
+  assert.equal(view.task, null);
+  assert.deepEqual(env.live(), []);
+});
+
 test("an uncertain retry after reload displays the exact frozen recipe even without current options", async () => {
   const env = setup();
   const frozen = {
