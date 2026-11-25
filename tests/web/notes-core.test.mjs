@@ -9,6 +9,7 @@ import {
   generationChoices,
   initialState,
   normalizePendingRequest,
+  outputLanguageStorageKey,
   pendingRequestStorageKey,
   reduce,
   requestStorageKey,
@@ -3042,4 +3043,48 @@ test("a locked recovered recipe names its pinned version when the same generatio
   const displayed = view.sourceItems.find((item) => item.value === view.generationId);
   assert.match(text(displayed.text), /nguồn 1(?:\D|$)/);
   assert.deepEqual(env.state().pending.m1, frozen);
+});
+
+test("confirming a request after the dialog was closed clears its unconfirmed status", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()] });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-submit", { requestId: TASK.request_id });
+  env.dispatch("regenerate-cancelled");
+  assert.equal(notes(env).runErrorUncertain, true);
+  assert.match(text(selectView(env.state()).run.label), /Xác minh yêu cầu notes/);
+
+  env.context(meeting());
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()], TASK, true));
+  const view = selectView(env.state());
+  assert.equal(env.state().pending.m1, undefined);
+  assert.equal(notes(env).runErrorUncertain, false);
+  assert.equal(text(view.error), "");
+  assert.doesNotMatch(text(view.status), /Xác minh yêu cầu notes/);
+  assert.match(text(view.task.status), /đang tạo notes/);
+  assert.equal(view.regenerateDialog.open, false);
+});
+
+test("restoring a pending per-run language keeps the meeting's default after completion", async () => {
+  const submitting = setup();
+  await opened(submitting, { revisions: [revision()] });
+  submitting.dispatch("regenerate-clicked");
+  submitting.dispatch("regenerate-language-picked", { language: "vi" });
+  submitting.dispatch("regenerate-submit", { requestId: TASK.request_id });
+  const frozen = submitting.state().pending.m1;
+
+  const restored = setup();
+  restored.context(meeting(), { stored: { pending: JSON.stringify(frozen), language: "en" } });
+  assert.equal(selectView(restored.state()).outputLanguage, "vi");
+  await restored.answer(restored.is("GET", "/api/meetings/m1/notes"), 200,
+    notesBody([revision()], { ...TASK, status: "succeeded", output_language: "vi" }));
+  await restored.answer(restored.is("GET", "/api/providers"), 200, PROVIDERS);
+  await restored.answer(restored.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await restored.answer(restored.is("GET", "/api/providers/chatgpt/models"), 200, CATALOG);
+
+  assert.equal(restored.state().pending.m1, undefined);
+  assert.equal(selectView(restored.state()).outputLanguage, "en");
+  restored.dispatch("regenerate-clicked");
+  assert.equal(selectView(restored.state()).regenerateDialog.outputLanguage, "en");
+  assert.ok(!restored.written.some(([, op, key]) => op === "write" && key === outputLanguageStorageKey("m1")));
 });

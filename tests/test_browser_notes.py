@@ -1790,3 +1790,46 @@ def test_restored_run_dialog_shows_the_frozen_recipe_if_verify_cannot_confirm(li
         expect(field).to_have_value(value)
         expect(field).to_be_disabled()
     expect(page.locator("#notes-regenerate-submit")).to_have_text("Xác minh yêu cầu notes")
+
+
+def test_completed_restored_recipe_keeps_the_meeting_language_for_the_next_run(live, signed_in):
+    _context, page = signed_in(viewport={"width": 390, "height": 900})
+    data_dir = live.settings.data_dir
+    meeting_id, _revision, snapshot, _segments = _seed_saved_notes(data_dir)
+    request_id = "fixture-restored-language"
+    body = {
+        "request_id": request_id,
+        "expected_generation_id": snapshot["generation_id"],
+        "expected_source_version": 1,
+        "expected_metadata_version": 1,
+        "output_language": "vi",
+        "run": {
+            "provider": "chatgpt",
+            "model": "gpt-6.1-sol",
+            "reasoning_effort": "high",
+            "generation_id": snapshot["generation_id"],
+            "source_version": 1,
+        },
+    }
+    admitted = accept_notes_task(
+        data_dir,
+        provider=BrowserExplicitStub(),
+        meeting_id=meeting_id,
+        worker_ready=True,
+        **body,
+    )
+    _complete_fake_task(data_dir, admitted["id"], request_id, _markdown(snapshot))
+
+    page.evaluate(
+        """([id, body]) => {
+            sessionStorage.setItem(`asr-studio:notes-request-v2:${id}`, JSON.stringify(body));
+            localStorage.setItem(`asr-studio:notes-output-language:${id}`, 'en');
+        }""",
+        [meeting_id, body],
+    )
+    _open_saved_notes(live, page, meeting_id)
+    expect(page.locator("#notes-start")).to_contain_text("English")
+    expect(page.locator("#notes-start")).not_to_contain_text("Xác minh yêu cầu notes")
+    page.locator("#notes-start").click()
+    expect(page.locator("#notes-regenerate-language")).to_have_value("en")
+    expect(page.locator("#notes-regenerate-submit")).to_be_enabled()

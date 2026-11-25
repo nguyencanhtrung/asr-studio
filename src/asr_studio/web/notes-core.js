@@ -2258,7 +2258,8 @@ function installNotes(state, meetingId, parsed, broadcast = false) {
   const legacyActiveTask = Boolean(task && pending && !validRunObject(pending.run) && isActiveStatus(task.status));
   if (sameRequest || legacyActiveTask) {
     result = then(result, (s) => {
-      let next = patchNotes(s, meetingId, { starting: false });
+      const receipt = sameRequest ? { runError: "", runErrorUncertain: false } : {};
+      let next = patchNotes(s, meetingId, { starting: false, ...receipt });
       if (sameRequest && validRunObject(pending.run) && s.meetingId === meetingId && s.regenerate.meetingId === meetingId) {
         next = patchRegenerate(next, { open: false, error: "" });
       }
@@ -3032,7 +3033,9 @@ function adoptStored(state, meetingId, stored) {
   return then(result, (s) => {
     if (Object.hasOwn(s.outputLanguages, meetingId)) return out(s);
     const pending = pendingOf(s, meetingId);
-    const language = pending ? pending.output_language : ["en", "vi"].includes(stored.language) ? stored.language : "en";
+    const storedLanguage = ["en", "vi"].includes(stored.language) ? stored.language : "en";
+    // An explicit recipe owns its language until that run settles. It does not set the next run's default.
+    const language = pending && !validRunObject(pending.run) ? pending.output_language : storedLanguage;
     return out({ ...s, outputLanguages: { ...s.outputLanguages, [meetingId]: language } });
   });
 }
