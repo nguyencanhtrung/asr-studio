@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from seeding import prepare_diarization_model, seed_meeting
+from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 
 from asr_studio import routes
 from asr_studio.config import Settings
@@ -161,6 +161,7 @@ def test_explicit_off_is_manual_rerun_only_and_publishes_truthful_no_speaker_gen
     data_dir = tmp_path / "data"
     initialize(data_dir)
     meeting_id = seed_meeting(data_dir, "Off fixture")
+    prepare_recording(data_dir, meeting_id)
     model_dir = _prepared_asr_model(tmp_path / "asr-model")
     diarization_dir = prepare_diarization_model(tmp_path / "diarization")
     with pytest.raises(TaskError) as fresh_error:
@@ -303,6 +304,7 @@ def test_rollback_fence_rejects_new_off_and_does_not_claim_pending_off(tmp_path,
     data_dir = tmp_path / "data"
     initialize(data_dir)
     meeting_id = seed_meeting(data_dir, "Rollback fence fixture")
+    prepare_recording(data_dir, meeting_id)
     model_dir = _prepared_asr_model(tmp_path / "asr-model")
     diarization_dir = prepare_diarization_model(tmp_path / "diarization")
 

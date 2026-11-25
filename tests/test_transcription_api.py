@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from notes_helpers import seed_completed_transcript
-from seeding import prepare_diarization_model, seed_meeting
+from notes_helpers import seed_cited_notes, seed_completed_transcript
+from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 
 from asr_studio import routes
 from asr_studio.app import create_app
@@ -216,6 +216,8 @@ def _admission_state(data_dir):
             connection.execute("SELECT * FROM transcript_segments ORDER BY id").fetchall(),
             connection.execute("SELECT * FROM tasks ORDER BY id").fetchall(),
             connection.execute("SELECT * FROM processing_slot").fetchall(),
+            connection.execute("SELECT * FROM notes_sources ORDER BY id").fetchall(),
+            connection.execute("SELECT * FROM notes_revisions ORDER BY id").fetchall(),
         )
 
 
@@ -236,6 +238,7 @@ async def test_diarization_capability_route_is_authoritative_and_authenticated(t
             assert unauthorized.status_code == 401
             headers = await _authorize(client, settings)
             meeting_id, generation_id, _ = seed_completed_transcript(settings.data_dir)
+            prepare_recording(settings.data_dir, meeting_id)
             before = _admission_state(settings.data_dir)
             lock_fd = acquire_transcription_lock(settings.data_dir)
             assert lock_fd is not None
@@ -319,6 +322,7 @@ async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
             meeting_id, generation_id, _ = seed_completed_transcript(
                 settings.data_dir, title="Stale Community-1 readiness fixture"
             )
+            prepare_recording(settings.data_dir, meeting_id)
             before = _admission_state(settings.data_dir)
             lock_fd = acquire_transcription_lock(settings.data_dir)
             assert lock_fd is not None
@@ -374,6 +378,110 @@ async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
                 assert _admission_state(settings.data_dir) == after_accept
             finally:
                 os.close(lock_fd)
+
+
+@pytest.mark.parametrize("mode", ["community-1", "off"])
+@pytest.mark.parametrize("loss", ["missing", "unreadable", "fifo"])
+async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypatch, mode, loss):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_model_path=_prepared_model(tmp_path / "asr"),
+        diarization_model_path=prepare_diarization_model(tmp_path / "community"),
+    )
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as client,
+    ):
+        headers = await _authorize(client, settings)
+        meeting, generation, segments = seed_completed_transcript(settings.data_dir)
+        edit = await client.patch(
+            f"/api/meetings/{meeting}/transcript-segments/{segments[0]}/text",
+            headers=headers,
+            json={
+                "expected_generation_id": generation,
+                "expected_source_version": 1,
+                "text": "A saved correction.",
+            },
+        )
+        assert edit.status_code == 200
+        seed_cited_notes(
+            settings.data_dir, existing=(meeting, generation, segments), source_version=2
+        )
+        audio = prepare_recording(settings.data_dir, meeting)
+        lock_fd = acquire_transcription_lock(settings.data_dir)
+        assert lock_fd is not None
+        try:
+            write_runtime_profile(
+                settings.data_dir, RuntimeProfile("cpu", "int8", settings.asr_model_path)
+            )
+            write_transcription_heartbeat(settings.data_dir, "idle")
+            capability = await client.get("/api/diarization-capability", headers=headers)
+            assert capability.status_code == 200
+            assert capability.json()["community_1"]["ready"] and capability.json()["off"]["ready"]
+            request = {
+                "meeting_id": meeting,
+                "expected_generation_id": generation,
+                "diarization_mode": mode,
+                "request_id": "recording-refused",
+            }
+            original_open = os.open
+
+            def deny_recording(path, flags, *args, **kwargs):
+                if path == audio:
+                    raise PermissionError("fixture audio cannot be opened")
+                return original_open(path, flags, *args, **kwargs)
+
+            with closing(sqlite3.connect(database_path(settings.data_dir))) as connection:
+                assert connection.execute(
+                    "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
+                ).fetchone() == (None,)
+            before = _admission_state(settings.data_dir)
+            with monkeypatch.context() as inaccessible:
+                if loss == "unreadable":
+                    inaccessible.setattr(os, "open", deny_recording)
+                else:
+                    backup = tmp_path / "saved.m4a"
+                    audio.rename(backup)
+                    if loss == "fifo":
+                        os.mkfifo(audio)
+                refused = await client.post("/api/tasks", headers=headers, json=request)
+                after = _admission_state(settings.data_dir)
+                assert (refused.status_code, after == before) == (409, True)
+                assert refused.json() == {
+                    "detail": {
+                        "code": "recording_unavailable",
+                        "message": (
+                            "The original recording is unavailable. Restore it before rerunning."
+                        ),
+                    }
+                }
+
+            if loss != "unreadable":
+                if loss == "fifo":
+                    audio.unlink()
+                backup.rename(audio)
+            accepted = await client.post(
+                "/api/tasks",
+                headers=headers,
+                json={**request, "request_id": "recording-accepted"},
+            )
+            assert accepted.status_code == 202
+            assert accepted.json()["diarization_mode"] == mode
+            audio.unlink()
+            after_accept = _admission_state(settings.data_dir)
+            replay = await client.post(
+                "/api/tasks",
+                headers=headers,
+                json={**request, "request_id": "recording-accepted"},
+            )
+            assert replay.status_code == 202
+            assert replay.json() == accepted.json()
+            assert _admission_state(settings.data_dir) == after_accept
+        finally:
+            os.close(lock_fd)
 
 
 async def test_task_route_persists_per_run_language_and_checks_idempotency(tmp_path, monkeypatch):

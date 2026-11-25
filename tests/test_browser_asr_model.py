@@ -11,9 +11,9 @@ import uuid
 from pathlib import Path
 
 import pytest
-from notes_helpers import seed_completed_transcript
+from notes_helpers import seed_cited_notes, seed_completed_transcript
 from playwright.sync_api import expect
-from seeding import prepare_diarization_model, seed_meeting
+from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 from test_browser_history import _prepare_browser_asr_model, _prepare_browser_qwen_model
 from test_browser_history import live as live
 from test_browser_history import signed_in as signed_in
@@ -113,6 +113,7 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
         _prepare_browser_asr_model(data_dir.parent / "pho-whisper-large"),
     )
     meeting_id = seed_meeting(data_dir, "Model comparison", "2026-10-17", duration_seconds=30.0)
+    prepare_recording(data_dir, meeting_id)
     sent = []
     page.on(
         "request",
@@ -197,6 +198,7 @@ def test_completed_transcript_rerun_uses_server_confirmed_diarization_choices(
     meeting_id, generation_id, _segments = seed_completed_transcript(
         live.settings.data_dir, title="Diarization rerun fixture"
     )
+    prepare_recording(live.settings.data_dir, meeting_id)
     page.goto(f"{live.url}/meetings/{meeting_id}")
     page.get_by_role("button", name="Chạy lại", exact=True).click()
 
@@ -332,6 +334,7 @@ def test_rollback_refusal_reopens_with_fresh_choices_and_request(
         page.get_by_role("button", name="Switch to English").click()
     monkeypatch.setenv("ASR_DIARIZATION_ROLLBACK_FENCE", "0")
     meeting_id, generation_id, _segments = seed_completed_transcript(live.settings.data_dir)
+    prepare_recording(live.settings.data_dir, meeting_id)
     requests = []
     page.on(
         "request",
@@ -414,6 +417,94 @@ def test_rollback_refusal_reopens_with_fresh_choices_and_request(
     assert requests[0]["request_id"] != requests[1]["request_id"]
 
 
+@pytest.mark.parametrize(("lang", "mode"), [("vi", "off"), ("en", "community-1")])
+def test_missing_recording_refusal_restores_controls_and_saved_notes(
+    live, signed_in, worker, lang, mode
+):
+    english = lang == "en"
+    viewport = {"width": 1440, "height": 1000} if english else {"width": 390, "height": 844}
+    _context, page = signed_in(viewport=viewport, color_scheme="light" if english else "dark")
+    if english:
+        page.get_by_role("button", name="Switch to English").click()
+    data_dir = live.settings.data_dir
+    meeting, revision, snapshot, _segments = seed_cited_notes(data_dir)
+    audio = prepare_recording(data_dir, meeting)
+    page.goto(f"{live.url}/meetings/{meeting}#transcript")
+    expect(page.locator("#meeting-tab-transcript")).to_have_attribute("aria-selected", "true")
+    start = page.locator("#start-transcription")
+    dialog = page.locator("#transcription-rerun-dialog")
+    cancel = page.locator("#transcription-rerun-cancel")
+    submit = page.locator("#transcription-rerun-submit")
+    status = page.locator("#transcription-status")
+    expect(start).to_be_visible()
+    expect(start).to_be_enabled()
+    start.press("Enter")
+    expect(cancel).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(start).to_be_focused()
+    page.keyboard.press("Enter")
+    community = dialog.locator('[value="community-1"]')
+    expect(community).to_be_enabled()
+    if mode == "off":
+        community.focus()
+        page.keyboard.press("ArrowDown")
+        off = dialog.locator('[value="off"]')
+        expect(off).to_be_focused()
+        expect(off).to_be_checked()
+    expect(submit).to_be_enabled()
+    backup = audio.with_suffix(".bak")
+    audio.rename(backup)
+
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as refusal:
+        submit.press("Enter")
+    assert refusal.value.status == 409
+    assert refusal.value.json()["detail"]["code"] == "recording_unavailable"
+    body = refusal.value.request.post_data_json
+    assert body["diarization_mode"] == mode
+    assert body["expected_generation_id"] == snapshot["generation_id"]
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#transcription-error-message")).to_have_text(
+        "The original recording could not be opened. Restore it before running again."
+        if english
+        else "Không thể mở bản ghi gốc. Khôi phục bản ghi rồi chạy lại."
+    )
+    expect(status).to_have_text(
+        "The complete transcript is saved." if english else "Transcript đã được lưu hoàn chỉnh."
+    )
+    expect(start).to_be_focused()
+    storage_key = f"asr-studio:transcription-request:{meeting}"
+    assert page.evaluate("key => sessionStorage.getItem(key)", storage_key) is None
+    expect(page.locator(".segment-text").first).to_have_text("We need a launch plan.")
+    if evidence_dir := os.environ.get("ASR_UI_EVIDENCE_DIR"):
+        page.screenshot(
+            path=Path(evidence_dir) / f"{lang}-recording-refusal.png", animations="disabled"
+        )
+
+    page.locator("#meeting-tab-notes").click()
+    export = page.locator("#notes-export")
+    expect(export).to_be_enabled()
+    with page.expect_download() as download:
+        export.click()
+    assert Path(download.value.path()).read_text(encoding="utf-8") == revision["markdown"]
+    page.locator("#meeting-tab-transcript").click()
+
+    backup.rename(audio)
+    start.press("Enter")
+    expect(cancel).to_be_focused()
+    expect(submit).to_have_text("Run again" if english else "Chạy lại")
+    expect(submit).to_be_enabled()
+    with page.expect_response(
+        lambda reply: reply.request.method == "POST" and reply.url.endswith("/api/tasks")
+    ) as accepted:
+        submit.press("Enter")
+    assert accepted.value.status == 202
+    assert accepted.value.request.post_data_json["request_id"] != body["request_id"]
+    expect(page.locator("#transcription-error")).to_be_hidden()
+    expect(status).to_be_focused()
+
+
 def publish_fixture_run(data_dir, task_id, segments, **metadata):
     owner_id = "browser-fixture-run"
     task = claim_next_task(data_dir, owner_id=owner_id)
@@ -448,6 +539,7 @@ def test_transcript_details_follow_saved_diarization_provenance(live, signed_in,
         page.get_by_role("button", name="Switch to English").click()
     data_dir = live.settings.data_dir
     meeting_id, legacy, _segments = seed_completed_transcript(data_dir)
+    prepare_recording(data_dir, meeting_id)
     with sqlite3.connect(database_path(data_dir)) as db:
         db.execute(
             "UPDATE transcript_generations SET diarization_model_name = NULL, "
@@ -740,6 +832,7 @@ def test_automatic_runs_the_default_from_settings_and_one_run_can_still_differ(
     )
     _choose_default(page, live, "pho-whisper-large")
     meeting_id = seed_meeting(data_dir, "Default model", "2026-10-17", duration_seconds=30.0)
+    prepare_recording(data_dir, meeting_id)
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
     selector = page.get_by_role("combobox", name="Model ASR", exact=True)

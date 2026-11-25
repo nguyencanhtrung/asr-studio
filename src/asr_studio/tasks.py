@@ -21,6 +21,7 @@ from asr_studio.diarization_runner import (
     DiarizationConfigurationError,
     prepared_diarization_directory,
 )
+from asr_studio.recordings import RecordingError, open_audio
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.storage import database_path
 
@@ -392,6 +393,17 @@ def accept_transcription_task(
                 "recording_not_ready",
                 "The recording is not ready for transcription yet.",
             )
+
+        if explicit_diarization_mode:
+            try:
+                _, audio = open_audio(data_dir, recording["storage_key"])
+                audio.close()
+            except RecordingError:
+                raise TaskError(
+                    409,
+                    "recording_unavailable",
+                    "The original recording is unavailable. Restore it before rerunning.",
+                ) from None
 
         slot = connection.execute(
             "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"

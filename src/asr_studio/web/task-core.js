@@ -470,7 +470,9 @@ function startFailed(state, error, auto) {
     : t("Bấm lại để xác minh bằng cùng request ID, ngôn ngữ gợi ý và model.");
   let message = [failure.message, " ", guidance];
   const selectedModel = pendingFor(state, meetingId)?.asrModel || (state.asrModel?.meetingId === meetingId ? state.asrModel.selection : "auto");
-  if (failure.code === "diarization_rollback_fence") {
+  if (failure.code === "recording_unavailable") {
+    message = t("Không thể mở bản ghi gốc. Khôi phục bản ghi rồi chạy lại.");
+  } else if (failure.code === "diarization_rollback_fence") {
     message = t("Chạy với chế độ tắt nhận dạng người nói đang tạm khóa. Mở Chạy lại để chọn Community-1 nếu đã sẵn sàng.");
   } else if (Object.hasOwn(MODEL_REFUSALS, failure.code) && selectedModel !== "auto") {
     // A named model has its own preparation/GPU guidance, including for an automatic handoff.
