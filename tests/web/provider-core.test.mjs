@@ -2251,6 +2251,90 @@ for (const { d, other, save } of CASES) {
   });
 }
 
+const r14SavePath = (d) => d === CHATGPT ? "/api/notes-preferences" : "/api/providers/antigravity/preference";
+const r14SaveReply = (d, model, effort) => d === CHATGPT
+  ? { models: { chatgpt: model }, reasoning_effort: effort, reasoning_efforts: { chatgpt: effort } }
+  : { provider: d.id, model, reasoning_effort: effort };
+
+const r14InvalidModelAcks = [
+  { id: "antigravity-space", d: ANTIGRAVITY, model: "bad model", effort: "medium" },
+  { id: "antigravity-241", d: ANTIGRAVITY, model: "g".repeat(241), effort: "medium" },
+  { id: "antigravity-newline", d: ANTIGRAVITY, model: "g2\n", effort: "medium" },
+  { id: "chatgpt-201", d: CHATGPT, model: "g".repeat(201), effort: "default" },
+  { id: "chatgpt-201-codepoints", d: CHATGPT, model: "😀".repeat(201), effort: "default" },
+];
+
+const r14ValidModelControls = [
+  { id: "antigravity-240", d: ANTIGRAVITY, model: "model/" + "g".repeat(234), effort: "medium" },
+  { id: "chatgpt-200-codepoints", d: CHATGPT, model: "😀".repeat(200), effort: "default" },
+];
+
+for (const { id, d, model: returnedModel, effort: returnedEffort } of r14InvalidModelAcks) {
+  test(`R14 ${id} rejects the returned model, preserves the draft, and commits a valid retry`, async () => {
+    const env = setup();
+    await loaded(env);
+    const before = own(env, d);
+    const draft = d === CHATGPT ? "m2" : "g2";
+    const draftEffort = d === CHATGPT ? "default" : "medium";
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, returnedModel, returnedEffort));
+
+    let current = own(env, d);
+    assert.equal(current.ownerModel, before.ownerModel);
+    assert.equal(current.ownerEffort, before.ownerEffort);
+    assert.equal(current.savedModel, before.savedModel);
+    assert.equal(current.savedEffort, before.savedEffort);
+    assert.equal(current.ownerFence, before.ownerFence);
+    assert.equal(current.selectedModel, draft);
+    assert.equal(current.selectedEffort, draftEffort);
+    assert.deepEqual(current.preferences, before.preferences);
+    assert.equal(current.pending.save, false);
+    assert.equal(current.error.code, "provider_invalid_response");
+    assert.equal(current.error.operation, "save");
+    assert.equal(current.modelStatus.state, "error");
+    assert.deepEqual(env.events, []);
+
+    const validModel = r14ValidModelControls.find((control) => control.d === d).model;
+    dispatch(env, d, "save-requested");
+    const validEffort = draftEffort;
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, validModel, validEffort));
+    current = own(env, d);
+    assert.equal(current.ownerModel, validModel);
+    assert.equal(current.ownerEffort, validEffort);
+    assert.equal(current.savedModel, validModel);
+    assert.equal(current.savedEffort, validEffort);
+    assert.equal(current.selectedModel, validModel);
+    assert.equal(current.ownerFence, before.ownerFence + 1);
+    assert.equal(current.error, null);
+    assert.equal(current.modelStatus.state, "saved");
+    assert.deepEqual(env.events, ["provider.choice-changed"]);
+  });
+}
+
+for (const { id, d, model: returnedModel, effort: returnedEffort } of r14ValidModelControls) {
+  test(`R14 ${id} accepts a supported returned model different from the draft`, async () => {
+    const env = setup();
+    await loaded(env);
+    const before = own(env, d);
+    const draft = d === CHATGPT ? "m2" : "g2";
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, returnedModel, returnedEffort));
+    const current = own(env, d);
+    assert.notEqual(returnedModel, draft);
+    assert.equal(current.ownerModel, returnedModel);
+    assert.equal(current.savedModel, returnedModel);
+    assert.equal(current.selectedModel, returnedModel);
+    assert.equal(current.ownerEffort, returnedEffort);
+    assert.equal(current.savedEffort, returnedEffort);
+    assert.equal(current.ownerFence, before.ownerFence + 1);
+    assert.equal(current.error, null);
+    assert.equal(current.modelStatus.state, "saved");
+    assert.deepEqual(env.events, ["provider.choice-changed"]);
+  });
+}
+
 for (const { d, other, save } of CASES) {
   for (const failure of ["malformed", "server"]) {
     test(`conductor R11 ${d.id} clears a ${failure} Save alert after a valid retry`, async () => {

@@ -1060,6 +1060,13 @@ function saveChoice(d, s) {
   return done(next, [request]);
 }
 
+function savedModelSupported(d, model) {
+  if (typeof model !== "string" || !model.trim()) return false;
+  // Antigravity stores restricted ASCII IDs; ChatGPT counts Unicode code points.
+  if (d.id === "antigravity") return model.length <= 240 && !/[^A-Za-z0-9._:/-]/.test(model);
+  return Array.from(model).length <= 200;
+}
+
 function savedEffortSupported(d, s, model, effort) {
   if (d.effort.kind === "fixed") return Object.hasOwn(d.effortLabels, effort);
   if (effort === "default") return true;
@@ -1077,7 +1084,7 @@ function saveOk(d, s, body) {
   const savedEffort = notesPreferences && Object.hasOwn(reasoningEfforts, d.id)
     ? reasoningEfforts[d.id]
     : reply.reasoning_effort;
-  if (typeof savedModel !== "string" || !savedModel.trim() || typeof savedEffort !== "string"
+  if (!savedModelSupported(d, savedModel) || typeof savedEffort !== "string"
     || !savedEffortSupported(d, s, savedModel, savedEffort) || !notesPreferences && reply.provider !== d.id) {
     const error = { code: "provider_invalid_response", text: errorMessageForCode("provider_invalid_response", undefined, d.id), retryPoll: false, operation: "save" };
     return done({ ...setPending(s, "save", false), error, modelStatus: { state: "error", text: null } });

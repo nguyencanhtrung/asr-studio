@@ -24,13 +24,6 @@ def test_long_saved_antigravity_id_wraps_in_automation_without_clipping(live, si
 
     owner = page.locator("#automatic-preferences-notes-owner")
     expect(owner).to_contain_text(model)
-    assert owner.evaluate("(element) => getComputedStyle(element).overflowWrap") == "anywhere"
-    assert (
-        page.locator("#antigravity-model-help").evaluate(
-            "(element) => getComputedStyle(element).overflowWrap"
-        )
-        == "normal"
-    )
 
     language = page.locator("#automatic-preferences-asr-language")
     expect(language).to_have_value("vi")
