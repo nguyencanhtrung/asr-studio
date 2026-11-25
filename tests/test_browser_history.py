@@ -3655,13 +3655,18 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
         == 1
     )
 
-    dialog = open_ready_rerun(page)
+    # The earlier edit and refresh scenarios can outlast the fixture heartbeat.
+    def open_rerun():
+        write_heartbeat(live.settings.data_dir, "idle")
+        return open_ready_rerun(page)
+
+    dialog = open_rerun()
     expect(dialog.locator("#transcription-rerun-cancel")).to_be_focused()
     page.keyboard.press("Escape")
     expect(dialog).to_be_hidden()
     expect(page.locator("#start-transcription")).to_be_focused()
     assert len(post_bodies) == 2
-    dialog = open_ready_rerun(page)
+    dialog = open_rerun()
     assert len(post_bodies) == 2
     dialog.get_by_role("button", name="Chạy lại", exact=True).click()
     expect(dialog).to_be_hidden()
@@ -3702,11 +3707,11 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
     expect(page.locator("#generation-title")).to_have_text("Transcript #2")
     assert post_bodies[2]["request_id"] != post_bodies[1]["request_id"]
 
-    dialog = open_ready_rerun(page)
+    dialog = open_rerun()
     dialog.get_by_role("button", name="Chạy lại", exact=True).click()
     expect(page.locator("#transcription-error")).to_be_visible(timeout=5_000)
     expect(page.locator("#start-transcription")).to_be_focused()
-    dialog = open_ready_rerun(page)
+    dialog = open_rerun()
     dialog.get_by_role("button", name="Chạy lại", exact=True).click()
     expect(page.get_by_role("button", name="Hủy")).to_be_visible()
     assert post_bodies[3]["request_id"] != post_bodies[2]["request_id"]
