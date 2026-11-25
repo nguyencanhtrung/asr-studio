@@ -119,7 +119,7 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     )
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model ASR")
+    selector = page.get_by_role("combobox", name="Model ASR", exact=True)
     expect(selector).to_have_value("auto")
     expect(selector.locator("option")).to_have_text(
         [
@@ -182,7 +182,7 @@ def test_an_unprepared_model_cannot_start_and_says_how_to_prepare_it(live, signe
         live.settings.data_dir, "Unprepared model", "2026-10-17", duration_seconds=30.0
     )
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model ASR")
+    selector = page.get_by_role("combobox", name="Model ASR", exact=True)
     start = page.get_by_role("button", name="Chép lời")
     guidance = page.locator("#transcription-model-guidance")
     expect(start).to_be_enabled()
@@ -238,7 +238,7 @@ def test_an_interrupted_run_invites_a_retry_only_with_a_usable_model(live, signe
     assert finish_interrupted_task(data_dir, task["id"], owner_id=owner_id, elapsed_seconds=1)
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model ASR")
+    selector = page.get_by_role("combobox", name="Model ASR", exact=True)
     status = page.locator("#transcription-status")
     expect(status).to_contain_text(INVITES_RETRY)
 
@@ -275,7 +275,7 @@ def test_only_a_transcript_without_confidence_scores_qualifies_its_review_count(
     expect(meta).not_to_contain_text(NO_CONFIDENCE)
 
     # The same warning where the model is chosen, before any count exists.
-    page.get_by_label("Model ASR").select_option("qwen3-asr-1.7b")
+    page.get_by_role("combobox", name="Model ASR", exact=True).select_option("qwen3-asr-1.7b")
     expect(page.locator("#transcription-model-help")).to_contain_text("Không có điểm tin cậy")
 
 
@@ -285,7 +285,7 @@ def test_renaming_the_meeting_keeps_the_selector_and_its_guard(live, signed_in, 
         live.settings.data_dir, "Before rename", "2026-10-17", duration_seconds=30.0
     )
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model ASR")
+    selector = page.get_by_role("combobox", name="Model ASR", exact=True)
     start = page.get_by_role("button", name="Chép lời")
     selector.select_option("pho-whisper-large")
     expect(start).to_be_disabled()
@@ -314,7 +314,7 @@ def test_a_model_removed_after_the_page_loaded_is_refused_and_the_page_recovers(
     object.__setattr__(live.settings, "asr_phowhisper_model_path", prepared)
     meeting_id = seed_meeting(data_dir, "Stale list", "2026-10-17", duration_seconds=30.0)
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model ASR")
+    selector = page.get_by_role("combobox", name="Model ASR", exact=True)
     start = page.get_by_role("button", name="Chép lời")
     selector.select_option("pho-whisper-large")
     expect(start).to_be_enabled()
@@ -358,7 +358,7 @@ def test_automatic_runs_the_default_from_settings_and_one_run_can_still_differ(
     meeting_id = seed_meeting(data_dir, "Default model", "2026-10-17", duration_seconds=30.0)
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    selector = page.get_by_label("Model ASR")
+    selector = page.get_by_role("combobox", name="Model ASR", exact=True)
     expect(selector).to_have_value("auto")
     expect(page.locator("#transcription-model-help")).to_have_text(
         "Theo Cài đặt: pho-whisper-large."
@@ -391,7 +391,7 @@ def test_automatic_is_refused_with_guidance_when_the_chosen_default_is_gone(
     meeting_id = seed_meeting(data_dir, "Default gone", "2026-10-17", duration_seconds=30.0)
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
-    expect(page.get_by_label("Model ASR")).to_have_value("auto")
+    expect(page.get_by_role("combobox", name="Model ASR", exact=True)).to_have_value("auto")
     command = page.get_by_label("Lệnh chuẩn bị model")
     expect(command.first).to_have_value(re.compile("--asr-model pho-whisper-large"))
     assert page.request.get(f"{live.url}/api/asr-models").json()["default_model"] == (

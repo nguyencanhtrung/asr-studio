@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,7 @@ def test_login_catalog_preference_verification_restart_and_disconnect(tmp_path):
         "account": {"label": "Google Antigravity"},
         "connection_version": 1,
         "verification": None,
+        "saved_model": None,
         "reasoning_effort": "high",
     }
 
@@ -251,6 +253,29 @@ def test_invalid_model_and_disconnected_catalog_fail_without_calling_adapter(tmp
     with pytest.raises(AntigravityError) as invalid:
         provider.verify("bad model with spaces")
     assert invalid.value.code == "invalid_model"
+
+
+def test_antigravity_owner_id_boundary_is_shared_by_preference_saves(tmp_path):
+    model = "g" * 240
+    adapter = FakeAntigravityAdapter()
+    adapter.models[0]["id"] = model
+    adapter.models[0]["name"] = "Long Antigravity model"
+    provider = AntigravityProvider(tmp_path / "provider", adapter=adapter)
+    provider.ensure()
+    with provider.store.locked(write=True) as state:
+        state["connection_status"] = "connected"
+
+    assert provider.set_preference(model)["model"] == model
+    provider.save_notes_preference(model, "medium")
+    assert provider.saved_notes_model() == model
+
+    for save in (
+        lambda: provider.set_preference("g" * 241),
+        lambda: provider.save_notes_preference("g" * 241, "medium"),
+    ):
+        with pytest.raises(AntigravityError) as invalid:
+            save()
+        assert invalid.value.code == "invalid_model"
 
 
 def test_real_rpc_transport_handles_login_catalog_and_synthetic_inference(tmp_path):
@@ -792,6 +817,37 @@ def test_antigravity_effort_is_saved_with_the_model_and_legacy_default_reads_hig
             provider.save_notes_preference("gemini-test", bad)
         assert failure.value.code == "invalid_reasoning_effort"
     assert provider.saved_notes_effort() == "high"
+
+
+def test_saved_notes_settings_returns_one_committed_owner_pair_during_interleaved_write(
+    tmp_path, monkeypatch
+):
+    provider = AntigravityProvider(tmp_path / "provider", adapter=FakeAntigravityAdapter())
+    provider.ensure()
+    committed = {"selected_model": "pair-a", "reasoning_effort": "medium"}
+    reader_entered = threading.Event()
+    writer_finished = threading.Event()
+    first_read = True
+
+    @contextmanager
+    def interleaved_locked(*, write=False):
+        nonlocal first_read
+        snapshot = dict(committed)
+        if first_read and not write:
+            first_read = False
+            reader_entered.set()
+            assert writer_finished.wait(5)
+        yield snapshot
+
+    monkeypatch.setattr(provider.store, "locked", interleaved_locked)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        read = pool.submit(provider.saved_notes_settings)
+        assert reader_entered.wait(5)
+        committed.update(selected_model="pair-b", reasoning_effort="high")
+        writer_finished.set()
+        assert read.result(timeout=5) == ("pair-a", "medium")
+    view = provider.provider_view()
+    assert (view["saved_model"], view["reasoning_effort"]) == ("pair-b", "high")
 
 
 def test_generate_notes_document_runs_with_the_pinned_level(tmp_path):

@@ -572,7 +572,8 @@ def install_routes(
     async def list_providers() -> dict[str, Any]:
         def load_providers() -> dict[str, Any]:
             chatgpt = chatgpt_provider.get_providers()
-            providers = [*chatgpt["providers"], antigravity_provider.provider_view()]
+            antigravity = antigravity_provider.provider_view()
+            providers = [*chatgpt["providers"], antigravity]
             for provider in providers:
                 in_use = has_active_notes_task(settings.data_dir, provider=provider["id"])
                 provider["in_use"] = in_use
