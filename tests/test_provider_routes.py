@@ -30,6 +30,19 @@ async def authenticate(client, settings, app):
     )
 
 
+async def test_provider_route_emits_antigravity_owner_pair_from_one_view(provider_http):
+    client, settings, app, _adapter = provider_http
+    assert (await authenticate(client, settings, app)).status_code == 204
+    app.state.antigravity_provider.save_notes_preference("gemini-test", "medium")
+
+    response = await client.get("/api/providers")
+
+    assert response.status_code == 200
+    antigravity = next(item for item in response.json()["providers"] if item["id"] == "antigravity")
+    assert antigravity["saved_model"] == "gemini-test"
+    assert antigravity["reasoning_effort"] == "medium"
+
+
 async def test_provider_routes_obey_auth_contract_and_never_expose_credentials(provider_http):
     client, settings, app, adapter = provider_http
     assert (await client.get("/api/providers")).status_code == 401
@@ -66,6 +79,7 @@ async def test_provider_routes_obey_auth_contract_and_never_expose_credentials(p
                 "account": None,
                 "connection_version": 0,
                 "verification": None,
+                "saved_model": None,
                 "reasoning_effort": "high",
                 "in_use": False,
                 "in_use_reason": None,

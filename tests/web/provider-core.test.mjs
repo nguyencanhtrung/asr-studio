@@ -23,6 +23,12 @@ const LIST_IN_USE = {
   ],
 };
 const LIST_OUT = { providers: [{ id: "chatgpt", status: "disconnected" }, { id: "antigravity", status: "disconnected" }] };
+const LIST_OUT_WITH_OWNER = {
+  providers: [
+    { id: "chatgpt", status: "disconnected" },
+    { id: "antigravity", status: "disconnected", saved_model: "g-saved", reasoning_effort: "medium" },
+  ],
+};
 const MODELS = {
   chatgpt: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["low", "high"] }, { id: "m2", display_name: "M2" }], selected_model: "m1" },
   antigravity: { models: [{ id: "g1", display_name: "G1" }, { id: "g2", display_name: "G2" }], selected_model: "g1", reasoning_effort: "medium" },
@@ -340,6 +346,17 @@ test("the page-load status read failing sets both buttons to error", async () =>
   assert.equal(own(env, ANTIGRAVITY).launcher.status, "error");
 });
 
+test("a disconnected Antigravity load keeps its committed owner pair", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: "antigravity" });
+  await env.answer(env.is("GET", "/api/providers"), 200, LIST_OUT_WITH_OWNER);
+  await env.answer(env.is("GET", "/api/providers"), 200, LIST_OUT_WITH_OWNER);
+  assert.equal(own(env, ANTIGRAVITY).savedModel, "g-saved");
+  assert.equal(own(env, ANTIGRAVITY).savedEffort, "medium");
+  assert.equal(own(env, ANTIGRAVITY).selectedModel, "g-saved");
+  assert.equal(own(env, ANTIGRAVITY).selectedEffort, "medium");
+});
+
 test("a page-load answer does not overwrite a Google status the dialog already showed", async () => {
   const env = setup();
   env.store.dispatch({ type: "provider/header-requested" });
@@ -368,8 +385,12 @@ for (const { d, other, save } of CASES) {
     dispatch(env, d, "save-requested");
     assert.equal(env.pending(env.is(...save)).length, 1);
     assert.equal(selectView(d, own(env, d)).saveDisabled, true);
-    await env.answer(env.is(...save), 200, d === CHATGPT ? { models: { chatgpt: other }, reasoning_effort: "default" } : {});
+    await env.answer(env.is(...save), 200, d === CHATGPT
+      ? { models: { chatgpt: other }, reasoning_effort: "default" }
+      : { provider: d.id, model: other, reasoning_effort: "high" });
     assert.equal(own(env, d).savedModel, other);
+    assert.equal(own(env, d).ownerModel, other);
+    assert.equal(own(env, d).ownerEffort, own(env, d).savedEffort);
     assert.deepEqual(env.events, ["provider.choice-changed"]);
 
     dispatch(env, d, "verify-requested");
@@ -385,6 +406,209 @@ for (const { d, other, save } of CASES) {
     assert.equal(env.pending(env.is("DELETE", "/connection")).length, 1);
   });
 }
+
+test("ChatGPT owner save installs the exact returned model and effort as the committed pair", async () => {
+  const env = setup();
+  await loaded(env);
+  dispatch(env, CHATGPT, "choice-edited", { field: "model", value: "m2" });
+  dispatch(env, CHATGPT, "save-requested");
+  await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+    models: { chatgpt: "gpt-5.5" },
+    reasoning_effort: "high",
+    reasoning_efforts: { chatgpt: "high" },
+  });
+  const saved = own(env, CHATGPT);
+  assert.equal(saved.ownerModel, "gpt-5.5");
+  assert.equal(saved.ownerEffort, "high");
+  assert.equal(saved.savedModel, "gpt-5.5");
+  assert.equal(saved.savedEffort, "high");
+  assert.equal(saved.preferences.reasoning_efforts.chatgpt, "high");
+});
+
+test("an OpenAI catalog reply cannot replace an explicit unconfigured owner snapshot", async () => {
+  const env = setup();
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: "chatgpt" });
+  await env.answer(env.is("GET", "/api/providers"), 200, LIST);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, {
+    provider: null,
+    models: {},
+    reasoning_effort: "default",
+    reasoning_efforts: { chatgpt: "default", antigravity: "medium" },
+  });
+  assert.equal(own(env, CHATGPT).ownerModel, null);
+  assert.equal(own(env, CHATGPT).ownerEffort, "default");
+  assert.equal(own(env, CHATGPT).ownerKnown, true);
+
+  // A first owner save can land after preferences and before the held catalog
+  // reply. The catalog may fill historical form fields, but not the committed pair.
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, {
+    models: [{ id: "m2", display_name: "M2", reasoning_efforts: ["low", "high"] }],
+    selected_model: "m2",
+  });
+  const chatgpt = own(env, CHATGPT);
+  assert.equal(chatgpt.selectedModel, "m2");
+  assert.equal(chatgpt.savedModel, "m2");
+  assert.equal(chatgpt.ownerModel, null);
+  assert.equal(chatgpt.ownerEffort, "default");
+  assert.equal(chatgpt.ownerKnown, true);
+});
+
+test("a read that started before an owner save cannot restore either provider's old pair", () => {
+  for (const { d, other, save } of CASES) {
+    const providerModels = d === CHATGPT
+      ? [
+        { id: "m1", display_name: "M1", reasoning_efforts: ["low", "high"] },
+        { id: "m2", display_name: "M2", reasoning_efforts: ["low", "high"] },
+      ]
+      : [{ id: "g1", display_name: "G1" }, { id: "g2", display_name: "G2" }];
+    const initialModel = d === CHATGPT ? "m1" : "g1";
+    const initialEffort = d === CHATGPT ? "low" : "high";
+    const next = d === CHATGPT ? "m2" : "g2";
+    let state = {
+      ...initialState,
+      [d.id]: {
+        ...initialState[d.id],
+        info: { id: d.id, status: "connected", account: { label: "fixture" } },
+        models: providerModels,
+        modelOptions: providerModels.map((model) => ({ value: model.id, label: model.display_name, disabled: false })),
+        selectedModel: initialModel,
+        savedModel: initialModel,
+        selectedEffort: initialEffort,
+        savedEffort: initialEffort,
+        ownerModel: initialModel,
+        ownerEffort: initialEffort,
+        ownerKnown: true,
+        catalogStatus: "loading",
+        preferences: d === CHATGPT ? PREFS : initialState[d.id].preferences,
+      },
+    };
+
+    const started = reduce(state, { type: "provider/dialog-opened", launcher: d.id });
+    const providerRead = started.effects.find(
+      (effect) => effect.meta?.provider === d.id && effect.meta.op === "providers",
+    );
+    assert.ok(providerRead);
+    const afterProviderRead = reduce(started.state, {
+      type: "provider/response",
+      meta: providerRead.meta,
+      response: { body: LIST },
+    });
+    const ownerRead = afterProviderRead.effects.find(
+      (effect) => effect.meta?.provider === d.id && ["preferences", "models"].includes(effect.meta.op),
+    );
+    assert.ok(ownerRead);
+    state = afterProviderRead.state;
+
+    state = reduce(state, { type: "provider/choice-edited", provider: d.id, field: "model", value: next }).state;
+    if (d === ANTIGRAVITY) {
+      state = reduce(state, { type: "provider/choice-edited", provider: d.id, field: "effort", value: "medium" }).state;
+    }
+    const requested = reduce(state, { type: "provider/save-requested", provider: d.id });
+    const saveEffect = requested.effects.find((effect) => effect.meta?.provider === d.id && effect.meta.op === "save");
+    assert.ok(saveEffect);
+    assert.equal(saveEffect.url, save[1]);
+    state = requested.state;
+    const acknowledged = reduce(state, {
+      type: "provider/response",
+      meta: saveEffect.meta,
+      response: {
+        body: d === CHATGPT
+          ? { models: { chatgpt: next }, reasoning_effort: "high", reasoning_efforts: { chatgpt: "high" } }
+          : { provider: d.id, model: next, reasoning_effort: "medium" },
+      },
+    }).state;
+    assert.equal(acknowledged[d.id].ownerFence, 1);
+
+    const staleBody = d === CHATGPT
+      ? { ...PREFS, models: { chatgpt: initialModel }, reasoning_effort: initialEffort, reasoning_efforts: { chatgpt: initialEffort } }
+      : { models: [{ id: "g1", display_name: "G1" }, { id: "g2", display_name: "G2" }], selected_model: initialModel, reasoning_effort: initialEffort };
+    const stalePreferences = reduce(acknowledged, {
+      type: "provider/response",
+      meta: ownerRead.meta,
+      response: { body: staleBody },
+    });
+    state = stalePreferences.state;
+    for (const effect of stalePreferences.effects.filter((item) => item.meta?.provider === d.id && item.meta.op === "models")) {
+      state = reduce(state, {
+        type: "provider/response",
+        meta: effect.meta,
+        response: { body: { models: providerModels, selected_model: initialModel, reasoning_effort: initialEffort } },
+      }).state;
+    }
+    const result = state[d.id];
+    assert.equal(result.loading, false);
+    assert.equal(result.ownerModel, next);
+    assert.equal(result.ownerEffort, d === CHATGPT ? "high" : "medium");
+    assert.equal(result.savedModel, next);
+    assert.equal(result.selectedModel, next);
+    assert.equal(result.selectedEffort, d === CHATGPT ? "high" : "medium");
+  }
+});
+
+test("a reconnect recovery failure settles the original catalog read and keeps the confirmed owner", () => {
+  const env = setup();
+  let state = env.state();
+  const opened = reduce(state, { type: "provider/dialog-opened", launcher: "chatgpt" });
+  state = opened.state;
+  const loadId = state.chatgpt.loadId;
+  state = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "chatgpt", op: "providers", id: loadId, ownerFence: state.chatgpt.ownerFence },
+    response: { body: LIST },
+  }).state;
+  state = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "chatgpt", op: "preferences", id: loadId, ownerFence: state.chatgpt.ownerFence },
+    response: { body: PREFS },
+  }).state;
+  const failedCatalog = reduce(state, {
+    type: "provider/request-failed",
+    meta: { provider: "chatgpt", op: "models", id: loadId, ownerFence: state.chatgpt.ownerFence },
+    error: { status: 409, body: { detail: { code: "reconnect_required" } } },
+  });
+  assert.equal(failedCatalog.effects[0].meta.operation, "models");
+  const recoveryFailed = reduce(failedCatalog.state, {
+    type: "provider/request-failed",
+    meta: failedCatalog.effects[0].meta,
+    error: { status: 503, body: { detail: { code: "unavailable" } } },
+  }).state.chatgpt;
+  assert.equal(recoveryFailed.loading, false);
+  assert.equal(recoveryFailed.catalogStatus, "error");
+  assert.equal(recoveryFailed.info.status, "connected");
+  assert.equal(recoveryFailed.ownerModel, "m1");
+  assert.equal(recoveryFailed.ownerEffort, "low");
+});
+
+test("a verification reply updates only verification and cannot revert a newer owner pair", async () => {
+  const env = setup();
+  await loaded(env);
+  const before = own(env, ANTIGRAVITY);
+  const state = {
+    ...env.state(),
+    antigravity: {
+      ...before,
+      info: { ...before.info, saved_model: "older-model", reasoning_effort: "high" },
+      ownerModel: "committed-new-model",
+      ownerEffort: "medium",
+      ownerKnown: true,
+      savedModel: "committed-new-model",
+      savedEffort: "medium",
+      selectedModel: "committed-new-model",
+      selectedEffort: "medium",
+      pending: { ...before.pending, verify: true },
+    },
+  };
+  const next = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "antigravity", op: "verify", model: "committed-new-model", effort: "medium" },
+    response: { body: { model: "committed-new-model", verified_at: LATER } },
+  }).state.antigravity;
+  assert.equal(next.ownerModel, "committed-new-model");
+  assert.equal(next.ownerEffort, "medium");
+  assert.equal(next.savedModel, "committed-new-model");
+  assert.equal(next.savedEffort, "medium");
+  assert.equal(next.info.verification.model, "committed-new-model");
+});
 
 test("Google runs one operation at a time; ChatGPT lets save and verify overlap", async () => {
   const env = setup();
@@ -529,6 +753,39 @@ test("Google: disconnect confirms locally, then tells notes.js; the busy flag ho
   assert.equal(s.pending.disconnect, false);
   assert.equal(s.ui, "focus:sign-in");
   assert.deepEqual(env.events, ["provider.choice-changed"]);
+});
+
+test("a cached disconnect status cannot restore a stale Antigravity owner pair", () => {
+  const env = setup();
+  const current = own(env, ANTIGRAVITY);
+  const state = {
+    ...env.state(),
+    antigravity: {
+      ...current,
+      ownerModel: "new-model",
+      ownerEffort: "medium",
+      ownerKnown: true,
+      savedModel: "new-model",
+      savedEffort: "medium",
+      pending: { ...current.pending, disconnect: true },
+      info: {
+        ...current.info,
+        status: "connected",
+        saved_model: "old-model",
+        reasoning_effort: "high",
+      },
+    },
+  };
+  const next = reduce(state, {
+    type: "provider/response",
+    meta: { provider: "antigravity", op: "disconnect" },
+    response: { body: { status: "disconnected" } },
+  }).state.antigravity;
+  assert.equal(next.ownerModel, "new-model");
+  assert.equal(next.ownerEffort, "medium");
+  assert.equal(next.info.saved_model, "new-model");
+  assert.equal(next.info.reasoning_effort, "medium");
+  assert.equal(next.info.status, "disconnected");
 });
 
 test("a failed disconnect keeps the connection and frees the button", async () => {
@@ -1189,6 +1446,73 @@ test("a model catalog reply of an older read is dropped, and a failed read shows
   assert.deepEqual(selectAsr(env.state().asr).rows, []);
 });
 
+test("Automation shares the initial ASR read, then re-entry fences the held catalog", () => {
+  const opened = reduce(initialState, { type: "provider/dialog-opened", launcher: null });
+  const firstVisit = reduce(opened.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "devices",
+  });
+  assert.equal(firstVisit.state.asr.summaryStatus, "loading");
+  assert.equal(firstVisit.effects.filter((effect) => effect.url === "/api/asr-models").length, 0);
+
+  const left = reduce(firstVisit.state, {
+    type: "provider/settings-section-selected",
+    section: "devices",
+    previousSection: "processing",
+  });
+  const reentered = reduce(left.state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "devices",
+  });
+  const refreshed = reentered.effects.find((effect) => effect.url === "/api/asr-models");
+  assert.ok(refreshed);
+  assert.equal(reentered.state.asr.request, opened.state.asr.request + 1);
+  assert.equal(reentered.state.asr.summaryStatus, "loading");
+
+  const stale = reduce(reentered.state, {
+    type: "provider/asr-loaded",
+    meta: { id: opened.state.asr.request },
+    response: { body: { ...ASR, default_model: null } },
+  });
+  assert.equal(stale.state.asr, reentered.state.asr);
+
+  const failed = reduce(reentered.state, { type: "provider/asr-failed", meta: refreshed.meta });
+  assert.equal(failed.state.asr.summaryStatus, "error");
+  assert.equal(failed.state.asr.status, "error");
+
+  const settled = reduce(reentered.state, {
+    type: "provider/asr-loaded",
+    meta: refreshed.meta,
+    response: { body: { ...ASR, default_model: "whisper-large-v3" } },
+  });
+  assert.equal(settled.state.asr.summaryStatus, null);
+  assert.equal(settled.state.asr.defaultModel, "whisper-large-v3");
+  assert.equal(selectAsr(settled.state.asr).defaultControl.value, "whisper-large-v3");
+});
+
+test("Automation re-entry does not overtake an ASR default save", () => {
+  const state = {
+    ...initialState,
+    asr: {
+      ...initialState.asr,
+      open: true,
+      status: "ready",
+      request: 5,
+      defaultPending: "whisper-large-v3",
+      models: ASR.asr_models,
+    },
+  };
+  const result = reduce(state, {
+    type: "provider/settings-section-selected",
+    section: "processing",
+    previousSection: "devices",
+  });
+  assert.deepEqual(result.state.asr, { ...state.asr, summaryStatus: "loading" });
+  assert.equal(result.effects.some((effect) => effect.url === "/api/asr-models"), false);
+});
+
 test("the copy button writes the command through the clipboard effect and the reducer owns the feedback", async () => {
   const env = setup();
   env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
@@ -1674,4 +1998,587 @@ test("ChatGPT: closing Settings clears an unsubmitted callback without cancellin
   const closed = reduce(state, { type: "provider/dialog-closed" });
   assert.equal(closed.state.chatgpt.ui, "clear-callback-input");
   assert.equal(closed.state.chatgpt.login.id, "s1");
+});
+
+for (const method of ["POST", "DELETE"]) {
+  for (const ackFirst of [false, true]) {
+    test(`an outstanding ASR ${method === "POST" ? "install" : "cancel"} survives an Automation refresh (ACK first=${ackFirst})`, async () => {
+      const creation = method === "POST";
+      const stale = creation ? catalog() : catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+      const confirmed = creation
+        ? { state: "queued" }
+        : { state: "cancelling" };
+      const requestType = creation ? "provider/asr-install-requested" : "provider/asr-cancel-requested";
+      const env = await openedWith(stale);
+      env.store.dispatch({ type: requestType, id: PHO });
+      const writeKey = env.is(method, "/install");
+      const writes = () => env.calls.filter(call => writeKey(call)).length;
+      assert.equal(writes(), 1);
+      env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+      const firstRead = env.pending(env.is("GET", "/api/asr-models"))[0];
+      assert.ok(firstRead);
+      const readId = env.state().asr.request;
+
+      if (ackFirst) {
+        await env.answer(writeKey, 202, { install: confirmed });
+        // Deliver the recorded callback even if the keyed runner canceled its old HTTP effect.
+        env.store.dispatch({ type: "provider/asr-loaded", response: { body: stale }, meta: { id: readId } });
+        await env.answer(env.is("GET", "/api/asr-models"), 200, stale);
+      } else {
+        await env.answer(env.is("GET", "/api/asr-models"), 200, stale);
+      }
+
+      env.store.dispatch({ type: "provider/settings-section-selected", section: "asr", previousSection: "processing" });
+      const row = phoRow(env);
+      env.store.dispatch({ type: requestType, id: PHO });
+      assert.equal(writes(), 1, "stale catalog read cannot emit a duplicate mutation");
+      assert.equal(row.install?.kind, "progress");
+      assert.equal(row.install.cancelDisabled, !(creation && ackFirst));
+
+      if (!ackFirst) await env.answer(writeKey, 202, { install: confirmed });
+      assert.equal(phoRow(env).install.phase.text, creation ? "Đang chờ cài đặt…" : "Đang hủy…");
+      const after = creation ? catalog({ pho: { install: { state: "running", phase: "downloading" } } }) : catalog();
+      const readKey = env.is("GET", "/api/asr-models");
+      if (!env.pending(readKey).length) env.fire(1000);
+      await env.answer(readKey, 200, after);
+      assert.equal(phoRow(env).install?.kind, creation ? "progress" : "offer");
+      env.store.dispatch({ type: creation ? "provider/asr-cancel-requested" : "provider/asr-install-requested", id: PHO });
+      assert.equal(env.pending(env.is(creation ? "DELETE" : "POST", "/install")).length, 1, "genuine next action works after reconciliation");
+    });
+  }
+}
+
+for (const method of ["POST", "DELETE"]) {
+  test(`conductor R8 ${method} acknowledgement supersedes a poll already reading the old catalog`, async () => {
+    const creating = method === "POST";
+    const stale = creating ? catalog() : catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+    const installed = creating ? { state: "queued" } : { state: "cancelling" };
+    const type = creating ? "provider/asr-install-requested" : "provider/asr-cancel-requested";
+    const env = await openedWith(stale);
+    const writeKey = env.is(method, "/install");
+    const readKey = env.is("GET", "/api/asr-models");
+    env.store.dispatch({ type, id: PHO });
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+    await env.answer(readKey, 200, stale);
+    assert.equal(env.state().asr.summaryStatus, null);
+    assert.equal(phoRow(env).install.cancelDisabled, true);
+
+    env.fire(1000);
+    assert.equal(env.pending(readKey).length, 1);
+    await env.answer(writeKey, 202, { install: installed });
+    await env.answer(readKey, 200, stale);
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "asr", previousSection: "processing" });
+
+    const visibleInstall = phoRow(env).install;
+    env.store.dispatch({ type, id: PHO });
+    assert.equal(env.calls.filter(writeKey).length, 1);
+    assert.equal(visibleInstall.kind, "progress");
+    assert.equal(visibleInstall.cancelDisabled, !creating);
+    assert.equal(visibleInstall.phase.text, creating ? "Đang chờ cài đặt…" : "Đang hủy…");
+
+    env.fire(1000);
+    const fresh = creating ? catalog({ pho: { install: { state: "running", phase: "downloading" } } }) : catalog();
+    await env.answer(readKey, 200, fresh);
+    assert.equal(phoRow(env).install.kind, creating ? "progress" : "offer");
+    if (creating) assert.equal(phoRow(env).install.cancelDisabled, false);
+  });
+}
+
+test("conductor R9 terminal cancel acknowledges while a reopened catalog is loading", async () => {
+  const running = catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+  const env = await openedWith(running);
+  const readKey = env.is("GET", "/api/asr-models");
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  env.store.dispatch({ type: "provider/dialog-closed" });
+  assert.deepEqual(env.live(), []);
+  env.store.dispatch({ type: "provider/dialog-opened", launcher: null });
+  const oldRequest = env.state().asr.request;
+  assert.equal(env.state().asr.status, "loading");
+  assert.equal(env.pending(readKey).length, 1);
+
+  await env.answer(env.is("DELETE", "/install"), 202, { install: { state: "idle" } });
+  assert.ok(env.state().asr.request > oldRequest);
+  env.store.dispatch({ type: "provider/asr-loaded", response: { body: running }, meta: { id: oldRequest } });
+  await env.answer(readKey, 200, running);
+  assert.equal(env.state().asr.status, "loading");
+  assert.equal(env.pending(readKey).length, 1, "an open catalog must have a replacement read after the ACK invalidates the old one");
+  const pending = env.pending(readKey)[0];
+
+  env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "ai" });
+  assert.equal(env.pending(readKey).length, 1);
+  assert.equal(env.pending(readKey)[0], pending, "first Automation visit shares the replacement read");
+  await env.answer(readKey, 200, catalog());
+  assert.equal(env.state().asr.status, "ready");
+  assert.equal(env.state().asr.summaryStatus, null);
+  assert.equal(selectAsr(env.state().asr).text, null);
+  assert.equal(phoRow(env).install.kind, "offer");
+});
+
+test("conductor R10 terminal POST replaces a stale readiness poll with one current read", async () => {
+  const stale = catalog();
+  const ready = catalog({ pho: { ready: true, reason: null, prepare_command: null, install: { state: "idle" } } });
+  const env = await openedWith(stale);
+  const read = env.is("GET", "/api/asr-models");
+  env.store.dispatch({ type: "provider/asr-install-requested", id: PHO });
+  env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+  await env.answer(read, 200, stale);
+  env.fire(1000);
+  await env.answer(env.is("POST", "/install"), 202, { install: { state: "idle" } });
+  await env.answer(read, 200, ready); // started before the ACK, now fenced
+  assert.equal(phoRow(env).state, "not_prepared");
+  assert.deepEqual(env.live(), [1000]);
+  env.fire(1000);
+  await env.answer(read, 200, ready);
+  assert.equal(phoRow(env).state, "ready");
+  assert.equal(phoRow(env).install, null);
+  assert.deepEqual(env.live(), []);
+});
+
+for (const failed of [false, true]) {
+  test(`conductor R10 Automation waits for default save read, error=${failed}`, async () => {
+    const env = await openedWith(catalog());
+    const read = env.is("GET", "/api/asr-models");
+    env.store.dispatch({ type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+    assert.equal(env.pending(read).length, 0);
+    assert.equal(env.state().asr.summaryStatus, "loading");
+    await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "whisper-large-v3" });
+    assert.equal(env.pending(read).length, 1);
+    await env.answer(read, failed ? 503 : 200, failed ? { detail: { code: "worker_unavailable" } } : {
+      ...catalog(), default_model: "whisper-large-v3",
+    });
+    assert.equal(env.state().asr.summaryStatus, failed ? "error" : null);
+    assert.equal(env.state().asr.status, "ready");
+    assert.equal(env.state().asr.defaultModel, "whisper-large-v3");
+    assert.ok(phoRow(env));
+  });
+}
+
+for (const enterAfterAck of [false, true]) {
+  for (const response of ["loaded", "malformed", "failed"]) {
+    test(`conductor R11 default follow-up owns the install poll, enter after ACK=${enterAfterAck}, response=${response}`, async () => {
+      const running = catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+      const env = await openedWith(running);
+      const read = env.is("GET", "/api/asr-models");
+      const before = catalogCalls(env).length;
+      env.store.dispatch({ type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+      if (!enterAfterAck) {
+        env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+        assert.equal(env.state().asr.summaryStatus, "loading");
+      }
+      assert.deepEqual(env.live(), [1000]);
+
+      await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "whisper-large-v3" });
+      assert.equal(catalogCalls(env).length, before + 1, "the ACK starts exactly one catalog follow-up");
+      assert.equal(env.pending(read).length, 1);
+      assert.deepEqual(env.live(), [], "the ordinary poll timer is suspended while the follow-up is pending");
+      if (enterAfterAck) {
+        env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+        assert.equal(env.state().asr.summaryStatus, "loading");
+        assert.equal(catalogCalls(env).length, before + 1, "Automation joins the current follow-up");
+      }
+
+      env.store.dispatch({ type: "provider/asr-poll" });
+      assert.equal(catalogCalls(env).length, before + 1, "a stale poll tick cannot replace the follow-up");
+
+      if (response === "loaded") await env.answer(read, 200, { ...running, default_model: "whisper-large-v3" });
+      else if (response === "malformed") await env.answer(read, 200, {});
+      else await env.fail(read);
+      assert.equal(env.state().asr.summaryStatus, response === "failed" ? "error" : null);
+      assert.deepEqual(env.live(), [1000], "settling the follow-up resumes active-install polling");
+
+      env.fire(1000);
+      assert.equal(catalogCalls(env).length, before + 2, "the resumed poll starts one later catalog read");
+      await env.answer(read, 200, running);
+    });
+  }
+}
+
+for (const response of ["loaded", "malformed", "failed"]) {
+  test(`conductor R10 pending default keeps Automation loading through an ongoing install ${response}`, async () => {
+    const running = catalog({ pho: { install: { state: "running", phase: "downloading", bytes_done: 1, bytes_total: 2 } } });
+    const env = await openedWith(running);
+    const read = env.is("GET", "/api/asr-models");
+    env.store.dispatch({ type: "provider/asr-default-chosen", value: "whisper-large-v3" });
+    env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+    assert.equal(env.pending(read).length, 0);
+    assert.equal(env.state().asr.summaryStatus, "loading");
+
+    env.fire(1000);
+    if (response === "loaded") await env.answer(read, 200, running);
+    else if (response === "malformed") await env.answer(read, 200, {});
+    else await env.fail(read);
+    assert.equal(env.state().asr.summaryStatus, "loading");
+
+    await env.answer(env.is("PUT", "/api/asr-models/default"), 200, { default_model: "whisper-large-v3" });
+    assert.equal(env.pending(read).length, 1);
+    await env.answer(read, 200, { ...catalog({ pho: { install: { state: "running", phase: "downloading" } } }), default_model: "whisper-large-v3" });
+    assert.equal(env.state().asr.summaryStatus, null);
+    assert.equal(env.state().asr.defaultPending, undefined);
+    assert.equal(env.state().asr.defaultModel, "whisper-large-v3");
+    assert.ok(phoRow(env));
+  });
+}
+
+for (const { d, other, save } of CASES) {
+  test(`conductor R10 ${d.id} partial ACK preserves the confirmed owner and draft`, async () => {
+    const cases = d === CHATGPT
+      ? [{}, { models: { chatgpt: other } }, { reasoning_efforts: { chatgpt: "high" } }]
+      : [{}, { provider: d.id, model: other }, { provider: d.id, reasoning_effort: "high" }];
+    for (const payload of cases) {
+      const env = setup();
+      await loaded(env);
+      const before = own(env, d);
+      dispatch(env, d, "choice-edited", { field: "model", value: other });
+      dispatch(env, d, "save-requested");
+      await env.answer(env.is(...save), 200, payload);
+      const after = own(env, d);
+      assert.equal(after.ownerModel, before.ownerModel);
+      assert.equal(after.ownerEffort, before.ownerEffort);
+      assert.equal(after.ownerFence, before.ownerFence);
+      assert.equal(after.savedModel, before.savedModel);
+      assert.equal(after.selectedModel, other);
+      assert.equal(after.pending.save, false);
+      assert.deepEqual(after.modelStatus, { state: "error", text: null });
+      assert.equal(after.error.code, "provider_invalid_response");
+      assert.deepEqual(after.error.text, {
+        text: "{provider} trả về phản hồi không hợp lệ.",
+        params: { provider: d === CHATGPT ? "ChatGPT" : "Google Antigravity" },
+      });
+      assert.equal(after.error.retryPoll, false);
+      assert.deepEqual(env.events, []);
+    }
+  });
+}
+
+const r14SavePath = (d) => d === CHATGPT ? "/api/notes-preferences" : "/api/providers/antigravity/preference";
+const r14SaveReply = (d, model, effort) => d === CHATGPT
+  ? { models: { chatgpt: model }, reasoning_effort: effort, reasoning_efforts: { chatgpt: effort } }
+  : { provider: d.id, model, reasoning_effort: effort };
+
+const r14InvalidModelAcks = [
+  { id: "antigravity-space", d: ANTIGRAVITY, model: "bad model", effort: "medium" },
+  { id: "antigravity-241", d: ANTIGRAVITY, model: "g".repeat(241), effort: "medium" },
+  { id: "antigravity-newline", d: ANTIGRAVITY, model: "g2\n", effort: "medium" },
+  { id: "chatgpt-201", d: CHATGPT, model: "g".repeat(201), effort: "default" },
+  { id: "chatgpt-201-codepoints", d: CHATGPT, model: "😀".repeat(201), effort: "default" },
+];
+
+const r14ValidModelControls = [
+  { id: "antigravity-240", d: ANTIGRAVITY, model: "model/" + "g".repeat(234), effort: "medium" },
+  { id: "chatgpt-200-codepoints", d: CHATGPT, model: "😀".repeat(200), effort: "default" },
+];
+
+const r15VisibleModelControls = [
+  { id: "antigravity-240-visible", d: ANTIGRAVITY, model: "model/" + "g".repeat(234), effort: "medium" },
+  { id: "chatgpt-200-codepoints-visible", d: CHATGPT, model: "😀".repeat(200), effort: "high" },
+];
+
+for (const { id, d, model: returnedModel, effort: returnedEffort } of r14InvalidModelAcks) {
+  test(`R14 ${id} rejects the returned model, preserves the draft, and commits a valid retry`, async () => {
+    const env = setup();
+    await loaded(env);
+    const before = own(env, d);
+    const draft = d === CHATGPT ? "m2" : "g2";
+    const draftEffort = d === CHATGPT ? "default" : "medium";
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, returnedModel, returnedEffort));
+
+    let current = own(env, d);
+    assert.equal(current.ownerModel, before.ownerModel);
+    assert.equal(current.ownerEffort, before.ownerEffort);
+    assert.equal(current.savedModel, before.savedModel);
+    assert.equal(current.savedEffort, before.savedEffort);
+    assert.equal(current.ownerFence, before.ownerFence);
+    assert.equal(current.selectedModel, draft);
+    assert.equal(current.selectedEffort, draftEffort);
+    assert.deepEqual(current.preferences, before.preferences);
+    assert.equal(current.pending.save, false);
+    assert.equal(current.error.code, "provider_invalid_response");
+    assert.equal(current.error.operation, "save");
+    assert.equal(current.modelStatus.state, "error");
+    assert.deepEqual(env.events, []);
+
+    const validModel = r14ValidModelControls.find((control) => control.d === d).model;
+    dispatch(env, d, "save-requested");
+    const validEffort = draftEffort;
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, validModel, validEffort));
+    current = own(env, d);
+    assert.equal(current.ownerModel, validModel);
+    assert.equal(current.ownerEffort, validEffort);
+    assert.equal(current.savedModel, validModel);
+    assert.equal(current.savedEffort, validEffort);
+    assert.equal(current.selectedModel, validModel);
+    assert.equal(current.ownerFence, before.ownerFence + 1);
+    assert.equal(current.error, null);
+    assert.equal(current.modelStatus.state, "saved");
+    assert.deepEqual(env.events, ["provider.choice-changed"]);
+  });
+}
+
+for (const { id, d, model: returnedModel, effort: returnedEffort } of r14ValidModelControls) {
+  test(`R14 ${id} accepts a supported returned model different from the draft`, async () => {
+    const env = setup();
+    await loaded(env);
+    const before = own(env, d);
+    const draft = d === CHATGPT ? "m2" : "g2";
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, returnedModel, returnedEffort));
+    const current = own(env, d);
+    assert.notEqual(returnedModel, draft);
+    assert.equal(current.ownerModel, returnedModel);
+    assert.equal(current.savedModel, returnedModel);
+    assert.equal(current.selectedModel, returnedModel);
+    assert.equal(current.ownerEffort, returnedEffort);
+    assert.equal(current.savedEffort, returnedEffort);
+    assert.equal(current.ownerFence, before.ownerFence + 1);
+    assert.equal(current.error, null);
+    assert.equal(current.modelStatus.state, "saved");
+    assert.deepEqual(env.events, ["provider.choice-changed"]);
+  });
+}
+
+for (const { id, d, model: returnedModel, effort: returnedEffort } of r15VisibleModelControls) {
+  test(`R15 ${id} projects model and effort after a valid retry`, async () => {
+    const env = setup();
+    await loaded(env);
+    const draft = d === CHATGPT ? "m2" : "g2";
+    const invalidModel = d === CHATGPT ? "g".repeat(201) : "bad model";
+    const catalogReads = env.calls.filter((call) => call.method === "GET" && call.url.includes("/models")).length;
+    const initial = own(env, d);
+    const initialView = selectView(d, initial);
+    assert.equal(initial.modelOptions.find((item) => item.value === initial.selectedModel)?.disabled, false);
+    assert.equal(initialView.effortValue, initial.savedEffort);
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, d === CHATGPT
+      ? { models: { chatgpt: invalidModel }, reasoning_effort: returnedEffort, reasoning_efforts: { chatgpt: returnedEffort } }
+      : { provider: d.id, model: invalidModel, reasoning_effort: returnedEffort });
+    assert.equal(own(env, d).error.code, "provider_invalid_response");
+    assert.equal(own(env, d).modelStatus.state, "error");
+
+    dispatch(env, d, "save-requested");
+    await env.answer(env.is("PUT", r14SavePath(d)), 200, r14SaveReply(d, returnedModel, returnedEffort));
+    const current = own(env, d);
+    const option = current.modelOptions.find((item) => item.value === returnedModel);
+    const view = selectView(d, current);
+    assert.equal(current.selectedModel, returnedModel);
+    assert.equal(option?.value, returnedModel);
+    assert.equal(option?.disabled, true);
+    assert.deepEqual(option?.label.params, { model: returnedModel });
+    assert.equal(current.savedEffort, returnedEffort);
+    assert.equal(view.effortValue, returnedEffort);
+    assert.equal(view.saveDisabled, true);
+    assert.equal(view.verifyDisabled, true);
+    if (d === CHATGPT) {
+      const effortOption = view.effortOptions.find((item) => item.value === returnedEffort);
+      assert.equal(effortOption?.disabled, true);
+    }
+    assert.equal(current.modelStatus.state, "saved");
+    assert.equal(current.error, null);
+    dispatch(env, d, "choice-edited", { field: "model", value: draft });
+    const selected = own(env, d);
+    const selectedView = selectView(d, selected);
+    assert.equal(selected.modelOptions.find((item) => item.value === draft)?.disabled, false);
+    assert.equal(selectedView.saveDisabled, false);
+    assert.equal(selectedView.verifyDisabled, false);
+    assert.equal(env.calls.filter((call) => call.method === "GET" && call.url.includes("/models")).length, catalogReads);
+    assert.equal(env.calls.filter((call) => call.method === "PUT" && call.url.includes("preference")).length, 2);
+    assert.deepEqual(env.events, ["provider.choice-changed"]);
+  });
+}
+
+for (const { d, other, save } of CASES) {
+  for (const failure of ["malformed", "server"]) {
+    test(`conductor R11 ${d.id} clears a ${failure} Save alert after a valid retry`, async () => {
+      const env = setup();
+      await loaded(env);
+      dispatch(env, d, "choice-edited", { field: "model", value: other });
+      dispatch(env, d, "save-requested");
+      if (failure === "malformed") {
+        await env.answer(env.is(...save), 200, d === CHATGPT
+          ? { models: { chatgpt: other } }
+          : { provider: d.id, model: other });
+      } else {
+        await env.answer(env.is(...save), 503, { detail: { code: "provider_unavailable", message: "The provider is offline." } });
+      }
+      assert.equal(own(env, d).error.code, failure === "malformed" ? "provider_invalid_response" : "provider_unavailable");
+      assert.equal(own(env, d).error.operation, "save");
+
+      dispatch(env, d, "save-requested");
+      await env.answer(env.is(...save), 200, d === CHATGPT
+        ? { models: { chatgpt: other }, reasoning_effort: "high", reasoning_efforts: { chatgpt: "high" } }
+        : { provider: d.id, model: other, reasoning_effort: "medium" });
+      assert.equal(own(env, d).error, null);
+      assert.equal(own(env, d).modelStatus.state, "saved");
+      assert.equal(own(env, d).ownerModel, other);
+    });
+  }
+}
+
+test("Antigravity rejects an impossible effort acknowledgement and accepts a valid retry", async () => {
+  const env = setup();
+  await loaded(env);
+  const before = own(env, ANTIGRAVITY);
+  dispatch(env, ANTIGRAVITY, "choice-edited", { field: "model", value: "g2" });
+  dispatch(env, ANTIGRAVITY, "choice-edited", { field: "effort", value: "high" });
+  dispatch(env, ANTIGRAVITY, "save-requested");
+  assert.deepEqual(env.pending(env.is("PUT", "/api/providers/antigravity/preference"))[0].body, {
+    model: "g2",
+    reasoning_effort: "high",
+  });
+
+  await env.answer(env.is("PUT", "/api/providers/antigravity/preference"), 200, {
+    provider: "antigravity",
+    model: "g2",
+    reasoning_effort: "low",
+  });
+  let current = own(env, ANTIGRAVITY);
+  assert.equal(current.ownerModel, before.ownerModel);
+  assert.equal(current.ownerEffort, before.ownerEffort);
+  assert.equal(current.ownerFence, before.ownerFence);
+  assert.equal(current.savedModel, before.savedModel);
+  assert.equal(current.savedEffort, before.savedEffort);
+  assert.equal(current.selectedModel, "g2");
+  assert.equal(current.selectedEffort, "high");
+  assert.equal(current.pending.save, false);
+  assert.equal(current.error.code, "provider_invalid_response");
+  assert.equal(current.error.operation, "save");
+  assert.deepEqual(current.error.text, {
+    text: "{provider} trả về phản hồi không hợp lệ.",
+    params: { provider: "Google Antigravity" },
+  });
+  assert.deepEqual(env.events, []);
+
+  dispatch(env, ANTIGRAVITY, "save-requested");
+  assert.deepEqual(env.pending(env.is("PUT", "/api/providers/antigravity/preference"))[0].body, {
+    model: "g2",
+    reasoning_effort: "high",
+  });
+  await env.answer(env.is("PUT", "/api/providers/antigravity/preference"), 200, {
+    provider: "antigravity",
+    model: "g2",
+    reasoning_effort: "medium",
+  });
+  current = own(env, ANTIGRAVITY);
+  assert.equal(current.ownerModel, "g2");
+  assert.equal(current.ownerEffort, "medium");
+  assert.equal(current.ownerFence, before.ownerFence + 1);
+  assert.equal(current.error, null);
+  assert.equal(current.modelStatus.state, "saved");
+  assert.deepEqual(env.events, ["provider.choice-changed"]);
+});
+
+test("OpenAI rejects a known-model effort absent from its current catalog and accepts a valid retry", async () => {
+  const env = setup();
+  await loaded(env);
+  const before = own(env, CHATGPT);
+  dispatch(env, CHATGPT, "choice-edited", { field: "effort", value: "high" });
+  dispatch(env, CHATGPT, "save-requested");
+  await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+    models: { chatgpt: "m1" },
+    reasoning_effort: "xhigh",
+    reasoning_efforts: { chatgpt: "xhigh" },
+  });
+  let current = own(env, CHATGPT);
+  assert.equal(current.ownerModel, before.ownerModel);
+  assert.equal(current.ownerEffort, before.ownerEffort);
+  assert.equal(current.ownerFence, before.ownerFence);
+  assert.equal(current.pending.save, false);
+  assert.equal(current.selectedEffort, "high");
+  assert.equal(current.error.code, "provider_invalid_response");
+  assert.equal(current.error.operation, "save");
+  assert.deepEqual(env.events, []);
+
+  dispatch(env, CHATGPT, "save-requested");
+  await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+    models: { chatgpt: "m1" },
+    reasoning_effort: "high",
+    reasoning_efforts: { chatgpt: "high" },
+  });
+  current = own(env, CHATGPT);
+  assert.equal(current.ownerModel, "m1");
+  assert.equal(current.ownerEffort, "high");
+  assert.equal(current.error, null);
+  assert.equal(current.modelStatus.state, "saved");
+  assert.deepEqual(env.events, ["provider.choice-changed"]);
+});
+
+test("OpenAI accepts global efforts for legacy or concurrent models but rejects unknown efforts", async () => {
+  const cases = [
+    { model: "m2", effort: "xhigh", accepted: true },
+    { model: "future-model", effort: "xhigh", accepted: true },
+    { model: "future-model", effort: "unlisted", accepted: false },
+  ];
+  for (const { model, effort, accepted } of cases) {
+    const env = setup();
+    await loaded(env);
+    const before = own(env, CHATGPT);
+    dispatch(env, CHATGPT, "choice-edited", { field: "effort", value: "high" });
+    dispatch(env, CHATGPT, "save-requested");
+    await env.answer(env.is("PUT", "/api/notes-preferences"), 200, {
+      models: { chatgpt: model },
+      reasoning_effort: effort,
+      reasoning_efforts: { chatgpt: effort },
+    });
+    const current = own(env, CHATGPT);
+    if (accepted) {
+      assert.equal(current.ownerModel, model);
+      assert.equal(current.ownerEffort, effort);
+      assert.equal(current.error, null);
+      assert.deepEqual(env.events, ["provider.choice-changed"]);
+    } else {
+      assert.equal(current.ownerModel, before.ownerModel);
+      assert.equal(current.ownerEffort, before.ownerEffort);
+      assert.equal(current.ownerFence, before.ownerFence);
+      assert.equal(current.error.code, "provider_invalid_response");
+      assert.equal(current.error.operation, "save");
+      assert.deepEqual(env.events, []);
+    }
+  }
+});
+
+for (const unrelated of ["verify", "login"]) {
+  test(`conductor R11 keeps an unrelated Antigravity ${unrelated} error after a valid Save`, async () => {
+    const env = setup();
+    await loaded(env);
+    if (unrelated === "verify") {
+      dispatch(env, ANTIGRAVITY, "verify-requested");
+      await env.answer(env.is("POST", "/api/providers/antigravity/verify"), 503, {
+        detail: { code: "provider_unavailable", message: "The provider is offline." },
+      });
+    } else {
+      dispatch(env, ANTIGRAVITY, "login-requested");
+      await env.answer(env.is("POST", "/api/providers/antigravity/login-sessions"), 503, {
+        detail: { code: "provider_unavailable", message: "The provider is offline." },
+      });
+    }
+    assert.equal(own(env, ANTIGRAVITY).error.operation, undefined);
+    dispatch(env, ANTIGRAVITY, "choice-edited", { field: "model", value: "g2" });
+    dispatch(env, ANTIGRAVITY, "save-requested");
+    await env.answer(env.is("PUT", "/api/providers/antigravity/preference"), 200, {
+      provider: "antigravity", model: "g2", reasoning_effort: "medium",
+    });
+    assert.equal(own(env, ANTIGRAVITY).error.code, "provider_unavailable");
+    assert.equal(own(env, ANTIGRAVITY).error.operation, undefined);
+    assert.equal(own(env, ANTIGRAVITY).modelStatus.state, "saved");
+  });
+}
+
+test("conductor R9 terminal cancel stays settled when its acknowledgement arrives after closing Settings", async () => {
+  const running = catalog({ pho: { install: { state: "running", phase: "downloading" } } });
+  const env = await openedWith(running);
+  const readKey = env.is("GET", "/api/asr-models");
+  env.store.dispatch({ type: "provider/asr-cancel-requested", id: PHO });
+  env.store.dispatch({ type: "provider/settings-section-selected", section: "processing", previousSection: "asr" });
+  const beforeClose = catalogCalls(env).length;
+  env.store.dispatch({ type: "provider/dialog-closed" });
+  await env.answer(env.is("DELETE", "/install"), 202, { install: { state: "idle" } });
+  assert.equal(catalogCalls(env).length, beforeClose, "closing Settings cancels background polling and starts no replacement read");
+  await env.answer(readKey, 200, running);
+  assert.equal(env.state().asr.open, false);
+  assert.deepEqual(env.live(), []);
+  assert.equal(phoRow(env).install.kind, "offer");
 });

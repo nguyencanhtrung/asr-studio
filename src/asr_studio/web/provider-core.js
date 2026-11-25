@@ -23,7 +23,12 @@ export const timestamp = (value) => ({ fmt: "timestamp", value });
 const KNOWN = ["connected", "disconnected", "reconnect_required"];
 const SESSION_DONE = ["connected", "cancelled", "expired", "failed"];
 const VIETNAMESE = /[À-ỹ]/u;
-const CHOICE_CHANGED = { type: "call", key: "provider/choice-changed", name: "provider.choice-changed" };
+const CHOICE_CHANGED = {
+  type: "call",
+  key: "provider/choice-changed",
+  name: "provider.choice-changed",
+  args: ["provider-owner-changed"],
+};
 
 const EFFORT_LABELS = {
   none: t("Không suy luận (none)"),
@@ -337,7 +342,15 @@ function initial(d) {
     savedModel: "",
     selectedEffort: d.effort.initial,
     savedEffort: d.effort.initial,
-    preferences: { provider: null, models: {}, reasoning_effort: "default" },
+    // The owner pair is the provider's committed setting, separate from the
+    // workflow draft shown in Automatic processing. Keep it while a catalog
+    // read is loading or fails; never borrow it from the other provider.
+    ownerModel: null,
+    ownerEffort: d.effort.initial,
+    ownerKnown: false,
+    ownerFence: 0, // successful owner saves fence owner-bearing reads already in flight
+    catalogStatus: "idle", // idle | loading | ready | error
+    preferences: { provider: null, models: {}, reasoning_effort: "default", reasoning_efforts: {} },
     modelStatus: { state: "", text: null },
     verifyResult: { state: "", text: null },
     message: null,
@@ -438,17 +451,44 @@ function summaryOf(d, s, verification) {
   return [name, " · effort ", verification.reasoning_effort || "default", " · ", timestamp(verification.verified_at)];
 }
 
+function applyVerification(d, s, verification) {
+  if (!s.info) return s;
+  return { ...s, info: { ...s.info, verification }, summary: summaryOf(d, s, verification) };
+}
+
 // The old renderProvider: the new status reaches the badge, the ledger, the verification row and the header button.
-function applyProvider(d, s, info) {
-  const status = info.status;
+// Only a full provider response is allowed to replace the committed owner pair. Cached or synthetic status
+// objects are normalized back to the reducer's owner fields so a stale info object cannot undo a newer save.
+function applyProvider(d, s, info, { ownerAuthority = false } = {}) {
+  const nextInfo = { ...info };
+  if (!ownerAuthority) {
+    if (s.ownerKnown) {
+      nextInfo.saved_model = s.ownerModel;
+      nextInfo.reasoning_effort = s.ownerEffort;
+    } else {
+      delete nextInfo.saved_model;
+      delete nextInfo.reasoning_effort;
+    }
+  }
+  const status = nextInfo.status;
   const text = KNOWN.includes(status) ? d.copy.status[status] : d.copy.status.other;
+  const hasOwnerModel = ownerAuthority && Object.hasOwn(info, "saved_model");
+  const hasOwnerEffort = ownerAuthority && Object.hasOwn(info, "reasoning_effort");
+  const owner = ownerAuthority && (hasOwnerModel || hasOwnerEffort)
+    ? {
+      ownerModel: typeof info.saved_model === "string" && info.saved_model ? info.saved_model : null,
+      ownerEffort: typeof info.reasoning_effort === "string" && info.reasoning_effort ? info.reasoning_effort : d.effort.initial,
+      ownerKnown: true,
+    }
+    : {};
   return {
     ...s,
-    info,
+    ...owner,
+    info: nextInfo,
     badge: { state: KNOWN.includes(status) ? status : "error", text },
     statusText: text,
-    summary: summaryOf(d, s, info.verification),
-    launcher: launcherOf(status, info.account?.label),
+    summary: summaryOf(d, s, nextInfo.verification),
+    launcher: launcherOf(status, nextInfo.account?.label),
   };
 }
 
@@ -456,23 +496,31 @@ function placeholderOptions(label) {
   return [{ value: "", label, disabled: false }];
 }
 
-function clearModels(d, s) {
-  return { ...s, models: [], selectedModel: "", savedModel: "", modelOptions: placeholderOptions(d.copy.connectToLoad) };
+function clearModels(d, s, { preserveForm = false } = {}) {
+  return {
+    ...s,
+    models: [],
+    modelOptions: placeholderOptions(d.copy.connectToLoad),
+    // Keep the historical Settings form behavior for ordinary disconnects:
+    // clearing the live selection must not erase the last saved label. A
+    // fenced stale owner read preserves both values explicitly.
+    ...(preserveForm ? {} : { selectedModel: "" }),
+  };
 }
 
-function localReconnect(d, s, error) {
+function localReconnect(d, s, error, { preserveForm = false } = {}) {
   const status = error.code === "provider_disconnected" ? "disconnected" : "reconnect_required";
   const info = { id: d.id, connection_version: 0, ...s.info, status, account: null, verification: null };
-  return applyProvider(d, clearModels(d, s), info);
+  return applyProvider(d, clearModels(d, s, { preserveForm }), info);
 }
 
 // ---- load: providers -> (preferences) -> models ----
 
 function startLoad(d, s) {
   const loadId = s.loadId + 1;
-  let next = { ...s, loadId, loading: true, error: null };
+  let next = { ...s, loadId, loading: true, catalogStatus: "loading", error: null };
   if (d.loadFailure === "keep-last") next = { ...next, badge: { state: "loading", text: d.copy.loading }, launcher: { status: "loading", account: "" } };
-  return done(next, [call(d, "load", "providers", d.endpoints.providers, { id: loadId })]);
+  return done(next, [call(d, "load", "providers", d.endpoints.providers, { id: loadId, extra: { ownerFence: s.ownerFence } })]);
 }
 
 function settle(d, s) {
@@ -490,6 +538,7 @@ function normalizePreferences(payload) {
     provider: ["chatgpt", "antigravity"].includes(payload.provider) ? payload.provider : null,
     models: isObject(payload.models) ? payload.models : {},
     reasoning_effort: typeof payload.reasoning_effort === "string" ? payload.reasoning_effort : "default",
+    reasoning_efforts: isObject(payload.reasoning_efforts) ? payload.reasoning_efforts : {},
   };
 }
 
@@ -502,99 +551,158 @@ function supportedEfforts(s, modelId) {
 
 const effortValue = (d, s, modelId, wanted) => (d.effort.kind === "per-model" ? (supportedEfforts(s, modelId).includes(wanted) ? wanted : "default") : wanted);
 
-function renderModels(d, s, catalog) {
+function modelOptionsFor(d, models, selectedModel) {
+  const options = [];
+  if (!selectedModel) options.push(...placeholderOptions(models.length ? d.copy.choose : d.copy.noModels));
+  else if (!models.some((model) => model.id === selectedModel)) {
+    options.push({ value: selectedModel, label: fill(d.copy.unavailableOption, { model: selectedModel }), disabled: true });
+  }
+  for (const model of models) options.push({ value: model.id, label: model.display_name, disabled: false });
+  return options;
+}
+
+function renderModels(d, s, catalog, { ownerAuthority = true } = {}) {
   const models = (Array.isArray(catalog.models) ? catalog.models : []).filter(
     (model) => model && typeof model.id === "string" && typeof model.display_name === "string",
   );
   let next = { ...s, models };
-  let selectedModel;
-  let savedEffort;
-  if (d.catalog === "preferences") {
+  let selectedModel = s.selectedModel;
+  let savedEffort = s.savedEffort;
+  if (ownerAuthority && d.catalog === "preferences") {
     const preferred = s.preferences.models[d.id];
     const fromCatalog = typeof catalog.selected_model === "string" ? catalog.selected_model : "";
     selectedModel = typeof preferred === "string" && preferred ? preferred : fromCatalog;
-    savedEffort = s.preferences.reasoning_effort;
-  } else {
-    selectedModel = typeof catalog.selected_model === "string" ? catalog.selected_model : "";
+    savedEffort = typeof s.preferences.reasoning_efforts[d.id] === "string"
+      ? s.preferences.reasoning_efforts[d.id]
+      : s.preferences.reasoning_effort;
+  } else if (ownerAuthority) {
+    selectedModel = typeof catalog.selected_model === "string"
+      ? catalog.selected_model
+      : (s.ownerModel || "");
     savedEffort = catalog.reasoning_effort === "medium" ? "medium" : "high";
   }
-  const options = [];
   const available = models.some((model) => model.id === selectedModel);
-  if (!selectedModel) options.push(...placeholderOptions(models.length ? d.copy.choose : d.copy.noModels));
-  else if (!available) options.push({ value: selectedModel, label: fill(d.copy.unavailableOption, { model: selectedModel }), disabled: true });
-  for (const model of models) options.push({ value: model.id, label: model.display_name, disabled: false });
-  next = { ...next, modelOptions: options, savedModel: selectedModel, selectedModel, savedEffort };
-  next.selectedEffort = effortValue(d, next, selectedModel, savedEffort);
-  if (selectedModel && !available) {
-    next.modelStatus = { state: "error", text: fill(d.copy.unavailableSaved, { model: selectedModel }) };
-  } else if (d.catalog === "preferences") {
-    next.modelStatus = { state: "", text: selectedModel ? null : d.copy.chooseToSave };
+  next = {
+    ...next,
+    modelOptions: modelOptionsFor(d, models, selectedModel),
+    catalogStatus: "ready",
+  };
+  if (ownerAuthority) {
+    next = {
+      ...next,
+      savedModel: selectedModel,
+      selectedModel,
+      savedEffort,
+      ...(d.catalog === "preferences" ? {} : {
+        ownerModel: selectedModel || null,
+        ownerEffort: savedEffort,
+        ownerKnown: true,
+      }),
+      selectedEffort: effortValue(d, next, selectedModel, savedEffort),
+    };
+    if (selectedModel && !available) {
+      next.modelStatus = { state: "error", text: fill(d.copy.unavailableSaved, { model: selectedModel }) };
+    } else if (d.catalog === "preferences") {
+      next.modelStatus = { state: "", text: selectedModel ? null : d.copy.chooseToSave };
+    }
   }
   return next;
 }
 
+function ownerReadIsCurrent(s, meta) {
+  return meta?.ownerFence === undefined || meta.ownerFence === s.ownerFence;
+}
+
 function loadOk(d, s, meta, body) {
   if (meta.id !== s.loadId) return done(s);
-  if (!isObject(body)) return loadFailed(d, s, GENERIC_ERROR);
+  if (!isObject(body)) return loadFailed(d, s, GENERIC_ERROR, meta.op, meta.ownerFence);
+  const ownerAuthority = ownerReadIsCurrent(s, meta);
   if (meta.op === "providers") {
     const info = (Array.isArray(body.providers) ? body.providers : []).find((item) => item && item.id === d.id);
     if (!info || (d.strictStatus && !KNOWN.includes(info.status))) {
-      return loadFailed(d, s, { code: "INVALID_PROVIDER_STATUS", message: d.copy.invalidStatus });
+      return loadFailed(d, s, { code: "INVALID_PROVIDER_STATUS", message: d.copy.invalidStatus }, meta.op, meta.ownerFence);
     }
-    const next = applyProvider(d, s, info);
-    if (d.endpoints.preferences) return done(next, [call(d, "load", "preferences", d.endpoints.preferences, { id: meta.id })]);
-    if (info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id })]);
-    return settle(d, clearModels(d, next));
+    const next = applyProvider(d, s, info, { ownerAuthority });
+    if (d.endpoints.preferences) return done(next, [call(d, "load", "preferences", d.endpoints.preferences, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
+    if (info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
+    const cleared = clearModels(d, next, { preserveForm: !ownerAuthority });
+    if (!ownerAuthority) return settle(d, { ...cleared, catalogStatus: "ready" });
+    if (d.id !== "antigravity") return settle(d, cleared);
+    const savedModel = next.ownerKnown && next.ownerModel ? next.ownerModel : "";
+    const savedEffort = next.ownerKnown ? next.ownerEffort : d.effort.initial;
+    return settle(d, { ...cleared, selectedModel: savedModel, savedModel, selectedEffort: savedEffort, savedEffort, catalogStatus: "ready" });
   }
   if (meta.op === "preferences") {
     const preferences = normalizePreferences(body);
-    const next = { ...s, preferences };
-    if (s.info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id })]);
+    if (!ownerAuthority) {
+      if (s.info?.status === "connected") return done(s, [call(d, "load", "models", d.endpoints.models, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
+      return settle(d, { ...s, catalogStatus: "ready" });
+    }
+    const ownerModel = typeof preferences.models[d.id] === "string" && preferences.models[d.id]
+      ? preferences.models[d.id]
+      : null;
+    const ownerEffort = typeof preferences.reasoning_efforts[d.id] === "string"
+      ? preferences.reasoning_efforts[d.id]
+      : preferences.reasoning_effort;
+    const next = { ...s, preferences, ownerModel, ownerEffort, ownerKnown: true };
+    if (s.info.status === "connected") return done(next, [call(d, "load", "models", d.endpoints.models, { id: meta.id, extra: { ownerFence: meta.ownerFence } })]);
     const selectedModel = preferences.models[d.id] || "";
     return settle(d, {
       ...next,
       models: [],
       selectedModel,
       savedModel: selectedModel,
-      savedEffort: preferences.reasoning_effort,
-      selectedEffort: "default",
+      savedEffort: ownerEffort,
+      selectedEffort: ownerEffort,
       modelOptions: placeholderOptions(d.copy.connectToLoad),
+      catalogStatus: "ready",
       modelStatus: { state: "", text: null },
     });
   }
-  return settle(d, renderModels(d, s, body)); // models
+  return settle(d, renderModels(d, s, body, { ownerAuthority })); // models
 }
 
-function loadFailed(d, s, error) {
-  return fail(d, s, error, "load");
+function loadFailed(d, s, error, operation = "load", ownerFence) {
+  return fail(d, s, error, "load", operation, ownerFence);
 }
 
 // A failed call that may mean the provider needs a new sign-in: re-read the status, then finish the operation.
-function fail(d, s, error, after) {
-  if (!needsReconnect(d, error)) return resume(d, s, error, after);
-  const next = d.reconnect.local ? localReconnect(d, s, error) : s;
-  return done(next, [call(d, `refresh-${after}`, "refresh", d.endpoints.providers, { extra: { after, error, loadId: s.loadId } })]);
+function fail(d, s, error, after, operation = after, ownerFence) {
+  if (!needsReconnect(d, error)) return resume(d, s, error, after, operation);
+  const ownerAuthority = ownerReadIsCurrent(s, { ownerFence });
+  const next = d.reconnect.local ? localReconnect(d, s, error, { preserveForm: !ownerAuthority }) : s;
+  return done(next, [call(d, `refresh-${after}`, "refresh", d.endpoints.providers, { extra: { after, error, operation, loadId: s.loadId, ownerFence } })]);
 }
 
-function refreshed(d, s, meta, body) {
+function refreshed(d, s, meta, body, recoveryError = null) {
   if (meta.after === "load" && meta.loadId !== s.loadId) return done(s); // a newer load owns the page now
   let next = s;
   const info = isObject(body) && Array.isArray(body.providers) ? body.providers.find((item) => item && item.id === d.id) : null;
   if (info && (!d.strictStatus || KNOWN.includes(info.status))) {
-    next = applyProvider(d, s, info);
-    if (!d.strictStatus && info.status !== "connected") next = clearModels(d, next);
+    const ownerAuthority = ownerReadIsCurrent(s, meta);
+    next = applyProvider(d, s, info, { ownerAuthority });
+    if (!d.strictStatus && info.status !== "connected") next = clearModels(d, next, { preserveForm: !ownerAuthority });
   }
-  return resume(d, next, meta.error, meta.after);
+  const operation = meta.operation ?? meta.after;
+  const isCatalogRecovery = meta.after === "load" && ["providers", "preferences", "models"].includes(operation);
+  // A failed follow-up status read is a catalog/status failure only when the
+  // original operation was the catalog load. Save/verify/disconnect recovery
+  // must retain the original refusal/reconnect error and its existing copy.
+  const resumeError = isCatalogRecovery && recoveryError ? recoveryError : meta.error;
+  return resume(d, next, resumeError, meta.after, operation);
 }
 
 function setPending(s, op, value) {
   return { ...s, pending: { ...s.pending, [op]: value } };
 }
 
-function resume(d, s, error, after) {
+function resume(d, s, error, after, operation = after) {
   if (after === "load") {
+    const catalogError = operation === "providers" || operation === "preferences" || operation === "models"
+      ? { catalogStatus: "error" }
+      : {};
     if (error?.code === "provider_in_use" && s.info?.status === "connected") {
-      return settle(d, showError(d, s, error));
+      return settle(d, showError(d, { ...s, ...catalogError }, error));
     }
     let next = s;
     if (d.loadFailure === "keep-last") {
@@ -603,11 +711,12 @@ function resume(d, s, error, after) {
     } else if (!needsReconnect(d, error)) {
       next = { ...s, launcher: { status: "error", account: "" }, badge: { state: "error", text: d.copy.unavailable } };
     }
-    return settle(d, showError(d, next, error));
+    return settle(d, showError(d, { ...next, ...catalogError }, error));
   }
   if (after === "save") {
     const next = setPending(s, "save", false);
-    return done(showError(d, d.copy.saveFailed ? { ...next, modelStatus: { state: "error", text: d.copy.saveFailed } } : next, error));
+    const shown = showError(d, d.copy.saveFailed ? { ...next, modelStatus: { state: "error", text: d.copy.saveFailed } } : next, error);
+    return done({ ...shown, error: { ...shown.error, operation: "save" } });
   }
   const next = setPending(s, "verify", false);
   return done(showError(d, { ...next, verifyResult: { state: "error", text: d.copy.verifyFailed } }, error));
@@ -957,24 +1066,53 @@ function saveChoice(d, s) {
   return done(next, [request]);
 }
 
-function saveOk(d, s, meta, body) {
-  const { model, effort } = meta;
-  let next = setPending(s, "save", false);
-  if (d.catalog === "preferences") {
-    const reply = isObject(body) ? body : {};
-    const preferences = {
-      provider: d.id,
-      models: isObject(reply.models) ? reply.models : { [d.id]: model },
-      reasoning_effort: typeof reply.reasoning_effort === "string" ? reply.reasoning_effort : effort,
-    };
-    const savedModel = preferences.models[d.id] || model;
-    next = { ...next, preferences, savedModel, selectedModel: savedModel, savedEffort: preferences.reasoning_effort };
-    next.selectedEffort = effortValue(d, next, savedModel, preferences.reasoning_effort);
-  } else {
-    next = { ...next, savedModel: model, savedEffort: effort };
+function savedModelSupported(d, model) {
+  if (typeof model !== "string" || !model.trim()) return false;
+  // Antigravity stores restricted ASCII IDs; ChatGPT counts Unicode code points.
+  if (d.id === "antigravity") return model.length <= 240 && !/[^A-Za-z0-9._:/-]/.test(model);
+  return Array.from(model).length <= 200;
+}
+
+function savedEffortSupported(d, s, model, effort) {
+  if (d.effort.kind === "fixed") return Object.hasOwn(d.effortLabels, effort);
+  if (effort === "default") return true;
+  const row = s.models.find((choice) => choice.id === model);
+  return Object.hasOwn(EFFORT_LABELS, effort)
+    && (!Array.isArray(row?.reasoning_efforts) || row.reasoning_efforts.includes(effort));
+}
+
+function saveOk(d, s, body) {
+  const reply = isObject(body) ? body : {};
+  const notesPreferences = d.catalog === "preferences";
+  const models = isObject(reply.models) ? reply.models : {};
+  const reasoningEfforts = isObject(reply.reasoning_efforts) ? reply.reasoning_efforts : {};
+  const savedModel = notesPreferences ? models[d.id] : reply.model;
+  const savedEffort = notesPreferences && Object.hasOwn(reasoningEfforts, d.id)
+    ? reasoningEfforts[d.id]
+    : reply.reasoning_effort;
+  if (!savedModelSupported(d, savedModel) || typeof savedEffort !== "string"
+    || !savedEffortSupported(d, s, savedModel, savedEffort) || !notesPreferences && reply.provider !== d.id) {
+    const error = { code: "provider_invalid_response", text: errorMessageForCode("provider_invalid_response", undefined, d.id), retryPoll: false, operation: "save" };
+    return done({ ...setPending(s, "save", false), error, modelStatus: { state: "error", text: null } });
   }
-  const label = d.effortLabels ? d.effortLabels[next.savedEffort] ?? next.savedEffort : next.savedEffort;
-  next = { ...next, modelStatus: { state: "saved", text: fill(d.copy.saved, { model: modelName(next, next.selectedModel), effort: label }) } };
+  let next = {
+    ...setPending(s, "save", false),
+    error: s.error?.operation === "save" ? null : s.error,
+    ownerFence: s.ownerFence + 1,
+    modelOptions: modelOptionsFor(d, s.models, savedModel),
+    savedModel,
+    selectedModel: savedModel,
+    savedEffort,
+    ownerModel: savedModel,
+    ownerEffort: savedEffort,
+    ownerKnown: true,
+  };
+  if (notesPreferences) {
+    next.preferences = { provider: d.id, models, reasoning_effort: savedEffort, reasoning_efforts: reasoningEfforts };
+  }
+  next.selectedEffort = effortValue(d, next, savedModel, savedEffort);
+  const label = d.effortLabels ? d.effortLabels[savedEffort] ?? savedEffort : savedEffort;
+  next = { ...next, modelStatus: { state: "saved", text: fill(d.copy.saved, { model: modelName(next, savedModel), effort: label }) } };
   return done(next, [CHOICE_CHANGED]);
 }
 
@@ -997,11 +1135,11 @@ function verifyOk(d, s, meta, result) {
       ...next,
       verifyResult: { state: "success", text: fill(d.copy.verified, { model: modelName(next, reply.model), effort, time: timestamp(reply.verified_at) }) },
     };
-    if (next.info) next = applyProvider(d, next, { ...next.info, verification: { model: reply.model, reasoning_effort: effort, verified_at: reply.verified_at } });
+    next = applyVerification(d, next, { model: reply.model, reasoning_effort: effort, verified_at: reply.verified_at });
     return done(next);
   }
   next = { ...next, verifyResult: { state: "success", text: fill(d.copy.verified, { model: modelName(next, meta.model), time: timestamp(reply.verified_at) }) } };
-  if (next.info) next = applyProvider(d, next, { ...next.info, verification: reply });
+  next = applyVerification(d, next, reply);
   return done(next);
 }
 
@@ -1159,7 +1297,7 @@ function onResponse(d, s, meta, body, now) {
     case "callback":
       return callbackOk(d, s, meta, body, now);
     case "save":
-      return saveOk(d, s, meta, body);
+      return saveOk(d, s, body);
     case "verify":
       return verifyOk(d, s, meta, body);
     default:
@@ -1172,9 +1310,9 @@ function onFailure(d, s, meta, error) {
     case "providers":
     case "preferences":
     case "models":
-      return meta.id === s.loadId ? loadFailed(d, s, error) : done(s);
+      return meta.id === s.loadId ? loadFailed(d, s, error, meta.op, meta.ownerFence) : done(s);
     case "refresh":
-      return refreshed(d, s, meta, null);
+      return refreshed(d, s, meta, null, error);
     case "login-start":
       return loginStartFailed(d, s, error, meta.recreation === true);
     case "registration-recreate":
@@ -1234,12 +1372,17 @@ const asrFetch = (request) => ({ type: "fetch", key: "provider/asr-models", url:
 // The meeting behind the dialog reads its model list again. Closing can beat a save, so a save says so too.
 const ASR_SETTINGS_CHANGED = { type: "call", key: "provider/asr-settings-changed", name: "asr.settings-changed", args: [] };
 const ASR_POLL = { type: "schedule", key: "provider/asr-poll", delay: 1000, action: { type: "provider/asr-poll" } };
+const ASR_STOP_POLL = { type: "cancel", key: ASR_POLL.key };
 const JOB_ACTIVE = ["queued", "running", "cancelling"];
 const jobActive = (choice) => JOB_ACTIVE.includes(choice.install?.state);
 const installerUsable = (installer) => installer.available && installer.models_writable;
 const asrPolling = (state) => state.open && state.installer.available && state.models.some(jobActive);
 const withPoll = (state) => done(state, asrPolling(state) ? [ASR_POLL] : []);
 const withInstall = (state, id, install) => ({ ...state, models: state.models.map((choice) => (choice.id === id ? { ...choice, install } : choice)) });
+const pendingInstall = (state, id) => {
+  const pending = state.pendingInstalls;
+  return pending && Object.hasOwn(pending, id) ? pending[id] : null;
+};
 const DEFINITIVE_INSTALL_REFUSALS = new Set(["gpu_required", "installer_unavailable", "models_not_writable", "model_ready", "install_not_active", "unknown_model", "worker_unavailable"]);
 const PREPARE_FALLBACK_REFUSALS = new Set(["installer_unavailable", "models_not_writable"]);
 const rawModelName = (choice) => typeof choice?.model_name === "string" ? choice.model_name : null;
@@ -1247,6 +1390,8 @@ const isDefinitiveInstallRefusal = (code) => DEFINITIVE_INSTALL_REFUSALS.has(cod
 
 function asrInstallCall(state, action, method, optimistic) {
   if (!isAsrModelId(action.id)) return done(state);
+  const pending = pendingInstall(state, action.id);
+  if (pending && (method === "POST" || pending.method === "DELETE")) return done(state);
   const choice = state.models.find((item) => item.id === action.id && item.id !== "auto");
   // A second click on a job that is already going asks for nothing; Cancel is the only click that does.
   if (!choice || (method === "POST" && jobActive(choice))) return done(state);
@@ -1256,7 +1401,7 @@ function asrInstallCall(state, action, method, optimistic) {
   // A new request id drops a catalog read that was already in flight: its answer predates this click.
   // Only the newest create or cancel of a model may answer: a late reply must not undo a later click.
   const mutation = (state.mutation ?? 0) + 1;
-  const next = withInstall({ ...state, request: state.request + 1, notice: null, mutation, latest: { ...state.latest, [action.id]: mutation } }, action.id, optimistic);
+  const next = withInstall({ ...state, request: state.request + 1, notice: null, mutation, latest: { ...state.latest, [action.id]: mutation }, pendingInstalls: { ...state.pendingInstalls, [action.id]: { method, optimistic } } }, action.id, optimistic);
   return done(next, [{ type: "fetch", key: `provider/asr-install/${method}/${action.id}`, url: `/api/asr-models/${encodeURIComponent(action.id)}/install`, init, ok: "provider/asr-install-sent", error: "provider/asr-install-refused", meta: { id: action.id, method, mutation } }]);
 }
 
@@ -1264,25 +1409,46 @@ function reduceAsr(state, action) {
   switch (action.type) {
     case "provider/dialog-opened": {
       const request = state.request + 1;
-      return done({ ...state, status: "loading", request, copy: null, notice: null, defaultRefusal: null, open: true }, [asrFetch(request)]);
+      return done({ ...state, status: "loading", summaryStatus: null, request, copy: null, notice: null, defaultRefusal: null, open: true }, [asrFetch(request)]);
+    }
+    case "provider/settings-section-selected": {
+      if (action.section !== "processing" || action.previousSection === "processing" || !state.open) return done(state);
+      if (state.defaultPending !== undefined || state.defaultCatalogRequest === state.request) return done({ ...state, summaryStatus: "loading" });
+      // The first Automation visit can share a catalog already loading at open.
+      // Re-entry requests the current snapshot, superseding any older keyed read.
+      if (state.status === "loading" && state.summaryStatus !== "loading") {
+        return done({ ...state, summaryStatus: "loading" });
+      }
+      const request = state.request + 1;
+      return done({ ...state, request, summaryStatus: "loading" }, [asrFetch(request)]);
     }
     case "provider/dialog-closed":
-      return done({ ...state, open: false }, [{ type: "cancel", key: "provider/asr-poll" }, ASR_SETTINGS_CHANGED]);
+      return done({ ...state, open: false }, [ASR_STOP_POLL, ASR_SETTINGS_CHANGED]);
     case "provider/asr-poll": {
-      if (!state.open) return done(state);
+      if (!state.open || state.defaultCatalogRequest === state.request) return done(state);
       const request = state.request + 1;
       return done({ ...state, request }, [asrFetch(request)]);
     }
     case "provider/asr-loaded": {
       if (action.meta.id !== state.request) return done(state);
+      const settled = { ...state, defaultCatalogRequest: undefined };
       const list = action.response.body?.asr_models;
-      if (!Array.isArray(list)) return done({ ...state, status: "error" });
-      const models = list.filter(isAsrModelRow);
+      const summaryStatus = state.defaultPending === undefined ? null : state.summaryStatus;
+      if (!Array.isArray(list)) {
+        const invalid = { ...settled, status: "error", summaryStatus };
+        return state.defaultCatalogRequest === state.request ? withPoll(invalid) : done(invalid);
+      }
+      const models = list.filter(isAsrModelRow).map((row) => {
+        const pending = pendingInstall(state, row.id);
+        // A catalog-confirmed job can be canceled while its create response is on the way.
+        if (!pending || pending.method === "POST" && (jobActive(row) || row.ready === true)) return row;
+        return { ...row, install: pending.optimistic };
+      });
       const installer = action.response.body?.installer;
       const { default_model: saved, hardware_model: hardware } = action.response.body;
       const defaultModel = isAsrModelId(saved) && saved !== "auto" ? saved : null;
       const hardwareModel = typeof hardware === "string" ? hardware : null;
-      const next = { ...state, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
+      const next = { ...settled, summaryStatus, models, defaultModel, defaultDamaged: action.response.body?.default_damaged === true, hardwareModel, installer: { available: installer?.available === true, models_writable: installer?.models_writable === true },
         // A reply with no usable model must say so; an empty list would leave the section blank.
         status: models.some((choice) => choice.id !== "auto") ? "ready" : "empty" };
       return withPoll(next);
@@ -1290,7 +1456,12 @@ function reduceAsr(state, action) {
     case "provider/asr-failed":
       // A failed poll keeps the rows: the next tick reads again.
       if (action.meta.id !== state.request) return done(state);
-      return state.status === "ready" ? withPoll(state) : done({ ...state, status: "error" });
+      const summaryStatus = state.summaryStatus === "loading" && state.defaultPending === undefined
+        ? "error" : state.summaryStatus;
+      const next = { ...state, summaryStatus, defaultCatalogRequest: undefined };
+      if (next.status === "ready") return withPoll(next);
+      const failed = { ...next, status: "error" };
+      return state.defaultCatalogRequest === state.request ? withPoll(failed) : done(failed);
     // The new value shows at once. A catalog read already in flight predates it and is dropped.
     case "provider/asr-default-chosen": {
       if (!isAsrModelId(action.value)) return done(state);
@@ -1309,27 +1480,38 @@ function reduceAsr(state, action) {
       const request = state.request + 1;
       const saved = action.response?.body?.default_model;
       const value = !refused && (saved === null || (isAsrModelId(saved) && saved !== "auto")) ? saved : state.defaultModel;
-      return done({ ...state, request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [asrFetch(request), ...(refused ? [] : [ASR_SETTINGS_CHANGED])]);
+      return done({ ...state, request, defaultCatalogRequest: request, defaultModel: value, defaultPending: undefined, defaultRefusal: refused ? action.error?.body?.detail?.code ?? "request_failed" : null }, [ASR_STOP_POLL, asrFetch(request), ...(refused ? [] : [ASR_SETTINGS_CHANGED])]);
     }
     case "provider/asr-install-requested":
       return asrInstallCall(state, action, "POST", { state: "queued", sending: true });
     case "provider/asr-cancel-requested":
       return asrInstallCall(state, action, "DELETE", { state: "cancelling" });
     case "provider/asr-install-sent": {
-      if (action.meta.mutation !== state.latest?.[action.meta.id]) return done(state);
+      const { id, mutation } = action.meta;
+      if (mutation !== state.latest?.[id] || !pendingInstall(state, id)) return done(state);
+      const { [id]: settled, ...pendingInstalls } = state.pendingInstalls;
       const install = isObject(action.response.body?.install) ? action.response.body.install : { state: "queued" };
-      return withPoll(withInstall(state, action.meta.id, install));
+      const request = state.request + 1;
+      const next = withInstall({ ...state, pendingInstalls, request }, id, install);
+      const loadingOpenCatalog = next.open && (next.status === "loading" || next.summaryStatus === "loading");
+      if (loadingOpenCatalog) return done(next, [asrFetch(request)]);
+      // An install can finish before its POST response is constructed. Verify model readiness once.
+      if (next.open && action.meta.method === "POST" && install.state === "idle"
+        && !next.models.some((row) => row.id === id && row.ready === true)) return done(next, [ASR_POLL]);
+      return withPoll(next);
     }
     // The server said no (no installer, no GPU, already prepared, nothing to cancel): say why, then read the truth.
     case "provider/asr-install-refused": {
-      if (action.meta.mutation !== state.latest?.[action.meta.id]) return done(state);
+      const { id, mutation } = action.meta;
+      if (mutation !== state.latest?.[id] || !pendingInstall(state, id)) return done(state);
+      const { [id]: settled, ...pendingInstalls } = state.pendingInstalls;
       const code = action.error?.body?.detail?.code ?? "request_failed";
       const request = state.request + 1;
       const fallback = action.meta.method !== "DELETE" && isDefinitiveInstallRefusal(code);
       const next = fallback
         ? withInstall(state, action.meta.id, { state: "refused", error: code, fallback: true, showPrepare: PREPARE_FALLBACK_REFUSALS.has(code) })
         : state;
-      return done({ ...next, request, notice: { id: action.meta.id, code } }, [asrFetch(request)]);
+      return done({ ...next, pendingInstalls, request, notice: { id, code } }, [asrFetch(request)]);
     }
     // The copy button: the clipboard is a call effect; the feedback line is state. A refused clipboard selects the command.
     case "provider/asr-copy-requested": {
@@ -1390,7 +1572,7 @@ export function selectProviderOverview(state) {
     overviewProvider(CHATGPT, state.chatgpt, "openai"),
     overviewProvider(ANTIGRAVITY, state.antigravity, "antigravity"),
     { id: "local", name: "Local AI", status: t("Sắp hỗ trợ"), model: null, disabled: true },
-    { id: "processing", name: t("Xử lý tự động"), status: t("Chọn rõ model chép lời, ngôn ngữ và công thức notes cho các bản ghi mới từ extension."), model: null, disabled: false },
+    { id: "processing", name: t("Xử lý tự động"), status: t("Chọn ngôn ngữ transcript và provider notes cho các bản ghi mới từ extension. Model ASR và model/effort notes lấy từ panel sở hữu. Không chọn provider nghĩa là transcript vẫn có thể hoàn tất nhưng notes sẽ chờ."), model: null, disabled: false },
   ];
 }
 
@@ -1552,7 +1734,11 @@ export function selectView(d, s) {
   const model = s.selectedModel;
   const available = modelAvailable(s, model);
   const efforts = d.effort.kind === "per-model" ? [{ value: "default", label: DEFAULT_EFFORT_LABEL }, ...supportedEfforts(s, model).map((value) => ({ value, label: EFFORT_LABELS[value] }))] : null;
-  const effort = d.effort.kind === "per-model" ? effortValue(d, s, model, s.selectedEffort) : s.selectedEffort;
+  let effort = efforts ? effortValue(d, s, model, s.selectedEffort) : s.selectedEffort;
+  if (efforts && model && !available && model === s.savedModel && Object.hasOwn(EFFORT_LABELS, s.savedEffort)) {
+    effort = s.savedEffort;
+    efforts.push({ value: effort, label: EFFORT_LABELS[effort], disabled: true });
+  }
   const view = {
     effortOptions: efforts,
     effortValue: effort,

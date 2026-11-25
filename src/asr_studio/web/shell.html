@@ -1036,13 +1036,12 @@
               <h3 class="settings-group-title" id="automatic-preferences-title" tabindex="-1">Xử lý tự động</h3>
               <span class="connection-state-badge" id="automatic-preferences-version"></span>
             </div>
-            <p class="connections-intro">Chọn rõ model chép lời, ngôn ngữ và công thức notes cho các bản ghi mới từ extension. Không chọn provider nghĩa là transcript vẫn có thể hoàn tất nhưng notes sẽ chờ.</p>
+            <p class="connections-intro">Chọn ngôn ngữ transcript và provider notes cho các bản ghi mới từ extension. Model ASR và model/effort notes lấy từ panel sở hữu. Không chọn provider nghĩa là transcript vẫn có thể hoàn tất nhưng notes sẽ chờ.</p>
             <section class="automatic-preferences-section" aria-labelledby="automatic-preferences-title">
               <form id="automatic-preferences-form">
                 <div class="connection-field">
-                  <label for="automatic-preferences-asr-choice">Model chép lời tự động</label>
-                  <select id="automatic-preferences-asr-choice" aria-describedby="automatic-preferences-asr-help"></select>
-                  <p class="connection-help" id="automatic-preferences-asr-help">Lựa chọn này áp dụng cho workflow tự động mới.</p>
+                  <p class="connection-help" id="automatic-preferences-asr-owner" role="status" aria-live="polite"></p>
+                  <a class="connection-inline-link" href="#settings-panel-asr" data-settings-tab="asr">ASR Model</a>
                 </div>
                 <div class="connection-field">
                   <label for="automatic-preferences-asr-language">Ngôn ngữ transcript</label>
@@ -1056,13 +1055,9 @@
                   <select id="automatic-preferences-provider" aria-describedby="automatic-preferences-provider-help"></select>
                   <p class="connection-help" id="automatic-preferences-provider-help"></p>
                 </div>
-                <div class="connection-field" id="automatic-preferences-model-field">
-                  <label for="automatic-preferences-model">Model notes</label>
-                  <select id="automatic-preferences-model"></select>
-                </div>
-                <div class="connection-field" id="automatic-preferences-effort-field">
-                  <label for="automatic-preferences-effort">Mức suy luận</label>
-                  <select id="automatic-preferences-effort"></select>
+                <div class="connection-field">
+                  <p class="connection-help" id="automatic-preferences-notes-owner" role="status" aria-live="polite"></p>
+                  <a class="connection-inline-link" href="#settings-panel-ai" data-settings-tab="ai">AI Provider</a>
                 </div>
                 <div class="connection-field">
                   <label for="automatic-preferences-output-language">Ngôn ngữ đầu ra notes</label>
