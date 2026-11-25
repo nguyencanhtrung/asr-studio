@@ -415,6 +415,74 @@ async def test_submit_refuses_stale_community_readiness_without_creating_a_task(
 
 
 @pytest.mark.parametrize("mode", ["community-1", "off"])
+async def test_explicit_rerun_rejects_weights_lost_after_readiness(tmp_path, mode):
+    selected = _prepared_model(tmp_path / "small")
+    default = _prepared_model(tmp_path / "default")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_cpu_model_path=selected,
+        asr_model_path=default,
+        asr_gpu_model_path=default,
+        diarization_model_path=prepare_diarization_model(tmp_path / "community"),
+    )
+    app = create_app(settings)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url=settings.public_url) as client,
+    ):
+        headers = await _authorize(client, settings)
+        meeting, generation, segments = seed_completed_transcript(settings.data_dir)
+        _, revision, _, _ = seed_cited_notes(
+            settings.data_dir, existing=(meeting, generation, segments)
+        )
+        prepare_recording(settings.data_dir, meeting)
+        before = _admission_state(settings.data_dir)
+        lock_fd = acquire_transcription_lock(settings.data_dir)
+        assert lock_fd is not None
+        try:
+            write_runtime_profile(settings.data_dir, RuntimeProfile("cpu", "int8", default))
+            write_transcription_heartbeat(settings.data_dir, "idle")
+            meeting_url = f"/api/meetings/{meeting}"
+            response = await client.get(meeting_url, headers=headers)
+            assert response.status_code == 200
+            initial = response.json()["transcription"]
+            choices = {choice["id"]: choice for choice in initial["asr_models"]}
+            assert choices["whisper-small"]["ready"] is True
+            assert choices["auto"]["ready"] is True
+
+            (selected / "model.bin").write_bytes(b"")
+            refreshed = await client.get(meeting_url, headers=headers)
+            assert refreshed.status_code == 200
+            transcription = refreshed.json()["transcription"]
+            choices = {choice["id"]: choice for choice in transcription["asr_models"]}
+            refused = await client.post(
+                "/api/tasks",
+                headers=headers,
+                json={
+                    "meeting_id": meeting,
+                    "expected_generation_id": generation,
+                    "request_id": "unusable-asr-model",
+                    "asr_model": "whisper-small",
+                    "diarization_mode": mode,
+                },
+            )
+
+            assert (choices["whisper-small"]["ready"], refused.status_code) == (False, 503)
+            assert choices["whisper-small"]["reason"] == "not_prepared"
+            assert choices["auto"]["ready"] is True
+            assert refused.json()["detail"]["code"] == "model_unavailable"
+            assert _admission_state(settings.data_dir) == before
+            assert transcription["generation"] == initial["generation"]
+            notes = await client.get(f"/api/notes/{revision['id']}/export", headers=headers)
+            assert notes.status_code == 200
+            assert notes.text == revision["markdown"]
+        finally:
+            os.close(lock_fd)
+
+
+@pytest.mark.parametrize("mode", ["community-1", "off"])
 @pytest.mark.parametrize("loss", ["missing", "unreadable", "fifo", "empty"])
 async def test_new_explicit_rerun_requires_original_recording(tmp_path, monkeypatch, mode, loss):
     settings = Settings(
