@@ -264,7 +264,7 @@ def test_extension_state_is_private_and_schema_migration_is_restart_safe(setting
         schema = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name LIKE 'extension_%'"
         ).fetchall()
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (20,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (21,)
         assert all("hmac_secret" not in (row[0] or "") for row in schema)
 
     initialize(settings.data_dir)

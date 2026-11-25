@@ -53,6 +53,8 @@ from asr_studio.service_runtime import (
 )
 from asr_studio.storage import initialize
 from asr_studio.tasks import (
+    DIARIZATION_MODE_COMMUNITY_1,
+    DIARIZATION_MODE_OFF,
     TASK_ERROR_MESSAGES,
     TaskError,
     claim_next_task,
@@ -912,6 +914,38 @@ def _run_task(
                 "runner_protocol_error",
                 "The local transcription runner did not return a complete result.",
             )
+            return
+
+        if task.get("diarization_mode", DIARIZATION_MODE_COMMUNITY_1) == DIARIZATION_MODE_OFF:
+            phase = "publishing"
+            state["stage"] = "publishing"
+            elapsed = time.monotonic() - started
+            if not update_task_progress(
+                settings.data_dir,
+                task_id,
+                owner_id=owner_id,
+                stage="publishing",
+                elapsed_seconds=elapsed,
+                transcript_end_seconds=state["latest_segment_end"],
+                segment_count=len(state["segments"]),
+            ):
+                _finish_after_child_stop(settings, task_id, owner_id, stop_event, elapsed)
+                return
+            generation = publish_complete_generation(
+                settings.data_dir,
+                task_id,
+                owner_id=owner_id,
+                segments=state["segments"],
+                speakers=(),
+                regular_turn_count=0,
+                exclusive_turn_count=0,
+                alignment_policy=None,
+                diarization_model_name=None,
+                language_probability=state["language_probability"],
+                elapsed_seconds=elapsed,
+            )
+            if generation is None:
+                _finish_after_child_stop(settings, task_id, owner_id, stop_event, elapsed)
             return
 
         phase = "diarization"

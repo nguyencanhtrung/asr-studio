@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 import uuid
@@ -25,6 +26,10 @@ from asr_studio.storage import database_path
 
 UNCERTAINTY_POLICY = ASR_UNCERTAINTY_POLICY
 DIARIZATION_MODEL_NAME = "Community-1"
+DIARIZATION_MODE_COMMUNITY_1 = "community-1"
+DIARIZATION_MODE_OFF = "off"
+DIARIZATION_MODES = frozenset({DIARIZATION_MODE_COMMUNITY_1, DIARIZATION_MODE_OFF})
+DIARIZATION_ROLLBACK_FENCE_ENV = "ASR_DIARIZATION_ROLLBACK_FENCE"
 _REVIEW_REASONS = frozenset(
     {
         "asr_uncertain",
@@ -39,6 +44,7 @@ _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._:-]{8,128}\Z")
 _SEGMENT_ID_RE = re.compile(r"[0-9a-f]{32}\Z")
 _LANGUAGE_HINTS = frozenset({"en", "vi"})
 _LANGUAGE_HINT_UNSET = object()
+_DIARIZATION_MODE_UNSET = object()
 _ACTIVE_TASK_STATES = frozenset({"accepted", "running", "stopping"})
 _TASK_ROLES = frozenset({"legacy", "transcription", "notes"})
 _ROLE_KINDS = {
@@ -65,6 +71,16 @@ class TaskError(RuntimeError):
         self.status_code = status_code
         self.code = code
         self.message = message
+
+
+def diarization_rollback_fence_enabled() -> bool:
+    """Return whether compatibility rollback must drain, but not start, Off work."""
+    return os.environ.get(DIARIZATION_ROLLBACK_FENCE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 @contextmanager
@@ -108,12 +124,15 @@ def _payload_hash(
     meeting_id: str,
     language_hint: str | None = None,
     asr_choice: str | None = None,
+    diarization_mode: str | None = None,
 ) -> str:
     payload: dict[str, str] = {"meeting_id": meeting_id}
     if asr_choice is not None:
         payload["asr_choice"] = asr_choice
     if language_hint is not None:
         payload["language_hint"] = language_hint
+    if diarization_mode is not None:
+        payload["diarization_mode"] = diarization_mode
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -148,6 +167,7 @@ def _task_summary(row: sqlite3.Row) -> dict[str, object]:
         "request_id": row["request_id"],
         "meeting_id": row["meeting_id"],
         "kind": row["kind"],
+        "diarization_mode": row["diarization_mode"],
         "model_name": row["model_name"],
         "language_hint": row["language_hint"],
         "device": row["device"],
@@ -201,6 +221,8 @@ def accept_transcription_task(
     worker_ready: bool,
     asr_model: str = AUTO,
     asr_choice: str | None = None,
+    diarization_mode: object = _DIARIZATION_MODE_UNSET,
+    expected_generation_id: object = None,
 ) -> dict[str, object]:
     """Accept one request atomically, returning the original row for HTTP retries.
 
@@ -210,6 +232,31 @@ def accept_transcription_task(
     if not isinstance(meeting_id, str) or not meeting_id:
         raise TaskError(400, "invalid_meeting_id", "Provide a meeting_id.")
     normalized_request_id = _request_id(request_id)
+    explicit_diarization_mode = diarization_mode is not _DIARIZATION_MODE_UNSET
+    if not explicit_diarization_mode:
+        normalized_diarization_mode = DIARIZATION_MODE_COMMUNITY_1
+    elif not isinstance(diarization_mode, str) or diarization_mode not in DIARIZATION_MODES:
+        raise TaskError(
+            400,
+            "invalid_diarization_mode",
+            "diarization_mode must be community-1 or off.",
+        )
+    else:
+        normalized_diarization_mode = diarization_mode
+    if expected_generation_id is not None and (
+        not isinstance(expected_generation_id, str) or not expected_generation_id
+    ):
+        raise TaskError(
+            400,
+            "invalid_rerun_source",
+            "expected_generation_id must identify the current transcript generation.",
+        )
+    if explicit_diarization_mode and expected_generation_id is None:
+        raise TaskError(
+            400,
+            "diarization_mode_requires_rerun",
+            "An explicit diarization mode is valid only for a manual transcript rerun.",
+        )
     normalized_model_path = str(Path(model_path).expanduser().resolve())
     model_name = Path(normalized_model_path).name
     normalized_diarization_model_path = str(Path(diarization_model_path).expanduser().resolve())
@@ -230,6 +277,42 @@ def accept_transcription_task(
                 "This meeting is being deleted. Wait for cleanup to finish before starting "
                 "another task.",
             )
+        if expected_generation_id is not None:
+            existing_rerun = connection.execute(
+                "SELECT id FROM tasks WHERE request_id = ?", (normalized_request_id,)
+            ).fetchone()
+            if existing_rerun is None:
+                current_generation = connection.execute(
+                    "SELECT current_generation_id FROM meetings WHERE id = ?",
+                    (meeting_id,),
+                ).fetchone()
+                current_generation_id = (
+                    current_generation["current_generation_id"]
+                    if current_generation is not None
+                    else None
+                )
+                if current_generation_id is None and explicit_diarization_mode:
+                    raise TaskError(
+                        400,
+                        "diarization_mode_requires_rerun",
+                        "An explicit diarization mode is valid only for a manual transcript rerun.",
+                    )
+                if current_generation_id != expected_generation_id:
+                    raise TaskError(
+                        409,
+                        "rerun_source_changed",
+                        "The current transcript changed. Reload it before rerunning.",
+                    )
+                generation = connection.execute(
+                    "SELECT status FROM transcript_generations WHERE id = ? AND meeting_id = ?",
+                    (expected_generation_id, meeting_id),
+                ).fetchone()
+                if generation is None or generation["status"] != "complete":
+                    raise TaskError(
+                        409,
+                        "rerun_source_changed",
+                        "The current transcript is not complete. Reload it before rerunning.",
+                    )
         normalized_language_hint = (
             meeting["language_hint"]
             if language_hint is _LANGUAGE_HINT_UNSET
@@ -239,6 +322,7 @@ def accept_transcription_task(
             meeting_id=meeting_id,
             language_hint=normalized_language_hint,
             asr_choice=asr_choice or asr_model,
+            diarization_mode=(normalized_diarization_mode if explicit_diarization_mode else None),
         )
         # Rows from before the choice was hashed say nothing about it: compare their model instead.
         legacy_request_hashes = {
@@ -249,9 +333,13 @@ def accept_transcription_task(
             "SELECT * FROM tasks WHERE request_id = ?", (normalized_request_id,)
         ).fetchone()
         if existing is not None:
+            accepted_hashes = {request_hash}
+            if not explicit_diarization_mode:
+                accepted_hashes.update(legacy_request_hashes)
             if (
                 existing["language_hint"] != normalized_language_hint
-                or existing["request_hash"] not in {request_hash, *legacy_request_hashes}
+                or existing["request_hash"] not in accepted_hashes
+                or existing["diarization_mode"] != normalized_diarization_mode
                 or (
                     existing["request_hash"] != request_hash
                     and existing["asr_model"] != (asr_choice or asr_model)
@@ -263,6 +351,18 @@ def accept_transcription_task(
                     "This request_id was already used with different task details.",
                 )
             return _task_summary(existing)
+
+        if (
+            explicit_diarization_mode
+            and normalized_diarization_mode == DIARIZATION_MODE_OFF
+            and diarization_rollback_fence_enabled()
+        ):
+            raise TaskError(
+                503,
+                "diarization_rollback_fence",
+                "Explicit Off runs are temporarily disabled while the compatible "
+                "runtime is active.",
+            )
 
         recording = connection.execute(
             "SELECT recordings.duration_seconds, recordings.storage_key, recordings.content_type, "
@@ -317,21 +417,23 @@ def accept_transcription_task(
                 "model_unavailable",
                 "The selected local ASR model is not prepared.",
             ) from None
-        try:
-            prepared_diarization_directory(Path(normalized_diarization_model_path))
-        except DiarizationConfigurationError:
-            raise TaskError(
-                503,
-                "diarization_model_unavailable",
-                "The configured local Community-1 model is not prepared.",
-            ) from None
+        if normalized_diarization_mode == DIARIZATION_MODE_COMMUNITY_1:
+            try:
+                prepared_diarization_directory(Path(normalized_diarization_model_path))
+            except DiarizationConfigurationError:
+                raise TaskError(
+                    503,
+                    "diarization_model_unavailable",
+                    "The configured local Community-1 model is not prepared.",
+                ) from None
 
         connection.execute(
             "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
-            "diarization_model_path, "
+            "diarization_model_path, diarization_mode, "
             "asr_model, model_name, device, compute_type, language_hint, status, stage, "
             "audio_duration_seconds, owner_role) "
-            "VALUES (?, ?, ?, ?, 'transcription', ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?, "
+            "VALUES (?, ?, ?, ?, 'transcription', ?, ?, ?, ?, ?, ?, ?, ?, "
+            "'accepted', 'accepted', ?, "
             "'transcription')",
             (
                 task_id,
@@ -340,6 +442,7 @@ def accept_transcription_task(
                 meeting_id,
                 normalized_model_path,
                 normalized_diarization_model_path,
+                normalized_diarization_mode,
                 asr_model,
                 model_name,
                 device,
@@ -456,6 +559,10 @@ def claim_next_task(
             (task_id, *sorted(kinds), *sorted(owner_roles)),
         ).fetchone()
         if task is None:
+            return None
+        if task["diarization_mode"] == DIARIZATION_MODE_OFF and (
+            diarization_rollback_fence_enabled()
+        ):
             return None
         cursor = connection.execute(
             "UPDATE tasks SET status = 'running', stage = 'starting', owner_id = ?, "
@@ -796,8 +903,8 @@ def publish_complete_generation(
     speakers: Sequence[dict[str, Any]] = (),
     regular_turn_count: int = 0,
     exclusive_turn_count: int = 0,
-    alignment_policy: str = ALIGNMENT_POLICY,
-    diarization_model_name: str = DIARIZATION_MODEL_NAME,
+    alignment_policy: str | None = ALIGNMENT_POLICY,
+    diarization_model_name: str | None = DIARIZATION_MODEL_NAME,
     language_probability: object,
     elapsed_seconds: float,
 ) -> dict[str, object] | None:
@@ -810,8 +917,6 @@ def publish_complete_generation(
         or isinstance(exclusive_turn_count, bool)
         or not isinstance(exclusive_turn_count, int)
         or exclusive_turn_count < 0
-        or alignment_policy != ALIGNMENT_POLICY
-        or diarization_model_name != DIARIZATION_MODEL_NAME
     ):
         raise TaskError(500, "invalid_runner_result", "Invalid diarization metadata.")
     normalized_speakers: list[dict[str, object]] = []
@@ -873,6 +978,32 @@ def publish_complete_generation(
             or slot["active_task_id"] != task_id
         ):
             return None
+        diarization_mode = task["diarization_mode"] or DIARIZATION_MODE_COMMUNITY_1
+        if diarization_mode == DIARIZATION_MODE_OFF:
+            if (
+                normalized_speakers
+                or regular_turn_count != 0
+                or exclusive_turn_count != 0
+                or alignment_policy is not None
+                or diarization_model_name is not None
+                or any(
+                    row["original_speaker_id"] is not None or row["speaker_id"] is not None
+                    for row in rows
+                )
+            ):
+                raise TaskError(500, "invalid_runner_result", "Invalid Off diarization result.")
+            generation_alignment_policy = None
+            generation_model_name = None
+        elif diarization_mode == DIARIZATION_MODE_COMMUNITY_1:
+            if (
+                alignment_policy != ALIGNMENT_POLICY
+                or diarization_model_name != DIARIZATION_MODEL_NAME
+            ):
+                raise TaskError(500, "invalid_runner_result", "Invalid diarization metadata.")
+            generation_alignment_policy = ALIGNMENT_POLICY
+            generation_model_name = DIARIZATION_MODEL_NAME
+        else:
+            raise TaskError(500, "invalid_runner_result", "Invalid diarization mode.")
         if task["processing_workflow_id"] is not None:
             from asr_studio.processing import publication_allowed_tx, publication_blocked_tx
 
@@ -890,8 +1021,8 @@ def publish_complete_generation(
             "INSERT INTO transcript_generations(id, meeting_id, task_id, generation_number, "
             "status, language_hint, model_name, device, compute_type, language_probability, "
             "uncertainty_policy, segment_count, diarization_model_name, regular_turn_count, "
-            "exclusive_turn_count, alignment_policy) "
-            "VALUES (?, ?, ?, ?, 'complete', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "exclusive_turn_count, alignment_policy, diarization_mode) "
+            "VALUES (?, ?, ?, ?, 'complete', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 generation_id,
                 task["meeting_id"],
@@ -904,10 +1035,11 @@ def publish_complete_generation(
                 normalized_language_probability,
                 UNCERTAINTY_POLICY,
                 len(rows),
-                diarization_model_name,
+                generation_model_name,
                 regular_turn_count,
                 exclusive_turn_count,
-                alignment_policy,
+                generation_alignment_policy,
+                diarization_mode,
             ),
         )
         connection.executemany(
@@ -1129,6 +1261,7 @@ def _generation_payload(
         "segment_count": generation["segment_count"],
         "completed_at": generation["completed_at"],
         "diarization_model_name": generation["diarization_model_name"],
+        "diarization_mode": generation["diarization_mode"],
         "regular_turn_count": generation["regular_turn_count"],
         "exclusive_turn_count": generation["exclusive_turn_count"],
         "alignment_policy": generation["alignment_policy"],

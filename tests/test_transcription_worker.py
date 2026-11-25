@@ -353,6 +353,72 @@ with log_path.open("a", encoding="ascii") as log:
     ]
 
 
+def test_worker_off_skips_diarization_and_keeps_asr_review_cues(tmp_path, monkeypatch):
+    data_dir, model_dir, meeting_ids, settings, lock_fd = _worker_task_store(tmp_path)
+    diarization_called = tmp_path / "diarization-called"
+    _install_runner_shim(
+        tmp_path,
+        monkeypatch,
+        """import json
+events = [
+    {"type": "segment", "id": "a" * 32, "start_seconds": 0.5, "end_seconds": 1.5,
+     "text": "ASR only.", "avg_logprob": -0.2, "no_speech_prob": 0.8,
+     "compression_ratio": 1.0},
+    {"type": "complete", "segment_count": 1, "language_probability": 0.9},
+]
+for event in events:
+    print(json.dumps(event), flush=True)
+""",
+    )
+    try:
+        first = _accept_and_claim(data_dir, model_dir, meeting_ids[0])
+        worker._run_task(settings, lock_fd, first, threading.Event())
+        previous = transcription_state(data_dir, meeting_ids[0])["generation"]
+        assert previous is not None
+
+        shim_package = tmp_path / "runner-shim" / "asr_studio"
+        (shim_package / "runner.py").write_text(
+            """import json
+print(json.dumps({"type": "segment", "id": "b" * 32, "start_seconds": 0.5,
+                  "end_seconds": 1.5, "text": "Off run.", "avg_logprob": -0.2,
+                  "no_speech_prob": 0.8, "compression_ratio": 1.0}), flush=True)
+print(json.dumps({"type": "complete", "segment_count": 1,
+                  "language_probability": 0.9}), flush=True)
+""",
+            encoding="utf-8",
+        )
+        (shim_package / "diarization_runner.py").write_text(
+            f"from pathlib import Path\nPath({str(diarization_called)!r}).touch()\n",
+            encoding="utf-8",
+        )
+        off = accept_transcription_task(
+            data_dir,
+            meeting_id=meeting_ids[0],
+            request_id="worker-off-request-002",
+            model_path=model_dir,
+            diarization_model_path=tmp_path / "missing-diarization",
+            device="cpu",
+            compute_type="int8",
+            worker_ready=True,
+            diarization_mode="off",
+            expected_generation_id=previous["id"],
+        )
+        claimed = claim_next_task(data_dir, owner_id="worker-off-owner")
+        assert claimed and claimed["id"] == off["id"]
+        worker._run_task(settings, lock_fd, claimed, threading.Event())
+    finally:
+        os.close(lock_fd)
+
+    state = transcription_state(data_dir, meeting_ids[0])
+    assert not diarization_called.exists()
+    assert state["task"]["status"] == "succeeded"
+    assert state["task"]["diarization_mode"] == "off"
+    assert state["generation"]["diarization_mode"] == "off"
+    assert state["generation"]["speakers"] == []
+    assert state["generation"]["segments"][0]["speaker_id"] is None
+    assert state["generation"]["segments"][0]["review_reasons"] == ["asr_uncertain"]
+
+
 def test_diarization_failure_keeps_the_previous_complete_generation(tmp_path, monkeypatch):
     data_dir, model_dir, meeting_ids, settings, lock_fd = _worker_task_store(tmp_path)
     task = _accept_and_claim(data_dir, model_dir, meeting_ids[0])

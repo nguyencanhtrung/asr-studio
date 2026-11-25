@@ -195,6 +195,48 @@ async def test_asr_models_route_requires_auth_and_matches_meeting_choices(tmp_pa
             ] == meeting.json()["transcription"]["asr_models"]
 
 
+async def test_diarization_capability_route_is_authoritative_and_authenticated(
+    tmp_path, monkeypatch
+):
+    diarization_model_dir = prepare_diarization_model(tmp_path / "diarization-model")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+        asr_model_path=_prepared_model(tmp_path / "model"),
+        diarization_model_path=diarization_model_dir,
+    )
+    monkeypatch.setattr(routes, "worker_is_healthy", lambda *_args, **_kwargs: True)
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url=settings.public_url) as client:
+            unauthorized = await client.get("/api/diarization-capability")
+            assert unauthorized.status_code == 401
+            headers = await _authorize(client, settings)
+            response = await client.get("/api/diarization-capability", headers=headers)
+            assert response.status_code == 200
+            assert response.json() == {
+                "contract_version": 1,
+                "default_mode": "community-1",
+                "explicit_mode_scope": "manual_transcript_rerun",
+                "community_1": {
+                    "id": "community-1",
+                    "ready": True,
+                    "state": "ready",
+                    "reason": None,
+                    "operator_prepared": True,
+                },
+                "off": {
+                    "id": "off",
+                    "ready": True,
+                    "state": "ready",
+                    "reason": None,
+                    "allowed_on": "manual_transcript_rerun",
+                },
+            }
+
+
 async def test_task_route_persists_per_run_language_and_checks_idempotency(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "run_in_threadpool", _run_inline)
     diarization_model_dir = prepare_diarization_model(tmp_path / "diarization-model")
