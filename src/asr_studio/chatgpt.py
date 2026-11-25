@@ -2347,6 +2347,56 @@ class ChatGPTProvider:
             with self.store.locked() as state:
                 return {"models": models, "selected_model": state.get("selected_model")}
 
+    @contextmanager
+    def notes_task_pin_for_run(
+        self, *, model: object, reasoning_effort: object
+    ) -> Iterator[dict[str, Any]]:
+        """Validate an explicit Notes recipe against the connected account's live catalog.
+
+        The yielded pin is held under the provider operation lock so Notes can perform its
+        SQLite admission transaction without allowing a concurrent provider mutation between
+        catalog validation and task insertion.  This intentionally does not read or write the
+        saved model preference.
+        """
+        if not isinstance(model, str) or not 1 <= len(model) <= 200:
+            raise ChatGPTError(400, "invalid_model", "Choose an available ChatGPT model.")
+        if not isinstance(reasoning_effort, str) or not reasoning_effort:
+            raise ChatGPTError(
+                400, "invalid_reasoning_effort", "Choose an effort supported by this model."
+            )
+        validate_reasoning_effort(model, reasoning_effort)
+        with self.store.operation():
+            self._assert_provider_mutation_allowed()
+            models = self._models()
+            selected = next((item for item in models if item["id"] == model), None)
+            if selected is None:
+                raise ChatGPTError(
+                    422,
+                    "model_unavailable",
+                    "The selected model is not available to this ChatGPT account.",
+                )
+            supported_efforts = selected.get("reasoning_efforts")
+            if reasoning_effort != "default" and (
+                not isinstance(supported_efforts, list) or reasoning_effort not in supported_efforts
+            ):
+                raise ChatGPTError(
+                    400, "invalid_reasoning_effort", "Choose an effort supported by this model."
+                )
+            with self.store.locked() as state:
+                connection_version = state.get("connection_version")
+                if (
+                    isinstance(connection_version, bool)
+                    or not isinstance(connection_version, int)
+                    or connection_version < 0
+                ):
+                    raise ProviderStateError("Selected ChatGPT connection state is invalid")
+            yield {
+                "provider": "chatgpt",
+                "connection_version": connection_version,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+            }
+
     def save_notes_preference(self, *, model: str, reasoning_effort: str = "default") -> None:
         """Save the next-run model after static validation only; never touches the network."""
         if not isinstance(model, str) or not 1 <= len(model) <= 200:

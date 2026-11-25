@@ -32,7 +32,22 @@ const els = {
   run: $("#notes-run"),
   status: $("#notes-status"),
   start: $("#notes-start"),
+  reviewCorrection: $("#notes-review-correction"),
   cancel: $("#notes-cancel"),
+  notesTab: $("#meeting-tab-notes"),
+  regenerateDialog: $("#notes-regenerate-dialog"),
+  regenerateTitle: $("#notes-regenerate-title"),
+  regenerateProvider: $("#notes-regenerate-provider"),
+  regenerateModel: $("#notes-regenerate-model"),
+  regenerateEffort: $("#notes-regenerate-effort"),
+  regenerateSource: $("#notes-regenerate-source"),
+  regenerateSourceAdopt: $("#notes-regenerate-source-adopt"),
+  regenerateLanguage: $("#notes-regenerate-language"),
+  regenerateStatus: $("#notes-regenerate-status"),
+  regenerateError: $("#notes-regenerate-error"),
+  regenerateReload: $("#notes-regenerate-reload"),
+  regenerateSubmit: $("#notes-regenerate-submit"),
+  regenerateCancel: $("#notes-regenerate-cancel"),
   change: $("#notes-change"),
   toolbar: $("#notes-toolbar"),
   language: $("#notes-output-language"),
@@ -328,6 +343,81 @@ function renderChoice(view) {
   }
 }
 
+function renderSelect(select, items, value, disabled) {
+  const key = JSON.stringify(items);
+  if (select.dataset.optionsKey !== key) {
+    select.replaceChildren(...items.map((item) => {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = tr(item.text);
+      option.disabled = Boolean(item.disabled);
+      return option;
+    }));
+    setData(select, "optionsKey", key);
+  }
+  setProp(select, "value", value);
+  setProp(select, "disabled", Boolean(disabled));
+}
+
+function restoreRegenerateFocus() {
+  // Native restoration finishes after close. Choose an enabled destination on
+  // the next turn, after the accepted task has disabled the launcher.
+  window.setTimeout(() => {
+    if (els.regenerateDialog.open) return;
+    const active = document.activeElement;
+    if (active === els.reviewCorrection && !active.hidden && !active.disabled) return;
+    if (active !== document.body && active !== els.start && active !== els.reviewCorrection
+      && !els.regenerateDialog.contains(active)) return;
+    const target = [els.start, els.cancel, els.notesTab].find((element) =>
+      element?.isConnected && !element.disabled && element.getClientRects().length,
+    );
+    target?.focus({ preventScroll: true });
+  }, 0);
+}
+
+function renderRegenerateDialog(view) {
+  const dialog = els.regenerateDialog;
+  const regenerate = view.regenerateDialog;
+  if (!dialog || !regenerate) return;
+  const focusedControl = document.activeElement;
+  const opening = regenerate.open && dialog.dataset.openIntent !== "true";
+  setData(dialog, "openIntent", String(regenerate.open));
+  if (opening && !dialog.open) {
+    dialog.showModal();
+  } else if (!regenerate.open && dialog.open) {
+    dialog.close();
+    restoreRegenerateFocus();
+  }
+  renderSelect(dialog.querySelector("#notes-regenerate-provider"), regenerate.providerItems, regenerate.provider, regenerate.locked);
+  renderSelect(dialog.querySelector("#notes-regenerate-model"), regenerate.modelItems, regenerate.model, regenerate.locked);
+  renderSelect(dialog.querySelector("#notes-regenerate-effort"), regenerate.effortItems, regenerate.reasoningEffort, regenerate.locked);
+  renderSelect(dialog.querySelector("#notes-regenerate-source"), regenerate.sourceItems, regenerate.generationId, regenerate.locked);
+  setProp(els.regenerateLanguage, "value", regenerate.outputLanguage);
+  setProp(els.regenerateLanguage, "disabled", regenerate.locked);
+  setProp(els.regenerateStatus, "textContent", tr(regenerate.status));
+  setProp(els.regenerateError, "textContent", tr(regenerate.error));
+  setProp(els.regenerateError, "hidden", !regenerate.error);
+  setProp(els.regenerateReload, "hidden", !regenerate.reloadVisible);
+  setProp(els.regenerateReload, "disabled", regenerate.reloadDisabled);
+  setProp(els.regenerateSourceAdopt, "hidden", !regenerate.sourceRefresh);
+  setProp(els.regenerateSourceAdopt, "disabled", regenerate.locked);
+  if (regenerate.sourceRefresh) setProp(els.regenerateSourceAdopt, "textContent", tr(regenerate.sourceRefreshLabel));
+  setProp(els.regenerateSubmit, "textContent", tr(regenerate.submitLabel));
+  setProp(els.regenerateSubmit, "disabled", regenerate.submitDisabled);
+  setProp(els.regenerateCancel, "textContent", tr(regenerate.cancelLabel));
+  setAttr(dialog, "aria-busy", String(regenerate.busy));
+  if (dialog.open && (opening || dialog.dataset.focusToken !== String(regenerate.focus))) {
+    setData(dialog, "focusToken", String(regenerate.focus));
+    const target = !regenerate.locked ? els.regenerateProvider
+      : !els.regenerateSubmit.disabled ? els.regenerateSubmit : els.regenerateCancel;
+    target.focus({ preventScroll: true });
+  } else if (dialog.open && dialog.contains(focusedControl) && focusedControl?.disabled) {
+    // Submission disables the focused submit button; keep keyboard focus inside
+    // the dialog on its available close action while the request is in flight.
+    els.regenerateCancel.focus({ preventScroll: true });
+  }
+}
+
 function renderTask(view) {
   const task = view.task;
   setProp(els.details, "hidden", !task);
@@ -458,9 +548,10 @@ function renderSource(source) {
 }
 
 function render(state) {
+  const view = selectView(state);
+  renderRegenerateDialog(view);
   if (!state.meeting) renderCopyPreview(null);
   if (!state.meeting) return; // the tab is hidden and keeps what it last showed
-  const view = selectView(state);
   setProp(els.empty, "hidden", !view.needed);
   setProp(els.create, "hidden", view.needed);
   setProp(els.run, "hidden", view.needed); // it sits in the toolbar once notes exist
@@ -474,6 +565,8 @@ function render(state) {
   setProp(els.start, "disabled", view.run.disabled);
   setProp(els.start, "title", tr(view.run.title));
   setProp(els.start, "textContent", tr(view.run.label));
+  setProp(els.reviewCorrection, "hidden", !view.run.correctionVisible);
+  setProp(els.reviewCorrection, "disabled", view.run.correctionDisabled);
   // A run copies the speaker names as they stand, so say which ones are still the system's own.
   const names = view.reminder.names;
   setProp(els.reminder, "hidden", !names.length || view.reminder.blocked);
@@ -599,7 +692,31 @@ els.start.addEventListener("click", (event) => {
   // The header launcher already opens Connections at its own provider's section.
   if (event.currentTarget.dataset.action === "connect") $(`#launcher-${selectedProvider(store.getState(), null)}`).click();
   else if (event.currentTarget.dataset.action === "configure") dispatch({ type: "notes/configure-clicked" });
+  else if (event.currentTarget.dataset.action === "regenerate") {
+    dispatch({ type: "notes/regenerate-clicked" });
+  }
   else dispatch({ type: "notes/start-clicked", requestId: newRequestId() });
+});
+els.reviewCorrection.addEventListener("click", () => dispatch({ type: "notes/regenerate-clicked" }));
+els.regenerateProvider.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-provider-picked", provider: event.currentTarget.value }));
+els.regenerateModel.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-model-picked", model: event.currentTarget.value }));
+els.regenerateEffort.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-effort-picked", reasoningEffort: event.currentTarget.value }));
+els.regenerateSource.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-source-picked", generationId: event.currentTarget.value }));
+els.regenerateLanguage.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-language-picked", language: event.currentTarget.value }));
+els.regenerateReload.addEventListener("click", () => dispatch({ type: "notes/regenerate-reload-clicked" }));
+els.regenerateSourceAdopt.addEventListener("click", () => dispatch({ type: "notes/regenerate-source-adopted" }));
+els.regenerateSubmit.addEventListener("click", () => dispatch({ type: "notes/regenerate-submit", requestId: newRequestId() }));
+els.regenerateCancel.addEventListener("click", () => dispatch({ type: "notes/regenerate-cancelled" }));
+els.regenerateDialog.addEventListener("cancel", (event) => {
+  if (event.target !== els.regenerateDialog) return;
+  event.preventDefault();
+  dispatch({ type: "notes/regenerate-cancelled" });
+});
+els.regenerateDialog.addEventListener("close", () => {
+  if (!els.regenerateDialog.open && store.getState().regenerate.open) {
+    dispatch({ type: "notes/regenerate-cancelled" });
+    restoreRegenerateFocus();
+  }
 });
 els.change.addEventListener("click", () => dispatch({ type: "notes/change-toggled" }));
 els.nameSpeakers.addEventListener("click", (event) => {

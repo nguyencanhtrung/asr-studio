@@ -748,7 +748,9 @@ function installMeeting(state, incoming, kind) {
   const other = !previous || !incoming || previous.id !== incoming.id;
   let notes = other ? { ...state.notes, count: 0, known: false, status: null } : state.notes;
   if (incoming && typeof incoming.notes_source_locked === "boolean") {
-    notes = { ...notes, locked: incoming.notes_source_locked, lockKnown: true };
+    // Meeting detail can predate a Notes receipt. The Notes task status keeps the lock until its own read settles it.
+    const locked = ACTIVE_TASK_STATES.includes(notes.status) || incoming.notes_source_locked;
+    notes = { ...notes, locked, lockKnown: true };
   } else if (other) {
     notes = { ...notes, locked: false, lockKnown: false };
   }
