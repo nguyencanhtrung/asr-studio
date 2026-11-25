@@ -64,6 +64,7 @@ def _accept(
     request_id: str,
     *,
     diarization_model_path: Path,
+    worker_ready: bool = True,
     **options: object,
 ) -> dict[str, object]:
     return accept_transcription_task(
@@ -74,7 +75,7 @@ def _accept(
         diarization_model_path=diarization_model_path,
         device="cpu",
         compute_type="int8",
-        worker_ready=True,
+        worker_ready=worker_ready,
         **options,
     )
 
@@ -235,6 +236,17 @@ def test_explicit_off_is_manual_rerun_only_and_publishes_truthful_no_speaker_gen
         expected_generation_id=first_generation["id"],
     )
     assert retry["id"] == off_task["id"]
+    with pytest.raises(TaskError) as generation_conflict:
+        _accept(
+            data_dir,
+            model_dir,
+            meeting_id,
+            "off-rerun-001",
+            diarization_model_path=tmp_path / "missing-diarization",
+            diarization_mode="off",
+            expected_generation_id="3" * 32,
+        )
+    assert generation_conflict.value.code == "idempotency_conflict"
     with pytest.raises(TaskError) as mode_conflict:
         _accept(
             data_dir,
@@ -255,6 +267,18 @@ def test_explicit_off_is_manual_rerun_only_and_publishes_truthful_no_speaker_gen
         alignment_policy=None,
         diarization_model_name=None,
     )
+    completed_retry = _accept(
+        data_dir,
+        model_dir,
+        meeting_id,
+        "off-rerun-001",
+        diarization_model_path=tmp_path / "missing-diarization",
+        diarization_mode="off",
+        expected_generation_id=first_generation["id"],
+        worker_ready=False,
+    )
+    assert completed_retry["id"] == off_task["id"]
+    assert completed_retry["status"] == "succeeded"
     state = transcription_state(data_dir, meeting_id)
     assert state["generation"]["id"] == off_generation["id"]
     assert state["generation"]["diarization_mode"] == "off"

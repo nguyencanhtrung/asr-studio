@@ -125,6 +125,7 @@ def _payload_hash(
     language_hint: str | None = None,
     asr_choice: str | None = None,
     diarization_mode: str | None = None,
+    expected_generation_id: str | None = None,
 ) -> str:
     payload: dict[str, str] = {"meeting_id": meeting_id}
     if asr_choice is not None:
@@ -133,6 +134,8 @@ def _payload_hash(
         payload["language_hint"] = language_hint
     if diarization_mode is not None:
         payload["diarization_mode"] = diarization_mode
+    if expected_generation_id is not None:
+        payload["expected_generation_id"] = expected_generation_id
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -323,6 +326,7 @@ def accept_transcription_task(
             language_hint=normalized_language_hint,
             asr_choice=asr_choice or asr_model,
             diarization_mode=(normalized_diarization_mode if explicit_diarization_mode else None),
+            expected_generation_id=expected_generation_id,
         )
         # Rows from before the choice was hashed say nothing about it: compare their model instead.
         legacy_request_hashes = {
@@ -334,7 +338,7 @@ def accept_transcription_task(
         ).fetchone()
         if existing is not None:
             accepted_hashes = {request_hash}
-            if not explicit_diarization_mode:
+            if not explicit_diarization_mode and expected_generation_id is None:
                 accepted_hashes.update(legacy_request_hashes)
             if (
                 existing["language_hint"] != normalized_language_hint
