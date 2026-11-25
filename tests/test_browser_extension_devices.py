@@ -644,3 +644,145 @@ def test_real_pairing_lifecycle_keeps_pending_records_visible_in_both_languages(
     assert device_token not in rendered
     assert session["session_token"] not in rendered
     context.close()
+
+
+def test_two_active_devices_revoke_one_keeps_the_other_authorized(browser_runtime):
+    live, browser = browser_runtime
+    context, page, _api = signed_in_page(
+        browser,
+        live,
+        viewport={"width": 1280, "height": 900},
+    )
+
+    credentials = {}
+    sessions = {}
+    for device_id in ("selective-device-a", "selective-device-b"):
+        issued = extension_json(
+            page,
+            live,
+            "POST",
+            "/api/extension/pairing-codes",
+            body={"device_lifetime": "never"},
+        )
+        credentials[device_id] = extension_json(
+            page,
+            live,
+            "POST",
+            "/api/extension/v1/pair",
+            body={"code": issued["code"], "device_id": device_id},
+            headers={"Content-Type": "application/json", "Origin": EXTENSION_ORIGIN},
+        )
+        sessions[device_id] = extension_json(
+            page,
+            live,
+            "POST",
+            "/api/extension/v1/session",
+            body={},
+            headers={
+                "Authorization": f"Bearer {credentials[device_id]['device_token']}",
+                "Content-Type": "application/json",
+                "Origin": EXTENSION_ORIGIN,
+            },
+        )
+
+    before = extension_json(page, live, "GET", "/api/extension/devices")["devices"]
+    assert len(before) == 2
+    assert {device["status"] for device in before} == {"active"}
+    records = {device["device_id"]: device for device in before}
+    record_a = records["selective-device-a"]["id"]
+    record_b = records["selective-device-b"]["id"]
+
+    page.get_by_role("button", name="Cài đặt", exact=True).click()
+    page.get_by_role("tab", name="Thiết bị", exact=True).click()
+    expect(page.locator("#extension-device-list > li")).to_have_count(2)
+    row_a = page.locator(f"#extension-device-list > li[data-device='{record_a}']")
+    row_b = page.locator(f"#extension-device-list > li[data-device='{record_b}']")
+    expect(row_a).to_contain_text("selective-device-a")
+    expect(row_b).to_contain_text("selective-device-b")
+    row_a.get_by_role("button", name=re.compile("Thu hồi thiết bị")).click()
+    page.get_by_role("button", name="Thu hồi thiết bị", exact=True).click()
+    expect(row_a).to_have_count(0)
+    expect(row_b).to_have_count(1)
+
+    old_a = page.request.fetch(
+        f"{live.url}/api/extension/v1/recording-sessions",
+        method="POST",
+        data=json.dumps(
+            {
+                "client_recording_id": "after-revoke-a",
+                "capture_epoch": "after-revoke-a-epoch",
+                "mime_type": "audio/webm;codecs=opus",
+                "title": "Selective revoke proof",
+                "metadata": {"channels": 1, "sample_rate": 48000, "tab_monitor": True},
+            }
+        ),
+        headers={
+            "Authorization": f"Bearer {sessions['selective-device-a']['session_token']}",
+            "Content-Type": "application/json",
+            "Origin": EXTENSION_ORIGIN,
+        },
+    )
+    assert old_a.status == 401
+    assert old_a.json()["error"]["code"] == "invalid_session_credential"
+
+    fresh_a = page.request.fetch(
+        f"{live.url}/api/extension/v1/session",
+        method="POST",
+        data="{}",
+        headers={
+            "Authorization": f"Bearer {credentials['selective-device-a']['device_token']}",
+            "Content-Type": "application/json",
+            "Origin": EXTENSION_ORIGIN,
+        },
+    )
+    assert fresh_a.status == 401
+    assert fresh_a.json()["error"]["code"] == "invalid_device_credential"
+
+    extension_json(
+        page,
+        live,
+        "POST",
+        "/api/extension/v1/recording-sessions",
+        body={
+            "client_recording_id": "existing-b",
+            "capture_epoch": "existing-b-epoch",
+            "mime_type": "audio/webm;codecs=opus",
+            "title": "Selective revoke proof",
+            "metadata": {"channels": 1, "sample_rate": 48000, "tab_monitor": True},
+        },
+        headers={
+            "Authorization": f"Bearer {sessions['selective-device-b']['session_token']}",
+            "Content-Type": "application/json",
+            "Origin": EXTENSION_ORIGIN,
+        },
+    )
+    fresh_b = extension_json(
+        page,
+        live,
+        "POST",
+        "/api/extension/v1/session",
+        body={},
+        headers={
+            "Authorization": f"Bearer {credentials['selective-device-b']['device_token']}",
+            "Content-Type": "application/json",
+            "Origin": EXTENSION_ORIGIN,
+        },
+    )
+    assert fresh_b["session_token"] != sessions["selective-device-b"]["session_token"]
+
+    after = extension_json(page, live, "GET", "/api/extension/devices")["devices"]
+    assert len(after) == 2
+    assert {device["device_id"] for device in after} == {
+        "selective-device-a",
+        "selective-device-b",
+    }
+    assert sum(device["status"] == "revoked" for device in after) == 1
+    assert (
+        next(device for device in after if device["device_id"] == "selective-device-a")["status"]
+        == "revoked"
+    )
+    assert (
+        next(device for device in after if device["device_id"] == "selective-device-b")["status"]
+        == "active"
+    )
+    context.close()

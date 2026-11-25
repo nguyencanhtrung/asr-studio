@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import hashlib
 import json
 import math
 import os
@@ -26,13 +27,18 @@ import pytest
 import uvicorn
 from fake_chatgpt import FakeChatGPTAdapter
 from fastapi.responses import JSONResponse
-from native_processing_helpers import processing_settings, synthetic_processing_worker
+from native_processing_helpers import (
+    hold_derivative_normalization,
+    processing_settings,
+    synthetic_processing_worker,
+)
 from playwright.sync_api import expect, sync_playwright
 
 from asr_studio.app import create_app
 from asr_studio.auth import AuthStore
 from asr_studio.config import Settings
 from asr_studio.extension_auth import EXTENSION_ID
+from asr_studio.notes_document import PROMPT_VERSION, SCHEMA_VERSION
 from asr_studio.storage import database_path
 
 pytestmark = pytest.mark.browser
@@ -1375,40 +1381,187 @@ def test_paired_extension_retains_and_retries_audio_after_server_api_change(
         assert db.execute("SELECT count(*) FROM recordings").fetchone()[0] == 1
 
 
+def _assert_native_processing_provenance(db, meeting_id, state):
+    steps = {step["kind"]: step for step in state["steps"]}
+    assert db.execute(
+        "SELECT kind, count(*) FROM tasks GROUP BY kind ORDER BY kind"
+    ).fetchall() == [
+        ("notes", 1),
+        ("transcription", 1),
+    ]
+    [(generation_id, source_version)] = db.execute(
+        "SELECT id, source_version FROM transcript_generations"
+    ).fetchall()
+    assert state["current_source"]["generation_id"] == generation_id
+    assert state["current_source"]["source_version"] == source_version == 1
+    assert db.execute(
+        "SELECT meeting_id, task_id, generation_number, status, language_hint, model_name, device, "
+        "compute_type, language_probability, segment_count, diarization_mode, "
+        "diarization_model_name, regular_turn_count, exclusive_turn_count, alignment_policy "
+        "FROM transcript_generations WHERE id = ?",
+        (generation_id,),
+    ).fetchone() == (
+        meeting_id,
+        steps["transcription"]["task_id"],
+        1,
+        "complete",
+        "vi",
+        "whisper-small",
+        "cpu",
+        "int8",
+        0.99,
+        1,
+        "community-1",
+        "Community-1",
+        1,
+        1,
+        "community-1-exclusive-max-overlap-v1",
+    )
+    [(segment_id, start, end, text, original_speaker_id, speaker_id)] = db.execute(
+        "SELECT id, start_seconds, end_seconds, text, original_speaker_id, speaker_id "
+        "FROM transcript_segments WHERE generation_id = ?",
+        (generation_id,),
+    ).fetchall()
+    assert (start, end, text, original_speaker_id, speaker_id) == (
+        1.1,
+        1.5,
+        "Synthetic meeting transcript.",
+        "SPEAKER_00",
+        "SPEAKER_00",
+    )
+
+    [(snapshot_id, citations_json)] = db.execute(
+        "SELECT source_snapshot_id, citations_json FROM notes_revisions"
+    ).fetchall()
+    notes = steps["notes"]
+    assert notes["source_snapshot_id"] == snapshot_id
+    assert notes["source_generation_id"] == generation_id
+    assert db.execute(
+        "SELECT meeting_id, task_id, edit_version, provider, model, reasoning_effort, "
+        "output_language, connection_version, prompt_version, schema_version "
+        "FROM notes_revisions WHERE source_snapshot_id = ?",
+        (snapshot_id,),
+    ).fetchone() == (
+        meeting_id,
+        notes["task_id"],
+        1,
+        "chatgpt",
+        "gpt-6.1-sol",
+        "high",
+        "en",
+        1,
+        PROMPT_VERSION,
+        SCHEMA_VERSION,
+    )
+    [(source_meeting, source_generation, saved_source_version, snapshot_json)] = db.execute(
+        "SELECT meeting_id, generation_id, source_version, snapshot_json FROM notes_sources "
+        "WHERE id = ?",
+        (snapshot_id,),
+    ).fetchall()
+    assert (source_meeting, source_generation, saved_source_version) == (
+        meeting_id,
+        generation_id,
+        source_version,
+    )
+    snapshot = json.loads(snapshot_json)
+    assert snapshot["id"] == snapshot_id
+    assert snapshot["generation_id"] == generation_id
+    assert snapshot["source_version"] == source_version
+    assert snapshot["segments"] == [
+        {
+            "id": segment_id,
+            "sequence": 0,
+            "start_seconds": start,
+            "end_seconds": end,
+            "text": text,
+            "original_speaker_id": original_speaker_id,
+            "speaker_id": speaker_id,
+            "speaker_name": "Speaker 1",
+        }
+    ]
+    assert json.loads(citations_json) == [
+        {
+            "section": "Overview",
+            "text": "Synthetic meeting notes.",
+            "sources": [{"id": segment_id, "start_seconds": start}],
+        }
+    ]
+    return snapshot_id, segment_id
+
+
 def test_native_capture_runs_transcript_and_notes_after_client_receipt(
     capture_server, paired_capture, tmp_path, monkeypatch
 ):
-    settings, url, requests, _tls = capture_server
+    settings, _url, requests, _tls = capture_server
     context, _worker, operator, control, tab = paired_capture
-    popup = NativePopup(context, tab)
-    popup.click("#start-button")
-    popup.wait_text("#capture-state", "Recording")
-    popup.close()
-    tab.wait_for_timeout(1600)
-    control.locator("#stop-button").click()
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        sessions = _status(control)["sessions"]
-        if sessions and sessions[0]["upload"]["cleaned"]:
-            break
-        control.wait_for_timeout(100)
-    assert sessions[0]["upload"]["cleaned"]
-    session = sessions[0]
-    with sqlite3.connect(database_path(settings.data_dir)) as db:
-        meeting_id = db.execute("SELECT id FROM meetings").fetchone()[0]
-        assert db.execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
-    extension_requests = [item for item in requests if item[1].startswith("/api/extension/v1/")]
+    db_path = database_path(settings.data_dir)
 
-    def processing():
+    def processing(meeting_id):
         return operator.evaluate(
-            "async id => (await (await fetch(`/api/meetings/${id}`)).json()).processing",
+            """async id => {
+                const response = await fetch(`/api/meetings/${id}`);
+                if (!response.ok) throw new Error(await response.text());
+                return (await response.json()).processing;
+            }""",
             meeting_id,
         )
 
     with synthetic_processing_worker(settings, tmp_path, monkeypatch):
+        with hold_derivative_normalization(monkeypatch) as normalizing:
+            popup = NativePopup(context, tab)
+            popup.click("#start-button")
+            popup.wait_text("#capture-state", "Recording")
+            popup.close()
+            # Wait for a full capture chunk to cover the fixture's citation at 1.1 seconds.
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                sessions = _status(control)["sessions"]
+                if sessions and sessions[0]["capture"]["chunkCount"] > 0:
+                    break
+                control.wait_for_timeout(100)
+            else:
+                pytest.fail("Chrome did not persist an audio chunk while recording")
+            control.locator("#stop-button").click()
+            assert normalizing.wait(timeout=30), "derivative normalization never started"
+            expect(control.locator(".session-title")).to_have_text(
+                "Server saved the raw audio", timeout=20000
+            )
+            [session] = _status(control)["sessions"]
+            assert session["capture"]["captureComplete"]
+            assert session["upload"]["cleaned"]
+            receipt = session["upload"]["receipt"]
+            assert receipt and receipt["chunk_count"] == session["capture"]["chunkCount"]
+            session_id = receipt["recording_id"]
+
+            # The scheduler and worker are running while real normalization is held.
+            with sqlite3.connect(db_path) as db:
+                raw = db.execute(
+                    "SELECT sessions.state, sessions.receipt_at, sessions.raw_key, "
+                    "sessions.raw_bytes, sessions.archive_sha256, sessions.manifest_hash, "
+                    "recordings.meeting_id, recordings.storage_key "
+                    "FROM extension_recording_sessions AS sessions "
+                    "JOIN recordings ON recordings.extension_session_id = sessions.id "
+                    "WHERE sessions.id = ?",
+                    (session_id,),
+                ).fetchone()
+                assert db.execute("SELECT COUNT(*) FROM processing_workflows").fetchone() == (0,)
+                assert db.execute("SELECT COUNT(*) FROM tasks").fetchone() == (0,)
+            assert raw is not None, receipt
+            phase, receipt_at, raw_key, size, digest, manifest, meeting_id, storage_key = raw
+            assert phase in {"archived", "finalizing"} and storage_key is None, raw
+            assert receipt_at and raw_key
+            raw_audio = (settings.data_dir / raw_key).read_bytes()
+            assert 0 < len(raw_audio) == size == receipt["total_bytes"]
+            assert hashlib.sha256(raw_audio).hexdigest() == digest == receipt["archive_sha256"]
+            assert manifest == receipt["manifest_hash"]
+            assert processing(meeting_id) is None
+            extension_requests = [
+                item for item in requests if item[1].startswith("/api/extension/v1/")
+            ]
+
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            state = processing()
+            state = processing(meeting_id)
             if state and any(
                 s["kind"] == "transcription" and s["state"] == "succeeded" for s in state["steps"]
             ):
@@ -1422,6 +1575,21 @@ def test_native_capture_runs_transcript_and_notes_after_client_receipt(
             next(s for s in state["steps"] if s["kind"] == "notes")["waiting_reason"]
             == "provider_unconfigured"
         ), state
+        with sqlite3.connect(db_path) as db:
+            ready = db.execute(
+                "SELECT sessions.state, sessions.receipt_at, sessions.raw_key, "
+                "recordings.storage_key, recordings.duration_seconds "
+                "FROM extension_recording_sessions AS sessions "
+                "JOIN recordings ON recordings.extension_session_id = sessions.id "
+                "WHERE sessions.id = ?",
+                (session_id,),
+            ).fetchone()
+            assert db.execute("SELECT kind FROM tasks").fetchall() == [("transcription",)]
+        assert ready is not None and ready[:3] == ("ready", receipt_at, raw_key), ready
+        derivative_key, duration = ready[3:]
+        assert derivative_key and derivative_key != raw_key and duration and duration >= 1.5, ready
+        assert (settings.data_dir / derivative_key).stat().st_size > 0
+
         preferences = operator.evaluate("""async () => {
             const response = await fetch('/api/processing-preferences', {method:'PUT',
               headers:{'Content-Type':'application/json'}, body:JSON.stringify({
@@ -1442,18 +1610,18 @@ def test_native_capture_runs_transcript_and_notes_after_client_receipt(
         )
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            state = processing()
-            if state and all(s["state"] == "succeeded" for s in state["steps"]):
+            state = processing(meeting_id)
+            if state and state["state"] == "succeeded":
                 break
             operator.wait_for_timeout(100)
         (tmp_path / "processing.json").write_text(json.dumps(state, indent=2))
-        assert all(s["state"] == "succeeded" for s in state["steps"]), state
-        with sqlite3.connect(database_path(settings.data_dir)) as db:
-            assert db.execute(
-                "SELECT kind, count(*) FROM tasks GROUP BY kind ORDER BY kind"
-            ).fetchall() == [("notes", 1), ("transcription", 1)]
-            assert db.execute("SELECT count(*) FROM transcript_generations").fetchone()[0] == 1
-            assert db.execute("SELECT count(*) FROM notes_revisions").fetchone()[0] == 1
+        assert state and state["state"] == "succeeded", state
+        assert {s["kind"]: s["state"] for s in state["steps"]} == {
+            "transcription": "succeeded",
+            "notes": "succeeded",
+        }, state
+        with sqlite3.connect(db_path) as db:
+            snapshot_id, segment_id = _assert_native_processing_provenance(db, meeting_id, state)
         assert [
             item for item in requests if item[1].startswith("/api/extension/v1/")
         ] == extension_requests
@@ -1466,10 +1634,31 @@ def test_native_capture_runs_transcript_and_notes_after_client_receipt(
             meeting.get_by_text("Synthetic meeting transcript.", exact=True).first
         ).to_be_visible()
         meeting.locator("#meeting-tab-notes").click()
-        expect(meeting.locator("#notes-preview")).to_contain_text("Synthetic meeting notes.")
-        expect(meeting.locator("#notes-preview")).to_be_visible()
+        preview = meeting.locator("#notes-preview")
+        expect(preview).to_contain_text("Synthetic meeting notes.")
+        expect(preview).to_be_visible()
+        citation = preview.locator("a[data-notes-source-link]")
+        expect(citation).to_have_text("00:01")
+        expect(citation).to_have_attribute(
+            "href",
+            f"/meetings/{meeting_id}?notes_source={snapshot_id}&segment={segment_id}#transcript",
+        )
         meeting.screenshot(path=str(tmp_path / "transcript-and-notes.png"))
-        (tmp_path / "processing.json").write_text(json.dumps(state, indent=2))
+        audio = meeting.locator("#meeting-audio")
+        audio.evaluate("""element => {
+            element.addEventListener('seeked', () => {
+                window.citationSeekTime = element.currentTime;
+            }, {once: true});
+        }""")
+        citation.click()
+        expect(meeting.locator("#notes-source-view")).to_be_visible()
+        expect(meeting.locator("#notes-source-text")).to_have_text("Synthetic meeting transcript.")
+        expect(meeting.locator("#notes-source-time")).to_have_text("00:00:01")
+        expect(meeting.locator("#notes-source-status")).to_contain_text(
+            "Đã tua bản ghi cuộc họp tới 00:00:01", timeout=10000
+        )
+        seek_time = meeting.wait_for_function("() => window.citationSeekTime").json_value()
+        assert seek_time == pytest.approx(1.1, abs=0.1)
 
 
 def test_native_pairing_success_activates_device_before_any_recording(

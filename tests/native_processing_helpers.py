@@ -16,7 +16,7 @@ from dataclasses import replace
 from seeding import prepare_diarization_model
 from test_chatgpt_provider import connect
 
-from asr_studio import worker
+from asr_studio import extension_ingest, worker
 from asr_studio.chatgpt import ChatGPTProvider
 from asr_studio.runtime import RuntimeProfile, write_runtime_profile
 
@@ -63,6 +63,26 @@ def _events_command(events):
 
 
 @contextmanager
+def hold_derivative_normalization(monkeypatch):
+    """Hold the real normalizer until the test observes the raw receipt."""
+    entered = threading.Event()
+    released = threading.Event()
+    normalize = extension_ingest.normalize_extension_media
+
+    def wait_then_normalize(*args, **kwargs):
+        entered.set()
+        assert released.wait(timeout=60), "test did not release derivative normalization"
+        return normalize(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(extension_ingest, "normalize_extension_media", wait_then_normalize)
+        try:
+            yield entered
+        finally:
+            released.set()
+
+
+@contextmanager
 def synthetic_processing_worker(settings, directory, monkeypatch):
     """Run real worker admission/publication with declared external boundaries."""
     monkeypatch.setenv("ASR_PROVIDER_DIR", str(settings.provider_dir))
@@ -74,20 +94,28 @@ def synthetic_processing_worker(settings, directory, monkeypatch):
                 {
                     "type": "segment",
                     "id": "a" * 32,
-                    "start_seconds": 0.1,
-                    "end_seconds": 0.5,
+                    "start_seconds": 1.1,
+                    "end_seconds": 1.5,
                     "text": "Synthetic meeting transcript.",
                 },
                 {"type": "complete", "segment_count": 1, "language_probability": 0.99},
             ]
         ),
     )
+    turn = {
+        "type": "turn",
+        "start_seconds": 1.0,
+        "end_seconds": 1.6,
+        "speaker_id": "SPEAKER_00",
+    }
     monkeypatch.setattr(
         worker,
         "_diarization_command",
         lambda *_: _events_command(
             [
-                {"type": "complete", "regular_turn_count": 0, "exclusive_turn_count": 0},
+                {**turn, "kind": "regular"},
+                {**turn, "kind": "exclusive"},
+                {"type": "complete", "regular_turn_count": 1, "exclusive_turn_count": 1},
             ]
         ),
     )
