@@ -90,6 +90,56 @@ def _notes_provider(value: object) -> str:
 
 ABSENT: Any = object()
 
+_RUN_FIELDS = frozenset(
+    {"provider", "model", "reasoning_effort", "generation_id", "source_version"}
+)
+
+
+def _run_choice(value: object) -> dict[str, object]:
+    """Normalize the complete explicit recipe without consulting provider state."""
+    if not isinstance(value, dict) or set(value) != _RUN_FIELDS:
+        raise TaskError(
+            400,
+            "invalid_run",
+            "Provide provider, model, reasoning_effort, generation_id, and source_version.",
+        )
+    provider = _notes_provider(value["provider"])
+    model = value["model"]
+    if not isinstance(model, str) or not 1 <= len(model) <= 240:
+        raise TaskError(400, "invalid_model", "Provide an available notes model.")
+    effort = value["reasoning_effort"]
+    if not isinstance(effort, str) or not effort:
+        raise TaskError(400, "invalid_reasoning_effort", "Provide a reasoning effort.")
+    generation_id = value["generation_id"]
+    if not isinstance(generation_id, str) or not generation_id:
+        raise TaskError(400, "invalid_generation_id", "Provide the selected generation id.")
+    return {
+        "provider": provider,
+        "model": model,
+        "reasoning_effort": effort,
+        "generation_id": generation_id,
+        "source_version": _positive_version(value["source_version"], field="source_version"),
+    }
+
+
+@contextmanager
+def _notes_provider_operation(
+    provider: ChatGPTProvider | AntigravityProvider,
+    *,
+    explicit_run: bool,
+    model: str | None,
+    reasoning_effort: str | None,
+) -> Iterator[dict[str, Any]]:
+    """Hold provider admission state stable while the Notes SQLite transaction runs."""
+    provider.assert_notes_acceptable()
+    if explicit_run:
+        assert model is not None and reasoning_effort is not None
+        with provider.notes_task_pin_for_run(model=model, reasoning_effort=reasoning_effort) as pin:
+            yield pin
+        return
+    with provider.store.operation():
+        yield provider.notes_task_pin()
+
 
 def _expected_choice(
     chosen_provider: str, expected_model: object, expected_reasoning_effort: object
@@ -127,6 +177,7 @@ def _request_hash(
     provider: str = "chatgpt",
     expected_model: str | None = None,
     expected_reasoning_effort: str | None = None,
+    run: dict[str, object] | None = None,
 ) -> str:
     value = {
         "expected_generation_id": expected_generation_id,
@@ -136,13 +187,15 @@ def _request_hash(
     }
     if output_language == "vi":
         value["output_language"] = "vi"
-    if provider != "chatgpt":
+    if provider != "chatgpt" and run is None:
         # Requests accepted before provider choice existed stay idempotent.
         value["provider"] = provider
     if expected_model is not None:
         value["expected_model"] = expected_model
     if expected_reasoning_effort is not None:
         value["expected_reasoning_effort"] = expected_reasoning_effort
+    if run is not None:
+        value["run"] = run
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -351,9 +404,10 @@ def accept_notes_task(
     expected_metadata_version: object,
     worker_ready: bool,
     output_language: object = "en",
-    provider_id: object = "chatgpt",
+    provider_id: object = ABSENT,
     expected_model: object = ABSENT,
     expected_reasoning_effort: object = ABSENT,
+    run: object = ABSENT,
 ) -> dict[str, object]:
     """Pin the chosen provider's state, freeze the source and claim the shared slot atomically.
 
@@ -361,12 +415,36 @@ def accept_notes_task(
     """
     if not isinstance(meeting_id, str) or not meeting_id:
         raise TaskError(400, "invalid_meeting_id", "Provide a meeting_id.")
-    chosen_provider = _notes_provider(provider_id)
     normalized_output_language = _output_language(output_language)
     normalized_request_id = _request_id(request_id)
-    confirmed_model, confirmed_effort = _expected_choice(
-        chosen_provider, expected_model, expected_reasoning_effort
-    )
+    explicit_run = run is not ABSENT
+    normalized_run: dict[str, object] | None = None
+    if explicit_run:
+        normalized_run = _run_choice(run)
+        if expected_model is not ABSENT or expected_reasoning_effort is not ABSENT:
+            raise TaskError(
+                400,
+                "invalid_request",
+                "An explicit run cannot be combined with outer model or effort choices.",
+            )
+        if provider_id is not ABSENT:
+            raise TaskError(
+                400,
+                "invalid_request",
+                "An explicit run cannot be combined with an outer provider choice.",
+            )
+        chosen_provider = normalized_run["provider"]
+        confirmed_model = normalized_run["model"]
+        confirmed_effort = normalized_run["reasoning_effort"]
+        selected_generation_id = normalized_run["generation_id"]
+        selected_source_version = normalized_run["source_version"]
+    else:
+        chosen_provider = _notes_provider("chatgpt" if provider_id is ABSENT else provider_id)
+        confirmed_model, confirmed_effort = _expected_choice(
+            chosen_provider, expected_model, expected_reasoning_effort
+        )
+        selected_generation_id = expected_generation_id
+        selected_source_version = expected_source_version
     if not isinstance(expected_generation_id, str) or not expected_generation_id:
         raise TaskError(400, "invalid_generation_id", "Provide the expected generation id.")
     source_version = _positive_version(expected_source_version, field="source_version")
@@ -378,8 +456,9 @@ def accept_notes_task(
         expected_metadata_version=metadata_version,
         output_language=normalized_output_language,
         provider=chosen_provider,
-        expected_model=confirmed_model,
-        expected_reasoning_effort=confirmed_effort,
+        expected_model=confirmed_model if not explicit_run else None,
+        expected_reasoning_effort=confirmed_effort if not explicit_run else None,
+        run=normalized_run,
     )
     existing = _existing_task(data_dir, normalized_request_id, request_hash, meeting_id)
     if existing is not None:
@@ -400,20 +479,32 @@ def accept_notes_task(
             "Another task owns the processing slot. Wait for it to finish.",
         )
 
-    provider.assert_notes_acceptable()
     # Acceptance and account changes share this cross-process lock. Lock order is
-    # provider operation lock, then SQLite. No inference or filesystem work occurs
-    # after the SQLite transaction begins.
-    with provider.store.operation():
-        pin = provider.notes_task_pin()
+    # provider operation lock, then SQLite. Explicit-run catalog I/O completes before
+    # the SQLite transaction begins; no provider I/O occurs inside that transaction.
+    with _notes_provider_operation(
+        provider,
+        explicit_run=explicit_run,
+        model=confirmed_model if explicit_run else None,
+        reasoning_effort=confirmed_effort if explicit_run else None,
+    ) as pin:
         if pin["provider"] != chosen_provider:
             raise TaskError(500, "provider_mismatch", "The notes provider could not be selected.")
         if chosen_provider == "antigravity" and confirmed_effort == "default":
             confirmed_effort = (
                 "high"  # legacy pending requests; the hash above keeps the sent value
             )
-        if (confirmed_model is not None and confirmed_model != pin["model"]) or (
-            confirmed_effort is not None and confirmed_effort != pin["reasoning_effort"]
+        if explicit_run and (
+            confirmed_model != pin["model"] or confirmed_effort != pin["reasoning_effort"]
+        ):
+            raise TaskError(
+                409,
+                "run_choice_changed",
+                "The requested notes recipe changed before it could start.",
+            )
+        if not explicit_run and (
+            (confirmed_model is not None and confirmed_model != pin["model"])
+            or (confirmed_effort is not None and confirmed_effort != pin["reasoning_effort"])
         ):
             raise TaskError(
                 409,
@@ -460,23 +551,43 @@ def accept_notes_task(
                     "current_generation_changed",
                     "The current transcript changed. Reload before starting notes generation.",
                 )
-            generation = connection.execute(
+            current_generation = connection.execute(
                 "SELECT id, status, language_hint, model_name, source_version "
                 "FROM transcript_generations WHERE id = ? AND meeting_id = ?",
                 (expected_generation_id, meeting_id),
             ).fetchone()
-            if generation is None or generation["status"] != "complete":
+            if current_generation is None or current_generation["status"] != "complete":
                 raise TaskError(
                     409,
                     "transcript_required",
                     "Generate a complete transcript before creating notes.",
                 )
-            if generation["source_version"] != source_version:
+            if current_generation["source_version"] != source_version:
                 raise TaskError(
                     409,
                     "source_version_changed",
                     "The transcript changed. Reload before starting notes generation.",
                 )
+            if explicit_run:
+                generation = connection.execute(
+                    "SELECT id, status, language_hint, model_name, source_version "
+                    "FROM transcript_generations WHERE id = ? AND meeting_id = ?",
+                    (selected_generation_id, meeting_id),
+                ).fetchone()
+                if generation is None or generation["status"] != "complete":
+                    raise TaskError(
+                        409,
+                        "transcript_required",
+                        "Select a complete saved transcript before creating notes.",
+                    )
+                if generation["source_version"] != selected_source_version:
+                    raise TaskError(
+                        409,
+                        "source_version_changed",
+                        "The selected transcript changed. Reload before starting notes generation.",
+                    )
+            else:
+                generation = current_generation
             recording = connection.execute(
                 "SELECT duration_seconds FROM recordings WHERE meeting_id = ?", (meeting_id,)
             ).fetchone()
@@ -570,7 +681,8 @@ def accept_notes_task(
             )
             if cursor.rowcount != 1:
                 raise TaskError(409, "system_busy", "Another task owns the processing slot.")
-            _record_last_provider(connection, chosen_provider)
+            if not explicit_run:
+                _record_last_provider(connection, chosen_provider)
             row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
             assert row is not None
             return _task_summary(row)

@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from asr_studio.notes import (
     get_note,
     get_notes_source,
     has_active_notes_task,
+    last_notes_provider,
     load_notes_task_input,
     notes_state,
     publish_notes_revision,
@@ -58,6 +60,22 @@ def _accept(data_dir: Path, meeting_id: str, generation_id: str, *, request_id="
         expected_metadata_version=1,
         worker_ready=True,
     )
+
+
+class _ExplicitNotesProvider(StubNotesProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.explicit_pins: list[tuple[str, str]] = []
+
+    @contextmanager
+    def notes_task_pin_for_run(self, *, model: str, reasoning_effort: str):
+        self.explicit_pins.append((model, reasoning_effort))
+        yield {
+            "provider": "chatgpt",
+            "connection_version": 11,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+        }
 
 
 def _markdown(text="Approved next step."):
@@ -161,6 +179,183 @@ def test_acceptance_freezes_source_pins_account_and_locks_only_its_meeting(tmp_p
         text="The lock released after the task stopped.",
     )
     assert changed["source_version"] == 2
+
+
+def test_explicit_run_selects_historical_source_without_preference_mutation_or_replay_pin(
+    tmp_path,
+):
+    data_dir = tmp_path / "data"
+    meeting_id, historical_generation_id, _ = seed_completed_transcript(data_dir)
+    previous = _publish(
+        data_dir,
+        meeting_id,
+        historical_generation_id,
+        markdown="# Edited Notes\n\nKeep this revision.\n",
+    )
+    edited = update_note(
+        data_dir,
+        previous["id"],
+        expected_edit_version=1,
+        markdown="# Edited Notes\n\nThe operator kept this edit.\n",
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE notes_preferences SET provider = 'antigravity' WHERE id = 1")
+    preference_before = last_notes_provider(data_dir)
+    rerun_transcript(data_dir, meeting_id)
+    current = transcription_state(data_dir, meeting_id)["generation"]
+    run = {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "high",
+        "generation_id": historical_generation_id,
+        "source_version": 1,
+    }
+    provider = _ExplicitNotesProvider()
+
+    accepted = accept_notes_task(
+        data_dir,
+        provider=provider,
+        meeting_id=meeting_id,
+        request_id="explicit-historical-001",
+        expected_generation_id=current["id"],
+        expected_source_version=current["source_version"],
+        expected_metadata_version=1,
+        worker_ready=True,
+        run=run,
+    )
+
+    assert provider.explicit_pins == [("gpt-6.1-sol", "high")]
+    assert last_notes_provider(data_dir) == preference_before == "antigravity"
+    assert get_note(data_dir, edited["id"])["markdown"] == (
+        "# Edited Notes\n\nThe operator kept this edit.\n"
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        task_row = connection.execute(
+            "SELECT notes_provider, notes_connection_version, notes_model, "
+            "notes_reasoning_effort, notes_source_id FROM tasks WHERE id = ?",
+            (accepted["id"],),
+        ).fetchone()
+    assert task_row[:4] == ("chatgpt", 11, "gpt-6.1-sol", "high")
+    snapshot = get_notes_source(data_dir, task_row[4])
+    assert snapshot["generation_id"] == historical_generation_id
+    assert [segment["text"] for segment in snapshot["segments"]] == [
+        "We need a launch plan.",
+        "Morgan will send a draft.",
+    ]
+
+    replay = accept_notes_task(
+        data_dir,
+        provider=_UntouchedProvider(),
+        meeting_id=meeting_id,
+        request_id="explicit-historical-001",
+        expected_generation_id=current["id"],
+        expected_source_version=current["source_version"],
+        expected_metadata_version=1,
+        worker_ready=False,
+        run=run,
+    )
+    assert replay["id"] == accepted["id"]
+    changed_run = {**run, "reasoning_effort": "medium"}
+    with pytest.raises(TaskError) as conflict:
+        accept_notes_task(
+            data_dir,
+            provider=_UntouchedProvider(),
+            meeting_id=meeting_id,
+            request_id="explicit-historical-001",
+            expected_generation_id=current["id"],
+            expected_source_version=current["source_version"],
+            expected_metadata_version=1,
+            worker_ready=False,
+            run=changed_run,
+        )
+    assert conflict.value.code == "idempotency_conflict"
+
+
+def test_explicit_run_rejects_outer_choice_fields(tmp_path):
+    data_dir = tmp_path / "data"
+    meeting_id, generation_id, _ = seed_completed_transcript(data_dir)
+    run = {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "high",
+        "generation_id": generation_id,
+        "source_version": 1,
+    }
+
+    for kwargs in (
+        {"provider_id": "chatgpt"},
+        {"expected_model": "gpt-6.1-sol"},
+        {"expected_reasoning_effort": "high"},
+    ):
+        with pytest.raises(TaskError) as failure:
+            accept_notes_task(
+                data_dir,
+                provider=_ExplicitNotesProvider(),
+                meeting_id=meeting_id,
+                request_id=f"explicit-mixed-{len(kwargs)}-{next(iter(kwargs))}",
+                expected_generation_id=generation_id,
+                expected_source_version=1,
+                expected_metadata_version=1,
+                worker_ready=True,
+                run=run,
+                **kwargs,
+            )
+        assert failure.value.code == "invalid_request"
+
+
+def test_explicit_run_keeps_current_guards_and_validates_selected_source_version(tmp_path):
+    data_dir = tmp_path / "data"
+    meeting_id, historical_generation_id, _ = seed_completed_transcript(data_dir)
+    rerun_transcript(data_dir, meeting_id)
+    current = transcription_state(data_dir, meeting_id)["generation"]
+    base_run = {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "high",
+        "generation_id": historical_generation_id,
+        "source_version": 1,
+    }
+    cases = (
+        (
+            "stale-current-generation",
+            {"expected_generation_id": historical_generation_id},
+            "current_generation_changed",
+        ),
+        (
+            "stale-current-source",
+            {"expected_source_version": 2},
+            "source_version_changed",
+        ),
+        (
+            "stale-metadata",
+            {"expected_metadata_version": 2},
+            "metadata_version_changed",
+        ),
+        (
+            "stale-selected-source",
+            {"run": {**base_run, "source_version": 2}},
+            "source_version_changed",
+        ),
+    )
+    for request_suffix, changes, expected_code in cases:
+        provider = _ExplicitNotesProvider()
+        arguments = {
+            "expected_generation_id": current["id"],
+            "expected_source_version": current["source_version"],
+            "expected_metadata_version": 1,
+            "run": base_run,
+        }
+        arguments.update(changes)
+        with pytest.raises(TaskError) as failure:
+            accept_notes_task(
+                data_dir,
+                provider=provider,
+                meeting_id=meeting_id,
+                request_id=f"explicit-guard-{request_suffix}",
+                worker_ready=True,
+                **arguments,
+            )
+        assert failure.value.code == expected_code
 
 
 def test_busy_notes_refusal_does_not_wait_for_provider_operation_lock(tmp_path):

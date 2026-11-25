@@ -141,6 +141,57 @@ def test_login_catalog_preference_verification_restart_and_disconnect(tmp_path):
     assert restarted.provider_view()["status"] == "disconnected"
 
 
+def test_explicit_notes_recipe_uses_live_catalog_without_saved_model_or_preference_writes(tmp_path):
+    adapter = FakeAntigravityAdapter()
+    provider = AntigravityProvider(tmp_path / "provider", adapter=adapter)
+    provider.ensure()
+    with provider.store.locked(write=True) as state:
+        state["connection_status"] = "connected"
+        state["connection_version"] = 4
+        state["selected_model"] = None
+        state["reasoning_effort"] = "medium"
+    with provider.store.locked() as state:
+        before = dict(state)
+
+    with provider.notes_task_pin_for_run(
+        model="gemini-3-pro-high", reasoning_effort="default"
+    ) as pin:
+        assert pin == {
+            "provider": "antigravity",
+            "connection_version": 4,
+            "model": "gemini-3-pro-high",
+            "reasoning_effort": "high",
+        }
+
+    with provider.store.locked() as state:
+        after = dict(state)
+    assert after["selected_model"] == before["selected_model"] is None
+    assert after["reasoning_effort"] == before["reasoning_effort"] == "medium"
+
+    with (
+        pytest.raises(AntigravityError) as unavailable,
+        provider.notes_task_pin_for_run(model="gemini-not-listed", reasoning_effort="high"),
+    ):
+        pass
+    assert (unavailable.value.status_code, unavailable.value.code) == (422, "model_unavailable")
+
+    with (
+        pytest.raises(AntigravityError) as invalid_effort,
+        provider.notes_task_pin_for_run(model="gemini-3-pro-high", reasoning_effort="low"),
+    ):
+        pass
+    assert invalid_effort.value.code == "invalid_reasoning_effort"
+
+    with provider.store.locked(write=True) as state:
+        state["connection_status"] = "disconnected"
+    with (
+        pytest.raises(AntigravityError) as disconnected,
+        provider.notes_task_pin_for_run(model="gemini-3-pro-high", reasoning_effort="high"),
+    ):
+        pass
+    assert disconnected.value.code == "provider_disconnected"
+
+
 def test_login_can_request_non_secret_code_and_be_cancelled(tmp_path):
     adapter = FakeAntigravityAdapter(needs_input=True)
     provider = AntigravityProvider(tmp_path / "provider", adapter=adapter)

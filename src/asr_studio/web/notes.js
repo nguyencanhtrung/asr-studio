@@ -33,6 +33,18 @@ const els = {
   status: $("#notes-status"),
   start: $("#notes-start"),
   cancel: $("#notes-cancel"),
+  regenerateDialog: $("#notes-regenerate-dialog"),
+  regenerateTitle: $("#notes-regenerate-title"),
+  regenerateProvider: $("#notes-regenerate-provider"),
+  regenerateModel: $("#notes-regenerate-model"),
+  regenerateEffort: $("#notes-regenerate-effort"),
+  regenerateSource: $("#notes-regenerate-source"),
+  regenerateLanguage: $("#notes-regenerate-language"),
+  regenerateStatus: $("#notes-regenerate-status"),
+  regenerateError: $("#notes-regenerate-error"),
+  regenerateReload: $("#notes-regenerate-reload"),
+  regenerateSubmit: $("#notes-regenerate-submit"),
+  regenerateCancel: $("#notes-regenerate-cancel"),
   change: $("#notes-change"),
   toolbar: $("#notes-toolbar"),
   language: $("#notes-output-language"),
@@ -328,6 +340,62 @@ function renderChoice(view) {
   }
 }
 
+function renderSelect(select, items, value, disabled) {
+  const key = JSON.stringify(items);
+  if (select.dataset.optionsKey !== key) {
+    select.replaceChildren(...items.map((item) => {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = tr(item.text);
+      option.disabled = Boolean(item.disabled);
+      return option;
+    }));
+    setData(select, "optionsKey", key);
+  }
+  setProp(select, "value", value);
+  setProp(select, "disabled", Boolean(disabled));
+}
+
+let regenerateOpener = null;
+
+function renderRegenerateDialog(view) {
+  const dialog = els.regenerateDialog;
+  const regenerate = view.regenerateDialog;
+  if (!dialog || !regenerate) return;
+  if (regenerate.open && !dialog.open) {
+    dialog.showModal();
+    regenerateOpener = regenerateOpener || els.start;
+  } else if (!regenerate.open && dialog.open) {
+    dialog.close();
+    const opener = regenerateOpener;
+    regenerateOpener = null;
+    // Native dialog dismissal may restore focus after this render pass; restore it on
+    // the next turn so Escape, cancel, and an uncertain retry all return to the launcher.
+    if (opener?.isConnected) window.setTimeout(() => {
+      if (!dialog.open && opener.isConnected) opener.focus({ preventScroll: true });
+    }, 0);
+  }
+  renderSelect(dialog.querySelector("#notes-regenerate-provider"), regenerate.providerItems, regenerate.provider, regenerate.locked);
+  renderSelect(dialog.querySelector("#notes-regenerate-model"), regenerate.modelItems, regenerate.model, regenerate.locked);
+  renderSelect(dialog.querySelector("#notes-regenerate-effort"), regenerate.effortItems, regenerate.reasoningEffort, regenerate.locked);
+  renderSelect(dialog.querySelector("#notes-regenerate-source"), regenerate.sourceItems, regenerate.generationId, regenerate.locked);
+  setProp(els.regenerateLanguage, "value", regenerate.outputLanguage);
+  setProp(els.regenerateLanguage, "disabled", regenerate.locked);
+  setProp(els.regenerateStatus, "textContent", tr(regenerate.status));
+  setProp(els.regenerateError, "textContent", tr(regenerate.error));
+  setProp(els.regenerateError, "hidden", !regenerate.error);
+  setProp(els.regenerateReload, "hidden", !regenerate.reloadVisible);
+  setProp(els.regenerateReload, "disabled", regenerate.reloadDisabled);
+  setProp(els.regenerateSubmit, "textContent", tr(regenerate.submitLabel));
+  setProp(els.regenerateSubmit, "disabled", regenerate.submitDisabled);
+  setProp(els.regenerateCancel, "textContent", tr(regenerate.cancelLabel));
+  setAttr(dialog, "aria-busy", String(Boolean(regenerate.locked && regenerate.status)));
+  if (regenerate.open && dialog.dataset.focusToken !== String(regenerate.focus)) {
+    setData(dialog, "focusToken", String(regenerate.focus));
+    els.regenerateProvider.focus({ preventScroll: true });
+  }
+}
+
 function renderTask(view) {
   const task = view.task;
   setProp(els.details, "hidden", !task);
@@ -458,9 +526,10 @@ function renderSource(source) {
 }
 
 function render(state) {
+  const view = selectView(state);
+  renderRegenerateDialog(view);
   if (!state.meeting) renderCopyPreview(null);
   if (!state.meeting) return; // the tab is hidden and keeps what it last showed
-  const view = selectView(state);
   setProp(els.empty, "hidden", !view.needed);
   setProp(els.create, "hidden", view.needed);
   setProp(els.run, "hidden", view.needed); // it sits in the toolbar once notes exist
@@ -599,7 +668,23 @@ els.start.addEventListener("click", (event) => {
   // The header launcher already opens Connections at its own provider's section.
   if (event.currentTarget.dataset.action === "connect") $(`#launcher-${selectedProvider(store.getState(), null)}`).click();
   else if (event.currentTarget.dataset.action === "configure") dispatch({ type: "notes/configure-clicked" });
+  else if (event.currentTarget.dataset.action === "regenerate") {
+    regenerateOpener = event.currentTarget;
+    dispatch({ type: "notes/regenerate-clicked" });
+  }
   else dispatch({ type: "notes/start-clicked", requestId: newRequestId() });
+});
+els.regenerateProvider.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-provider-picked", provider: event.currentTarget.value }));
+els.regenerateModel.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-model-picked", model: event.currentTarget.value }));
+els.regenerateEffort.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-effort-picked", reasoningEffort: event.currentTarget.value }));
+els.regenerateSource.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-source-picked", generationId: event.currentTarget.value }));
+els.regenerateLanguage.addEventListener("change", (event) => dispatch({ type: "notes/regenerate-language-picked", language: event.currentTarget.value }));
+els.regenerateReload.addEventListener("click", () => dispatch({ type: "notes/regenerate-reload-clicked" }));
+els.regenerateSubmit.addEventListener("click", () => dispatch({ type: "notes/regenerate-submit", requestId: newRequestId() }));
+els.regenerateCancel.addEventListener("click", () => dispatch({ type: "notes/regenerate-cancelled" }));
+els.regenerateDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  dispatch({ type: "notes/regenerate-cancelled" });
 });
 els.change.addEventListener("click", () => dispatch({ type: "notes/change-toggled" }));
 els.nameSpeakers.addEventListener("click", (event) => {

@@ -93,16 +93,41 @@ def install_notes_routes(
                 "expected_source_version",
                 "expected_metadata_version",
             },
-            optional={"output_language", "provider", "expected_model", "expected_reasoning_effort"},
+            optional={
+                "output_language",
+                "provider",
+                "expected_model",
+                "expected_reasoning_effort",
+                "run",
+            },
         )
+        if "run" in payload and any(
+            field in payload
+            for field in ("provider", "expected_model", "expected_reasoning_effort")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_request",
+                    "message": (
+                        "An explicit run cannot be combined with provider, model, or effort "
+                        "choices outside run."
+                    ),
+                },
+            )
         worker_ready = _notes_processing_ready(settings.data_dir)
-        provider_id = payload.get("provider", "chatgpt")
+        run_payload = payload.get("run", ABSENT)
+        provider_id = (
+            run_payload.get("provider", "chatgpt")
+            if isinstance(run_payload, dict)
+            else payload.get("provider", "chatgpt")
+        )
         try:
             result = await run_in_threadpool(
                 accept_notes_task,
                 settings.data_dir,
                 provider=antigravity_provider if provider_id == "antigravity" else chatgpt_provider,
-                provider_id=provider_id,
+                provider_id=ABSENT if "run" in payload else provider_id,
                 meeting_id=meeting_id,
                 request_id=payload["request_id"],
                 expected_generation_id=payload["expected_generation_id"],
@@ -112,6 +137,7 @@ def install_notes_routes(
                 expected_model=payload.get("expected_model", ABSENT),
                 expected_reasoning_effort=payload.get("expected_reasoning_effort", ABSENT),
                 worker_ready=worker_ready,
+                run=run_payload,
             )
             return result
         except TaskError as error:

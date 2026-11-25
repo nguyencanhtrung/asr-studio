@@ -6,6 +6,7 @@ import {
   blockRuns,
   hasUnsavedDraft,
   failureMessage,
+  generationChoices,
   initialState,
   normalizePendingRequest,
   pendingRequestStorageKey,
@@ -109,11 +110,19 @@ function setup() {
 const notesBody = (revisions = [], task = null, locked = false) => ({ revisions, task, source_locked: locked });
 
 // Open the meeting and answer the notes read plus the provider choice, so the run button can work.
-async function opened(env, { revisions = [], task = null, catalog = CATALOG } = {}) {
+async function opened(env, { revisions = [], task = null, catalog = CATALOG, preferences = PREFS } = {}) {
   env.context();
   await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody(revisions, task));
   await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
-  await env.answer(env.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, preferences);
+  await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, catalog);
+}
+
+async function openedMeeting(env, customMeeting, { revisions = [], catalog = CATALOG, preferences = PREFS } = {}) {
+  env.context(customMeeting);
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody(revisions));
+  await env.answer(env.is("GET", "/api/providers"), 200, PROVIDERS);
+  await env.answer(env.is("GET", "/api/notes-preferences"), 200, preferences);
   await env.answer(env.is("GET", "/api/providers/chatgpt/models"), 200, catalog);
 }
 
@@ -797,6 +806,127 @@ test("start pressed twice issues one POST in total", async () => {
   env.dispatch("start-clicked", { requestId: "req-bbbb-0002" });
   assert.equal(posts(env, "/notes-runs").length, 1);
 });
+
+test("regenerate dialog exposes current and historical transcript sources and closes without a request", async () => {
+  const current = { ...GENERATION, generation_number: 2, source_version: 3 };
+  const historical = { id: "g0", status: "complete", generation_number: 1, source_version: 1, segments: [] };
+  const customMeeting = {
+    ...meeting(),
+    transcription: { generation: current, generation_history: [historical], task: null },
+  };
+  const env = setup();
+  await openedMeeting(env, customMeeting, {
+    revisions: [revision()],
+    catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["medium", "high"] }] },
+  });
+  assert.deepEqual(generationChoices(customMeeting).map((item) => item.id), ["g0", "g1"]);
+  env.dispatch("regenerate-clicked");
+  const open = selectView(env.state()).regenerateDialog;
+  assert.equal(open.open, true);
+  assert.deepEqual(open.sourceItems.map((item) => item.value), ["g0", "g1"]);
+  assert.equal(open.generationId, "g1");
+  assert.equal(open.sourceVersion, 3);
+  env.dispatch("regenerate-cancelled");
+  assert.equal(selectView(env.state()).regenerateDialog.open, false);
+  assert.equal(posts(env, "/notes-runs").length, 0);
+  assert.equal(env.requests.filter((request) => request.method === "PUT").length, 0);
+});
+
+test("explicit regeneration sends only the typed run recipe, preserves legacy guards, and writes no preference", async () => {
+  const current = { ...GENERATION, generation_number: 2, source_version: 3 };
+  const historical = { id: "g0", status: "complete", generation_number: 1, source_version: 1, segments: [] };
+  const customMeeting = {
+    ...meeting(),
+    transcription: { generation: current, generation_history: [historical], task: null },
+  };
+  const env = setup();
+  await openedMeeting(env, customMeeting, {
+    revisions: [revision()],
+    catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["medium", "high"] }] },
+    preferences: { provider: "chatgpt", models: {}, reasoning_effort: "default" },
+  });
+  env.dispatch("regenerate-clicked");
+  assert.equal(env.state().choice.preferences.models.chatgpt, undefined);
+  env.dispatch("regenerate-effort-picked", { reasoningEffort: "high" });
+  env.dispatch("regenerate-source-picked", { generationId: "g0" });
+  env.dispatch("regenerate-language-picked", { language: "vi" });
+  env.dispatch("regenerate-submit", { requestId: "req-run-0001" });
+  const body = posts(env, "/notes-runs")[0].body;
+  assert.deepEqual(body, {
+    request_id: "req-run-0001",
+    expected_generation_id: "g1",
+    expected_source_version: 3,
+    expected_metadata_version: 3,
+    output_language: "vi",
+    run: {
+      provider: "chatgpt",
+      model: "m1",
+      reasoning_effort: "high",
+      generation_id: "g0",
+      source_version: 1,
+    },
+  });
+  assert.equal(Object.hasOwn(body, "provider"), false);
+  assert.equal(Object.hasOwn(body, "expected_model"), false);
+  assert.equal(Object.hasOwn(body, "expected_reasoning_effort"), false);
+  assert.deepEqual(env.state().pending.m1, body);
+  assert.equal(env.requests.filter((request) => request.method === "PUT").length, 0);
+});
+
+test("explicit regeneration keeps the exact request across an uncertain retry and ignores a stale response after cancel", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision()], catalog: { models: [{ id: "m1", display_name: "M1", reasoning_efforts: ["high"] }] } });
+  env.dispatch("regenerate-clicked");
+  env.dispatch("regenerate-effort-picked", { reasoningEffort: "high" });
+  env.dispatch("regenerate-submit", { requestId: "req-run-0002" });
+  const firstBody = posts(env, "/notes-runs")[0].body;
+  await env.fail(env.is("POST", "/notes-runs"));
+  assert.equal(notes(env).runErrorUncertain, true);
+  assert.deepEqual(env.state().pending.m1, firstBody);
+  assert.equal(
+    text(selectView(env.state()).regenerateDialog.status),
+    "Yêu cầu này đã được giữ nguyên. Thử lại sẽ dùng cùng các lựa chọn.",
+  );
+  assert.doesNotMatch(text(selectView(env.state()).regenerateDialog.status), /JSON|capability/);
+  assert.equal(selectView(env.state()).regenerateDialog.submitLabel.text, "Xác minh yêu cầu notes");
+  env.dispatch("regenerate-submit", { requestId: "req-run-replaced" });
+  assert.deepEqual(posts(env, "/notes-runs")[1].body, firstBody);
+
+  const beforeCancel = env.state();
+  env.dispatch("regenerate-cancelled");
+  assert.equal(notes(env).starting, false);
+  assert.deepEqual(env.state().pending.m1, firstBody);
+  const cancelledMessage = notes(env).runError;
+  env.store.dispatch({
+    type: "notes/response",
+    meta: { op: "start", meetingId: "m1", requestId: firstBody.request_id, explicit: true, attempt: beforeCancel.startAttempt },
+    response: { status: 202, body: { ...TASK, status: "accepted" } },
+  });
+  assert.equal(notes(env).runError, cancelledMessage);
+  assert.deepEqual(env.state().pending.m1, firstBody);
+});
+
+test("explicit regeneration blocks disconnected providers and catalog failures before POST", async () => {
+  const disconnected = setup();
+  await opened(disconnected, { revisions: [revision()] });
+  disconnected.dispatch("regenerate-clicked");
+  disconnected.dispatch("regenerate-provider-picked", { provider: "antigravity" });
+  disconnected.dispatch("regenerate-submit", { requestId: "req-run-0003" });
+  assert.equal(posts(disconnected, "/notes-runs").length, 0);
+  assert.match(text(selectView(disconnected.state()).regenerateDialog.error), /chưa sẵn sàng/);
+
+  const failed = setup();
+  failed.context();
+  await failed.answer(failed.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await failed.answer(failed.is("GET", "/api/providers"), 200, PROVIDERS);
+  await failed.answer(failed.is("GET", "/api/notes-preferences"), 200, PREFS);
+  await failed.fail(failed.is("GET", "/api/providers/chatgpt/models"));
+  failed.dispatch("regenerate-clicked");
+  failed.dispatch("regenerate-submit", { requestId: "req-run-0004" });
+  assert.equal(posts(failed, "/notes-runs").length, 0);
+  assert.match(text(selectView(failed.state()).regenerateDialog.error), /Chưa tải được danh sách model/);
+});
+
 test("no start while a task is active, the source is locked, or transcription runs", async () => {
   const active = setup();
   await opened(active, { task: TASK });
@@ -995,6 +1125,24 @@ test("normalizePendingRequest: provider default, partial or invalid expected fie
   assert.equal(normalizePendingRequest(JSON.stringify({ ...full, expected_source_version: 0 })), null);
   assert.equal(normalizePendingRequest(JSON.stringify({ ...full, expected_metadata_version: 0 })), null);
   assert.ok(normalizePendingRequest(JSON.stringify({ ...base, expected_generation_id: "g" }), { legacy: true }));
+  const explicit = {
+    ...base,
+    expected_generation_id: "current",
+    expected_source_version: 2,
+    expected_metadata_version: 3,
+    run: {
+      provider: "chatgpt",
+      model: "m1",
+      reasoning_effort: "high",
+      generation_id: "historical",
+      source_version: 1,
+    },
+  };
+  assert.deepEqual(normalizePendingRequest(JSON.stringify(explicit)), explicit);
+  assert.equal(normalizePendingRequest(JSON.stringify({ ...explicit, provider: "chatgpt" })), null);
+  assert.equal(normalizePendingRequest(JSON.stringify({ ...explicit, expected_model: "m1" })), null);
+  assert.equal(normalizePendingRequest(JSON.stringify({ ...explicit, expected_reasoning_effort: "high" })), null);
+  assert.equal(normalizePendingRequest(JSON.stringify({ ...explicit, run: { ...explicit.run, extra: true } })), null);
 });
 test("stored pending: the first one wins, the stored language is adopted once", async () => {
   const env = setup();

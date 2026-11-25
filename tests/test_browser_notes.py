@@ -5,11 +5,12 @@ import json
 import re
 import sqlite3
 import wave
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from notes_helpers import StubNotesProvider, seed_completed_transcript
+from notes_helpers import StubNotesProvider, rerun_transcript, seed_completed_transcript
 from playwright.sync_api import expect
 from test_browser_history import live as live
 from test_browser_history import signed_in as browser_signed_in  # noqa: F401
@@ -29,6 +30,18 @@ from asr_studio.storage import database_path
 from asr_studio.tasks import claim_next_task, transcription_state
 
 pytestmark = pytest.mark.browser
+
+
+class BrowserExplicitStub(StubNotesProvider):
+    @contextmanager
+    def notes_task_pin_for_run(self, *, model: str, reasoning_effort: str):
+        with self.store.operation():
+            yield {
+                "provider": "chatgpt",
+                "connection_version": 7,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+            }
 
 
 @pytest.fixture
@@ -203,7 +216,7 @@ def fake_notes_provider(monkeypatch):
     original_accept = notes_routes.accept_notes_task
 
     def accept_with_stub(data_dir, *, provider, **kwargs):
-        return original_accept(data_dir, provider=StubNotesProvider(), **kwargs)
+        return original_accept(data_dir, provider=BrowserExplicitStub(), **kwargs)
 
     monkeypatch.setattr(notes_routes, "accept_notes_task", accept_with_stub)
     monkeypatch.setattr(notes_routes, "worker_is_healthy", lambda _path, *, role=None: True)
@@ -816,6 +829,158 @@ def _seed_saved_notes(data_dir: Path, *, title: str = "Notes frame"):
 def _open_saved_notes(live, page, meeting_id: str) -> None:
     page.goto(f"{live.url}/meetings/{meeting_id}")
     expect(page.locator("#notes-saved-work")).to_be_visible(timeout=10_000)
+    # Saved work can paint before the provider catalogs finish; the launcher is
+    # enabled only after the choice surface is authoritative for this meeting.
+    expect(page.locator("#notes-start")).to_be_enabled(timeout=10_000)
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_explicit_regenerate_dialog_uses_historical_source_without_saving_preferences(
+    live, signed_in, fake_notes_provider, width
+):
+    _context, page = signed_in(viewport={"width": width, "height": 900})
+    meeting_id, revision, snapshot, _segment_ids = _seed_saved_notes(live.settings.data_dir)
+    historical_generation_id = snapshot["generation_id"]
+    rerun_transcript(live.settings.data_dir, meeting_id)
+    with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
+        current_generation_id = connection.execute(
+            "SELECT current_generation_id FROM meetings WHERE id = ?", (meeting_id,)
+        ).fetchone()[0]
+    assert current_generation_id != historical_generation_id
+
+    requests: list[dict[str, object]] = []
+    preference_writes: list[str] = []
+
+    def capture_request(request) -> None:
+        if request.method == "POST" and request.url.endswith("/notes-runs"):
+            requests.append(json.loads(request.post_data or "{}"))
+        if request.method == "PUT" and request.url.endswith("/api/notes-preferences"):
+            preference_writes.append(request.url)
+
+    page.on("request", capture_request)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-mode-write").click()
+    draft = "# Keep this draft\n\nDo not replace these unsaved words.\n"
+    page.locator("#notes-markdown").fill(draft)
+    page.locator("#notes-start").click()
+
+    dialog = page.locator("#notes-regenerate-dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog).to_have_attribute("aria-labelledby", "notes-regenerate-title")
+    expect(dialog).to_have_attribute("aria-describedby", "notes-regenerate-intro")
+    assert page.evaluate("document.activeElement && document.activeElement.id") == (
+        "notes-regenerate-provider"
+    )
+    source = page.locator("#notes-regenerate-source")
+    source_values = source.locator("option").evaluate_all("items => items.map(item => item.value)")
+    assert source_values == [historical_generation_id, current_generation_id]
+    expect(source).to_have_value(current_generation_id)
+    page.locator("#notes-regenerate-provider").select_option("chatgpt")
+    page.locator("#notes-regenerate-model").select_option("gpt-6.1-sol")
+    page.locator("#notes-regenerate-effort").select_option("high")
+    source.select_option(historical_generation_id)
+    page.locator("#notes-regenerate-language").select_option("vi")
+    dialog_box = dialog.bounding_box()
+    assert dialog_box is not None and dialog_box["width"] <= width
+
+    with page.expect_response(
+        lambda response: response.url.endswith("/notes-runs")
+        and response.request.method == "POST"
+    ) as accepted_response:
+        page.locator("#notes-regenerate-submit").click()
+    assert accepted_response.value.status == 202
+    assert len(requests) == 1
+    body = requests[0]
+    assert set(body) == {
+        "request_id",
+        "expected_generation_id",
+        "expected_source_version",
+        "expected_metadata_version",
+        "output_language",
+        "run",
+    }
+    assert body["expected_generation_id"] == current_generation_id
+    assert body["expected_source_version"] == 1
+    assert body["expected_metadata_version"] == 1
+    assert body["output_language"] == "vi"
+    assert body["run"] == {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "high",
+        "generation_id": historical_generation_id,
+        "source_version": 1,
+    }
+    assert preference_writes == []
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#notes-markdown")).to_have_value(draft)
+    assert revision["id"]
+
+
+def test_explicit_regenerate_retry_replays_the_same_request_and_cancel_returns_focus(
+    live, signed_in, fake_notes_provider
+):
+    _context, page = signed_in()
+    meeting_id, _revision, snapshot, _segment_ids = _seed_saved_notes(live.settings.data_dir)
+    rerun_transcript(live.settings.data_dir, meeting_id)
+    requests: list[dict[str, object]] = []
+
+    def notes_request(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        requests.append(body)
+        route.fulfill(
+            status=503,
+            json={"detail": {"code": "temporary_failure", "message": "Try again."}},
+        )
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}/notes-runs", notes_request)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-dialog")).to_be_visible()
+    expect(page.locator("#notes-regenerate-error")).to_be_visible()
+    expect(page.locator("#notes-regenerate-error")).to_contain_text("Hãy thử lại")
+    expect(page.locator("#notes-start")).to_have_text("Xác minh yêu cầu notes")
+    assert len(requests) == 1
+    first_body = requests[0]
+    expect(page.locator("#notes-regenerate-submit")).to_have_text("Xác minh yêu cầu notes")
+
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-dialog")).to_be_visible()
+    assert len(requests) == 2
+    assert requests[1] == first_body
+
+    page.locator("#notes-regenerate-cancel").click()
+    expect(page.locator("#notes-regenerate-dialog")).to_be_hidden()
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-start"
+    assert snapshot["generation_id"]
+
+
+def test_explicit_regenerate_dialog_uses_english_title_intro_and_error(
+    live, signed_in, fake_notes_provider
+):
+    _context, page = signed_in()
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    meeting_id, _revision, _snapshot, _segment_ids = _seed_saved_notes(live.settings.data_dir)
+
+    def fail_notes(route) -> None:
+        route.fulfill(
+            status=503,
+            json={"detail": {"code": "temporary_failure", "message": "Try again."}},
+        )
+
+    page.route(f"{live.url}/api/meetings/{meeting_id}/notes-runs", fail_notes)
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-start").click()
+    dialog = page.locator("#notes-regenerate-dialog")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#notes-regenerate-title")).to_have_text("Recreate notes")
+    expect(page.locator("#notes-regenerate-intro")).to_have_text(
+        "Choose the recipe and saved transcript for this run. This choice does not change the setting for the next run."
+    )
+    page.locator("#notes-regenerate-submit").click()
+    expect(page.locator("#notes-regenerate-error")).to_have_text(
+        "The server could not complete the request. Try again later."
+    )
 
 
 def _contrast(foreground: str, background: str) -> float:
