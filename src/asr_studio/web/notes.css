@@ -964,3 +964,158 @@ a.notes-citation-chip:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* The regeneration dialog is a one-run ledger: the choices are visible together and never become a preference. */
+.notes-regenerate-dialog {
+  width: min(48rem, calc(100% - 28px));
+  max-height: calc(100dvh - 28px);
+  padding: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.notes-regenerate-dialog[open] {
+  display: grid;
+  gap: 16px;
+}
+
+.notes-regenerate-dialog::backdrop {
+  background: var(--overlay);
+}
+
+.notes-regenerate-header {
+  padding-inline-start: 13px;
+  border-inline-start: 3px solid var(--accent);
+}
+
+.notes-regenerate-header h2 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: var(--text-heading);
+  font-weight: 560;
+  line-height: 1.2;
+}
+
+.notes-regenerate-header p:last-child {
+  max-width: 62ch;
+  margin: 7px 0 0;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  line-height: 1.6;
+}
+
+.notes-regenerate-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.notes-regenerate-field {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 5px;
+}
+
+.notes-regenerate-field label {
+  color: var(--ink-2);
+  font-size: var(--text-label);
+  font-weight: 620;
+}
+
+.notes-regenerate-field select {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-control);
+}
+
+.notes-regenerate-field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.notes-regenerate-field select:disabled {
+  cursor: not-allowed;
+  opacity: .68;
+}
+
+.notes-regenerate-source-field {
+  grid-column: 1 / -1;
+}
+
+.notes-regenerate-source-adopt {
+  justify-self: start;
+  text-align: start;
+}
+
+.notes-regenerate-help {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-small);
+  line-height: 1.45;
+}
+
+.notes-regenerate-status,
+.notes-regenerate-error {
+  min-height: 1em;
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+
+.notes-regenerate-status {
+  color: var(--ink-2);
+}
+
+.notes-regenerate-error {
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.notes-regenerate-reload {
+  justify-self: start;
+  margin-top: -8px;
+}
+
+.notes-regenerate-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 520px) {
+  .notes-regenerate-dialog {
+    width: calc(100% - 20px);
+    padding: 16px;
+  }
+
+  .notes-regenerate-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notes-regenerate-source-field {
+    grid-column: auto;
+  }
+
+  .notes-regenerate-controls {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .notes-regenerate-controls > button {
+    width: 100%;
+  }
+}

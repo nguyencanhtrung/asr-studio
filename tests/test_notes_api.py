@@ -4,8 +4,14 @@ import sqlite3
 import time
 
 import pytest
+from fake_chatgpt import FakeChatGPTAdapter
 from httpx import ASGITransport, AsyncClient
-from notes_helpers import StubNotesProvider, seed_cited_notes, seed_completed_transcript
+from notes_helpers import (
+    StubNotesProvider,
+    rerun_transcript,
+    seed_cited_notes,
+    seed_completed_transcript,
+)
 
 from asr_studio.app import create_app
 from asr_studio.auth import AuthStore
@@ -13,7 +19,12 @@ from asr_studio.chatgpt import DIRECT_SCOPE
 from asr_studio.config import Settings
 from asr_studio.notes import accept_notes_task, publish_notes_revision
 from asr_studio.storage import database_path
-from asr_studio.tasks import add_current_generation_speaker, claim_next_task, finish_canceled_task
+from asr_studio.tasks import (
+    add_current_generation_speaker,
+    claim_next_task,
+    finish_canceled_task,
+    transcription_state,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -216,6 +227,105 @@ async def test_notes_routes_enforce_auth_and_preserve_saved_revision_contract(
             assert history.json()["revisions"][0]["citations"] == []  # none were kept for it
             assert history.json()["revisions"][1]["citations"] == citations
             assert history.json()["task"]["output_language"] == "vi"
+
+
+async def test_explicit_run_uses_historical_generation_without_saved_model_or_mixed_choices(
+    tmp_path, monkeypatch
+):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        auth_dir=tmp_path / "auth",
+        public_url="http://127.0.0.1:8765",
+    )
+    adapter = FakeChatGPTAdapter()
+    app = create_app(settings, chatgpt_adapter=adapter)
+    async with app.router.lifespan_context(app):
+        meeting_id, historical_generation_id, _ = seed_completed_transcript(settings.data_dir)
+        rerun_transcript(settings.data_dir, meeting_id)
+        current = transcription_state(settings.data_dir, meeting_id)["generation"]
+        monkeypatch.setattr(
+            "asr_studio.notes_routes.worker_is_healthy",
+            lambda _path, *, role=None: True,
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url=settings.public_url
+        ) as client:
+            headers = await _authorize(client, settings)
+            provider = app.state.chatgpt_provider
+            client_id = "oaiapp_explicit-123"
+            with provider.store.locked(write=True) as state:
+                state["connection_status"] = "connected"
+                state["connection_version"] = 6
+                state["active_client_id"] = client_id
+                state["registrations"][client_id] = {
+                    "access_token": "local-test-access-token",
+                    "refresh_token": "local-test-refresh-token",
+                    "expires_at": time.time() + 3600,
+                    "scopes": [DIRECT_SCOPE],
+                    "subject": "test-subject",
+                    "label": "Test account",
+                }
+                state["selected_model"] = None
+                state["selected_reasoning_effort"] = "default"
+
+            meeting = await client.get(f"/api/meetings/{meeting_id}")
+            assert meeting.status_code == 200
+            assert meeting.json()["transcription"]["generation_history"][0]["id"] == (
+                historical_generation_id
+            )
+            body = {
+                "request_id": "api-explicit-historical-001",
+                "expected_generation_id": current["id"],
+                "expected_source_version": current["source_version"],
+                "expected_metadata_version": 1,
+                "run": {
+                    "provider": "chatgpt",
+                    "model": "gpt-6.1-sol",
+                    "reasoning_effort": "high",
+                    "generation_id": historical_generation_id,
+                    "source_version": 1,
+                },
+            }
+            accepted = await client.post(
+                f"/api/meetings/{meeting_id}/notes-runs", headers=headers, json=body
+            )
+            assert accepted.status_code == 202
+            task = accepted.json()
+            assert task["provider"] == "chatgpt"
+            assert task["model"] == "gpt-6.1-sol"
+            calls_after_accept = len(adapter.model_calls)
+            with sqlite3.connect(database_path(settings.data_dir)) as connection:
+                source_id = connection.execute(
+                    "SELECT notes_source_id FROM tasks WHERE id = ?", (task["id"],)
+                ).fetchone()[0]
+                preference = connection.execute(
+                    "SELECT provider FROM notes_preferences WHERE id = 1"
+                ).fetchone()[0]
+            assert preference is None
+            assert provider.store._read()["selected_model"] is None
+            assert (await client.get(f"/api/notes-sources/{source_id}")).json()[
+                "generation_id"
+            ] == historical_generation_id
+
+            replay = await client.post(
+                f"/api/meetings/{meeting_id}/notes-runs", headers=headers, json=body
+            )
+            assert replay.status_code == 202
+            assert replay.json()["id"] == task["id"]
+            assert len(adapter.model_calls) == calls_after_accept
+
+            for field, value in (
+                ("provider", "chatgpt"),
+                ("expected_model", "gpt-6.1-sol"),
+                ("expected_reasoning_effort", "high"),
+            ):
+                mixed = await client.post(
+                    f"/api/meetings/{meeting_id}/notes-runs",
+                    headers=headers,
+                    json={**body, "request_id": f"api-explicit-mixed-{field}", field: value},
+                )
+                assert mixed.status_code == 400
+                assert mixed.json()["detail"]["code"] == "invalid_request"
 
 
 async def _authorize(client, settings) -> dict[str, str]:
