@@ -367,6 +367,11 @@ def test_diarization_capability_reports_real_file_and_worker_readiness(tmp_path,
         "operator_prepared": False,
     }
 
+    monkeypatch.setattr(routes, "worker_is_healthy", lambda *_args, **_kwargs: False)
+    unavailable = routes.diarization_capability(settings)
+    assert unavailable["off"]["ready"] is False
+    assert unavailable["off"]["reason"] == "worker_unavailable"
+
     monkeypatch.setenv("ASR_DIARIZATION_ROLLBACK_FENCE", "1")
     fenced = routes.diarization_capability(settings)
     assert fenced["off"] == {

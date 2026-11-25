@@ -124,6 +124,11 @@ def diarization_capability(settings: Settings) -> dict[str, object]:
     else:
         state = "unavailable"
         reason = "worker_unavailable"
+    off_reason = None
+    if rollback_fenced:
+        off_reason = "rollback_fence"
+    elif not worker_ready:
+        off_reason = "worker_unavailable"
     return {
         "contract_version": DIARIZATION_CAPABILITY_VERSION,
         "default_mode": "community-1",
@@ -137,9 +142,9 @@ def diarization_capability(settings: Settings) -> dict[str, object]:
         },
         "off": {
             "id": "off",
-            "ready": not rollback_fenced,
-            "state": "unavailable" if rollback_fenced else "ready",
-            "reason": "rollback_fence" if rollback_fenced else None,
+            "ready": off_reason is None,
+            "state": "unavailable" if off_reason else "ready",
+            "reason": off_reason,
             "allowed_on": "manual_transcript_rerun",
         },
     }
