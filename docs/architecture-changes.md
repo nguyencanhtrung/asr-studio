@@ -3070,9 +3070,11 @@ Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#1
 disposable desktop fixture, the search top moved from 1301.515625px to
 588.6875px; the first segment top moved from 1467.515625px to
 807.6875px. Its final height is 89.59375px. These measurements come
-from the committed [before](assets/frontend/issue-283/before.json) and
-[after](assets/frontend/issue-283/after.json) records (desktop, light, VI);
-the [capture instructions](assets/frontend/issue-283/README.md) describe the fixture.
+from the local-only `before.json` and `after.json` records under
+`/tmp/asr-visual-correction/evidence/issue-283/preserved-5baadbf/` (desktop, light, VI).
+The [capture instructions](assets/frontend/issue-283/README.md) describe the fixture,
+source limits, hashes and external artifact location. Generated images and records
+are not versioned in Git.
 These are viewport coordinates for that sample, not a general performance claim.
 
 **Design change.** Search leads, successful process metadata collapses, and a context disclosure

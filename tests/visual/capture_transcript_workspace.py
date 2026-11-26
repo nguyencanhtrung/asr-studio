@@ -1,7 +1,9 @@
+"""Capture reproducible Transcript workspace scenarios to an external directory."""
+
+import argparse
 import json
 import sqlite3
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -11,9 +13,16 @@ from test_browser_history import LiveServer
 
 from asr_studio.storage import database_path
 
-out = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).resolve().parent
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("phase", choices=("before", "after"))
+parser.add_argument("output", type=Path, help="Evidence directory outside the checkout")
+args = parser.parse_args()
+out = args.output.expanduser().resolve()
+checkout = Path(__file__).resolve().parents[2]
+if out == checkout or checkout in out.parents:
+    parser.error("Evidence output must be outside the checkout")
 out.mkdir(parents=True, exist_ok=True)
-phase = sys.argv[1]
+phase = args.phase
 with tempfile.TemporaryDirectory(prefix="transcript-283-") as tmp:
     server = LiveServer(Path(tmp))
     server.start()
