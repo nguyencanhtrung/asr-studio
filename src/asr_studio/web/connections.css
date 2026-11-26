@@ -1560,3 +1560,37 @@ button.provider-overview-row:focus-visible {
     width: 100%;
   }
 }
+
+/* Section grouping keeps provider pages reachable inside the existing modal. */
+.settings-nav-group {
+  margin: 16px 12px 4px;
+  color: var(--ink-3);
+  font-size: var(--text-label);
+  font-weight: 600;
+}
+.settings-nav-group:first-child {
+  margin-top: 0;
+}
+@media (min-width: 681px) {
+  #settings-tab-processing {
+    padding-left: 12px;
+  }
+}
+@media (min-width: 900px) {
+  .connection-model-section form {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 12px 20px;
+  }
+  .connection-model-section .connection-model-status,
+  .connection-model-section form > button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+@media (max-width: 680px) {
+  .settings-nav-group {
+    display: none;
+  }
+}
