@@ -2695,7 +2695,9 @@ function renderTranscription(transcription) {
     setProp(status, "textContent", !recording.ready
       ? tr(recording.statusMessage)
       : modelBlocked
-        ? modelGuidance
+        ? generation
+          ? modelGuidance
+          : t("Bản ghi đã lưu.")
         : generation
           ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
           : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local."));
