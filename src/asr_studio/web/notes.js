@@ -421,8 +421,10 @@ function renderRegenerateDialog(view) {
 
 function renderTask(view) {
   const task = view.task;
-  setProp(els.details, "hidden", !task);
+  const summary = els.details.querySelector("summary");
   const completed = Boolean(task && task.steps.every((step) => step === "done"));
+  const transferSummaryFocus = Boolean(task && !completed && document.activeElement === summary);
+  setProp(els.details, "hidden", !task);
   // Polling must not close a disclosure the reader opened. Only a transition
   // into/out of successful completion changes its default presentation.
   const presentation = task ? (completed ? "completed" : "attention") : "";
@@ -431,13 +433,13 @@ function renderTask(view) {
     setData(els.details, "presentation", presentation);
   }
   // Active progress and failures are always exposed; only success is collapsible.
-  setProp(els.details.querySelector("summary"), "hidden", Boolean(task && !completed));
+  setProp(summary, "hidden", Boolean(task && !completed));
   setProp(els.status, "textContent", tr(view.status));
   if (!task) {
     setProp(els.cancel, "hidden", true);
     return;
   }
-  if (!els.details.contains(document.activeElement)) {
+  if (transferSummaryFocus || !els.details.contains(document.activeElement)) {
     const inPosition = completed
       ? els.savedWork.nextSibling === els.details
       : els.details.nextSibling === els.savedWork;
@@ -464,6 +466,9 @@ function renderTask(view) {
   setProp(els.cancel, "hidden", task.cancelHidden);
   setProp(els.cancel, "disabled", task.cancelDisabled);
   setProp(els.cancel, "textContent", tr(task.cancelLabel));
+  // Focus only after the complete render has settled the generation controls.
+  if (!transferSummaryFocus) return null;
+  return task.cancelHidden || task.cancelDisabled ? els.status : els.cancel;
 }
 
 // The saved Markdown's source links that open no source, said in words above the notes.
@@ -591,7 +596,7 @@ function render(state) {
   const names = view.reminder.names;
   setProp(els.reminder, "hidden", !names.length || view.reminder.blocked);
   setProp(els.reminderNames, "textContent", tr(speakerReminder(names)));
-  renderTask(view);
+  const taskFocusTarget = renderTask(view);
   setProp(els.error, "hidden", !view.error);
   setProp(els.errorMessage, "textContent", tr(view.error));
   renderSavedWork(view.savedWork);
@@ -602,6 +607,7 @@ function render(state) {
   setProp(els.copyStatus, "textContent", tr(view.actionMessage));
   renderSource(view.source);
   renderCopyPreview(state.activeTab === "notes" ? view.copyPreview : null);
+  taskFocusTarget?.focus();
 }
 
 function renderCopyPreview(preview) {

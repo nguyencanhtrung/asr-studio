@@ -3058,4 +3058,6 @@ Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#1
 
 **Accessibility regression.** The processing disclosure uses the control type token. Layout probes distinguish assistive-only headings from visible clipping; a deliberate visible overflow remains detectable. The typography matrix retains its existing font, keyboard and overflow requirements.
 
+**External-run focus.** A queued or failed server run hides the completed-run summary. If that summary owns focus, transfer focus to an available cancel control or the programmatically focusable status, after moving the active details above the document. Bring that replacement into view; ordinary polling and focus elsewhere remain untouched. The visible-focus regression is `tests/test_browser_notes_disclosure_focus.py`.
+
 **Tag / target.** Design; `DESIGN.md` and `docs/frontend-design.md`.
