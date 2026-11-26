@@ -64,9 +64,13 @@ CUT_TEXT_JS = """() => [...document.querySelectorAll("body *")]
     if (!text || !element.getClientRects().length) return false;
     const style = getComputedStyle(element);
     if (style.display === "inline" || style.visibility === "hidden") return false;
-    if (element.closest(".visually-hidden,[aria-hidden='true']")) return false;
-    // Chromium can retain layout boxes for descendants of a closed native disclosure.
-    if (element.closest("details:not([open])")) return false;
+    if (element.closest(".visually-hidden")) return false;
+    // A closed disclosure hides its body, but its direct summary stays visible.
+    for (let closed = element.closest("details:not([open])"); closed;
+         closed = closed.parentElement?.closest("details:not([open])")) {
+      const summary = closed.querySelector(":scope > summary");
+      if (!summary || !summary.contains(element)) return false;
+    }
     if (element.matches("select")) return false;
     if (style.textOverflow === "ellipsis" || style.clipPath !== "none") return false;
     return element.scrollWidth - element.clientWidth > 1
@@ -846,24 +850,34 @@ def test_clipping_probe_ignores_assistive_text_and_closed_disclosures(live, sign
           const clipped = document.createElement("p");
           clipped.style.cssText = "width:10px;white-space:nowrap;overflow:hidden";
           clipped.textContent = "Visible text that must be detected.";
+          const ariaHidden = clipped.cloneNode(true);
+          ariaHidden.setAttribute("aria-hidden", "true");
+          ariaHidden.textContent = "Visible pixels remain checked with aria-hidden.";
           const details = document.createElement("details");
           details.id = "clipping-details";
           const summary = document.createElement("summary");
-          summary.textContent = "Open clipping probe";
+          summary.style.cssText = "width:10px;white-space:nowrap;overflow:hidden";
+          summary.textContent = "Visible summary must be detected while closed.";
           const collapsed = document.createElement("p");
           collapsed.style.cssText = "width:10px;white-space:nowrap;overflow:hidden";
           collapsed.textContent = "Collapsed text is checked only after opening.";
           details.append(summary, collapsed);
-          document.body.append(hidden, clipped, details);
+          document.body.append(hidden, clipped, ariaHidden, details);
         }"""
     )
     expect(page.get_by_role("heading", name="Assistive heading probe")).to_have_count(1)
-    assert page.evaluate(CUT_TEXT_JS) == ["P. Visible text that must be detected."]
+    visible_clipping = [
+        "P. Visible text that must be detected.",
+        "P. Visible pixels remain checked with aria-hidden.",
+        "SUMMARY. Visible summary must be detected while closed.",
+    ]
+    assert page.evaluate(CUT_TEXT_JS) == visible_clipping
     probe = page.locator("#clipping-details")
     probe.locator(":scope > summary").focus()
     probe.locator(":scope > summary").press("Enter")
     expect(probe).to_have_attribute("open", "")
+    expect(probe.locator(":scope > summary")).to_be_focused()
     assert page.evaluate(CUT_TEXT_JS) == [
-        "P. Visible text that must be detected.",
+        *visible_clipping,
         "P. Collapsed text is checked only after opening.",
     ]
