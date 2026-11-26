@@ -423,7 +423,6 @@
               <h3 id="audio-heading">Bản ghi âm</h3>
               <span class="source-label"><span class="source-label-dot" aria-hidden="true"></span><span id="recording-source">Nguồn cuộc họp</span></span>
             </header>
-            <p class="audio-hint">Dùng thanh điều khiển để phát, tạm dừng hoặc tua tới đoạn cần nghe lại.</p>
             <section class="recording-status" id="recording-status" hidden>
               <div class="recording-status-copy">
                 <p id="recording-status-message"></p>
@@ -456,35 +455,72 @@
             <p class="notes-source-status" id="notes-source-status" role="status" aria-live="polite"></p>
           </section>
           <section class="transcription-panel" id="transcription-panel" aria-labelledby="transcription-heading">
-            <header class="transcription-heading">
-              <h3 id="transcription-heading">Transcript</h3>
-              <div class="transcription-actions">
-                <div class="transcription-language-control">
-                  <label for="transcription-language">Gợi ý ngôn ngữ</label>
-                  <select id="transcription-language" aria-describedby="transcription-language-help">
-                    <option value="en">English</option>
-                    <option value="vi">Tiếng Việt</option>
-                  </select>
-                  <p class="field-help" id="transcription-language-help">Không khóa ngôn ngữ transcript.</p>
-                </div>
-                <div class="transcription-language-control" id="transcription-model-control" hidden>
-                  <label for="transcription-model">Model ASR</label>
-                  <select id="transcription-model" aria-describedby="transcription-model-help transcription-dependency"></select>
-                  <p class="field-help" id="transcription-model-help"></p>
-                </div>
-                <button class="primary-button" id="start-transcription" type="button">Chép lời</button>
-                <button class="secondary-button" id="cancel-transcription" type="button" hidden>Hủy</button>
+            <div class="transcript-filters" id="transcript-filters" hidden role="search" aria-label="Tìm trong transcript">
+              <label class="transcript-search" for="transcript-search">Tìm nội dung, người nói hoặc mốc thời gian
+                <input id="transcript-search" type="search" autocomplete="off" aria-controls="transcript-segments" />
+              </label>
+              <label class="transcript-review-filter"><input id="transcript-review-only" type="checkbox" /> Chỉ đoạn cần kiểm tra</label>
+              <div class="transcript-review-navigation" role="group" aria-label="Điều hướng đoạn cần kiểm tra">
+                <button id="transcript-review-prev" class="secondary-button" type="button">Đoạn cần kiểm tra trước</button>
+                <button id="transcript-review-next" class="secondary-button" type="button">Đoạn cần kiểm tra tiếp</button>
+                <button id="transcript-clear-filters" class="text-button" type="button" hidden>Xóa bộ lọc</button>
               </div>
-            </header>
-            <p class="field-help" id="transcription-dependency">Transcript cần Community-1 để tách người nói.</p>
-            <div class="transcription-model-guidance" id="transcription-model-guidance" role="status" hidden>
-              <p id="transcription-model-guidance-text"></p>
-              <div class="task-diagnostic-command-wrap" id="transcription-model-command-wrap" hidden>
-                <label for="transcription-model-command">Lệnh chuẩn bị model</label>
-                <div class="task-diagnostic-command">
-                  <input id="transcription-model-command" type="text" readonly spellcheck="false" />
+              <p id="transcript-filter-status" class="field-help" role="status"></p>
+              <button id="transcript-reveal-target" class="secondary-button" type="button" hidden></button>
+            </div>
+            <div class="transcript-processing-tools">
+              <details class="transcript-processing" id="transcript-processing" open>
+                <summary aria-describedby="transcription-status">ASR · <span>Chi tiết xử lý</span></summary>
+                <header class="transcription-heading">
+                  <h3 id="transcription-heading">Transcript</h3>
+                  <div class="transcription-actions">
+                    <div class="transcription-language-control">
+                      <label for="transcription-language">Gợi ý ngôn ngữ</label>
+                      <select id="transcription-language" aria-describedby="transcription-language-help">
+                        <option value="en">English</option>
+                        <option value="vi">Tiếng Việt</option>
+                      </select>
+                      <p class="field-help" id="transcription-language-help">Không khóa ngôn ngữ transcript.</p>
+                    </div>
+                    <div class="transcription-language-control" id="transcription-model-control" hidden>
+                      <label for="transcription-model">Model ASR</label>
+                      <select id="transcription-model" aria-describedby="transcription-model-help transcription-dependency"></select>
+                      <p class="field-help" id="transcription-model-help"></p>
+                    </div>
+                  </div>
+                </header>
+                <p class="field-help" id="transcription-dependency">Transcript cần Community-1 để tách người nói.</p>
+                <div class="transcription-model-guidance" id="transcription-model-guidance" role="status" hidden>
+                  <p id="transcription-model-guidance-text"></p>
+                  <div class="task-diagnostic-command-wrap" id="transcription-model-command-wrap" hidden>
+                    <label for="transcription-model-command">Lệnh chuẩn bị model</label>
+                    <div class="task-diagnostic-command">
+                      <input id="transcription-model-command" type="text" readonly spellcheck="false" />
+                    </div>
+                  </div>
                 </div>
-              </div>
+                <p class="audio-hint">Dùng thanh điều khiển để phát, tạm dừng hoặc tua tới đoạn cần nghe lại.</p>
+                <details class="generation-details" id="generation-details">
+                  <summary>Chi tiết transcript</summary>
+                  <p id="generation-meta"></p>
+                </details>
+                <div id="completed-task-status"></div>
+                <div id="completed-task-measurements"></div>
+                <details class="processing-details">
+                  <summary>Chi tiết xử lý</summary>
+                  <dl class="runtime-profile" id="runtime-profile" aria-live="polite">
+                    <div>
+                      <dt>Compute backend</dt>
+                      <dd id="runtime-backend">Đang chờ worker</dd>
+                    </div>
+                    <div>
+                      <dt>Model mặc định theo phần cứng</dt>
+                      <dd id="runtime-model">Chưa xác định</dd>
+                    </div>
+                  </dl>
+                </details>
+              </details>
+              <button class="primary-button" id="start-transcription" type="button">Chép lời</button>
             </div>
             <div class="task-progress" id="task-progress" hidden>
               <p class="task-progress-line">
@@ -496,25 +532,13 @@
             <p class="transcription-status" id="transcription-status" role="status" aria-live="polite">
               Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local.
             </p>
+            <button class="secondary-button" id="cancel-transcription" type="button" hidden>Hủy</button>
             <dl class="task-measurements" id="task-measurements" hidden>
               <div><dt>Giai đoạn</dt><dd id="task-stage"></dd></div>
               <div><dt>Thời gian đã chạy</dt><dd id="task-elapsed"></dd></div>
               <div><dt>Số đoạn</dt><dd id="task-segment-count"></dd></div>
               <div><dt>Mốc transcript</dt><dd id="task-transcript-end"></dd></div>
             </dl>
-            <details class="processing-details">
-              <summary>Chi tiết xử lý</summary>
-              <dl class="runtime-profile" id="runtime-profile" aria-live="polite">
-                <div>
-                  <dt>Compute backend</dt>
-                  <dd id="runtime-backend">Đang chờ worker</dd>
-                </div>
-                <div>
-                  <dt>Model mặc định theo phần cứng</dt>
-                  <dd id="runtime-model">Chưa xác định</dd>
-                </div>
-              </dl>
-            </details>
             <div class="transcription-error" id="transcription-error" role="alert" hidden>
               <p id="transcription-error-message"></p>
               <dl class="task-diagnostic-details" id="task-diagnostic-details" hidden>
@@ -539,10 +563,6 @@
                 <h4 id="generation-title"></h4>
                 <div class="generation-summary-wrap">
                   <p id="generation-summary"></p>
-                  <details class="generation-details" id="generation-details">
-                    <summary>Chi tiết transcript</summary>
-                    <p id="generation-meta"></p>
-                  </details>
                 </div>
               </div>
               <div class="generation-navigation" id="generation-navigation" hidden>
@@ -551,34 +571,36 @@
               </div>
               <p class="generation-mode" id="generation-mode" role="status"></p>
               <div class="transcript-draft-recovery" id="transcript-draft-recovery" hidden></div>
-              <section class="speaker-catalog" id="speaker-catalog" aria-labelledby="speaker-catalog-title">
-                <h5 id="speaker-catalog-title" tabindex="-1">Người nói trong phiên bản này</h5>
-                <p class="field-help" id="speaker-name-help">Đổi tên chỉ cập nhật tên hiển thị của người nói.</p>
-                <ul class="speaker-catalog-list" id="speaker-catalog-list"></ul>
-                <form class="speaker-add-form" id="speaker-add-form" novalidate>
-                  <label for="speaker-add-name">Thêm người nói <span class="optional-mark">Tùy chọn tên</span></label>
-                  <div class="speaker-add-controls">
-                    <input id="speaker-add-name" type="text" maxlength="80" autocomplete="off" placeholder="Mặc định: Speaker mới" data-transcript-mutation />
-                    <button class="secondary-button" type="submit" data-transcript-mutation>Thêm người nói</button>
-                  </div>
-                  <p class="speaker-form-status" id="speaker-add-status" role="status"></p>
-                </form>
-              </section>
-              <div class="transcript-filters" role="search" aria-label="Tìm trong transcript">
-                <label class="transcript-search" for="transcript-search">Tìm nội dung, người nói hoặc mốc thời gian
-                  <input id="transcript-search" type="search" autocomplete="off" aria-controls="transcript-segments" />
-                </label>
-                <label class="transcript-review-filter"><input id="transcript-review-only" type="checkbox" /> Chỉ đoạn cần kiểm tra</label>
-                <div class="transcript-review-navigation" role="group" aria-label="Điều hướng đoạn cần kiểm tra">
-                  <button id="transcript-review-prev" class="secondary-button" type="button">Đoạn cần kiểm tra trước</button>
-                  <button id="transcript-review-next" class="secondary-button" type="button">Đoạn cần kiểm tra tiếp</button>
-                  <button id="transcript-clear-filters" class="text-button" type="button" hidden>Xóa bộ lọc</button>
+              <div class="transcript-workspace">
+                <details class="transcript-context" id="transcript-context">
+                  <summary id="transcript-context-summary"><span>Chi tiết</span> · <span>Người nói</span></summary>
+                  <section class="selected-segment" aria-labelledby="selected-segment-title">
+                    <h5 id="selected-segment-title">Chi tiết</h5>
+                    <p id="selected-segment-time" class="selected-segment-time"></p>
+                    <p id="selected-segment-speaker"></p>
+                    <p id="selected-segment-text"></p>
+                    <div id="selected-segment-details"></div>
+                    <button class="secondary-button" id="selected-segment-edit" type="button">Sửa</button>
+                  </section>
+                  <section class="speaker-catalog" id="speaker-catalog" aria-labelledby="speaker-catalog-title">
+                    <h5 id="speaker-catalog-title" tabindex="-1">Người nói trong phiên bản này</h5>
+                    <p class="field-help" id="speaker-name-help">Đổi tên chỉ cập nhật tên hiển thị của người nói.</p>
+                    <ul class="speaker-catalog-list" id="speaker-catalog-list"></ul>
+                    <form class="speaker-add-form" id="speaker-add-form" novalidate>
+                      <label for="speaker-add-name">Thêm người nói <span class="optional-mark">Tùy chọn tên</span></label>
+                      <div class="speaker-add-controls">
+                        <input id="speaker-add-name" type="text" maxlength="80" autocomplete="off" placeholder="Mặc định: Speaker mới" data-transcript-mutation />
+                        <button class="secondary-button" type="submit" data-transcript-mutation>Thêm người nói</button>
+                      </div>
+                      <p class="speaker-form-status" id="speaker-add-status" role="status"></p>
+                    </form>
+                  </section>
+                </details>
+                <div class="transcript-reading">
+                  <p class="transcript-empty" id="transcript-empty" hidden>Model không trả về đoạn lời nói nào.</p>
+                  <ol class="transcript-segments" id="transcript-segments"></ol>
                 </div>
-                <p id="transcript-filter-status" class="field-help" role="status"></p>
-                <button id="transcript-reveal-target" class="secondary-button" type="button" hidden></button>
               </div>
-              <p class="transcript-empty" id="transcript-empty" hidden>Model không trả về đoạn lời nói nào.</p>
-              <ol class="transcript-segments" id="transcript-segments"></ol>
             </div>
           </section>
           </div>

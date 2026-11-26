@@ -371,6 +371,12 @@ def test_rerun_language_is_retained_across_an_uncertain_retry(live, signed_in):
     page.route(f"{live.url}/api/tasks", start_task)
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     language = page.locator("#transcription-language")
+    expect(language).to_be_hidden()
+    summary = page.locator("#transcript-processing > summary")
+    summary.focus()
+    summary.press("Enter")
+    expect(summary).to_be_focused()
+    expect(language).to_be_visible()
     expect(language).to_have_value("en")
     expect(language).to_have_accessible_name("Gợi ý ngôn ngữ")
     language.select_option("vi")
@@ -467,7 +473,8 @@ def test_progress_fits_360px_in_both_themes_and_the_summary_shows_focus(
     assert len(ratios) == 3 and min(ratios) >= 4.5
 
     page.locator("#cancel-transcription").focus()
-    page.keyboard.press("Tab")
+    # Processing details precede the always-visible cancel action in the workspace.
+    page.keyboard.press("Shift+Tab")
     summary = page.locator(".processing-details > summary")
     expect(summary).to_be_focused()
     ring = summary.evaluate(

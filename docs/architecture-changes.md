@@ -26,9 +26,11 @@ keeps the real segment ID, so the view can offer a reachable clear-filter/reveal
 that row is hidden. Filtering never changes the immutable Notes source or seeks to a visible substitute.
 A save or assignment that removes a focused row from the results returns focus to search.
 This extends ADR 0010's current core/view boundary; no new runner effect, API or persisted schema.
-The generation header keeps a short count summary. Existing model, language, runtime, diarization
-and review-policy values stay available in a native `Chi tiết transcript` disclosure, separate from
-the pipeline's `Chi tiết xử lý` diagnostics and cancel controls.
+The generation header keeps a short count summary. In the #283 workspace, completed model,
+language, runtime, diarization and review-policy metadata is inside the outer native `ASR · Chi tiết
+xử lý` disclosure, with `Chi tiết transcript` and the runtime profile as nested disclosures;
+`Chạy lại` stays beside it. Active progress, worker state, failure, cancel and task diagnostics
+remain outside that completed metadata, and unavailable model controls stay hidden.
 See [frontend transitions](frontend-design.md#1110-transcript), focused transcript/player browser tests,
 and the committed [desktop light](evidence/issue-257/hidden-target-1280-light.png),
 [desktop dark](evidence/issue-257/hidden-target-1280-dark.png),
@@ -3061,3 +3063,53 @@ Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#1
 **External-run focus.** A queued or failed server run hides the completed-run summary. If that summary owns focus, transfer focus to an available cancel control or the programmatically focusable status, after moving the active details above the document. Bring that replacement into view; ordinary polling and focus elsewhere remain untouched. The visible-focus regression is `tests/test_browser_notes_disclosure_focus.py`.
 
 **Tag / target.** Design; `DESIGN.md` and `docs/frontend-design.md`.
+
+## #283 — Transcript reading workspace
+
+**Problem and evidence.** Completed controls and the speaker catalog precede reading. In the
+disposable desktop fixture, the search top moved from 1301.515625px to
+588.6875px; the first segment top moved from 1467.515625px to
+807.6875px. Its final height is 89.59375px. These measurements come
+from the local-only `before.json` and `after.json` records under
+`/tmp/asr-visual-correction/evidence/issue-283/preserved-5baadbf/` (desktop, light, VI).
+The [capture instructions](assets/frontend/issue-283/README.md) describe the fixture,
+source limits, hashes and external artifact location. Generated images and records
+are not versioned in Git.
+These are viewport coordinates for that sample, not a general performance claim.
+
+**Design change.** Search leads, successful process metadata collapses, and a context disclosure
+holds the selected saved segment and the actual speaker controls. Desktop places it alongside
+the list; mobile places it before the list and initially closes it. Rerun, active/pending/error
+status, cancel and diagnostics remain outside completed metadata. Native summary activation keeps
+keyboard focus; the Notes naming link opens the context disclosure before focusing its catalog
+heading. The live status stays outside closed metadata, beside progress and Cancel before the
+reading list. Ordinary success is assistive-only; a selected-model blocking reason stays visible
+and replaces misleading rerun invitation text. Unchanged polling does not rewrite the live text.
+Completion hands an already-focused status to the visible summary with its accessible description;
+other focused controls and ordinary refresh scroll remain unchanged. Native audio, source links, the existing
+row editor and all mutation effects keep their owners and semantics.
+
+**Trade-offs.** Reassignment stays in the original row editor, reached through context Edit,
+instead of introducing another select with duplicate focus and conflict ownership. Context
+selection is generation-scoped presentation data in the disclosure DOM, derived from visible
+segments; it does not become playback or draft state. A user-open disclosure stays open through
+ordinary refreshes, and auto-closing never hides a focused control. No speculative backend
+features from #266 or typography changes from #249 are included.
+
+**Verification and follow-up.** Real disposable-browser evidence covers desktop/mobile,
+light/dark and VI/EN; focused regression coverage is in
+`tests/test_browser_transcript_workspace.py` with existing history/player scenarios.
+The committed capture runner reproduces the sample without provider calls or model loading.
+Independent verification and full CI remain required before issue acceptance.
+
+**Interaction evidence.** Reached ASR browser paths wait for the saved-generation paint,
+focus the native summary, and activate it with Enter only when closed; original visibility,
+model, default and provenance assertions remain. The context capture scrolls the actual speaker
+catalog into view. `tests/test_browser_transcript_feedback.py` covers accessible completion,
+unchanged polling, server-derived unready-model guidance and status/Cancel before a long
+reading list. Chromium semantic-role and accessibility snapshots are checked; testing with
+real assistive technology is not claimed. Source/API/model/default/recording contracts remain
+unchanged, with no speculative #266 functionality.
+
+**Tag / target:** design; `DESIGN.md` Transcript Workspace. Issue:
+[#283](https://github.com/nguyencanhtrung/asr-studio/issues/283).

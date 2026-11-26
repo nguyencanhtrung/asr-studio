@@ -261,7 +261,7 @@ At 980px and below, the ledger rail widens enough for the wordmark, language and
 
 A meeting page is a header and two tabs. The header carries the meeting name once (the page heading above it only says "Cuộc họp"), the date and language hint, and a short status strip, Bản ghi · Transcript · Notes. Its content and the workspace header share the same centered readable column; the header holds only the create action (and Lịch on phones). The tablist sits directly under the header at every width; the Meeting notes panel and the Transcript & bản ghi panel take turns below it, one visible at a time and each as wide as the content area.
 
-In the Transcript tab the player is the one sticky element in the content area, at every width: a single bar, at most 72px tall, pinned to the top edge of that area while the transcript scrolls under it. The Meeting notes tab pins nothing and reserves no room for a bar. On desktop the navigation ledger stays pinned beside the bar; at 680px and below, where the navigation bar scrolls away with the page, the player is the only pinned piece. The recording heading and its hint stay in normal flow and scroll away. Anything the page scrolls to in the Transcript tab stops below the bar: the document scroller reserves the bar's height and each scroll target adds a 12px gap, so a segment never lands under it. The browser scrolls a keyboard-focused control clear of the bar too, but a text field may only reveal its caret line, so part of the field can stay beneath the bar. While audio plays and some of the transcript list shows below the bar, the active segment follows with a nearest-edge scroll, instant under reduced motion; the page holds still while audio is paused, for two seconds after a manual scroll, while a transcript field has focus, and while the whole list is off screen, which includes every moment the Meeting notes tab is open, so reading the notes is never interrupted.
+In the Transcript tab the player is the one sticky element in the content area, at every width: a single bar, at most 72px tall, pinned to the top edge of that area while the transcript scrolls under it. The Meeting notes tab pins nothing and reserves no room for a bar. On desktop the navigation ledger stays pinned beside the bar; at 680px and below, where the navigation bar scrolls away with the page, the player is the only pinned piece. The recording identity stays in normal flow and scrolls away; the longer playback instruction belongs to the ASR processing disclosure and is not part of the player. Anything the page scrolls to in the Transcript tab stops below the bar: the document scroller reserves the bar's height and each scroll target adds a 12px gap, so a segment never lands under it. The browser scrolls a keyboard-focused control clear of the bar too, but a text field may only reveal its caret line, so part of the field can stay beneath the bar. While audio plays and some of the transcript list shows below the bar, the active segment follows with a nearest-edge scroll, instant under reduced motion; the page holds still while audio is paused, for two seconds after a manual scroll, while a transcript field has focus, and while the whole list is off screen, which includes every moment the Meeting notes tab is open, so reading the notes is never interrupted.
 
 ## Elevation & Depth
 
@@ -311,6 +311,40 @@ Corners are compact and engineered: controls use the small radius, content panel
 - **Across tabs:** Choosing the Meeting notes tab hides the bar but does not pause the audio, so the reader can listen while reading the notes and pauses from the Transcript tab.
 - **Focus:** The two-pixel accent outline is drawn inside the bar, so the bar edge and the top of the viewport never clip it.
 
+### Transcript Workspace (#283)
+
+Search and the existing review filter lead the transcript. Completed configuration, runtime,
+transcript model metadata and task measurements live in **ASR · Chi tiết xử lý**.
+**Chạy lại** remains beside that disclosure. The live status stays outside the disclosure,
+with progress and Cancel before the reading list. Ordinary completed success is assistive-only;
+selected-model blocking guidance, active status and recovery remain visible. Unchanged polling
+does not rewrite the status text. Opening or closing metadata must not hide the focused control. At tablet widths the review
+navigation and status stack below the search/filter content so both remain readable.
+
+The desktop workspace pairs the reading list with a contextual **Chi tiết · Người nói**
+disclosure. Row focus or selection updates saved segment text, timestamps, speaker and review
+reasons without opening an editor, seeking audio or moving focus. Context **Sửa · timestamp** (accessible name **Chi tiết · Sửa · timestamp**, translated
+as **Details · Edit · timestamp**) is distinct from the row action and opens the
+existing row editor, where speaker reassignment still uses the existing select. The actual
+speaker catalog, inline rename and add form live below the selected segment; no duplicate
+mutation controls or draft state are introduced. Technical segment facts retain a separate
+closed disclosure. A generation change resets presentation selection; filtering selects a
+remaining visible row or shows the existing no-results message.
+
+On phones and narrower workspaces the same context disclosure starts closed above the list.
+Native summary activation retains keyboard focus. The notes speaker-naming link opens it
+before focusing the catalog heading. On desktop the panel starts open and can scroll within
+the viewport below the sticky player. Closing it is always available. Transcript rows retain
+their existing timestamp/edit tab stops and keyboard save/cancel behavior. Playback, drafts,
+revision reads, source citations and source locks keep their existing owners and APIs. The
+portable evidence capture scrolls the nested speaker catalog into view before taking its
+context frame; it does not duplicate the controls or alter the base workspace measurements.
+
+The recording identity is one compact line above the unchanged native sticky player; its
+long instruction moves into processing details. Existing fonts, color tokens and centered
+Settings/GitHub footer are preserved. Implementation lives in `history.css`, `history.js`
+and the transcript section of `shell.html`; no Notes styling or framework changes apply.
+
 ### Transcript Segments
 
 - **Read mode (default):** One bordered row per segment, on the subtle surface with the medium radius. It holds the timestamp button (mono, 14px, accent; seeks and plays), the speaker name (14px, semibold ink), the text (Inter reading, 16px) and, when the segment needs review, the amber "Cần kiểm tra" cue with its reasons (13px, bordered, never color alone). No field, select or save button is rendered. The playing segment keeps its accent border and soft fill.
@@ -323,6 +357,7 @@ Corners are compact and engineered: controls use the small radius, content panel
 ### Speaker Chips
 
 - **Shape:** One compact button per speaker (30px minimum height, large radius, strong hairline, surface fill, 14px semibold name) in a wrapping row; hover shifts to the accent border and soft fill.
+- **Placement:** The catalog lives in the contextual **Chi tiết · Người nói** disclosure: beside the list on desktop and before it on narrow screens, where the native disclosure starts closed. The Notes naming link opens that disclosure before focusing its heading.
 - **Marks:** A speaker still carrying the system default name ("Speaker N") shows an outlined "đặt tên" mark in accent. A name typed and left unsaved shows "bản nháp". Marks are words, not color alone.
 - **Rename:** A chip click swaps only that chip for an inline form on its own line (name field, "Lưu tên", "Hủy", "Khôi phục tên mặc định"; the label is 12px). Enter saves, Esc cancels, one rename is open at a time, and focus returns to the chip. "Thêm người nói" stays below the chips.
 - **Disabled / read-only:** A locked source disables chips with muted ink and a plain hairline, tied to the lock reason like "Sửa". In a past transcript chips are plain text.
@@ -345,7 +380,7 @@ Corners are compact and engineered: controls use the small radius, content panel
 
 ### Processing Details
 
-- A closed `<details>` with the summary "Chi tiết xử lý" (14px, secondary ink, standard two-pixel accent focus outline) holds the compute backend and model profile. Opening it shows the same flat bordered group; nothing is removed, only collapsed.
+- The outer native `<details>` is summarized as **ASR · Chi tiết xử lý** (14px, secondary ink, standard two-pixel accent focus outline). Once a generation is complete it closes by default and contains the completed configuration, model/runtime facts, long playback instruction, successful status and measurements; **Chạy lại** remains its sibling. The nested **Chi tiết transcript** and runtime-profile **Chi tiết xử lý** disclosures keep provenance and runtime facts separately readable. Pending/active progress, worker state, failure, cancel and task diagnostics stay outside the completed disclosure, and an unavailable model control remains hidden.
 
 ### Cards / Containers
 
@@ -386,7 +421,7 @@ Without a complete transcript the Meeting notes tab holds one heading, **Cần t
 - **One action:** Under the notes heading one button names the saved choice: **Tạo notes · English · ChatGPT GPT 6.1 Sol** (output language, then provider and model). It is the one primary button of the tab. Once notes exist it reads **Tạo lại notes · …**, turns secondary and moves, with everything that belongs to it, after the saved document, so readers reach the saved work before generation settings. The panel’s duplicate visual heading is hidden with the accessible heading retained. The group moves as one: the button keeps its identity and any keyboard focus inside the group goes with it. When a task needs attention, the complete group returns above the document beside the visible task state and cancel action. Existing pending, disabled and retry semantics remain unchanged.
 - **Đổi…:** A text button (14px, underlined, accent) beside the action, with `aria-expanded` and `aria-controls`, opens a flat region under it: the output language, provider and model selects in a wrapping row, the line saying what the next run uses (provider · model · effort), the save feedback, and the description of what is sent. The region is closed on every meeting until opened; opening and closing makes no request and no motion. Saving a choice, and the rule that nothing switches provider or model on its own, are as before.
 - **Connect:** When the chosen provider is not connected, or has no usable model, the same button reads **Kết nối ChatGPT để tạo notes** or **Kết nối Google Antigravity để tạo notes** and opens the connections dialog at that provider's section, as its header button does. The line explaining why shows without opening **Đổi…**, with **Tải lại lựa chọn** when the saved choice could not be read. A run in progress keeps its own button. When the dialog reports the provider connected the button becomes the action again in place, so the dialog hands focus back to a control that is still there.
-- **Speaker reminder:** While the current transcript still has speakers with the system's default name (“Speaker N”), one line under the action reads **Notes sẽ dùng tên người nói hiện tại: Speaker 1, Speaker 2.** (13px, secondary ink) followed by the link **Đặt tên trước**. The link opens the Transcript tab on the current transcript, a past one on screen giving way to it, and focuses the speaker catalog heading, so the chips are the next Tab stops. The line never disables the action and steps aside while a run holds the source, when names cannot change.
+- **Speaker reminder:** While the current transcript still has speakers with the system's default name (“Speaker N”), one line under the action reads **Notes sẽ dùng tên người nói hiện tại: Speaker 1, Speaker 2.** (13px, secondary ink) followed by the link **Đặt tên trước**. The link opens the Transcript tab on the current transcript, replaces a past one on screen, opens **Chi tiết · Người nói**, and focuses the speaker catalog heading, so the chips are the next Tab stops. The line never disables the action and steps aside while a run holds the source, when names cannot change.
 - **Narrow:** The action's long name wraps inside the button. At 520px and below the button takes the full row and **Đổi…** sits below it; nothing scrolls sideways down to 320px.
 
 ### Navigation
@@ -407,7 +442,7 @@ The **AI Provider** overview is read-only and lists the provider sub-items **Ope
 
 **ASR Model** lists the three catalog models from the real `/api/asr-models` read as hairline rows. Each row shows the name, a **Mặc định** badge on the model that **Tự động** resolves to, and a status badge with one of **Sẵn sàng**, **Chưa chuẩn bị**, **Cần GPU NVIDIA** or **Chưa kiểm tra được**. Each status badge pairs colour with text. An unprepared model shows required and remaining space and a primary **Cài đặt model** button. During installation, the status badge reads **Đang cài đặt** in the accent tint. The row shows the phase, a 6px `task-progress-bar`, received and total bytes in mono, and a secondary **Hủy** button. Conversion has no number and uses a dashed bar. A failure shows a plain danger sentence with primary **Thử lại**. Short free space disables the button and states the shortfall. The row keeps focus: the replacement button receives focus. Without a running installer, the row keeps the prepare guidance and a read-only, copyable command field that wraps the whole command and keeps the model name visible. With no worker, the rows omit the repeated reason and one line above the list states the reason. Qwen3-ASR states the GPU requirement in plain words.
 
-The dialog adds no new colour or size tokens; every size is a `--text-*` token. The runtime profile sits in the closed **Processing Details** disclosure. Task measurements, generations, timestamps and diagnostic IDs use mono metadata inside flat bordered groups. Loading, saved, warning and error states pair semantic colour with explicit language. Transcript and history layouts belong to this product; preserve their scan order when restyling.
+The dialog adds no new colour or size tokens; every size is a `--text-*` token. In the transcript workspace, the outer **ASR · Chi tiết xử lý** disclosure closes after a completed generation; its nested runtime-profile **Chi tiết xử lý** disclosure holds the runtime facts. When a focused status completes and the metadata closes, focus moves to the visible summary, which describes that status. The completion live region remains accessible outside the disclosure. Other controls retain focus; ordinary refreshes preserve scroll. Task measurements, generations, timestamps and diagnostic IDs use mono metadata inside flat bordered groups. Loading, saved, warning and error states pair semantic colour with explicit language. Transcript and history layouts belong to this product; preserve their scan order when restyling.
 
 ## Do's and Don'ts
 

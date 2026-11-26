@@ -1127,6 +1127,7 @@ function focusSpeakerCatalog() {
     selector.value = current.id;
     selector.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  $("#transcript-context").open = true;
   $("#speaker-catalog-title").focus();
 }
 
@@ -1580,12 +1581,15 @@ function renderTranscriptFilters() {
   button.hidden = !target || visible.has(target.id);
   button.dataset.segmentId = target?.id || "";
   button.textContent = target ? t("Hiện đoạn nguồn / tua {time} · Xóa bộ lọc", { time: formatTimestamp(target.start_seconds) }) : "";
+  renderSegmentContext();
 }
 
 function renderTranscriptGeneration(generation, editable) {
   const panel = $("#transcript-generation");
   const list = $("#transcript-segments");
   panel.hidden = !generation;
+  $("#transcript-filters").hidden = !generation;
+  $("#generation-details").hidden = !generation;
   if (!generation) {
     list.replaceChildren();
     $("#speaker-catalog-list").replaceChildren();
@@ -1594,6 +1598,14 @@ function renderTranscriptGeneration(generation, editable) {
   }
   // Lock changes affect controls and the mode label, not transcript content.
   // Keep the content key consistent with incremental save reconciliation.
+  const context = $("#transcript-context");
+  if (context.dataset.generationId !== generation.id) {
+    context.dataset.generationId = generation.id;
+    delete context.dataset.segmentId;
+    delete context.dataset.contextKey;
+    // Native disclosure on phones; never close it around an active field on resize or refresh.
+    context.open = window.matchMedia("(min-width: 1100px)").matches;
+  }
   const renderKey = `${generation.id}:${generation.source_version}:${editable}`;
   const mode = $("#generation-mode");
   mode.textContent = editable && !nav().notes.lockKnown
@@ -1643,7 +1655,53 @@ function renderTranscriptGeneration(generation, editable) {
   $("#transcript-empty").hidden = segments.length > 0;
   for (const segment of segments) list.append(buildSegmentRow(generation, segment, editable));
   if (tstate().mutation) syncTranscriptMutationControls();
+  renderSegmentContext();
   updateActiveTranscriptIntervals();
+}
+
+// Presentation selection belongs to this generation's disclosure, not to the transcript or
+// playback core. It never creates drafts or takes focus; all edits still use the existing row.
+function renderSegmentContext(segmentId = null) {
+  const { generation, editable } = shownGeneration();
+  if (!generation) return;
+  const context = $("#transcript-context");
+  const visible = selectSegments(tstate(), generation).segments;
+  const chosen = segmentId || context.dataset.segmentId;
+  const segment = visible.find((item) => item.id === chosen) || visible[0];
+  context.dataset.segmentId = segment?.id || "";
+  for (const row of $("#transcript-segments").children) {
+    row.classList.toggle("is-context-selected", row.dataset.segmentId === segment?.id);
+  }
+  const edit = $("#selected-segment-edit");
+  edit.hidden = !segment || !editable;
+  edit.disabled = sourceMutationUnavailable() || Boolean(tstate().mutation);
+  if (edit.disabled) edit.setAttribute("aria-describedby", "generation-mode");
+  else edit.removeAttribute("aria-describedby");
+  if (segment) {
+    setProp(edit, "textContent", `${t("Sửa")} · ${formatTimestamp(segment.start_seconds)}`);
+    setAttr(edit, "aria-label", `${t("Chi tiết")} · ${edit.textContent}`);
+  }
+  const key = JSON.stringify([generation.id, generation.source_version, segment]);
+  if (context.dataset.contextKey === key) return;
+  context.dataset.contextKey = key;
+  setProp($("#selected-segment-time"), "textContent", segment ? `${formatTimestamp(segment.start_seconds)} – ${formatTimestamp(segment.end_seconds)}` : "");
+  setProp($("#selected-segment-speaker"), "textContent", segment ? transcriptSpeakerLabel(generation, segment.speaker_id) : "");
+  setProp($("#selected-segment-text"), "textContent", segment ? segment.text : t("Không có đoạn phù hợp. Xóa hoặc đổi bộ lọc."));
+  const details = $("#selected-segment-details");
+  details.replaceChildren();
+  if (segment) {
+    const cue = buildReviewCue(segment);
+    if (cue) {
+      cue.className = "context-review-cue";
+      details.append(cue);
+    }
+    // Technical source and model facts stay behind their existing disclosure.
+    const names = new Map((generation.speakers || []).map((speaker) => [speaker.speaker_id, speaker.display_name]));
+    const facts = buildSegmentDetails(segment, names);
+    facts.className = "context-segment-details";
+    for (const fact of facts.querySelectorAll("span")) fact.className = "context-segment-fact";
+    details.append(facts);
+  }
 }
 
 function buildOriginalSpeaker(segment, speakerNames) {
@@ -2220,6 +2278,7 @@ function syncTranscriptMutationControls() {
     cancel.disabled = busy;
   }
   $("#transcript-generation").setAttribute("aria-busy", busy ? "true" : "false");
+  renderSegmentContext();
   // The shared status line is announced (aria-live): a reported result is written again, anything else only when its words change.
   const status = $("#transcript-mutation-status");
   if (String(noticeRev) !== (status.dataset.noticeRev ?? "0")) {
@@ -2583,6 +2642,31 @@ function renderTranscription(transcription) {
   const startButton = $("#start-transcription");
   const cancelButton = $("#cancel-transcription");
   const measurements = $("#task-measurements");
+  const advanced = $("#transcript-processing");
+  const statusLine = $("#transcription-status");
+  const statusHadFocus = document.activeElement === statusLine;
+  const completed = Boolean(
+    generation && (!task || task.status === "succeeded")
+    && !view.requestBusy && !view.notice && !view.error.visible,
+  );
+  const presentationKey = `${meeting.id}:${completed}`;
+  const presentationChanged = advanced.dataset.presentationKey !== presentationKey;
+  if (presentationChanged) {
+    advanced.dataset.presentationKey = presentationKey;
+    if (!advanced.contains(document.activeElement)) advanced.open = !completed;
+  }
+  // Keep live feedback outside closed details and before the reading list: active
+  // status and recovery must stay with progress and Cancel, even for long transcripts.
+  const statusHost = $("#transcription-panel");
+  const progress = $("#task-progress");
+  if (statusLine.parentElement !== statusHost || statusLine.previousElementSibling !== progress) {
+    progress.after(statusLine);
+  }
+  const measurementHost = completed ? $("#completed-task-measurements") : $("#transcription-panel");
+  if (measurements.parentElement !== measurementHost) {
+    if (completed) measurementHost.append(measurements);
+    else $("#transcription-status").after(measurements);
+  }
 
   renderLanguageControl(view);
   renderModelControl(view);
@@ -2603,14 +2687,20 @@ function renderTranscription(transcription) {
 
   // With the button off, the model guidance says what to do: do not also invite a click on it.
   const modelBlocked = Boolean(view.model && view.model.blocked);
+  const status = $("#transcription-status");
+  const modelGuidance = modelBlocked && view.model
+    ? tr(view.model.guidance || t("Model đã chọn chưa sẵn sàng. Chọn một model sẵn sàng để tiếp tục."))
+    : "";
   if (!task) {
-    $("#transcription-status").textContent = !recording.ready
+    setProp(status, "textContent", !recording.ready
       ? tr(recording.statusMessage)
-      : generation
-        ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
-        : modelBlocked
-          ? t("Bản ghi đã lưu.")
-          : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local.");
+      : modelBlocked
+        ? generation
+          ? modelGuidance
+          : t("Bản ghi đã lưu.")
+        : generation
+          ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
+          : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local."));
   } else {
     const statusText = {
       accepted: t("Tác vụ đã được nhận. Worker sẽ bắt đầu xử lý."),
@@ -2625,18 +2715,21 @@ function renderTranscription(transcription) {
         ? t("Worker đã dừng giữa tác vụ. Không tự chạy lại.")
         : t("Worker đã dừng giữa tác vụ. Không tự chạy lại; hãy bấm để thử lại."),
     };
-    $("#transcription-status").textContent = workerChecking
+    setProp(status, "textContent", workerChecking
       ? task.status === "accepted"
         ? t("Đang kiểm tra worker trước khi bắt đầu xử lý.")
         : t("Đang kiểm tra worker vì heartbeat tác vụ đã cũ.")
-      : statusText[task.status] || t("Đang tải trạng thái tác vụ.");
+      : task.status === "succeeded" && modelGuidance
+        ? modelGuidance
+        : tr(statusText[task.status] || t("Đang tải trạng thái tác vụ.")));
     $("#task-stage").textContent = taskStageLabel(task);
     $("#task-elapsed").textContent = formatElapsedSeconds(task.elapsed_seconds);
     $("#task-segment-count").textContent = String(task.segment_count || 0);
     $("#task-transcript-end").textContent = formatTimestamp(task.transcript_end_seconds || 0);
   }
-  if (view.notice) $("#transcription-status").textContent = NOTICE_TEXT[view.notice];
-  const status = $("#transcription-status");
+  if (view.notice) setProp(status, "textContent", tr(NOTICE_TEXT[view.notice]));
+  // A completed success is still announced by the live region, but does not take vertical space from the reading surface.
+  status.classList.toggle("visually-hidden", completed && !modelGuidance);
   status.dataset.workerState = task && task.worker_state ? task.worker_state : "";
   status.classList.toggle("is-checking-worker", workerChecking);
   renderRerunDialog(view, startButton, status);
@@ -2646,6 +2739,12 @@ function renderTranscription(transcription) {
   }
   if (transcriptSynced(store.getState())) paintTranscriptTail(transcription);
   notifyMeetingContext();
+  if (statusHadFocus && completed && presentationChanged) {
+    // A completed status hands focus to the visible summary when the disclosure is collapsed.
+    const target = completed && !advanced.open
+      ? advanced.querySelector(":scope > summary") : statusLine;
+    target.focus();
+  }
 }
 
 function renderLanguageControl(view) {
@@ -3159,7 +3258,19 @@ $("#transcript-generation").addEventListener("keydown", (event) => {
     form.requestSubmit();
   }
 });
+$("#selected-segment-edit").addEventListener("click", () => {
+  const row = segmentRow($("#transcript-context").dataset.segmentId);
+  const edit = row?.querySelector("button[data-edit-segment]");
+  if (edit) edit.click();
+  else row?.querySelector(".segment-text-editor")?.focus();
+});
+$("#transcript-segments").addEventListener("focusin", (event) => {
+  const row = event.target.closest(".transcript-segment");
+  if (row) renderSegmentContext(row.dataset.segmentId);
+});
 $("#transcript-segments").addEventListener("click", (event) => {
+  const row = event.target.closest(".transcript-segment");
+  if (row) renderSegmentContext(row.dataset.segmentId);
   const edit = event.target.closest("button[data-edit-segment]");
   if (edit) {
     dispatch({ type: "transcript/segment-edit-opened", segmentId: edit.closest(".transcript-segment").dataset.segmentId });
