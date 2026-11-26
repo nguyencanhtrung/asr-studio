@@ -1806,22 +1806,30 @@ def test_one_toolbar_serves_both_modes_and_keeps_the_enable_rules(live, signed_i
         expect(copy).to_be_enabled()
         expect(export).to_be_enabled()
     assert layouts[0] == layouts[1]
-    # The status lines sit right under the toolbar, next to the buttons that cause them.
+    # Empty action feedback uses no space; populated live regions sit by their controls.
+    expect(page.locator("#notes-copy-export-status")).to_be_hidden()
     assert page.evaluate(
         """() => {
           const toolbar = document.querySelector("#notes-toolbar").getBoundingClientRect();
           const frame = document.querySelector(".notes-frame").getBoundingClientRect();
-          return ["#notes-draft-status", "#notes-copy-export-status"].map(selector => {
+          return ["#notes-draft-status"].map(selector => {
             const box = document.querySelector(selector).getBoundingClientRect();
             return box.top >= toolbar.bottom && box.bottom <= frame.top;
           });
         }"""
-    ) == [True, True]
+    ) == [True]
     expect(save).to_have_accessible_name("Lưu bản nháp")
     expect(copy).to_have_accessible_name("Sao chép bản đã lưu")
     expect(export).to_have_accessible_name("Tải Markdown đã lưu")
 
     page.locator("#notes-markdown").fill("# Draft")
+    page.locator("#notes-save").click()
+    expect(page.locator("#notes-copy-export-status")).to_contain_text("Markdown đã được lưu")
+    assert (
+        page.locator("#notes-copy-export-status").bounding_box()["y"]
+        < page.locator(".notes-frame").bounding_box()["y"]
+    )
+    page.locator("#notes-markdown").fill("# Another draft")
     for mode in ("write", "view"):
         page.locator(f"#notes-mode-{mode}").click()
         expect(save).to_be_enabled()
@@ -2039,8 +2047,8 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     for name, (foreground, background) in pairs.items():
         assert _contrast(foreground, background) >= 4.5, (name, foreground, background)
 
-    # The switch sits above the frame, so the notes action's last control comes right before it.
-    page.locator("#notes-change").focus()
+    # The document tools precede the mode switch; generation follows the document.
+    page.locator("#notes-edit-cancel").focus()
     for button in ("view", "rich", "write"):
         page.keyboard.press("Tab")
         focused = page.locator(f"#notes-mode-{button}")

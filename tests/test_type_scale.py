@@ -62,9 +62,10 @@ CUT_TEXT_JS = """() => [...document.querySelectorAll("body *")]
     const text = element.value || [...element.childNodes].some(
       (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
     if (!text || !element.getClientRects().length) return false;
+    // Assistive-only headings remain in the accessibility tree, not the visible layout.
+    if (element.closest(".visually-hidden")) return false;
     const style = getComputedStyle(element);
     if (style.display === "inline" || style.visibility === "hidden") return false;
-    if (element.closest(".visually-hidden")) return false;
     // A closed disclosure hides its body, but its direct summary stays visible.
     for (let closed = element.closest("details:not([open])"); closed;
          closed = closed.parentElement?.closest("details:not([open])")) {

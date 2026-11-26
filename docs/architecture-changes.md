@@ -3048,6 +3048,22 @@ the clipboard and displays the subject separately.
 Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#117-notes-tab-meeting-notes).
 
 
+## #282 — Put saved Notes before completed processing and regeneration
+
+**Problem and measured cause.** The completed step list and generation group preceded the saved document, consuming the initial viewport. On a disposable persisted “Sample meeting” fixture at desktop 1440 × 900, the preview began at y=1050.859375px before this correction and y=630.921875px afterward. Source: [Chromium measurements](assets/frontend/issue-282/measurements.json), both themes and UI languages, same data for baseline `a112687` and candidate. The first content item ends at y=704.40625px after the correction. The mobile records measure improvement without claiming that the document fits its initial viewport.
+
+**Design.** Keep the saved version/actions and provenance/mode controls directly before the document; place regeneration afterward. Successful steps/runtime are in a closed keyboard-operable native disclosure after the document. Active, error and other incomplete states stay expanded before it with cancel/retry accessible. Empty action feedback no longer reserves space. The duplicate visual panel heading remains available to assistive technology. The existing reducer, API, source identity, draft/conflict semantics and original Settings/GitHub footer are preserved.
+
+**Trade-offs.** The task state may move content downward while a run needs attention. This intentionally favors visible progress and recovery. Hiding all task details or reordering only with CSS would obscure active work or make keyboard order disagree with the document. Small screens retain the established full-width text actions and wrapping controls.
+
+**Evidence and follow-ups.** [Before/after fixture images and keyboard focus](assets/frontend/issue-282/), `tests/test_browser_notes_layout.py`, and existing Notes/editor/provider browser workflows. Independent tester, final reviewer and remote CI remain conductor-owned gates. [Issue #282](https://github.com/nguyencanhtrung/asr-studio/issues/282); adjacent Transcript and Settings corrections belong to #283 and #284.
+
+**Accessibility regression.** The processing disclosure uses the control type token. Layout probes distinguish assistive-only headings from visible clipping; a deliberate visible overflow remains detectable. The typography matrix retains its existing font, keyboard and overflow requirements.
+
+**External-run focus.** A queued or failed server run hides the completed-run summary. If that summary owns focus, transfer focus to an available cancel control or the programmatically focusable status, after moving the active details above the document. Bring that replacement into view; ordinary polling and focus elsewhere remain untouched. The visible-focus regression is `tests/test_browser_notes_disclosure_focus.py`.
+
+**Tag / target.** Design; `DESIGN.md` and `docs/frontend-design.md`.
+
 ## #283 — Transcript reading workspace
 
 **Problem and evidence.** Completed controls and the speaker catalog precede reading. In the
