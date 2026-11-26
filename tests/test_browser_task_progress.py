@@ -576,6 +576,9 @@ def test_notes_steps_follow_a_live_run_with_elapsed_time_and_model(live, signed_
         data_dir, task["id"], owner_id=owner_id, markdown="# Notes\n\nSaved.\n", elapsed_seconds=16
     )
     assert revision is not None
+    expect(page.locator("#notes-status")).to_contain_text("Notes đã được lưu")
+    expect(page.locator("#notes-task-details")).not_to_have_attribute("open")
+    page.locator("#notes-task-details summary").press("Enter")
     expect_steps(page, "done", "done", "done", "done")
     expect(page.locator("#notes-step-end")).to_be_hidden()
 

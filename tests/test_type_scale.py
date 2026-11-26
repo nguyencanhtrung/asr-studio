@@ -62,6 +62,8 @@ CUT_TEXT_JS = """() => [...document.querySelectorAll("body *")]
     const text = element.value || [...element.childNodes].some(
       (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
     if (!text || !element.getClientRects().length) return false;
+    // Assistive-only headings remain in the accessibility tree, not the visible layout.
+    if (element.closest(".visually-hidden")) return false;
     const style = getComputedStyle(element);
     if (style.display === "inline" || style.visibility === "hidden") return false;
     if (element.matches("select")) return false;
@@ -812,3 +814,24 @@ def test_transcript_controls_drop_below_title_at_medium_width(live, signed_in):
         }"""
     )
     assert geometry["controlsTop"] >= geometry["titleBottom"] - 0.5, geometry
+
+
+@pytest.mark.browser
+def test_clipping_probe_ignores_assistive_text_but_detects_visible_overflow(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1440, "height": 900})
+    page.goto(f"{live.url}/")
+    page.evaluate(
+        """() => {
+          const hidden = document.createElement("div");
+          hidden.className = "visually-hidden";
+          const heading = document.createElement("h3");
+          heading.textContent = "Assistive heading probe";
+          hidden.append(heading);
+          const clipped = document.createElement("p");
+          clipped.style.cssText = "width:10px;white-space:nowrap;overflow:hidden";
+          clipped.textContent = "Visible text that must be detected.";
+          document.body.append(hidden, clipped);
+        }"""
+    )
+    expect(page.get_by_role("heading", name="Assistive heading probe")).to_have_count(1)
+    assert page.evaluate(CUT_TEXT_JS) == ["P. Visible text that must be detected."]
