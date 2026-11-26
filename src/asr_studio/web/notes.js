@@ -29,6 +29,7 @@ const els = {
   empty: $("#notes-empty"),
   emptyCopy: $("#notes-empty-copy"),
   create: $("#notes-create"),
+  heading: $("#notes-create .notes-heading-row"),
   run: $("#notes-run"),
   status: $("#notes-status"),
   start: $("#notes-start"),
@@ -301,10 +302,10 @@ function renderBlocks(root, blocks, { rich = false, disabled = false, selectionI
 
 // ---- render ----
 
-// Until notes exist the action is the primary one on the tab; afterwards it is one secondary tool in the
-// notes toolbar. The whole group moves, so its choice and reminder stay beside the button.
-function placeRunControls(inToolbar) {
-  const host = inToolbar ? els.toolbar : els.create;
+// Saved Notes lead with the document. Active/error controls stay above it.
+// Move the whole group so its choice, data policy and keyboard focus stay together.
+function placeRunControls(inToolbar, urgent) {
+  const host = inToolbar && !urgent ? els.savedWork : els.create;
   if (els.run.parentElement !== host) {
     const focused = els.run.contains(document.activeElement) ? document.activeElement : null;
     host.append(els.run);
@@ -421,10 +422,26 @@ function renderRegenerateDialog(view) {
 function renderTask(view) {
   const task = view.task;
   setProp(els.details, "hidden", !task);
+  const completed = Boolean(task && task.steps.every((step) => step === "done"));
+  // Polling must not close a disclosure the reader opened. Only a transition
+  // into/out of successful completion changes its default presentation.
+  const presentation = task ? (completed ? "completed" : "attention") : "";
+  if (els.details.dataset.presentation !== presentation) {
+    setProp(els.details, "open", Boolean(task && !completed));
+    setData(els.details, "presentation", presentation);
+  }
+  // Active progress and failures are always exposed; only success is collapsible.
+  setProp(els.details.querySelector("summary"), "hidden", Boolean(task && !completed));
   setProp(els.status, "textContent", tr(view.status));
   if (!task) {
     setProp(els.cancel, "hidden", true);
     return;
+  }
+  if (!els.details.contains(document.activeElement)) {
+    const anchor = completed ? els.savedWork.nextSibling : els.savedWork;
+    if (els.details.nextSibling !== anchor) {
+      els.savedWork.parentElement.insertBefore(els.details, anchor);
+    }
   }
   const items = [...els.steps.children];
   const end = items.pop();
@@ -554,7 +571,7 @@ function render(state) {
   if (!state.meeting) return; // the tab is hidden and keeps what it last showed
   setProp(els.empty, "hidden", !view.needed);
   setProp(els.create, "hidden", view.needed);
-  setProp(els.run, "hidden", view.needed); // it sits in the toolbar once notes exist
+  setProp(els.run, "hidden", view.needed);
   setProp(els.status, "hidden", view.needed);
   if (view.needed) setProp(els.emptyCopy, "textContent", tr(view.emptyCopy));
   setProp(els.language, "value", view.outputLanguage);
@@ -575,8 +592,10 @@ function render(state) {
   setProp(els.error, "hidden", !view.error);
   setProp(els.errorMessage, "textContent", tr(view.error));
   renderSavedWork(view.savedWork);
-  // After the saved-work block has settled, so a focused control is not moved while it is hidden.
-  placeRunControls(view.run.inToolbar);
+  // Move only after saved work settles, preserving focus on generation controls.
+  els.heading.classList.toggle("visually-hidden", !view.savedWork.hidden);
+  const urgent = Boolean(view.error || (view.task && !view.task.steps.every((step) => step === "done")));
+  placeRunControls(view.run.inToolbar, urgent);
   setProp(els.copyStatus, "textContent", tr(view.actionMessage));
   renderSource(view.source);
   renderCopyPreview(state.activeTab === "notes" ? view.copyPreview : null);

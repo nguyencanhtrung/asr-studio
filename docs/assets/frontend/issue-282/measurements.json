@@ -1,0 +1,146 @@
+[
+  {
+    "phase": "before",
+    "width": 1440,
+    "theme": "light",
+    "language": "vi",
+    "preview_y": 1050.859375,
+    "first_content_y": 1097.15625,
+    "first_content_bottom": 1124.34375
+  },
+  {
+    "phase": "before",
+    "width": 390,
+    "theme": "light",
+    "language": "vi",
+    "preview_y": 1606.328125,
+    "first_content_y": 1652.625,
+    "first_content_bottom": 1679.8125
+  },
+  {
+    "phase": "before",
+    "width": 1440,
+    "theme": "dark",
+    "language": "vi",
+    "preview_y": 1050.859375,
+    "first_content_y": 1097.15625,
+    "first_content_bottom": 1124.34375
+  },
+  {
+    "phase": "before",
+    "width": 390,
+    "theme": "dark",
+    "language": "vi",
+    "preview_y": 1606.328125,
+    "first_content_y": 1652.625,
+    "first_content_bottom": 1679.8125
+  },
+  {
+    "phase": "before",
+    "width": 1440,
+    "theme": "light",
+    "language": "en",
+    "preview_y": 1050.859375,
+    "first_content_y": 1097.15625,
+    "first_content_bottom": 1124.34375
+  },
+  {
+    "phase": "before",
+    "width": 390,
+    "theme": "light",
+    "language": "en",
+    "preview_y": 1589.53125,
+    "first_content_y": 1635.828125,
+    "first_content_bottom": 1663.015625
+  },
+  {
+    "phase": "before",
+    "width": 1440,
+    "theme": "dark",
+    "language": "en",
+    "preview_y": 1050.859375,
+    "first_content_y": 1097.15625,
+    "first_content_bottom": 1124.34375
+  },
+  {
+    "phase": "before",
+    "width": 390,
+    "theme": "dark",
+    "language": "en",
+    "preview_y": 1589.53125,
+    "first_content_y": 1635.828125,
+    "first_content_bottom": 1663.015625
+  },
+  {
+    "phase": "after",
+    "width": 1440,
+    "theme": "light",
+    "language": "vi",
+    "preview_y": 620.921875,
+    "first_content_y": 667.21875,
+    "first_content_bottom": 694.40625
+  },
+  {
+    "phase": "after",
+    "width": 390,
+    "theme": "light",
+    "language": "vi",
+    "preview_y": 1153.453125,
+    "first_content_y": 1199.75,
+    "first_content_bottom": 1226.9375
+  },
+  {
+    "phase": "after",
+    "width": 1440,
+    "theme": "dark",
+    "language": "vi",
+    "preview_y": 620.921875,
+    "first_content_y": 667.21875,
+    "first_content_bottom": 694.40625
+  },
+  {
+    "phase": "after",
+    "width": 390,
+    "theme": "dark",
+    "language": "vi",
+    "preview_y": 1153.453125,
+    "first_content_y": 1199.75,
+    "first_content_bottom": 1226.9375
+  },
+  {
+    "phase": "after",
+    "width": 1440,
+    "theme": "light",
+    "language": "en",
+    "preview_y": 620.921875,
+    "first_content_y": 667.21875,
+    "first_content_bottom": 694.40625
+  },
+  {
+    "phase": "after",
+    "width": 390,
+    "theme": "light",
+    "language": "en",
+    "preview_y": 1136.65625,
+    "first_content_y": 1182.953125,
+    "first_content_bottom": 1210.140625
+  },
+  {
+    "phase": "after",
+    "width": 1440,
+    "theme": "dark",
+    "language": "en",
+    "preview_y": 620.921875,
+    "first_content_y": 667.21875,
+    "first_content_bottom": 694.40625
+  },
+  {
+    "phase": "after",
+    "width": 390,
+    "theme": "dark",
+    "language": "en",
+    "preview_y": 1136.65625,
+    "first_content_y": 1182.953125,
+    "first_content_bottom": 1210.140625
+  }
+]

@@ -305,7 +305,7 @@
                 <p class="notes-intro">Notes được tạo từ transcript hoàn chỉnh của cuộc họp theo lựa chọn đã lưu.</p>
               </div>
             </header>
-            <!-- Moved by notes.js into #notes-toolbar once notes exist, where the action turns secondary. -->
+            <!-- Saved Notes place generation controls after the document. -->
             <div class="notes-run" id="notes-run">
               <div class="notes-run-actions">
                 <button class="primary-button" id="notes-start" type="button" aria-describedby="notes-status" disabled>Tạo notes</button>
@@ -351,7 +351,8 @@
             </div>
             <p class="notes-lock-status" id="notes-lock-status" role="status" aria-live="polite" hidden></p>
             <p class="notes-status" id="notes-status" role="status" aria-live="polite">Đang kiểm tra trạng thái notes…</p>
-            <div class="notes-task-details" id="notes-task-details" hidden>
+            <details class="notes-task-details" id="notes-task-details" hidden>
+              <summary>Chi tiết xử lý</summary>
               <ol class="notes-steps" id="notes-steps">
                 <li data-step-state="upcoming"><span>Nhận yêu cầu</span><span class="notes-step-state"></span></li>
                 <li data-step-state="upcoming"><span>Khởi chạy</span><span class="notes-step-state"></span></li>
@@ -364,7 +365,7 @@
                 <span id="notes-task-provider-model"></span>
                 <span id="notes-task-progress"></span>
               </p>
-            </div>
+            </details>
             <div class="notes-error" id="notes-error" role="alert" hidden>
               <p id="notes-error-message"></p>
             </div>

@@ -114,14 +114,14 @@ def test_one_primary_action_names_the_saved_choice(live, signed_in, fake_notes_p
     assert runs[0]["expected_model"] == model
 
 
-def test_with_notes_the_action_is_a_secondary_button_in_the_notes_toolbar(live, signed_in):
+def test_with_notes_the_action_is_secondary_after_the_document(live, signed_in):
     _context, page = signed_in()
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
     save_choice(page, live, "chatgpt")
     open_notes(page, live, meeting_id)
 
     expect(page.locator("#notes-saved-work")).to_be_visible(timeout=10_000)
-    start = page.get_by_role("group", name="Công cụ notes").locator("#notes-start")
+    start = page.locator("#notes-saved-work #notes-start")
     expect(start).to_have_text("Tạo lại notes · English · ChatGPT GPT 6.1 Sol")
     expect(start).to_be_enabled()
     expect(start).to_have_class(re.compile(r"\bsecondary-button\b"))
@@ -130,7 +130,7 @@ def test_with_notes_the_action_is_a_secondary_button_in_the_notes_toolbar(live, 
     expect(page.locator("#notes-create #notes-start")).to_have_count(0)
 
 
-def test_the_action_moves_into_the_toolbar_when_the_first_notes_arrive(
+def test_the_action_moves_after_the_document_when_the_first_notes_arrive(
     live, signed_in, fake_notes_provider
 ):
     _context, page = signed_in()
@@ -150,7 +150,7 @@ def test_the_action_moves_into_the_toolbar_when_the_first_notes_arrive(
 
     complete(live.settings.data_dir, task["id"], "# First\n\nNotes.\n")
     expect(page.locator("#notes-saved-work")).to_be_visible(timeout=10_000)
-    expect(page.locator("#notes-toolbar #notes-start")).to_have_count(1)
+    expect(page.locator("#notes-saved-work #notes-start")).to_have_count(1)
     expect(page.locator("#notes-create #notes-start")).to_have_count(0)
     expect(start).to_have_text("Tạo lại notes · English · ChatGPT GPT 6.1 Sol")
     expect(start).to_have_class(re.compile(r"\bsecondary-button\b"))
@@ -551,7 +551,7 @@ def test_the_action_area_fits_360px_in_both_themes(live, signed_in, scheme):
     expect(page.locator("#notes-content-policy")).to_be_visible()
     assert_fits_and_reads(page)
 
-    # With notes the group sits in the toolbar, and the action is secondary.
+    # With notes the group follows the document, and the action is secondary.
     open_notes(page, live, saved)
     expect(page.locator("#notes-saved-work")).to_be_visible(timeout=10_000)
     expect(start).to_have_text("Tạo lại notes · English · Google Antigravity Gemini 3 Pro High")
@@ -602,7 +602,7 @@ def test_at_360px_the_action_takes_the_whole_row_and_change_sits_below_it(live, 
     assert change["y"] >= action["y"] + action["height"] - 1, (action, change)
 
 
-def test_with_notes_the_action_group_is_the_last_full_width_row_of_the_toolbar(live, signed_in):
+def test_with_notes_the_action_group_follows_the_document_at_full_width(live, signed_in):
     _context, page = signed_in(viewport={"width": 1280, "height": 900}, reduced_motion="reduce")
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
     save_choice(page, live, "chatgpt")
@@ -614,9 +614,9 @@ def test_with_notes_the_action_group_is_the_last_full_width_row_of_the_toolbar(l
 
     toolbar = page.locator("#notes-toolbar").bounding_box()
     group = page.locator("#notes-run").bounding_box()
-    tools = page.locator(".notes-toolbar-actions").bounding_box()
+    frame = page.locator(".notes-frame").bounding_box()
     assert abs(group["width"] - toolbar["width"]) <= 1, (group, toolbar)
-    assert group["y"] >= tools["y"] + tools["height"] - 1, (group, tools)
+    assert group["y"] >= frame["y"] + frame["height"], (group, frame)
 
 
 def test_keyboard_focus_is_visible_on_the_new_controls_and_they_add_no_motion(live, signed_in):
