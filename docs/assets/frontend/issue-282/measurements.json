@@ -76,9 +76,9 @@
     "width": 1440,
     "theme": "light",
     "language": "vi",
-    "preview_y": 620.921875,
-    "first_content_y": 667.21875,
-    "first_content_bottom": 694.40625
+    "preview_y": 630.921875,
+    "first_content_y": 677.21875,
+    "first_content_bottom": 704.40625
   },
   {
     "phase": "after",
@@ -94,9 +94,9 @@
     "width": 1440,
     "theme": "dark",
     "language": "vi",
-    "preview_y": 620.921875,
-    "first_content_y": 667.21875,
-    "first_content_bottom": 694.40625
+    "preview_y": 630.921875,
+    "first_content_y": 677.21875,
+    "first_content_bottom": 704.40625
   },
   {
     "phase": "after",
@@ -112,9 +112,9 @@
     "width": 1440,
     "theme": "light",
     "language": "en",
-    "preview_y": 620.921875,
-    "first_content_y": 667.21875,
-    "first_content_bottom": 694.40625
+    "preview_y": 630.921875,
+    "first_content_y": 677.21875,
+    "first_content_bottom": 704.40625
   },
   {
     "phase": "after",
@@ -130,9 +130,9 @@
     "width": 1440,
     "theme": "dark",
     "language": "en",
-    "preview_y": 620.921875,
-    "first_content_y": 667.21875,
-    "first_content_bottom": 694.40625
+    "preview_y": 630.921875,
+    "first_content_y": 677.21875,
+    "first_content_bottom": 704.40625
   },
   {
     "phase": "after",

@@ -1155,8 +1155,4 @@ a.notes-citation-chip:focus-visible {
     grid-template-columns: minmax(180px, 1fr) auto;
     gap: 8px 12px;
   }
-
-  .meeting-view:has(#meeting-panel-notes:not([hidden])) .metadata-item {
-    padding-block: 10px;
-  }
 }

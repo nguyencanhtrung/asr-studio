@@ -13,6 +13,43 @@ from asr_studio.tasks import fail_task, update_task_progress
 pytestmark = pytest.mark.browser
 
 
+def test_notes_and_transcript_tabs_keep_header_position_when_switching(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1440, "height": 900})
+    meeting, _revision, _snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
+    page.goto(f"{live.url}/meetings/{meeting}#notes")
+
+    tabs = page.locator("#meeting-tabs")
+    notes_tab = page.locator("#meeting-tab-notes")
+    transcript_tab = page.locator("#meeting-tab-transcript")
+    notes_panel = page.locator("#meeting-panel-notes")
+    transcript_panel = page.locator("#meeting-panel-transcript")
+
+    notes_tab.click()
+    expect(notes_tab).to_have_attribute("aria-selected", "true")
+    expect(notes_tab).to_be_focused()
+    expect(notes_panel).to_be_visible()
+    expect(page.locator("#notes-preview > *").first).to_be_visible()
+    expect(page.locator("#notes-status")).not_to_be_empty()
+    page.evaluate("document.fonts.ready")
+    notes_y = tabs.bounding_box()["y"]
+
+    transcript_tab.click()
+    expect(transcript_tab).to_have_attribute("aria-selected", "true")
+    expect(transcript_tab).to_be_focused()
+    expect(transcript_panel).to_be_visible()
+    expect(page.locator("#transcript-segments > li").first).to_be_visible()
+    expect(page.locator("#status-transcript")).to_contain_text("Transcript")
+    transcript_y = tabs.bounding_box()["y"]
+
+    notes_tab.click()
+    expect(notes_tab).to_have_attribute("aria-selected", "true")
+    expect(notes_tab).to_be_focused()
+    expect(notes_panel).to_be_visible()
+    expect(page.locator("#notes-preview > *").first).to_be_visible()
+    assert tabs.bounding_box()["y"] == pytest.approx(notes_y, abs=0.01)
+    assert transcript_y == pytest.approx(notes_y, abs=0.01)
+
+
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 @pytest.mark.parametrize("width", [1440, 390])
 @pytest.mark.parametrize("language", ["vi", "en"])
