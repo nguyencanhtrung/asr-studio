@@ -331,6 +331,18 @@ def _finalize_database_delete(data_dir: Path, meeting_id: str) -> None:
                 for row in recording_rows
                 if row["extension_session_id"] is not None
             ]
+            # Lifecycle tombstones and content-free operation receipts belong to
+            # this meeting, but are not recording deletion.  Remove them inside
+            # the same finalizer transaction before their protected Notes FKs.
+            connection.execute(
+                "DELETE FROM notes_lifecycle_operations WHERE meeting_id = ?",
+                (meeting_id,),
+            )
+            connection.execute(
+                "DELETE FROM notes_version_lifecycle WHERE note_id IN "
+                "(SELECT id FROM notes_revisions WHERE meeting_id = ?)",
+                (meeting_id,),
+            )
             connection.execute(
                 "DELETE FROM notes_saved_versions WHERE note_id IN "
                 "(SELECT id FROM notes_revisions WHERE meeting_id = ?)",

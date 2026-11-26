@@ -200,23 +200,33 @@ function normalizeCitations(citations) {
 }
 
 function normalizeRevision(revision, meetingId) {
+  const lifecycle = ["active", "trashed", "purged"].includes(revision?.lifecycle_status)
+    ? revision.lifecycle_status : "active";
+  const contentAvailable = lifecycle === "active"
+    && revision?.content_available !== false
+    && typeof revision?.markdown === "string";
   if (
     !revision
     || typeof revision.id !== "string"
     || !revision.id
     || revision.meeting_id !== meetingId
     || typeof revision.source_snapshot_id !== "string"
-    || typeof revision.markdown !== "string"
+    || (!contentAvailable && lifecycle === "active")
     || !Number.isInteger(revision.edit_version)
     || !["current", "stale", "historical"].includes(revision.source_state)
   ) return null;
   return {
     ...revision,
+    markdown: contentAvailable ? revision.markdown : "",
     output_language: ["en", "vi"].includes(revision.output_language) ? revision.output_language : "en",
-    citations: normalizeCitations(revision.citations),
-    display_citations: normalizeCitations(revision.display_citations || revision.citations),
+    lifecycle_status: lifecycle,
+    content_available: contentAvailable,
+    can_restore: lifecycle === "trashed",
+    tombstone: lifecycle === "purged",
+    citations: contentAvailable ? normalizeCitations(revision.citations) : [],
+    display_citations: contentAvailable ? normalizeCitations(revision.display_citations || revision.citations) : [],
     // The source links of the saved Markdown that open no source; a server without the field names none.
-    warnings: Array.isArray(revision.warnings)
+    warnings: contentAvailable && Array.isArray(revision.warnings)
       ? revision.warnings.filter((warning) => warning && typeof warning.href === "string")
       : [],
   };
@@ -255,11 +265,60 @@ function parseDetail(payload) {
     || typeof note.id !== "string"
     || typeof note.meeting_id !== "string"
     || typeof note.source_snapshot_id !== "string"
-    || typeof note.markdown !== "string"
     || !Number.isInteger(note.edit_version)
     || !["current", "stale", "historical"].includes(note.source_state)
   ) return null;
   return normalizeRevision(note, note.meeting_id);
+}
+
+function normalizeTrashItem(item, meetingId) {
+  if (
+    !item
+    || typeof item.note_id !== "string"
+    || !item.note_id
+    || typeof item.transition_id !== "string"
+    || !item.transition_id
+    || !Number.isInteger(item.edit_version)
+    || item.edit_version < 1
+    || (item.source_id !== undefined && typeof item.source_id !== "string")
+    || (item.origin !== undefined && typeof item.origin !== "string")
+    || (item.actor_role !== undefined && typeof item.actor_role !== "string")
+    || (item.saved_at !== undefined && typeof item.saved_at !== "string")
+    || (item.trashed_at !== undefined && typeof item.trashed_at !== "string")
+  ) return null;
+  return {
+    note_id: item.note_id,
+    edit_version: item.edit_version,
+    transition_id: item.transition_id,
+    ...(typeof item.source_id === "string" ? { source_id: item.source_id } : {}),
+    ...(typeof item.origin === "string" ? { origin: item.origin } : {}),
+    ...(typeof item.actor_role === "string" ? { actor_role: item.actor_role } : {}),
+    ...(typeof item.saved_at === "string" ? { saved_at: item.saved_at } : {}),
+    ...(typeof item.trashed_at === "string" ? { trashed_at: item.trashed_at } : {}),
+    meeting_id: meetingId,
+  };
+}
+
+function parseTrash(meetingId, payload) {
+  if (
+    !payload
+    || payload.meeting_id !== meetingId
+    || typeof payload.meeting_title !== "string"
+    || !Number.isInteger(payload.count)
+    || payload.count < 0
+    || typeof payload.digest !== "string"
+    || !/^[a-f0-9]{64}$/i.test(payload.digest)
+    || !Array.isArray(payload.items)
+  ) return null;
+  const items = payload.items.map((item) => normalizeTrashItem(item, meetingId));
+  if (items.some((item) => !item) || items.length !== payload.count) return null;
+  return {
+    meetingId,
+    meetingTitle: payload.meeting_title,
+    count: payload.count,
+    digest: payload.digest,
+    items,
+  };
 }
 
 function normalizeCatalog(payload) {
@@ -1665,6 +1724,11 @@ const EMPTY_SAVED_HISTORY = {
   latestEditVersion: 0, returning: null,
   list: [], detail: null, listPending: false, detailPending: false, status: "",
 };
+const EMPTY_TRASH = {
+  meetingId: "", meetingTitle: "", readId: 0, pending: false,
+  count: 0, digest: "", items: [], error: "", status: "",
+  mutationId: 0, mutation: null, confirmation: null, lastOutcome: null, focus: 0,
+};
 const SAVED_HISTORY_LATEST = "notes/saved-history-latest";
 
 export const initialState = {
@@ -1724,6 +1788,8 @@ export const initialState = {
   // the stage when a run fails, is canceled or is interrupted.
   taskSteps: {},
   snapshots: {}, // saved transcript snapshots by id
+  trash: {}, // meeting id -> content-free lifecycle list and mutation state
+  lifecycleEpoch: 0, // invalidates cached fixed content when a lifecycle state changes in place
   readId: 0, // id of the latest notes read
   readRetainedNoteIds: [], // current Notes confirmed since that meeting-wide read began
   latestReadId: 0, // attempt to reconcile the current projection with saved history
@@ -1746,6 +1812,11 @@ const patchChoice = (state, patch) => ({ ...state, choice: { ...state.choice, ..
 const patchRegenerate = (state, patch) => ({ ...state, regenerate: { ...state.regenerate, ...patch } });
 const patchSource = (state, patch) => ({ ...state, source: { ...state.source, ...patch } });
 const pendingOf = (state, meetingId = state.meetingId) => (meetingId ? state.pending[meetingId] ?? null : null);
+const trashOf = (state, meetingId = state.meetingId) => (meetingId ? state.trash[meetingId] ?? EMPTY_TRASH : EMPTY_TRASH);
+const patchTrash = (state, meetingId, patch) => ({
+  ...state,
+  trash: { ...state.trash, [meetingId]: { ...trashOf(state, meetingId), ...patch } },
+});
 const languageOf = (state, meetingId) => state.outputLanguages[meetingId] ?? "en";
 const nextStartAttempt = (state, meetingId) => (state.startAttempts[meetingId] || 0) + 1;
 
@@ -1769,6 +1840,10 @@ const notesEndpoint = (meetingId) => `/api/meetings/${encodeURIComponent(meeting
 const noteEndpoint = (noteId) => `/api/notes/${encodeURIComponent(noteId)}`;
 const savedVersionEndpoint = (noteId, editVersion = null) =>
   `${noteEndpoint(noteId)}/versions${editVersion === null ? "" : `/${editVersion}`}`;
+const notesTrashEndpoint = (meetingId) => `/api/meetings/${encodeURIComponent(meetingId)}/notes-trash`;
+const notesTrashEmptyEndpoint = (meetingId) => `${notesTrashEndpoint(meetingId)}/empty`;
+const notesTrashRestoreEndpoint = (meetingId, noteId, editVersion) =>
+  `${notesTrashEndpoint(meetingId)}/${encodeURIComponent(noteId)}/${editVersion}/restore`;
 const versionSelected = (state) => state.savedHistory.open && state.savedHistory.editVersion !== null;
 const displayedRevision = (state) => versionSelected(state) ? state.savedHistory.detail : selectedRevision(state);
 const displayedNoteId = (state) => versionSelected(state) ? state.savedHistory.noteId : selectedRevision(state)?.id;
@@ -2165,7 +2240,8 @@ function openSavedHistory(state, noteId, editVersion = null) {
     },
   };
   const meta = { requestId, meetingId, noteId };
-  const result = readSavedHistoryList(next);
+  let result = readSavedHistoryList(next);
+  result = then(result, (s) => readTrash(s, meetingId));
   if (previous.returning) result.effects.push({ type: "cancel", key: SAVED_HISTORY_LATEST });
   if (editVersion !== null) {
     result.effects.push(request("notes/saved-history-detail", savedVersionEndpoint(noteId, editVersion), "GET", undefined,
@@ -2279,8 +2355,13 @@ function savedHistoryAnswered(state, action, failed = false) {
   const message = t("Không thể đọc bản Notes đã lưu theo yêu cầu.");
   if (action.meta.op === "saved-history-list") {
     const list = !failed && values.id === noteId && values.meeting_id === meetingId && Array.isArray(values.versions)
-      ? values.versions.filter((item) => item?.note_id === noteId && validEditVersion(item.edit_version)
-        && ["ai", "operator", "legacy"].includes(item.origin) && typeof item.saved_at === "string")
+      ? values.versions
+        .filter((item) => item?.note_id === noteId && validEditVersion(item.edit_version)
+          && ["ai", "operator", "legacy"].includes(item.origin) && typeof item.saved_at === "string"
+          && [undefined, "active", "trashed", "purged"].includes(item.lifecycle_status)
+          && (item.lifecycle_status === undefined || item.lifecycle_status === "active"
+            || (typeof item.transition_id === "string" && item.transition_id)))
+        .map((item) => ({ ...item, lifecycle_status: item.lifecycle_status || "active" }))
       : null;
     const latestEditVersion = list
       ? list.reduce((highest, item) => Math.max(highest, item.edit_version),
@@ -2303,6 +2384,267 @@ function savedHistoryAnswered(state, action, failed = false) {
       status: matches ? history.status : message,
     },
   });
+}
+
+const trashIdentity = (item) => `${item.note_id}\u0000${item.edit_version}\u0000${item.transition_id}`;
+const trashIdentities = (items) => (Array.isArray(items) ? items : []).map(trashIdentity).join("\u0001");
+
+function lifecycleError(error) {
+  const parsed = apiError(error);
+  return parsed.message || (parsed.status === 409
+    ? t("Dữ liệu đã thay đổi. Hãy tải lại rồi thử lại.")
+    : t("Không thể hoàn tất thao tác. Hãy kiểm tra trạng thái rồi thử lại."));
+}
+
+function readTrash(state, meetingId) {
+  if (!meetingId) return out(state);
+  const current = trashOf(state, meetingId);
+  if (current.pending) return out(state);
+  const readId = current.readId + 1;
+  return out(patchTrash(state, meetingId, {
+    meetingId,
+    readId,
+    pending: true,
+    error: "",
+  }), [request("notes/trash-read", notesTrashEndpoint(meetingId), "GET", undefined, "trash-read", {
+    meetingId,
+    readId,
+  })]);
+}
+
+function sameTrashSnapshot(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && trashIdentities(left) === trashIdentities(right);
+}
+
+function mutationBody(mutation) {
+  if (mutation.kind === "trash") {
+    return { operation_id: mutation.operationId, note_id: mutation.noteId, edit_version: mutation.editVersion };
+  }
+  if (mutation.kind === "restore") {
+    return { operation_id: mutation.operationId, transition_id: mutation.transitionId };
+  }
+  return {
+    operation_id: mutation.operationId,
+    confirmation_digest: mutation.digest,
+    items: mutation.items.map((item) => ({
+      note_id: item.note_id,
+      edit_version: item.edit_version,
+      transition_id: item.transition_id,
+    })),
+  };
+}
+
+function mutationUrl(meetingId, mutation) {
+  if (mutation.kind === "restore") return notesTrashRestoreEndpoint(meetingId, mutation.noteId, mutation.editVersion);
+  if (mutation.kind === "empty") return notesTrashEmptyEndpoint(meetingId);
+  return notesTrashEndpoint(meetingId);
+}
+
+function beginLifecycleMutation(state, meetingId, mutation) {
+  if (!meetingId || !mutation || !mutation.operationId) return out(state);
+  const current = trashOf(state, meetingId);
+  const mutationId = current.mutationId + 1;
+  const pending = {
+    ...mutation,
+    mutationId,
+    phase: "pending",
+    error: "",
+    retryable: false,
+  };
+  return out(patchTrash(state, meetingId, {
+    mutationId,
+    mutation: pending,
+    error: "",
+    status: "",
+  }), [request("notes-trash-mutation", mutationUrl(meetingId, pending), "POST", JSON.stringify(mutationBody(pending)), "trash-mutation", {
+    meetingId,
+    mutationId,
+    kind: pending.kind,
+    operationId: pending.operationId,
+    noteId: pending.noteId || null,
+    editVersion: pending.editVersion || null,
+    transitionId: pending.transitionId || null,
+  })]);
+}
+
+function trashVersionRequested(state, action) {
+  const meetingId = state.meetingId;
+  const history = state.savedHistory;
+  const current = trashOf(state, meetingId);
+  if (!meetingId || current.pending || current.mutation?.phase === "pending" || !versionSelected(state) || !history.detail) return out(state);
+  const item = history.list.find((entry) => entry.edit_version === history.editVersion);
+  if (!canTrashHistoryItem(item, history.latestEditVersion) || lifecycleOf(history.detail) !== "active") return out(state);
+  if (typeof action.operationId !== "string" || !action.operationId) return out(state);
+  return beginLifecycleMutation(state, meetingId, {
+    kind: "trash",
+    operationId: action.operationId,
+    noteId: history.noteId,
+    editVersion: history.editVersion,
+    transitionId: "",
+    digest: "",
+    items: [],
+  });
+}
+
+function restoreVersionRequested(state, action) {
+  const meetingId = state.meetingId;
+  const current = trashOf(state, meetingId);
+  if (!meetingId || current.pending || current.mutation?.phase === "pending") return out(state);
+  const noteId = typeof action.noteId === "string" ? action.noteId : state.savedHistory.noteId;
+  const editVersion = Number.isSafeInteger(action.editVersion) ? action.editVersion : state.savedHistory.editVersion;
+  const transitionId = typeof action.transitionId === "string" ? action.transitionId : "";
+  const item = current.items.find((entry) => entry.note_id === noteId && entry.edit_version === editVersion);
+  if (!noteId || !validEditVersion(editVersion) || !transitionId || !item || item.transition_id !== transitionId) return out(state);
+  if (typeof action.operationId !== "string" || !action.operationId) return out(state);
+  return beginLifecycleMutation(state, meetingId, {
+    kind: "restore",
+    operationId: action.operationId,
+    noteId,
+    editVersion,
+    transitionId,
+    digest: "",
+    items: [],
+  });
+}
+
+function emptyTrashRequested(state) {
+  const meetingId = state.meetingId;
+  const current = trashOf(state, meetingId);
+  if (!meetingId || current.pending || current.mutation?.phase === "pending" || current.count < 1) return out(state);
+  const items = current.items.map((item) => ({
+    note_id: item.note_id,
+    edit_version: item.edit_version,
+    transition_id: item.transition_id,
+  }));
+  return out(patchTrash(state, meetingId, {
+    confirmation: {
+      open: true,
+      meetingTitle: current.meetingTitle || state.meeting?.title || "",
+      count: current.count,
+      digest: current.digest,
+      items,
+      checked: false,
+      error: "",
+      focus: current.focus + 1,
+    },
+    status: "",
+    error: "",
+  }));
+}
+
+function emptyTrashChecked(state, checked) {
+  const current = trashOf(state);
+  if (!current.confirmation?.open) return out(state);
+  return out(patchTrash(state, state.meetingId, {
+    confirmation: { ...current.confirmation, checked: Boolean(checked), error: "" },
+  }));
+}
+
+function emptyTrashConfirmed(state, action) {
+  const meetingId = state.meetingId;
+  const current = trashOf(state, meetingId);
+  const confirmation = current.confirmation;
+  if (!meetingId || !confirmation?.open || !confirmation.checked || current.mutation?.phase === "pending") return out(state);
+  if (confirmation.digest !== current.digest || !sameTrashSnapshot(confirmation.items, current.items)) {
+    return out(patchTrash(state, meetingId, {
+      confirmation: null,
+      status: t("Dữ liệu đã thay đổi. Hãy tải lại rồi thử lại."),
+      focus: current.focus + 1,
+    }));
+  }
+  if (typeof action.operationId !== "string" || !action.operationId) return out(state);
+  return beginLifecycleMutation(patchTrash(state, meetingId, { confirmation: null }), meetingId, {
+    kind: "empty",
+    operationId: action.operationId,
+    noteId: "",
+    editVersion: null,
+    transitionId: "",
+    digest: confirmation.digest,
+    items: confirmation.items,
+  });
+}
+
+function retryLifecycleMutation(state) {
+  const meetingId = state.meetingId;
+  const mutation = trashOf(state, meetingId).mutation;
+  if (!meetingId || !mutation || mutation.phase !== "failed" || !mutation.retryable) return out(state);
+  return beginLifecycleMutation(state, meetingId, mutation);
+}
+
+function staleLifecycleRead(state, meta) {
+  if (meta.op === "trash-read") {
+    const current = trashOf(state, meta.meetingId);
+    return state.meetingId !== meta.meetingId || current.readId !== meta.readId || !current.pending;
+  }
+  if (meta.op === "trash-mutation") {
+    const current = trashOf(state, meta.meetingId);
+    return state.meetingId !== meta.meetingId || current.mutation?.mutationId !== meta.mutationId
+      || current.mutation?.operationId !== meta.operationId || current.mutation?.phase !== "pending";
+  }
+  return false;
+}
+
+function lifecycleFixedTarget(state, mutation) {
+  if (!versionSelected(state)) return false;
+  if (mutation.kind === "empty") {
+    return mutation.items.some((item) => item.note_id === state.savedHistory.noteId
+      && item.edit_version === state.savedHistory.editVersion);
+  }
+  return state.savedHistory.noteId === mutation.noteId && state.savedHistory.editVersion === mutation.editVersion;
+}
+
+function lifecycleMutationFailed(state, action) {
+  const meetingId = action.meta.meetingId;
+  const current = trashOf(state, meetingId);
+  const error = lifecycleError(action.error);
+  const retryable = !Number.isInteger(action.error?.status) || action.error.status === 0;
+  let next = patchTrash(state, meetingId, {
+    mutation: current.mutation ? { ...current.mutation, phase: "failed", error, retryable } : null,
+    error,
+    status: "",
+  });
+  if (action.error?.status === 409 || action.error?.status === 410) {
+    next = patchTrash(next, meetingId, { confirmation: null });
+    return then(out(next), (s) => readTrash(s, meetingId));
+  }
+  return out(next);
+}
+
+function lifecycleMutationAnswered(state, action, failed = false) {
+  const meetingId = action.meta.meetingId;
+  if (failed) return lifecycleMutationFailed(state, action);
+  const body = object(action.response?.body);
+  const outcome = object(body?.historical_outcome);
+  const currentState = object(body?.current_state);
+  if (
+    !body
+    || body.operation_id !== action.meta.operationId
+    || !outcome
+    || outcome.status !== "succeeded"
+    || (currentState && typeof currentState.status !== "string")
+  ) return lifecycleMutationFailed(state, { ...action, error: { status: 0, body: {} } });
+  const mutation = trashOf(state, meetingId).mutation;
+  const targetStatus = currentState?.status || (action.meta.kind === "restore" ? "active" : "trashed");
+  let next = {
+    ...patchTrash(state, meetingId, {
+      mutation: null,
+      confirmation: null,
+      error: "",
+      status: t("Hoàn tất"),
+      lastOutcome: {
+        operationId: body.operation_id,
+        kind: action.meta.kind,
+        historicalStatus: outcome.status,
+        historicalCode: outcome.code || null,
+        currentStatus: targetStatus,
+      },
+    }),
+    lifecycleEpoch: state.lifecycleEpoch + 1,
+  };
+  if (mutation && lifecycleFixedTarget(state, mutation)) {
+    return then(out(next), (s) => openSavedHistory(s, s.savedHistory.noteId, s.savedHistory.editVersion));
+  }
+  return then(out(next), (s) => readTrash(s, meetingId));
 }
 
 const draftIsDirty = (draft) => Boolean(draft && draft.value !== draft.baselineMarkdown);
@@ -3021,11 +3363,13 @@ function useLatestSavedNote(state) {
 
 const PREVIEW_READ = "notes/authoritative/preview";
 const AUTHORITATIVE_KEYS = ["notes/authoritative/copy", "notes/authoritative/export", PREVIEW_READ];
-const isPreviewAction = (action) => action === "rich" || action === "email";
+const isPreviewAction = (action) => action === "rich" || action === "email" || action === "preview-copy";
 
 function staleAuthoritativeRead(state, meta) {
-  return meta.op === "authoritative" && (meta.selectionId !== state.selectionId
+  const stale = meta.op === "authoritative" && (meta.selectionId !== state.selectionId
+    || (meta.lifecycleEpoch !== undefined && meta.lifecycleEpoch !== state.lifecycleEpoch)
     || (isPreviewAction(meta.action) && (state.activeTab !== "notes" || meta.previewContextId !== state.previewContextId)));
+  return stale;
 }
 const blockedSavedAction = (data, noteId, draft) => draftIsDirty(draft) || Boolean(draft.conflict) || Boolean(data.saving[noteId]);
 
@@ -3042,6 +3386,12 @@ function readSavedMarkdown(state, action) {
   }
   const preview = isPreviewAction(action);
   if (preview && state.activeTab !== "notes") return out(state);
+  if (exactVersion !== null && !contentAvailable(revision)) {
+    const nextPreview = action === "preview-copy" && state.copyPreview
+      ? { ...state.copyPreview, copying: false, status: t("Không thể đọc bản Notes đã lưu theo yêu cầu.") }
+      : state.copyPreview;
+    return out({ ...patchNotes(state, meetingId, { actionMessage: t("Không thể đọc bản Notes đã lưu theo yêu cầu.") }), copyPreview: nextPreview });
+  }
   const next = preview
     ? { ...patchNotes(state, meetingId, { actionMessage: "" }), previewLoading: true }
     : patchNotes(state, meetingId, { actionMessage: t("Đang đọc bản Notes đã lưu…") });
@@ -3050,6 +3400,7 @@ function readSavedMarkdown(state, action) {
     request(preview ? PREVIEW_READ : `notes/authoritative/${action}`, endpoint, "GET", undefined, "authoritative", {
       previewContextId: preview ? state.previewContextId : null,
       selectionId: state.selectionId,
+      lifecycleEpoch: state.lifecycleEpoch,
       meetingId,
       noteId: revision.id,
       action,
@@ -3064,7 +3415,12 @@ function savedMarkdownRead(state, action, failed) {
   const { meetingId, noteId, currentValue, expectedVersion, exactVersion } = action.meta;
   if (isPreviewAction(action.meta.action)) state = { ...state, previewLoading: false };
   const message = (actionMessage) => out(patchNotes(state, meetingId, { actionMessage }));
-  if (failed) return message(apiError(action.error).message || t("Không thể đọc bản notes đã lưu mới nhất."));
+  if (failed) {
+    if (action.meta.action === "preview-copy" && state.copyPreview) {
+      state = { ...state, copyPreview: { ...state.copyPreview, copying: false, status: apiError(action.error).message || t("Không thể đọc bản notes đã lưu mới nhất.") } };
+    }
+    return message(apiError(action.error).message || t("Không thể đọc bản notes đã lưu mới nhất."));
+  }
   const latest = parseDetail(object(action.response.body));
   if (!latest) return message(t("Máy chủ không trả về revision notes hợp lệ."));
   if (latest.id !== noteId || latest.meeting_id !== meetingId) return message(t("Revision notes mới nhất không khớp cuộc họp."));
@@ -3096,6 +3452,12 @@ function savedMarkdownRead(state, action, failed) {
 
 function performSavedMarkdownAction(state, kind, latest) {
   const { meetingId } = state;
+  if (!contentAvailable(latest)) {
+    const copyPreview = kind === "preview-copy" && state.copyPreview
+      ? { ...state.copyPreview, copying: false, status: t("Không thể đọc bản Notes đã lưu theo yêu cầu.") }
+      : null;
+    return out({ ...patchNotes(state, meetingId, { actionMessage: t("Không thể đọc bản Notes đã lưu theo yêu cầu.") }), copyPreview });
+  }
   if (kind === "copy") {
     return out(patchNotes(state, meetingId, { actionMessage: "" }), [
       call("copy", [latest.markdown], { key: "notes/copy", ok: "notes/copied", error: "notes/copy-failed", meta: { editVersion: latest.edit_version, selectionId: state.selectionId } }),
@@ -3107,28 +3469,49 @@ function performSavedMarkdownAction(state, kind, latest) {
       [call("download", [safeFilename(state.meeting && state.meeting.title), latest.markdown])],
     );
   }
+  const requestedKind = kind === "preview-copy" ? state.copyPreview?.content?.kind : kind;
+  if (!requestedKind || !["rich", "email"].includes(requestedKind)) {
+    return out(patchNotes(state, meetingId, { actionMessage: t("Không thể đọc bản Notes đã lưu theo yêu cầu.") }));
+  }
   const blocks = markdownBlocks(latest.markdown, latest, state.origin, "clipboard");
   const heading = headingText(blocks[0]);
   const content = {
-    kind, noteId: latest.id, editVersion: latest.edit_version,
-    blocks: kind === "email" ? emailBlocks(blocks) : blocks,
-    subject: kind === "email"
+    kind: requestedKind, noteId: latest.id, editVersion: latest.edit_version,
+    blocks: requestedKind === "email" ? emailBlocks(blocks) : blocks,
+    subject: requestedKind === "email"
       ? ((!emailSectionName(heading) && heading) || state.meeting?.title || "").replace(/\s+/g, " ").trim() : "",
     markdown: latest.markdown,
   };
+  if (kind === "preview-copy") {
+    return out({ ...state, previewLoading: false, copyPreview: { content, copying: true, status: "" } }, [
+      call("copyFormatted", [clipboardHtml(content.blocks), content.markdown], {
+        key: "notes/copy-formatted", ok: "notes/preview-copied", error: "notes/preview-copy-failed", meta: { content },
+      }),
+    ]);
+  }
   return out({ ...patchNotes(state, meetingId, { actionMessage: "" }), copyPreview: { content, copying: false, status: "" } });
 }
 
 function copyPreview(state) {
   const preview = state.copyPreview;
   if (!preview || preview.copying) return out(state);
-  const { content } = preview;
-  const next = { ...state, copyPreview: { ...preview, copying: true, status: "" } };
-  return out(next, [
-    call("copyFormatted", [clipboardHtml(content.blocks), content.markdown], {
-      key: "notes/copy-formatted", ok: "notes/preview-copied", error: "notes/preview-copy-failed", meta: { content },
-    }),
-  ]);
+  const content = preview.content;
+  if (!content || typeof content.noteId !== "string" || !validEditVersion(content.editVersion)
+    || !state.meetingId || state.activeTab !== "notes") return out(state);
+  const next = {
+    ...state,
+    previewLoading: true,
+    copyPreview: { ...preview, copying: true, status: "" },
+  };
+  return out(next, [request(PREVIEW_READ, savedVersionEndpoint(content.noteId, content.editVersion), "GET", undefined, "authoritative", {
+    previewContextId: state.previewContextId,
+    selectionId: state.selectionId,
+    lifecycleEpoch: state.lifecycleEpoch,
+    meetingId: state.meetingId,
+    noteId: content.noteId,
+    action: "preview-copy",
+    exactVersion: content.editVersion,
+  })]);
 }
 
 function finishPreviewCopy(state, action) {
@@ -3396,7 +3779,8 @@ function meetingContext(state, action) {
 
 function response(state, action) {
   const { meta } = action;
-  if (staleAuthoritativeRead(state, meta) || staleLatestRead(state, meta) || staleSavedHistoryRead(state, meta)) return out(state);
+  if (staleAuthoritativeRead(state, meta) || staleLatestRead(state, meta) || staleSavedHistoryRead(state, meta)
+    || staleLifecycleRead(state, meta)) return out(state);
   if (staleTaskRequest(state, meta)) return out(state);
   switch (meta.op) {
     case "read": {
@@ -3427,6 +3811,35 @@ function response(state, action) {
       return savedHistoryAnswered(state, action);
     case "saved-history-latest":
       return latestHistoryAnswered(state, action);
+    case "trash-read": {
+      const parsed = parseTrash(meta.meetingId, object(action.response.body));
+      if (!parsed) {
+        return out(patchTrash(state, meta.meetingId, {
+          pending: false,
+          error: t("Không đọc được trạng thái"),
+          status: "",
+        }));
+      }
+      const current = trashOf(state, meta.meetingId);
+      const changed = current.digest !== parsed.digest || !sameTrashSnapshot(current.items, parsed.items)
+        || current.meetingTitle !== parsed.meetingTitle;
+      let next = patchTrash(state, meta.meetingId, {
+        ...parsed,
+        pending: false,
+        error: "",
+        status: changed && current.count > 0 ? current.status : current.status,
+      });
+      if (current.confirmation?.open && changed) {
+        next = patchTrash(next, meta.meetingId, {
+          confirmation: null,
+          status: t("Dữ liệu đã thay đổi. Hãy tải lại rồi thử lại."),
+          focus: current.focus + 1,
+        });
+      }
+      return out(next);
+    }
+    case "trash-mutation":
+      return lifecycleMutationAnswered(state, action);
     case "source-snapshot":
       return snapshotAnswered(state, action);
     default:
@@ -3436,7 +3849,8 @@ function response(state, action) {
 
 function requestFailed(state, action) {
   const { meta } = action;
-  if (staleAuthoritativeRead(state, meta) || staleLatestRead(state, meta) || staleSavedHistoryRead(state, meta)) return out(state);
+  if (staleAuthoritativeRead(state, meta) || staleLatestRead(state, meta) || staleSavedHistoryRead(state, meta)
+    || staleLifecycleRead(state, meta)) return out(state);
   if (staleTaskRequest(state, meta)) return out(state);
   if (isWorkspaceAuthenticationFailure(action.error?.status, action.error?.body)) {
     const meetingId = state.meetingId || meta.meetingId;
@@ -3477,6 +3891,16 @@ function requestFailed(state, action) {
       return savedHistoryAnswered(state, action, true);
     case "saved-history-latest":
       return latestHistoryAnswered(state, action, true);
+    case "trash-read": {
+      const error = apiError(action.error);
+      return out(patchTrash(state, meta.meetingId, {
+        pending: false,
+        error: error.message || t("Không đọc được trạng thái"),
+        status: "",
+      }));
+    }
+    case "trash-mutation":
+      return lifecycleMutationAnswered(state, action, true);
     case "source-snapshot":
       return action.meta.id === state.source.id ? sourceFailed(state, error.message) : out(state);
     default:
@@ -3710,6 +4134,24 @@ function transition(state, action) {
     }
     case "notes/saved-history-closed":
       return returnToLatest(state, action.href, true);
+    case "notes/trash-read-requested":
+      return state.meetingId ? readTrash(state, state.meetingId) : out(state);
+    case "notes/trash-version-requested":
+      return trashVersionRequested(state, action);
+    case "notes/restore-version-requested":
+      return restoreVersionRequested(state, action);
+    case "notes/empty-trash-requested":
+      return emptyTrashRequested(state);
+    case "notes/empty-trash-checked":
+      return emptyTrashChecked(state, action.checked);
+    case "notes/empty-trash-cancelled":
+      return state.meetingId && trashOf(state).confirmation
+        ? out(patchTrash(state, state.meetingId, { confirmation: null }))
+        : out(state);
+    case "notes/empty-trash-confirmed":
+      return emptyTrashConfirmed(state, action);
+    case "notes/lifecycle-retry":
+      return retryLifecycleMutation(state);
     case "notes/copy-clicked":
       return readSavedMarkdown(state, "copy");
     case "notes/export-clicked":
@@ -4025,6 +4467,23 @@ function revisionWarnings(revision) {
   return warnings?.length ? { count: warnings.length, first: warnings[0].href } : null;
 }
 
+function lifecycleOf(revision) {
+  return revision?.lifecycle_status || "active";
+}
+
+function contentAvailable(revision) {
+  return Boolean(revision && lifecycleOf(revision) === "active" && revision.content_available !== false
+    && typeof revision.markdown === "string");
+}
+
+function canTrashHistoryItem(item, latestEditVersion) {
+  return Boolean(item
+    && item.lifecycle_status === "active"
+    && item.origin === "operator"
+    && item.edit_version > 1
+    && item.edit_version < latestEditVersion);
+}
+
 function savedHistoryView(state) {
   const { open, list, listPending, editVersion, detail, detailPending, returning, status, latestEditVersion } = state.savedHistory;
   const hasLatestTarget = latestEditVersion > 0;
@@ -4040,16 +4499,21 @@ function savedHistoryView(state) {
         " · ",
         { fmt: "timestamp", value: item.saved_at.includes(" ") ? item.saved_at.replace(" ", "T") + "Z" : item.saved_at },
       ],
+      lifecycleStatus: item.lifecycle_status || "active",
+      canTrash: canTrashHistoryItem(item, latestEditVersion),
     });
   }
   if (editVersion !== null && !list.some((item) => item.edit_version === editVersion)) {
-    options.push({ value: String(editVersion), text: t("Bản lưu {version}", { version: editVersion }) });
+    options.push({ value: String(editVersion), text: t("Bản lưu {version}", { version: editVersion }), lifecycleStatus: detail?.lifecycle_status || "active" });
   }
+  const lifecycleStatus = detail?.lifecycle_status || "active";
   return {
     open,
     options,
     selected: editVersion === null ? "" : String(editVersion),
     linkDisabled: !detail,
+    lifecycleStatus,
+    selectedItem: list.find((item) => item.edit_version === editVersion) || null,
     latestPhase,
     closeLabel: !hasLatestTarget ? t("Đóng lịch sử") : latestPhase === "failed"
       ? t("Thử đọc lại bản mới nhất") : t("Về bản mới nhất"),
@@ -4073,7 +4537,7 @@ function savedWorkView(state, data) {
   const missing = selected && !revisions.some((item) => item.id === selected) ? selected : "";
   const fixedVersion = pinned && state.savedHistory.latestEditVersion > 0 ? state.savedHistory.editVersion : "";
   const missingKey = missing ? `${missing}\u0001${Boolean(data?.known)}\u0001${fixedVersion}` : "";
-  const optionsKey = [missingKey, ...revisions.map((item) => `${item.id}\u0001${item.provider || ""}\u0001${item.model || ""}`)].join("\u0000");
+  const optionsKey = [missingKey, ...revisions.map((item) => `${item.id}\u0001${item.provider || ""}\u0001${item.model || ""}\u0001${lifecycleOf(item)}`)].join("\u0000");
   const options = [];
   if (missing) {
     options.push({ value: missing, text: fixedVersion
@@ -4093,6 +4557,8 @@ function savedWorkView(state, data) {
     revision,
   };
   if (pinned) {
+    const lifecycleStatus = lifecycleOf(revision);
+    const available = contentAvailable(revision);
     return {
       ...view,
       selectionId: state.selectionId,
@@ -4100,13 +4566,17 @@ function savedWorkView(state, data) {
       textareaDisabled: true,
       meta: revision ? revisionMeta(revision) : "",
       warning: revisionWarnings(revision),
-      blocks: revision ? markdownBlocks(revision.markdown, revision, state.origin, "view") : [],
+      blocks: available ? markdownBlocks(revision.markdown, revision, state.origin, "view") : [],
       saveDisabled: true,
-      copyDisabled: !revision,
+      copyDisabled: !revision || !available,
       cancelDisabled: true,
       draftStatus: "",
       viewDraftHidden: true,
       writeLabel: t("Viết"),
+      lifecycleStatus,
+      contentAvailable: available,
+      canRestore: lifecycleStatus === "trashed",
+      tombstone: lifecycleStatus === "purged",
     };
   }
   if (!revision) {
@@ -4131,6 +4601,10 @@ function savedWorkView(state, data) {
     meta: revisionMeta(revision),
     warning: revisionWarnings(revision),
     blocks,
+    lifecycleStatus: lifecycleOf(revision),
+    contentAvailable: true,
+    canRestore: false,
+    tombstone: false,
     saveDisabled: !dirty || busy,
     copyDisabled: blockedSavedAction(data, revision.id, draft),
     cancelDisabled: busy || (state.mode === "view" && !dirty),
@@ -4164,6 +4638,57 @@ function sourceView(state) {
     status,
     seekDisabled: !current || !Number.isFinite(current.startSeconds) || current.startSeconds < 0,
     focus,
+  };
+}
+
+function trashView(state) {
+  const trash = trashOf(state);
+  const history = state.savedHistory;
+  const detail = history.open && history.editVersion !== null ? history.detail : null;
+  const selectedItem = history.list.find((item) => item.edit_version === history.editVersion) || null;
+  const selectedCanTrash = canTrashHistoryItem(selectedItem, history.latestEditVersion)
+    && lifecycleOf(detail) === "active";
+  const selectedCanRestore = Boolean(detail?.can_restore && detail.transition_id);
+  const mutation = trash.mutation;
+  return {
+    visible: Boolean(history.open),
+    meetingId: state.meetingId || "",
+    meetingTitle: trash.meetingTitle || state.meeting?.title || "",
+    count: trash.count,
+    digest: trash.digest,
+    readPending: trash.pending,
+    items: trash.items,
+    error: trash.error,
+    status: trash.status,
+    mutation: mutation ? {
+      kind: mutation.kind,
+      operationId: mutation.operationId,
+      noteId: mutation.noteId || "",
+      editVersion: mutation.editVersion || null,
+      transitionId: mutation.transitionId || "",
+      phase: mutation.phase,
+      error: mutation.error || "",
+      retryable: mutation.phase === "failed",
+    } : null,
+    emptyDisabled: trash.pending || Boolean(mutation && mutation.phase === "pending") || trash.count === 0,
+    confirmation: trash.confirmation ? {
+      open: trash.confirmation.open,
+      meetingTitle: trash.confirmation.meetingTitle,
+      count: trash.confirmation.count,
+      checked: trash.confirmation.checked,
+      error: trash.confirmation.error,
+      focus: trash.confirmation.focus,
+    } : null,
+    versionAction: {
+      visible: Boolean(history.open && history.editVersion !== null && history.detail),
+      canTrash: selectedCanTrash,
+      canRestore: selectedCanRestore,
+      lifecycleStatus: lifecycleOf(detail),
+      noteId: history.noteId,
+      editVersion: history.editVersion,
+      transitionId: detail?.transition_id || selectedItem?.transition_id || "",
+      disabled: trash.pending || Boolean(mutation && mutation.phase === "pending") || history.detailPending,
+    },
   };
 }
 
@@ -4362,6 +4887,7 @@ export function selectView(state) {
     regenerateDialog: regenerateView(state, data, pending),
     savedWork,
     savedHistory: savedHistoryView(state),
+    trash: trashView(state),
     actionMessage: data?.actionMessage || (state.previewLoading ? t("Đang đọc phiên bản đã lưu mới nhất…") : ""),
     copyPreview: state.copyPreview,
     source: sourceView(state),

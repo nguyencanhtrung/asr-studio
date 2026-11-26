@@ -184,6 +184,24 @@ const versionIndex = (latest) => ({
 const meetingRead = (r) => r.url === "/api/meetings/m1/notes";
 const historyIndex = (r) => r.url === "/api/notes/r1/versions";
 const fixedDetail = (r) => r.url === "/api/notes/r1/versions/2";
+const trashRead = (r) => r.method === "GET" && r.url === "/api/meetings/m1/notes-trash";
+const trashItems = (transitionIds = ["transition-v2", "transition-v3"]) => transitionIds.map((transition_id, index) => ({
+  note_id: "r1",
+  edit_version: index + 2,
+  transition_id,
+  source_id: "s1",
+  origin: "operator",
+  actor_role: "operator",
+  saved_at: "2026-11-25 00:00:00",
+  trashed_at: "2026-11-27 00:00:00",
+}));
+const trashPayload = (items = trashItems()) => ({
+  meeting_id: "m1",
+  meeting_title: "Weekly",
+  count: items.length,
+  digest: "a".repeat(64),
+  items,
+});
 
 for (const action of ["copy", "export", "rich-preview", "email-preview"]) {
   test(`fixed ${action} survives meeting list population, updates and omission`, async () => {
@@ -208,6 +226,7 @@ for (const action of ["copy", "export", "rich-preview", "email-preview"]) {
       assert.equal(view().copyPreview.content.kind, action.split("-")[0]);
       assert.equal(view().copyPreview.content.editVersion, 2);
       env.dispatch("preview-copy-clicked");
+      await env.answer(fixedDetail, 200, fixed);
     }
     env.dispatch("meeting-change-received", { meetingId: "m1" });
     await env.answer(meetingRead, 200, notesBody([revision({ id: "r2" })]));
@@ -232,6 +251,71 @@ for (const action of ["copy", "export", "rich-preview", "email-preview"]) {
     }
   });
 }
+
+test("Notes lifecycle actions bind the saved revision and its exact trash transition", async () => {
+  const env = setup();
+  const active = revision({ edit_version: 2, origin: "operator" });
+  env.context(meeting(), { href: fixedHref });
+  await env.answer(fixedDetail, 200, active);
+  await env.answer(meetingRead, 200, notesBody([savedEdit(4)]));
+  await env.answer(historyIndex, 200, versionIndex(4));
+  await env.answer(trashRead, 200, trashPayload([]));
+
+  env.dispatch("trash-version-requested", { operationId: "ui-trash-v2" });
+  const move = env.waiting((request) => request.method === "POST" && request.url.endsWith("/notes-trash"))[0];
+  assert.deepEqual(move.body, { operation_id: "ui-trash-v2", note_id: "r1", edit_version: 2 });
+  await env.answer((request) => request === move, 200, {
+    operation_id: "ui-trash-v2",
+    historical_outcome: { status: "succeeded", code: "notes_version_trashed" },
+    current_state: { status: "trashed", transition_id: "transition-v2" },
+  });
+
+  const trashed = { ...active, lifecycle_status: "trashed", content_available: false, transition_id: "transition-v2" };
+  delete trashed.markdown;
+  await env.answer(fixedDetail, 200, trashed);
+  await env.answer(historyIndex, 200, {
+    ...versionIndex(4),
+    versions: versionIndex(4).versions.map((item) => item.edit_version === 2
+      ? { ...item, lifecycle_status: "trashed", transition_id: "transition-v2" } : item),
+  });
+  await env.answer(trashRead, 200, trashPayload([trashItems(["transition-v2"])[0]]));
+  assert.equal(selectView(env.state()).savedWork.contentAvailable, false);
+  assert.equal(selectView(env.state()).savedWork.canRestore, true);
+  assert.equal(selectView(env.state()).savedWork.copyDisabled, true);
+
+  env.dispatch("restore-version-requested", {
+    operationId: "ui-restore-v2",
+    noteId: "r1",
+    editVersion: 2,
+    transitionId: "transition-v2",
+  });
+  const restore = env.waiting((request) => request.method === "POST" && request.url.endsWith("/2/restore"))[0];
+  assert.deepEqual(restore.body, { operation_id: "ui-restore-v2", transition_id: "transition-v2" });
+});
+
+test("Empty Trash stays confirmation-bound to the exact current set", async () => {
+  const env = setup();
+  env.context(meeting(), { href: fixedHref });
+  await env.answer(fixedDetail, 200, revision({ edit_version: 2, origin: "operator" }));
+  await env.answer(meetingRead, 200, notesBody([savedEdit(5)]));
+  await env.answer(historyIndex, 200, versionIndex(5));
+  const items = trashItems();
+  await env.answer(trashRead, 200, trashPayload(items));
+
+  env.dispatch("empty-trash-requested");
+  let trash = selectView(env.state()).trash;
+  assert.equal(trash.confirmation.open, true);
+  assert.equal(trash.confirmation.count, 2);
+  assert.equal(env.waiting((request) => request.method === "POST").length, 0);
+  env.dispatch("empty-trash-checked", { checked: true });
+  env.dispatch("empty-trash-confirmed", { operationId: "ui-empty-v2-v3" });
+  const empty = env.waiting((request) => request.method === "POST" && request.url.endsWith("/notes-trash/empty"))[0];
+  assert.deepEqual(empty.body, {
+    operation_id: "ui-empty-v2-v3",
+    confirmation_digest: "a".repeat(64),
+    items: items.map(({ note_id, edit_version, transition_id }) => ({ note_id, edit_version, transition_id })),
+  });
+});
 
 for (const control of ["saved-history-closed", "saved-history-picked"]) {
   test(`${control} remembers a newly projected v5 across stale and omitting lists`, async () => {
@@ -3177,6 +3261,7 @@ test("a list item containing a heading stays raw for rich editing and formatted 
   await env.answer(env.is("GET", "/api/notes/r1"), 200, revision({ markdown, edit_version: 2 }));
   env.hostResults.copyFormatted = async () => "html";
   env.dispatch("preview-copy-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1/versions/2"), 200, revision({ markdown, edit_version: 2 }));
   await tick();
   const copy = env.hostCalls.find(([name]) => name === "copyFormatted");
   assert.ok(copy);
@@ -3241,6 +3326,7 @@ test("formatted previews pin the saved text, preserve safe authored links and om
   env.hostResults.copyFormatted = async () => "plain";
   env.dispatch("preview-copy-clicked");
   env.dispatch("preview-copy-clicked");
+  await env.answer(env.is("GET", "/api/notes/r1/versions/2"), 200, note);
   await tick();
   const writes = env.hostCalls.filter(([name]) => name === "copyFormatted");
   assert.equal(writes.length, 1);

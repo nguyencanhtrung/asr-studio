@@ -410,6 +410,105 @@
   margin: 0;
 }
 
+.notes-trash {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.notes-trash-title,
+.notes-trash-confirmation h5 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: var(--text-control);
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.notes-trash-scope,
+.notes-trash-version-status,
+.notes-trash-status,
+.notes-trash-confirmation p,
+.notes-lifecycle-notice {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+.notes-trash-version-status,
+.notes-lifecycle-notice {
+  color: var(--warning);
+}
+
+.notes-trash-status {
+  color: var(--ink-2);
+}
+
+.notes-trash-actions,
+.notes-trash-confirmation-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.notes-trash-actions > button,
+.notes-trash-confirmation-actions > button {
+  min-width: 0;
+  min-height: 40px;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: break-word;
+  text-align: center;
+}
+
+.notes-trash-confirmation {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+}
+
+.notes-trash-confirmation label {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--ink);
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+
+.notes-trash-confirmation input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.notes-trash-confirmation-error {
+  color: var(--danger) !important;
+}
+
+.notes-lifecycle-notice {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+}
+
 .notes-revision-select-wrap {
   display: grid;
   flex: 0 1 20rem;
@@ -799,7 +898,9 @@ a.notes-citation-chip:focus-visible {
   }
 
   .notes-toolbar-actions,
-  .notes-conflict-actions {
+  .notes-conflict-actions,
+  .notes-trash-actions,
+  .notes-trash-confirmation-actions {
     align-items: stretch;
     flex-direction: column;
   }
@@ -822,7 +923,9 @@ a.notes-citation-chip:focus-visible {
   .notes-run-actions > .primary-button,
   .notes-run-actions > .secondary-button,
   .notes-toolbar-actions > button,
-  .notes-conflict-actions > button {
+  .notes-conflict-actions > button,
+  .notes-trash-actions > button,
+  .notes-trash-confirmation-actions > button {
     width: 100%;
   }
 

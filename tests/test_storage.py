@@ -169,11 +169,33 @@ def _create_populated_v22_database(data_dir):
             "SELECT COUNT(*) FROM notes_saved_versions WHERE note_id = 'migration-note'"
         ).fetchone() == (2,)
 
-        # The current initializer provides the complete schema; remove only v23's additive
-        # objects to make a real, populated v22-shaped fixture without an absolute path.
+        saved_rows = connection.execute(
+            "SELECT note_id, edit_version, markdown, source_id, origin, saved_at "
+            "FROM notes_saved_versions WHERE note_id = 'migration-note' "
+            "ORDER BY edit_version"
+        ).fetchall()
+        # The current initializer provides the complete schema; remove additive
+        # objects and rebuild the Notes history table to make a real v22 fixture.
         connection.execute("DROP TABLE transcript_segment_reviews")
         connection.execute("DROP TABLE transcript_edit_events")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 23")
+        connection.execute("DROP TABLE notes_lifecycle_operations")
+        connection.execute("DROP TABLE notes_version_lifecycle")
+        for trigger in (
+            "notes_saved_versions_after_insert",
+            "notes_saved_versions_after_save",
+            "notes_saved_versions_update_guard",
+        ):
+            connection.execute(f"DROP TRIGGER {trigger}")
+        connection.execute("DROP TABLE notes_saved_versions")
+        storage_module.install_notes_history(connection)
+        connection.execute("DELETE FROM notes_saved_versions")
+        connection.executemany(
+            "INSERT INTO notes_saved_versions(note_id, edit_version, markdown, source_id, "
+            "origin, saved_at) VALUES (?, ?, ?, ?, ?, ?)",
+            saved_rows,
+        )
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 22")
+        connection.execute("INSERT INTO schema_migrations(version) VALUES (22)")
         assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (22,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     return database
@@ -210,7 +232,7 @@ def _migration_fixture_snapshot(connection):
     }
 
 
-def test_schema_v23_preserves_populated_v22_notes_pins_and_transcript(tmp_path):
+def test_schema_v24_preserves_populated_v22_notes_pins_and_transcript(tmp_path):
     data_dir = tmp_path / "populated-v22-data"
     database = _create_populated_v22_database(data_dir)
 
@@ -223,7 +245,7 @@ def test_schema_v23_preserves_populated_v22_notes_pins_and_transcript(tmp_path):
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         after = _migration_fixture_snapshot(connection)
-        assert after["versions"] == before["versions"] + [(23,)]
+        assert after["versions"] == before["versions"] + [(23,), (24,)]
         assert after["meeting"] == before["meeting"]
         assert after["generation"] == before["generation"]
         assert after["segment"] == before["segment"]
@@ -254,7 +276,7 @@ def test_schema_v23_preserves_populated_v22_notes_pins_and_transcript(tmp_path):
         ).fetchone() == ("## Pinned notes v3", "operator")
 
 
-def test_schema_v23_install_is_idempotent_and_foreign_keys_stay_clean(tmp_path):
+def test_schema_v24_install_is_idempotent_and_foreign_keys_stay_clean(tmp_path):
     data_dir = tmp_path / "idempotent-v22-data"
     database = _create_populated_v22_database(data_dir)
 
@@ -326,12 +348,46 @@ def test_schema_v23_failure_rolls_back_new_schema_and_allows_clean_retry(tmp_pat
     initialize(data_dir)
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (23,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (24,)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("SELECT COUNT(*) FROM transcript_edit_events").fetchone() == (0,)
         assert connection.execute("SELECT COUNT(*) FROM transcript_segment_reviews").fetchone() == (
             0,
         )
+
+
+def test_schema_v24_failure_rolls_back_lifecycle_install_and_retries(tmp_path, monkeypatch):
+    data_dir = tmp_path / "rollback-v24-data"
+    database = _create_populated_v22_database(data_dir)
+    real_install = storage_module._install_notes_lifecycle
+
+    def fail_after_real_install(connection):
+        real_install(connection)
+        raise RuntimeError("injected v24 migration failure")
+
+    monkeypatch.setattr(storage_module, "_install_notes_lifecycle", fail_after_real_install)
+    with pytest.raises(RuntimeError, match="injected v24 migration failure"):
+        initialize(data_dir)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (22,)
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert "notes_version_lifecycle" not in tables
+        assert "notes_lifecycle_operations" not in tables
+        assert "transcript_edit_events" not in tables
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    monkeypatch.setattr(storage_module, "_install_notes_lifecycle", real_install)
+    initialize(data_dir)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (24,)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute(
+            "SELECT COUNT(*) FROM notes_saved_versions WHERE note_id = 'migration-note'"
+        ).fetchone() == (2,)
 
 
 def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
@@ -367,6 +423,8 @@ def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
         "notes_sources",
         "notes_revisions",
         "notes_saved_versions",
+        "notes_version_lifecycle",
+        "notes_lifecycle_operations",
         "notes_preferences",
         "extension_devices",
         "extension_pairing_codes",

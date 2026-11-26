@@ -24,7 +24,14 @@ from asr_studio.notes_document import (
     NotesDocumentError,
     plan_source,
 )
-from asr_studio.notes_history import get_saved_version, list_saved_versions
+from asr_studio.notes_history import list_saved_versions
+from asr_studio.notes_lifecycle import (
+    ACTIVE,
+    PURGED,
+    lifecycle_for_version,
+    lifecycle_rows_for_note,
+    saved_version_for_read,
+)
 from asr_studio.storage import database_path
 from asr_studio.tasks import TaskError, _request_id, _task_summary
 
@@ -929,12 +936,97 @@ def list_note_versions(data_dir: Path, note_id: str) -> dict[str, object]:
         ).fetchone()
         if latest is None:
             raise TaskError(404, "notes_not_found", "Notes revision not found.")
+        lifecycle = {
+            row["edit_version"]: row for row in lifecycle_rows_for_note(connection, note_id)
+        }
+        versions = []
+        for version in list_saved_versions(connection, note_id, include_markdown=False):
+            detail = saved_version_for_read(connection, note_id, version["edit_version"])
+            marker = lifecycle.get(version["edit_version"])
+            versions.append(
+                {
+                    **version,
+                    "actor_role": detail["actor_role"] if detail is not None else version["origin"],
+                    "lifecycle_status": marker["status"] if marker is not None else ACTIVE,
+                    "transition_id": marker["transition_id"] if marker is not None else None,
+                    "trashed_at": marker["trashed_at"] if marker is not None else None,
+                    "purged_at": marker["purged_at"] if marker is not None else None,
+                }
+            )
+        for marker in lifecycle.values():
+            if marker["edit_version"] in {version["edit_version"] for version in versions}:
+                continue
+            versions.append(
+                {
+                    "note_id": note_id,
+                    "edit_version": marker["edit_version"],
+                    "source_id": marker["source_id"],
+                    "origin": marker["origin"],
+                    "actor_role": marker["actor_role"],
+                    "saved_at": marker["saved_at"],
+                    "lifecycle_status": marker["status"],
+                    "transition_id": marker["transition_id"],
+                    "trashed_at": marker["trashed_at"],
+                    "purged_at": marker["purged_at"],
+                }
+            )
+        versions.sort(key=lambda version: version["edit_version"])
         return {
             "id": note_id,
             "meeting_id": latest["meeting_id"],
             "latest_edit_version": latest["edit_version"],
-            "versions": list_saved_versions(connection, note_id, include_markdown=False),
+            "versions": versions,
         }
+
+
+def _saved_version_metadata(
+    connection: sqlite3.Connection,
+    revision: sqlite3.Row,
+    saved: sqlite3.Row,
+    marker: sqlite3.Row,
+    *,
+    current_generation: str | None,
+    current_version: int | None,
+    date_version: int,
+    meeting_date: str | None,
+) -> dict[str, object]:
+    if revision["generation_id"] != current_generation:
+        source_state = "historical"
+    elif (
+        revision["source_version"] != current_version
+        or revision["notes_source_version"] != date_version
+        or revision["source_meeting_date"] != meeting_date
+    ):
+        source_state = "stale"
+    else:
+        source_state = "current"
+    status = marker["status"] if marker is not None else ACTIVE
+    return {
+        "id": revision["id"],
+        "meeting_id": revision["meeting_id"],
+        "source_snapshot_id": saved["source_id"],
+        "edit_version": saved["edit_version"],
+        "source_state": source_state,
+        "provider": revision["provider"],
+        "model": revision["model"],
+        "reasoning_effort": revision["reasoning_effort"],
+        "connection_version": revision["connection_version"],
+        "prompt_version": revision["prompt_version"],
+        "schema_version": revision["schema_version"],
+        "output_language": revision["output_language"],
+        "created_at": revision["created_at"],
+        "updated_at": saved["saved_at"],
+        "saved_at": saved["saved_at"],
+        "origin": saved["origin"],
+        "actor_role": saved["actor_role"],
+        "lifecycle_status": status,
+        "transition_id": marker["transition_id"] if marker is not None else None,
+        "trashed_at": marker["trashed_at"] if marker is not None else None,
+        "purged_at": marker["purged_at"] if marker is not None else None,
+        "content_available": False,
+        "can_restore": status == "trashed",
+        "tombstone": status == PURGED,
+    }
 
 
 def get_note_version(data_dir: Path, note_id: str, edit_version: int) -> dict[str, object]:
@@ -948,18 +1040,42 @@ def get_note_version(data_dir: Path, note_id: str, edit_version: int) -> dict[st
         ).fetchone()
         if revision is None:
             raise TaskError(404, "notes_not_found", "Notes revision not found.")
-        saved = get_saved_version(connection, note_id, edit_version)
+        marker = lifecycle_for_version(connection, note_id, edit_version)
+        saved = saved_version_for_read(connection, note_id, edit_version)
+        current_generation, current_version, date_version, meeting_date = _source_state_context(
+            connection, revision["meeting_id"]
+        )
+        if marker is not None and marker["status"] == PURGED and saved is None:
+            return _saved_version_metadata(
+                connection,
+                revision,
+                marker,
+                marker=marker,
+                current_generation=current_generation,
+                current_version=current_version,
+                date_version=date_version,
+                meeting_date=meeting_date,
+            )
         if saved is None:
             raise TaskError(404, "notes_version_not_found", "Saved Notes version not found.")
+        if marker is not None:
+            return _saved_version_metadata(
+                connection,
+                revision,
+                saved,
+                marker=marker,
+                current_generation=current_generation,
+                current_version=current_version,
+                date_version=date_version,
+                meeting_date=meeting_date,
+            )
         version = {
             **dict(revision),
             "markdown": saved["markdown"],
             "edit_version": saved["edit_version"],
             "updated_at": saved["saved_at"],
+            "citations_json": saved["citations_json"],
         }
-        current_generation, current_version, date_version, meeting_date = _source_state_context(
-            connection, revision["meeting_id"]
-        )
         payload = _revision_payload(
             connection,
             version,
@@ -969,7 +1085,35 @@ def get_note_version(data_dir: Path, note_id: str, edit_version: int) -> dict[st
             current_meeting_date=meeting_date,
             preserve_stored_markdown=True,
         )
-        return {**payload, "saved_at": saved["saved_at"], "origin": saved["origin"]}
+        return {
+            **payload,
+            "saved_at": saved["saved_at"],
+            "origin": saved["origin"],
+            "actor_role": saved["actor_role"],
+            "lifecycle_status": ACTIVE,
+            "transition_id": None,
+            "trashed_at": None,
+            "purged_at": None,
+            "content_available": True,
+            "can_restore": False,
+            "tombstone": False,
+        }
+
+
+def export_note_version(data_dir: Path, note_id: str, edit_version: int) -> str:
+    saved = get_note_version(data_dir, note_id, edit_version)
+    if saved.get("lifecycle_status") != ACTIVE or not saved.get("content_available"):
+        raise TaskError(
+            410,
+            "notes_version_unavailable",
+            "This fixed Notes version is no longer available for export.",
+        )
+    markdown = saved.get("markdown")
+    if not isinstance(markdown, str):
+        raise TaskError(
+            410, "notes_version_unavailable", "This fixed Notes version is unavailable."
+        )
+    return markdown
 
 
 def update_note(

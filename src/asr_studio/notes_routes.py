@@ -16,6 +16,7 @@ from asr_studio.notes import (
     ABSENT,
     accept_notes_task,
     export_note,
+    export_note_version,
     get_note,
     get_note_version,
     get_notes_source,
@@ -25,6 +26,7 @@ from asr_studio.notes import (
     save_notes_preference,
     update_note,
 )
+from asr_studio.notes_lifecycle import empty_trash, list_trash, restore_version, trash_version
 from asr_studio.notes_service import is_healthy as notes_service_is_healthy
 from asr_studio.tasks import TaskError
 from asr_studio.worker import is_healthy as worker_is_healthy
@@ -186,6 +188,64 @@ def install_notes_routes(
         except TaskError as error:
             _raise_task_error(error)
 
+    @app.get("/api/meetings/{meeting_id}/notes-trash")
+    async def read_notes_trash(meeting_id: str) -> dict[str, object]:
+        try:
+            return await run_in_threadpool(list_trash, settings.data_dir, meeting_id)
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.post("/api/meetings/{meeting_id}/notes-trash")
+    async def move_note_version_to_trash(meeting_id: str, request: Request) -> dict[str, object]:
+        payload = await _json_object(request, required={"operation_id", "note_id", "edit_version"})
+        try:
+            return await run_in_threadpool(
+                trash_version,
+                settings.data_dir,
+                meeting_id,
+                operation_id=payload["operation_id"],
+                note_id=payload["note_id"],
+                edit_version=payload["edit_version"],
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.post("/api/meetings/{meeting_id}/notes-trash/empty")
+    async def empty_notes_trash(meeting_id: str, request: Request) -> dict[str, object]:
+        payload = await _json_object(
+            request,
+            required={"operation_id", "confirmation_digest", "items"},
+        )
+        try:
+            return await run_in_threadpool(
+                empty_trash,
+                settings.data_dir,
+                meeting_id,
+                operation_id=payload["operation_id"],
+                confirmation_digest=payload["confirmation_digest"],
+                items=payload["items"],
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.post("/api/meetings/{meeting_id}/notes-trash/{note_id}/{edit_version}/restore")
+    async def restore_note_version(
+        meeting_id: str, note_id: str, edit_version: int, request: Request
+    ) -> dict[str, object]:
+        payload = await _json_object(request, required={"operation_id", "transition_id"})
+        try:
+            return await run_in_threadpool(
+                restore_version,
+                settings.data_dir,
+                meeting_id,
+                operation_id=payload["operation_id"],
+                note_id=note_id,
+                edit_version=edit_version,
+                transition_id=payload["transition_id"],
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
     @app.get("/api/notes/{note_id}")
     async def read_note(note_id: str) -> dict[str, object]:
         try:
@@ -238,13 +298,13 @@ def install_notes_routes(
     @app.get("/api/notes/{note_id}/versions/{edit_version}/export")
     async def export_saved_note_version(note_id: str, edit_version: int) -> Response:
         try:
-            saved = await run_in_threadpool(
-                get_note_version, settings.data_dir, note_id, edit_version
+            markdown = await run_in_threadpool(
+                export_note_version, settings.data_dir, note_id, edit_version
             )
         except TaskError as error:
             _raise_task_error(error)
         return Response(
-            content=saved["markdown"],
+            content=markdown,
             media_type="text/markdown",
             headers={
                 "Content-Disposition": f'attachment; filename="meeting-notes-v{edit_version}.md"'
