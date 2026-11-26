@@ -467,7 +467,8 @@ def test_progress_fits_360px_in_both_themes_and_the_summary_shows_focus(
     assert len(ratios) == 3 and min(ratios) >= 4.5
 
     page.locator("#cancel-transcription").focus()
-    page.keyboard.press("Tab")
+    # Processing details precede the always-visible cancel action in the workspace.
+    page.keyboard.press("Shift+Tab")
     summary = page.locator(".processing-details > summary")
     expect(summary).to_be_focused()
     ring = summary.evaluate(

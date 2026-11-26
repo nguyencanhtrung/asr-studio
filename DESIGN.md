@@ -311,6 +311,36 @@ Corners are compact and engineered: controls use the small radius, content panel
 - **Across tabs:** Choosing the Meeting notes tab hides the bar but does not pause the audio, so the reader can listen while reading the notes and pauses from the Transcript tab.
 - **Focus:** The two-pixel accent outline is drawn inside the bar, so the bar edge and the top of the viewport never clip it.
 
+### Transcript Workspace (#283)
+
+Search and the existing review filter lead the transcript. Completed configuration, runtime,
+transcript model metadata, task measurements and successful process status live in **ASR ·
+Chi tiết xử lý**. **Chạy lại** remains beside that disclosure. Pending requests, active progress,
+worker checks, failures, cancellations and diagnostic commands remain visible outside it;
+opening or closing metadata must not hide the focused control.
+
+The desktop workspace pairs the reading list with a contextual **Chi tiết · Người nói**
+disclosure. Row focus or selection updates saved segment text, timestamps, speaker and review
+reasons without opening an editor, seeking audio or moving focus. Context **Sửa · timestamp** (accessible name **Chi tiết · Sửa · timestamp**, translated
+as **Details · Edit · timestamp**) is distinct from the row action and opens the
+existing row editor, where speaker reassignment still uses the existing select. The actual
+speaker catalog, inline rename and add form live below the selected segment; no duplicate
+mutation controls or draft state are introduced. Technical segment facts retain a separate
+closed disclosure. A generation change resets presentation selection; filtering selects a
+remaining visible row or shows the existing no-results message.
+
+On phones and narrower workspaces the same context disclosure starts closed above the list.
+Native summary activation retains keyboard focus. The notes speaker-naming link opens it
+before focusing the catalog heading. On desktop the panel starts open and can scroll within
+the viewport below the sticky player. Closing it is always available. Transcript rows retain
+their existing timestamp/edit tab stops and keyboard save/cancel behavior. Playback, drafts,
+revision reads, source citations and source locks keep their existing owners and APIs.
+
+The recording identity is one compact line above the unchanged native sticky player; its
+long instruction moves into processing details. Existing fonts, color tokens and centered
+Settings/GitHub footer are preserved. Implementation lives in `history.css`, `history.js`
+and the transcript section of `shell.html`; no Notes styling or framework changes apply.
+
 ### Transcript Segments
 
 - **Read mode (default):** One bordered row per segment, on the subtle surface with the medium radius. It holds the timestamp button (mono, 14px, accent; seeks and plays), the speaker name (14px, semibold ink), the text (Inter reading, 16px) and, when the segment needs review, the amber "Cần kiểm tra" cue with its reasons (13px, bordered, never color alone). No field, select or save button is rendered. The playing segment keeps its accent border and soft fill.

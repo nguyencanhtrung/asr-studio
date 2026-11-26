@@ -179,6 +179,8 @@ def edit_segment(page, index=0):
 
 def rename_speaker(page, index=0):
     """Press a speaker chip, as a user does, and return the name input that opens in its place."""
+    if not page.locator("#transcript-context").evaluate("el => el.open"):
+        page.locator("#transcript-context > summary").click()
     item = page.locator("#speaker-catalog-list > li").nth(index)
     item.locator(".speaker-chip").click()
     return item.locator("input")
@@ -246,6 +248,8 @@ def ready_rerun_worker(live):
 
 
 def open_ready_rerun(page):
+    if not page.locator("#transcript-processing").evaluate("el => el.open"):
+        page.locator("#transcript-processing > summary").click()
     page.get_by_role("button", name="Chạy lại", exact=True).click()
     dialog = page.locator("#transcription-rerun-dialog")
     expect(dialog).to_be_visible()
@@ -4677,6 +4681,8 @@ def open_reading_meeting(live, page, title="Reading mode"):
 
 def speaker_chip(page, index):
     """A speaker's chip by position; unlike `.speaker-chip`, stable while a rename replaces one."""
+    if not page.locator("#transcript-context").evaluate("el => el.open"):
+        page.locator("#transcript-context > summary").click()
     return page.locator("#speaker-catalog-list > li").nth(index).locator(".speaker-chip")
 
 
@@ -5562,6 +5568,8 @@ def test_reading_rows_editor_and_chips_fit_360px_in_both_themes(live, signed_in,
     expect(page.locator(".segment-edit-button").first).to_be_enabled()
     assert page.evaluate(OVERFLOW_JS) == {"page": 0, "wide": []}
 
+    # Open the mobile context disclosure before traversing its speaker controls.
+    page.locator("#transcript-context > summary").click()
     # Keyboard focus is a solid 2px ring on the chip and on the Sửa button.
     tab_until(page, "el => el.classList.contains('speaker-chip')")
     assert_focus_ring(page)
@@ -5894,6 +5902,7 @@ def test_filtered_transcript_rerun_keeps_ready_language_and_community_contract(
     )
     page.reload(wait_until="networkidle")
     page.locator("#transcript-search").fill("Manual revision")
+    page.locator("#transcript-processing > summary").click()
     model = page.locator("#transcription-model")
     model.select_option("whisper-small")
     expect(page.get_by_role("button", name="Chạy lại", exact=True)).to_be_disabled()
@@ -5927,6 +5936,8 @@ def test_filtered_transcript_rerun_keeps_ready_language_and_community_contract(
     new_generation = finish_run(live, "New rerun output")
     expect(page.locator("#generation-title")).to_have_text("Transcript #2", timeout=8_000)
     expect(page.locator("#generation-summary")).to_have_text("1 đoạn")
+    if not page.locator("#transcript-processing").evaluate("el => el.open"):
+        page.locator("#transcript-processing > summary").click()
     details = page.locator("#generation-details")
     expect(details).to_have_js_property("open", False)
     summary = details.locator("summary")

@@ -817,3 +817,267 @@ button.speaker-chip:disabled {
 button.speaker-chip:disabled .speaker-chip-mark {
   color: var(--ink-3);
 }
+
+/* Transcript workspace: reading and search lead; source context stays alongside the list. */
+#meeting-panel-transcript .audio-hint {
+  margin: 6px 0 0;
+}
+
+#meeting-panel-transcript .transcription-panel {
+  padding: 16px;
+}
+
+.transcript-processing-tools {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.transcript-processing-tools > button {
+  flex: none;
+}
+
+.transcript-processing {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--ink-2);
+  font-size: var(--text-control);
+}
+
+.transcript-processing > summary,
+.transcript-context > summary {
+  cursor: pointer;
+  min-height: 24px;
+  align-content: center;
+}
+
+.transcript-processing[open] > summary {
+  margin-bottom: 12px;
+}
+
+#transcript-filters {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  margin: 0;
+}
+
+#transcript-filters .transcript-search {
+  grid-column: 1 / -1;
+}
+
+#transcript-filters .transcript-review-navigation {
+  justify-content: end;
+}
+
+#transcript-filters #transcript-reveal-target {
+  grid-column: 1 / -1;
+}
+
+#transcript-generation {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.transcript-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 12px;
+}
+
+.transcript-reading,
+.transcript-context {
+  min-width: 0;
+}
+
+.transcript-context {
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+  overflow-wrap: anywhere;
+}
+
+.transcript-context > summary {
+  color: var(--ink-2);
+  font-size: var(--text-control);
+}
+
+.selected-segment {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.selected-segment h5 {
+  margin: 0 0 8px;
+  font-size: var(--text-small);
+}
+
+.selected-segment p {
+  margin: 8px 0;
+  font-size: var(--text-small);
+}
+
+.selected-segment .selected-segment-time {
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+#selected-segment-text {
+  font-size: var(--text-reading);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+#selected-segment-details {
+  margin-bottom: 12px;
+}
+
+.transcript-context .speaker-catalog {
+  margin: 0;
+  padding: 16px 0 0;
+  border: 0;
+  background: transparent;
+}
+
+.transcript-context .speaker-add-controls {
+  flex-wrap: wrap;
+}
+
+.transcript-context .speaker-add-controls input {
+  width: 100%;
+}
+
+.transcript-reading .transcript-segments {
+  margin-top: 0;
+}
+
+.transcript-segment.is-context-selected {
+  border-color: var(--accent);
+}
+
+.transcript-context summary:focus-visible,
+.transcript-processing summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+@media (min-width: 1100px) {
+  .transcript-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
+  }
+
+  .transcript-context {
+    grid-column: 2;
+    grid-row: 1;
+    position: sticky;
+    top: calc(var(--player-height) + var(--player-clearance));
+    max-height: calc(100dvh - var(--player-height) - 2 * var(--player-clearance));
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    scroll-padding-block: 12px;
+  }
+
+  .transcript-reading {
+    grid-column: 1;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 700px) {
+  #transcript-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #transcript-filters .transcript-review-navigation {
+    justify-content: start;
+  }
+
+  #meeting-panel-transcript .transcription-panel {
+    padding: 12px;
+  }
+}
+
+/* Keep the saved recording's identity compact; playback remains the native sticky control. */
+#meeting-panel-transcript .audio-panel {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+#meeting-panel-transcript .audio-heading {
+  margin: 0;
+}
+
+#meeting-panel-transcript .source-label {
+  padding-block: 4px;
+}
+
+#transcription-panel > .task-diagnostic-copy-status:empty {
+  display: none;
+}
+
+#transcription-panel > .transcription-status {
+  margin-top: 8px;
+}
+
+#transcript-processing .generation-details {
+  margin-top: 12px;
+}
+
+#transcript-processing .generation-details summary,
+#transcript-processing .generation-details p {
+  text-align: start;
+}
+
+@media (min-width: 1100px) {
+  #transcript-filters .transcript-search {
+    grid-column: 1;
+  }
+
+  #transcript-filters .transcript-review-filter {
+    align-self: end;
+    min-height: 40px;
+    margin: 0;
+  }
+
+  #transcript-filters .transcript-review-navigation {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: start;
+  }
+
+  #transcript-filters #transcript-filter-status {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: center;
+  }
+}
+
+.context-segment-details {
+  color: var(--ink-2);
+  font-size: var(--text-control);
+}
+
+.context-segment-details > summary {
+  padding-block: 4px;
+  cursor: pointer;
+}
+
+.context-segment-fact {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--text-small);
+}
+
+.context-review-cue {
+  color: var(--warning);
+  font-size: var(--text-small);
+}
