@@ -17,7 +17,9 @@ from asr_studio.notes import (
     accept_notes_task,
     export_note,
     get_note,
+    get_note_version,
     get_notes_source,
+    list_note_versions,
     notes_preferences,
     notes_state,
     save_notes_preference,
@@ -215,6 +217,38 @@ def install_notes_routes(
             content=markdown,
             media_type="text/markdown",
             headers={"Content-Disposition": 'attachment; filename="meeting-notes.md"'},
+        )
+
+    @app.get("/api/notes/{note_id}/versions")
+    async def read_note_versions(note_id: str) -> dict[str, object]:
+        try:
+            return await run_in_threadpool(list_note_versions, settings.data_dir, note_id)
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.get("/api/notes/{note_id}/versions/{edit_version}")
+    async def read_note_version(note_id: str, edit_version: int) -> dict[str, object]:
+        try:
+            return await run_in_threadpool(
+                get_note_version, settings.data_dir, note_id, edit_version
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.get("/api/notes/{note_id}/versions/{edit_version}/export")
+    async def export_saved_note_version(note_id: str, edit_version: int) -> Response:
+        try:
+            saved = await run_in_threadpool(
+                get_note_version, settings.data_dir, note_id, edit_version
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+        return Response(
+            content=saved["markdown"],
+            media_type="text/markdown",
+            headers={
+                "Content-Disposition": f'attachment; filename="meeting-notes-v{edit_version}.md"'
+            },
         )
 
     @app.get("/api/notes-sources/{source_id}")

@@ -331,6 +331,11 @@ def _finalize_database_delete(data_dir: Path, meeting_id: str) -> None:
                 for row in recording_rows
                 if row["extension_session_id"] is not None
             ]
+            connection.execute(
+                "DELETE FROM notes_saved_versions WHERE note_id IN "
+                "(SELECT id FROM notes_revisions WHERE meeting_id = ?)",
+                (meeting_id,),
+            )
             connection.execute("DELETE FROM notes_revisions WHERE meeting_id = ?", (meeting_id,))
             connection.execute("DELETE FROM notes_sources WHERE meeting_id = ?", (meeting_id,))
             connection.execute(

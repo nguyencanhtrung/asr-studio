@@ -376,6 +376,7 @@
                   <select id="notes-revision-selector" aria-label="Chọn phiên bản notes đã lưu"></select>
                 </div>
                 <div class="notes-toolbar-actions">
+                  <button class="secondary-button" id="notes-history-open" type="button" aria-expanded="false" aria-controls="notes-history">Lịch sử lưu</button>
                   <button class="secondary-button" id="notes-save" type="button">Lưu bản nháp</button>
                   <button class="text-button" id="notes-edit-cancel" type="button">Hủy chỉnh sửa</button>
                   <button class="secondary-button" id="notes-copy-rich" type="button" aria-haspopup="dialog">Sao chép có định dạng</button>
@@ -384,6 +385,20 @@
                   <button class="icon-button" id="notes-export" type="button" aria-label="Tải Markdown đã lưu" title="Tải Markdown đã lưu"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 17h12" /></svg></button>
                 </div>
               </div>
+              <section class="notes-history" id="notes-history" aria-label="Lịch sử lưu Notes" hidden>
+                <div class="notes-history-controls">
+                  <div class="notes-revision-select-wrap">
+                    <label for="notes-history-selector">Bản lưu của Notes này</label>
+                    <select id="notes-history-selector" aria-describedby="notes-history-status notes-history-legacy"></select>
+                  </div>
+                  <div class="notes-history-actions">
+                    <button class="secondary-button" id="notes-history-copy-link" type="button" disabled>Sao chép liên kết cố định</button>
+                    <button class="text-button" id="notes-history-close" type="button">Về bản mới nhất</button>
+                  </div>
+                </div>
+                <p class="notes-draft-status" id="notes-history-status" role="status"></p>
+                <p class="notes-draft-status" id="notes-history-legacy" hidden></p>
+              </section>
               <p class="notes-draft-status" id="notes-draft-status" role="status" aria-live="polite"></p>
               <p class="notes-action-status" id="notes-copy-export-status" role="status" aria-live="polite"></p>
               <div class="notes-conflict" id="notes-conflict" role="alert" hidden>
@@ -396,7 +411,7 @@
               <!-- The view/write switch sits at the right of the line describing the text below it. -->
               <div class="notes-meta-row">
                 <p class="notes-revision-meta" id="notes-revision-meta"></p>
-                <div class="notes-mode-toggle" role="group" aria-label="Chế độ notes">
+                <div class="notes-mode-toggle" id="notes-mode-controls" role="group" aria-label="Chế độ notes">
                   <button class="notes-mode-button" id="notes-mode-view" type="button" aria-pressed="true" aria-label="Xem" title="Xem"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10Z" /><circle cx="10" cy="10" r="2.5" /></svg></button>
                   <button class="notes-mode-button" id="notes-mode-rich" type="button" aria-pressed="false">
                     Viết<span class="notes-unsaved-dot" id="notes-unsaved-dot" title="Có thay đổi chưa lưu" aria-hidden="true" hidden></span>

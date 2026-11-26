@@ -8,7 +8,9 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 21
+from asr_studio.notes_history import install_notes_history
+
+SCHEMA_VERSION = 22
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -1094,6 +1096,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 21:
             _migrate_v21(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (21)")
+        if current_version < 22:
+            install_notes_history(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (22)")
         connection.commit()
     finally:
         connection.close()

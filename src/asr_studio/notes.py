@@ -24,6 +24,7 @@ from asr_studio.notes_document import (
     NotesDocumentError,
     plan_source,
 )
+from asr_studio.notes_history import get_saved_version, list_saved_versions
 from asr_studio.storage import database_path
 from asr_studio.tasks import TaskError, _request_id, _task_summary
 
@@ -701,7 +702,7 @@ def accept_notes_task(
             return _task_summary(row)
 
 
-def _summary_markdown(row: sqlite3.Row) -> str:
+def _summary_markdown(row: sqlite3.Row | dict[str, Any]) -> str:
     """Hide generated timestamp citations in never-edited older revisions, saved notes untouched.
 
     Once the operator has saved an edit, the Markdown comes back exactly as it was typed.
@@ -720,7 +721,7 @@ def _summary_markdown(row: sqlite3.Row) -> str:
     )
 
 
-def _stored_citations(row: sqlite3.Row) -> list[object]:
+def _stored_citations(row: sqlite3.Row | dict[str, Any]) -> list[object]:
     """The citations saved with a revision; none for one made before they were kept."""
     citations = json.loads(row["citations_json"]) if row["citations_json"] else []
     return citations if isinstance(citations, list) else []
@@ -732,7 +733,7 @@ _LINK_RUN_RE = re.compile(r"(?<![^)\s])([^)\s]+)\)")
 
 
 def _source_link_warnings(
-    connection: sqlite3.Connection, row: sqlite3.Row, markdown: str
+    connection: sqlite3.Connection, row: sqlite3.Row | dict[str, Any], markdown: str
 ) -> list[dict[str, str]]:
     """Source links in `markdown` that do not open this revision's saved source, as typed.
 
@@ -765,7 +766,7 @@ def _source_link_warnings(
     return warnings
 
 
-def _display_citations(connection: sqlite3.Connection, row: sqlite3.Row) -> list:
+def _display_citations(connection: sqlite3.Connection, row: sqlite3.Row | dict[str, Any]) -> list:
     from asr_studio.citation_groups import group_citations
 
     citations = _stored_citations(row)
@@ -782,12 +783,13 @@ def _display_citations(connection: sqlite3.Connection, row: sqlite3.Row) -> list
 
 def _revision_payload(
     connection: sqlite3.Connection,
-    row: sqlite3.Row,
+    row: sqlite3.Row | dict[str, Any],
     *,
     current_generation_id: str | None,
     current_source_version: int | None,
     current_notes_source_version: int,
     current_meeting_date: str | None,
+    preserve_stored_markdown: bool = False,
 ) -> dict[str, object]:
     if row["generation_id"] != current_generation_id:
         source_state = "historical"
@@ -799,7 +801,7 @@ def _revision_payload(
         source_state = "stale"
     else:
         source_state = "current"
-    markdown = _summary_markdown(row)
+    markdown = row["markdown"] if preserve_stored_markdown else _summary_markdown(row)
     return {
         "id": row["id"],
         "meeting_id": row["meeting_id"],
@@ -916,6 +918,58 @@ def get_note(data_dir: Path, note_id: str) -> dict[str, object]:
             current_notes_source_version=date_version,
             current_meeting_date=meeting_date,
         )
+
+
+def list_note_versions(data_dir: Path, note_id: str) -> dict[str, object]:
+    """Read the versions actually saved for this Notes revision."""
+    with _connect_read_only(data_dir) as connection:
+        connection.execute("BEGIN")
+        latest = connection.execute(
+            "SELECT meeting_id, edit_version FROM notes_revisions WHERE id = ?", (note_id,)
+        ).fetchone()
+        if latest is None:
+            raise TaskError(404, "notes_not_found", "Notes revision not found.")
+        return {
+            "id": note_id,
+            "meeting_id": latest["meeting_id"],
+            "latest_edit_version": latest["edit_version"],
+            "versions": list_saved_versions(connection, note_id, include_markdown=False),
+        }
+
+
+def get_note_version(data_dir: Path, note_id: str, edit_version: int) -> dict[str, object]:
+    """Use the original revision's provenance with the immutable saved Markdown."""
+    if type(edit_version) is not int or not 1 <= edit_version <= 2**63 - 1:
+        raise TaskError(404, "notes_version_not_found", "Saved Notes version not found.")
+    with _connect_read_only(data_dir) as connection:
+        connection.execute("BEGIN")
+        revision = connection.execute(
+            _REVISION_SELECT + "WHERE revisions.id = ?", (note_id,)
+        ).fetchone()
+        if revision is None:
+            raise TaskError(404, "notes_not_found", "Notes revision not found.")
+        saved = get_saved_version(connection, note_id, edit_version)
+        if saved is None:
+            raise TaskError(404, "notes_version_not_found", "Saved Notes version not found.")
+        version = {
+            **dict(revision),
+            "markdown": saved["markdown"],
+            "edit_version": saved["edit_version"],
+            "updated_at": saved["saved_at"],
+        }
+        current_generation, current_version, date_version, meeting_date = _source_state_context(
+            connection, revision["meeting_id"]
+        )
+        payload = _revision_payload(
+            connection,
+            version,
+            current_generation_id=current_generation,
+            current_source_version=current_version,
+            current_notes_source_version=date_version,
+            current_meeting_date=meeting_date,
+            preserve_stored_markdown=True,
+        )
+        return {**payload, "saved_at": saved["saved_at"], "origin": saved["origin"]}
 
 
 def update_note(

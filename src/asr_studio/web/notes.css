@@ -380,6 +380,36 @@
   gap: 12px;
 }
 
+.notes-history {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.notes-history-controls,
+.notes-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.notes-history-controls > .notes-revision-select-wrap {
+  flex: 1 1 14rem;
+}
+
+.notes-history-actions > button {
+  min-height: 40px;
+}
+
+.notes-history .notes-draft-status {
+  margin: 0;
+}
+
 .notes-revision-select-wrap {
   display: grid;
   flex: 0 1 20rem;

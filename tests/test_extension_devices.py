@@ -23,7 +23,7 @@ from asr_studio.extension_auth import (
     ExtensionAuthService,
     authorize_extension_session,
 )
-from asr_studio.storage import database_path, initialize
+from asr_studio.storage import SCHEMA_VERSION, database_path, initialize
 
 EXTENSION_ORIGIN = f"chrome-extension://{EXTENSION_ID}"
 pytestmark = pytest.mark.anyio
@@ -264,7 +264,9 @@ def test_extension_state_is_private_and_schema_migration_is_restart_safe(setting
         schema = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name LIKE 'extension_%'"
         ).fetchall()
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (21,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (
+            SCHEMA_VERSION,
+        )
         assert all("hmac_secret" not in (row[0] or "") for row in schema)
 
     initialize(settings.data_dir)

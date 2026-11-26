@@ -13,6 +13,7 @@ import {
   pendingRequestStorageKey,
   reduce,
   requestStorageKey,
+  savedVersionFromHref,
   selectView,
   sourceFromHref,
   sourceHref,
@@ -138,6 +139,642 @@ const text = (message) => {
 };
 
 // ---- context and reads ----
+
+for (const action of ["saved-history-closed", "saved-history-picked"]) {
+  for (const detailStatus of ["pending", "failed"]) {
+    test(`returning to latest through ${action} keeps the linked revision after ${detailStatus} detail`, async () => {
+      const env = setup();
+      const href = `${ORIGIN}/meetings/m1?notes_revision=r1&notes_edit=2#notes`;
+      const linked = revision({ edit_version: 4, markdown: "# Latest of linked revision" });
+      env.context(meeting(), { href });
+      await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([
+        revision({ id: "r2", markdown: "# Another generated revision" }), linked,
+      ]));
+      const detail = env.waiting(env.is("GET", "/api/notes/r1/versions/2"))[0];
+      assert.ok(detail);
+      if (detailStatus === "failed") {
+        await env.answer(env.is("GET", "/api/notes/r1/versions/2"), 404, {});
+      }
+
+      env.dispatch(action, { href, editVersion: null });
+      assert.equal(selectView(env.state()).savedWork.pinned, true);
+      if (detailStatus === "pending") assert.equal(detail.signal.aborted, false);
+      await env.answer(targetRead, 200, linked);
+      const returned = selectView(env.state());
+      assert.equal(returned.savedWork.pinned, false);
+      assert.equal(returned.savedWork.revision.id, linked.id);
+      assert.equal(returned.savedWork.draftValue, linked.markdown);
+      assert.equal(env.hostCalls.find(([name]) => name === "replaceUrl")[1], "/meetings/m1#notes");
+      if (detailStatus === "pending") assert.equal(detail.signal.aborted, true);
+      assert.equal(returned.savedHistory.open, action === "saved-history-picked");
+    });
+  }
+}
+
+const fixedHref = `${ORIGIN}/meetings/m1?notes_revision=r1&notes_edit=2#notes`;
+const targetRead = (request) => request.method === "GET" && request.url === "/api/notes/r1";
+const savedEdit = (version) => revision({ edit_version: version, markdown: `# Saved edit ${version}` });
+const versionIndex = (latest) => ({
+  id: "r1", meeting_id: "m1", latest_edit_version: latest,
+  versions: [1, 2, 3, 4, 5].slice(0, latest).map((edit_version) => ({
+    note_id: "r1", edit_version, origin: edit_version === 1 ? "ai" : "operator", saved_at: "2026-11-25 00:00:00",
+  })),
+});
+
+const meetingRead = (r) => r.url === "/api/meetings/m1/notes";
+const historyIndex = (r) => r.url === "/api/notes/r1/versions";
+const fixedDetail = (r) => r.url === "/api/notes/r1/versions/2";
+
+for (const action of ["copy", "export", "rich-preview", "email-preview"]) {
+  test(`fixed ${action} survives meeting list population, updates and omission`, async () => {
+    const env = setup();
+    const view = () => selectView(env.state());
+    const fixed = revision({ edit_version: 2, markdown: "# Fixed two\n\nKeep **these bytes**.\n" });
+    env.context(meeting(), { href: fixedHref });
+    await env.answer(fixedDetail, 200, fixed);
+    env.dispatch(`${action}-clicked`);
+    const [pending] = env.waiting(fixedDetail);
+    await env.answer(meetingRead, 200, notesBody([savedEdit(3)]));
+    assert.equal(pending.signal.aborted, false);
+    await env.answer(historyIndex, 200, versionIndex(4));
+    env.dispatch("meeting-change-received", { meetingId: "m1" });
+    await env.answer(meetingRead, 200, notesBody([savedEdit(5)]));
+
+    let finishClipboard;
+    env.hostResults.copy = env.hostResults.copyFormatted = () => new Promise((resolve) => { finishClipboard = resolve; });
+    await env.answer(fixedDetail, 200, fixed);
+    const preview = action.endsWith("preview");
+    if (preview) {
+      assert.equal(view().copyPreview.content.kind, action.split("-")[0]);
+      assert.equal(view().copyPreview.content.editVersion, 2);
+      env.dispatch("preview-copy-clicked");
+    }
+    env.dispatch("meeting-change-received", { meetingId: "m1" });
+    await env.answer(meetingRead, 200, notesBody([revision({ id: "r2" })]));
+    assert.deepEqual(notes(env).revisions.map(({ id }) => id), ["r2"]);
+    assert.equal(view().savedWork.revision.markdown, fixed.markdown);
+
+    if (finishClipboard) finishClipboard("html");
+    await tick();
+    const shareCalls = env.hostCalls.filter(([name]) => ["copy", "download", "copyFormatted"].includes(name));
+    assert.equal(shareCalls.length, 1);
+    if (preview) {
+      const [[name, html, plain]] = shareCalls;
+      assert.equal(name, "copyFormatted");
+      assert.match(html, /Keep <strong>these bytes<\/strong>/);
+      assert.equal(plain, fixed.markdown);
+      assert.equal(view().copyPreview.copying, false);
+      assert.match(text(view().copyPreview.status), /Đã sao chép nội dung có định dạng/);
+    } else {
+      assert.deepEqual(shareCalls, action === "copy"
+        ? [["copy", fixed.markdown]] : [["download", "Weekly.md", fixed.markdown]]);
+      assert.match(text(view().actionMessage), action === "copy" ? /Đã sao chép.*edit 2/ : /Đã tải.*edit 2/);
+    }
+  });
+}
+
+for (const control of ["saved-history-closed", "saved-history-picked"]) {
+  test(`${control} remembers a newly projected v5 across stale and omitting lists`, async () => {
+    const env = setup();
+    const view = () => selectView(env.state());
+    env.context(meeting(), { href: fixedHref });
+    await env.answer(fixedDetail, 200, savedEdit(2));
+    env.dispatch(control, { href: fixedHref, editVersion: null });
+    assert.equal(view().savedHistory.latestPhase, "pending");
+    await env.answer(meetingRead, 200, notesBody([savedEdit(5), revision({ id: "r2" })]));
+    await env.answer(historyIndex, 200, versionIndex(3));
+    for (const rows of [[revision({ id: "r3" })], [savedEdit(3)], []]) {
+      env.dispatch("meeting-change-received", { meetingId: "m1" });
+      await env.answer(meetingRead, 200, notesBody(rows));
+      assert.deepEqual(notes(env).revisions.map(({ id }) => id), rows.map(({ id }) => id));
+    }
+    await env.answer(targetRead, 200, savedEdit(4));
+    assert.equal(view().savedHistory.latestPhase, "failed");
+    assert.equal(view().savedHistory.selected, "2");
+    assert.equal(view().savedWork.revision.markdown, "# Saved edit 2");
+    assert.equal(view().savedWork.saveDisabled, true);
+    assert.ok(!env.hostCalls.some(([name]) => name === "replaceUrl"));
+
+    env.dispatch("saved-history-closed", { href: fixedHref });
+    await env.answer(targetRead, 200, savedEdit(5));
+    assert.equal(view().savedWork.pinned, false);
+    assert.equal(view().savedWork.draftValue, "# Saved edit 5");
+    assert.equal(view().savedHistory.open, control === "saved-history-picked");
+    assert.deepEqual(env.hostCalls.filter(([name]) => name === "replaceUrl"), [["replaceUrl", "/meetings/m1#notes"]]);
+    env.dispatch("meeting-change-received", { meetingId: "m1" });
+    await env.answer(meetingRead, 200, notesBody());
+    assert.deepEqual(notes(env).revisions, []);
+  });
+}
+
+test("choosing another fixed edit closes the preview and fences the previous share read", async () => {
+  const env = setup();
+  env.context(meeting(), { href: fixedHref });
+  await env.answer(meetingRead, 200, notesBody([savedEdit(3)]));
+  await env.answer(fixedDetail, 200, savedEdit(2));
+  env.dispatch("email-preview-clicked");
+  await env.answer(fixedDetail, 200, savedEdit(2));
+  assert.ok(selectView(env.state()).copyPreview);
+  const action = { type: "notes/copy-clicked" };
+  const { meta } = reduce(env.state(), action).effects.find((effect) => effect.type === "fetch");
+  env.store.dispatch(action);
+  const [pending] = env.waiting(fixedDetail);
+  env.dispatch("saved-history-picked", { editVersion: 1, href: fixedHref });
+  assert.equal(pending.signal.aborted, true);
+  assert.equal(selectView(env.state()).copyPreview, null);
+  env.dispatch("location-changed", { href: fixedHref });
+  await env.answer(fixedDetail, 200, savedEdit(2));
+  const before = env.state();
+  env.dispatch("response", { meta, response: { status: 200, body: savedEdit(2) } });
+  env.dispatch("request-failed", { meta, error: { status: 401, body: { detail: "Authentication required" } } });
+  assert.equal(env.state(), before);
+  assert.ok(!env.hostCalls.some(([name]) => name === "copy"));
+  assert.equal(selectView(env.state()).actionMessage, "");
+});
+
+for (const mismatch of [{ id: "r2" }, { meeting_id: "m2" }, { edit_version: 3 }, { markdown: null }]) {
+  test(`fixed copy rejects a mismatched ${Object.keys(mismatch)[0]}`, async () => {
+    const env = setup();
+    env.context(meeting(), { href: fixedHref });
+    await env.answer(fixedDetail, 200, savedEdit(2));
+    env.dispatch("copy-clicked");
+    await env.answer(meetingRead, 200, notesBody([savedEdit(3)]));
+    await env.answer(fixedDetail, 200, { ...savedEdit(2), ...mismatch });
+    const view = selectView(env.state());
+    assert.equal(view.savedWork.revision.markdown, "# Saved edit 2");
+    assert.match(text(view.actionMessage), /Không thể đọc|không khớp|không trả về/);
+    assert.ok(!env.hostCalls.some(([name]) => name === "copy"));
+  });
+}
+
+for (const [confirmation, projection, control] of [
+  ["detail", "pending", "saved-history-closed"],
+  ["detail", "failed", "saved-history-picked"],
+  ["detail", "omitted", "saved-history-closed"],
+  ["index", "pending", "saved-history-picked"],
+  ["index", "failed", "saved-history-closed"],
+  ["index", "omitted", "saved-history-picked"],
+]) {
+  test(`${control} uses confirmed ${confirmation} with a ${projection} meeting projection`, async () => {
+    const env = setup();
+    const view = () => selectView(env.state());
+    env.context(meeting(), { href: fixedHref });
+    const other = revision({ id: "r2", markdown: "# Other revision" });
+    if (projection === "failed") await env.answer(meetingRead, 503, {});
+    if (projection === "omitted") await env.answer(meetingRead, 200, notesBody([other]));
+    if (confirmation === "detail") {
+      await env.answer(fixedDetail, 200, savedEdit(2));
+      if (projection === "failed") await env.answer(historyIndex, 503, {});
+    } else {
+      await env.answer(historyIndex, 200, versionIndex(4));
+      if (projection === "failed") await env.answer(fixedDetail, 404, {});
+    }
+    assert.equal(view().savedHistory.options[0].disabled, false);
+    assert.equal(view().savedWork.selected, "r1");
+    assert.equal(text(view().savedWork.options.find(({ value }) => value === "r1").text), "Bản lưu 2");
+    assert.equal(view().savedWork.revision?.edit_version, confirmation === "detail" ? 2 : undefined);
+    assert.deepEqual(notes(env).revisions.map((item) => item.id), projection === "omitted" ? ["r2"] : []);
+
+    env.dispatch(control, { href: fixedHref, editVersion: null });
+    assert.equal(view().savedHistory.latestPhase, "pending");
+    assert.equal(view().savedHistory.selected, "2");
+    const floor = confirmation === "detail" ? 2 : 4;
+    await env.answer(targetRead, 200, savedEdit(floor - 1));
+    assert.equal(view().savedHistory.latestPhase, "failed");
+    assert.equal(view().savedWork.pinned, true);
+    assert.equal(env.hostCalls.some(([name]) => name === "replaceUrl"), false);
+    env.dispatch("saved-history-closed", { href: fixedHref });
+    await env.answer(targetRead, 200, savedEdit(4));
+    assert.equal(view().savedWork.pinned, false);
+    assert.equal(view().savedWork.selected, "r1");
+    assert.equal(view().savedWork.draftValue, "# Saved edit 4");
+    assert.equal(view().savedHistory.open, control === "saved-history-picked");
+    assert.deepEqual(env.hostCalls.find(([name]) => name === "replaceUrl"), ["replaceUrl", "/meetings/m1#notes"]);
+    assert.equal(notes(env).known, projection !== "pending");
+    assert.equal(Boolean(notes(env).readError), projection === "failed");
+    if (projection === "pending") {
+      await env.answer(meetingRead, 200, notesBody([other]));
+      assert.deepEqual(notes(env).revisions.map((item) => item.id), ["r2", "r1"]);
+      assert.equal(view().savedWork.draftValue, "# Saved edit 4");
+    }
+  });
+}
+
+test("an earlier projection can omit the reconciled Note while still replacing unrelated rows", async () => {
+  const env = setup();
+  const other = revision({ id: "r2", markdown: "# Other revision" });
+  await opened(env, { revisions: [other, revision({ id: "r3" })] });
+  env.dispatch("mode-chosen", { mode: "write" });
+  env.dispatch("draft-edited", { value: "# Unrelated draft" });
+  const draft = env.state().drafts.r2;
+  env.dispatch("meeting-change-received", { meetingId: "m1" });
+  env.dispatch("location-changed", { href: fixedHref });
+  await env.answer(fixedDetail, 200, savedEdit(2));
+  env.dispatch("saved-history-closed", { href: fixedHref });
+  await env.answer(targetRead, 200, savedEdit(4));
+  await env.answer(meetingRead, 200, notesBody([other]));
+  assert.deepEqual(notes(env).revisions.map((item) => item.id), ["r2", "r1"]);
+  assert.equal(selectView(env.state()).savedWork.draftValue, "# Saved edit 4");
+  assert.equal(env.state().drafts.r2, draft);
+
+  env.dispatch("meeting-change-received", { meetingId: "m1" });
+  await env.answer(meetingRead, 200, notesBody([other]));
+  assert.deepEqual(notes(env).revisions.map((item) => item.id), ["r2"]);
+  assert.equal(env.state().drafts.r2, draft);
+});
+
+test("a pending current GET keeps the floor of a cached Note that the meeting list omits", async () => {
+  const env = setup();
+  await opened(env, { revisions: [savedEdit(4)] });
+  env.dispatch("location-changed", { href: fixedHref });
+  env.dispatch("saved-history-closed", { href: fixedHref });
+  env.dispatch("meeting-change-received", { meetingId: "m1" });
+  await env.answer(meetingRead, 200, notesBody());
+  await env.answer(targetRead, 200, savedEdit(3));
+  assert.equal(selectView(env.state()).savedHistory.latestPhase, "failed");
+
+  env.dispatch("saved-history-closed", { href: fixedHref });
+  await env.answer(targetRead, 200, { ...savedEdit(4), markdown: null });
+  assert.equal(selectView(env.state()).savedHistory.latestPhase, "failed");
+  assert.equal(env.hostCalls.some(([name]) => name === "replaceUrl"), false);
+
+  env.dispatch("saved-history-closed", { href: fixedHref });
+  await env.answer(targetRead, 200, savedEdit(4));
+  assert.equal(selectView(env.state()).savedWork.draftValue, "# Saved edit 4");
+});
+
+async function historyAheadOfMeeting(env, { dirty = false } = {}) {
+  env.context();
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([
+    revision({ id: "r2", markdown: "# A different Notes revision" }), savedEdit(3),
+  ]));
+  if (dirty) {
+    env.dispatch("revision-picked", { id: "r1" });
+    env.dispatch("mode-chosen", { mode: "write" });
+    env.dispatch("draft-edited", { value: "# Local draft" });
+  }
+  env.dispatch("location-changed", { href: fixedHref });
+  await env.answer((r) => r.url === "/api/notes/r1/versions", 200, versionIndex(4));
+  await env.answer((r) => r.url === "/api/notes/r1/versions/2", 200, savedEdit(2));
+}
+
+for (const action of ["saved-history-closed", "saved-history-picked"]) {
+  test(`${action} reconciles a newer history index before enabling latest Notes`, async () => {
+    const env = setup();
+    await historyAheadOfMeeting(env);
+    const view = () => selectView(env.state());
+    const effects = (name) => env.hostCalls.filter(([call]) => call === name);
+    env.dispatch(action, { href: fixedHref, editVersion: null });
+    assert.equal(view().savedWork.pinned, true);
+    assert.equal(view().savedWork.revision.markdown, "# Saved edit 2");
+    assert.equal(effects("replaceUrl").length, 0);
+    await env.answer(targetRead, 503, {});
+    assert.equal(view().savedWork.pinned, true);
+    assert.equal(view().savedWork.saveDisabled, true);
+    assert.equal(view().savedHistory.selected, "2");
+    assert.match(text(view().savedHistory.status), /Không thể đọc bản Notes mới nhất/);
+    assert.equal(effects("replaceUrl").length, 0);
+    env.dispatch("copy-clicked");
+    await env.answer((r) => r.url === "/api/notes/r1/versions/2", 200, savedEdit(2));
+    assert.deepEqual(effects("copy").at(-1), ["copy", "# Saved edit 2"]);
+
+    env.dispatch("saved-history-closed", { href: fixedHref });
+    await env.answer(targetRead, 200, savedEdit(4));
+    assert.equal(view().savedHistory.open, action === "saved-history-picked");
+    assert.equal(view().savedWork.pinned, false);
+    assert.equal(view().savedWork.revision.id, "r1");
+    assert.equal(view().savedWork.draftValue, "# Saved edit 4");
+    assert.deepEqual(effects("replaceUrl"), [["replaceUrl", "/meetings/m1#notes"]]);
+    env.dispatch("copy-clicked");
+    await env.answer(targetRead, 200, savedEdit(4));
+    assert.deepEqual(effects("copy").at(-1), ["copy", "# Saved edit 4"]);
+  });
+
+  for (const fixedDetail of ["visible", "loading"]) {
+    test(`${action} refreshes latest when the first index is pending and fixed detail is ${fixedDetail}`, async () => {
+      const env = setup();
+      env.context();
+      await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([savedEdit(3)]));
+      env.dispatch("location-changed", { href: fixedHref });
+      const [index] = env.waiting((r) => r.url === "/api/notes/r1/versions");
+      if (fixedDetail === "visible") {
+        await env.answer((r) => r.url === "/api/notes/r1/versions/2", 200, savedEdit(2));
+      }
+      env.dispatch(action, { href: fixedHref, editVersion: null });
+      assert.equal(selectView(env.state()).savedWork.pinned, true);
+      assert.equal(selectView(env.state()).savedWork.revision?.edit_version, fixedDetail === "visible" ? 2 : undefined);
+      assert.equal(index.signal.aborted, false);
+      await env.answer(targetRead, 200, savedEdit(4));
+      const view = selectView(env.state());
+      assert.equal(view.savedWork.pinned, false);
+      assert.equal(view.savedWork.revision.edit_version, 4);
+      assert.equal(view.savedHistory.open, action === "saved-history-picked");
+      assert.equal(index.signal.aborted, true);
+      env.dispatch("copy-clicked");
+      await env.answer(targetRead, 200, savedEdit(4));
+      assert.deepEqual(env.hostCalls.find(([name]) => name === "copy"), ["copy", "# Saved edit 4"]);
+    });
+  }
+}
+
+test("closing a chooser already on latest does not request Notes content", async () => {
+  const env = setup();
+  await opened(env, { revisions: [savedEdit(4)] });
+  env.dispatch("saved-history-opened");
+  env.dispatch("saved-history-closed");
+  assert.equal(selectView(env.state()).savedHistory.open, false);
+  assert.equal(env.requests.some(targetRead), false);
+});
+
+test("latest history reconciliation keeps a dirty draft and survives a late v3 meeting read", async () => {
+  const env = setup();
+  await historyAheadOfMeeting(env, { dirty: true });
+  env.dispatch("saved-history-picked", { href: fixedHref, editVersion: null });
+  await env.answer(targetRead, 200, savedEdit(3));
+  assert.equal(selectView(env.state()).savedWork.pinned, true);
+  env.dispatch("saved-history-closed", { href: fixedHref });
+  env.dispatch("meeting-change-received", { meetingId: "m1" });
+  await env.answer(targetRead, 200, savedEdit(4));
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([savedEdit(3)]));
+  const work = selectView(env.state()).savedWork;
+  assert.equal(work.revision.markdown, "# Saved edit 4");
+  assert.equal(work.draftValue, "# Local draft");
+  assert.equal(work.copyDisabled, true);
+  assert.match(text(work.conflict.message), /edit 4/);
+  env.dispatch("use-latest-clicked");
+  assert.equal(selectView(env.state()).savedWork.draftValue, "# Saved edit 4");
+});
+
+for (const destination of ["another note", "another saved version", "another meeting", "Transcript", "home"]) {
+  test(`latest history response is discarded after navigating to ${destination}`, async () => {
+    const env = setup();
+    if (destination === "another meeting" || destination === "Transcript") {
+      env.context(meeting(), { href: fixedHref });
+      await env.answer(historyIndex, 200, versionIndex(4));
+    } else {
+      await historyAheadOfMeeting(env);
+    }
+    const action = { type: "notes/saved-history-closed", href: fixedHref };
+    const { meta } = reduce(env.state(), action).effects.find(targetReadEffect);
+    env.store.dispatch(action);
+    const [pending] = env.waiting(targetRead);
+    assert.ok(pending);
+
+    if (destination === "another note") {
+      env.dispatch("revision-picked", { id: "r2", href: fixedHref });
+    } else if (destination === "another saved version") {
+      env.dispatch("saved-history-picked", { editVersion: 1, href: fixedHref });
+    } else if (destination === "another meeting") {
+      env.context(meeting("m2"));
+    } else if (destination === "Transcript") {
+      env.context(meeting(), { detail: { view: "meeting", meeting: meeting(), tab: "transcript" }, href: fixedHref });
+    } else {
+      env.dispatch("context", { detail: { view: "home" } });
+    }
+    assert.equal(pending.signal.aborted, true);
+    const before = env.state();
+    const calls = env.hostCalls.length;
+    // Exercise the reducer fence independently of the runner's abort.
+    env.dispatch("response", { meta, response: { status: 200, body: savedEdit(4) } });
+    env.dispatch("request-failed", { meta, error: { status: 503 } });
+    assert.equal(env.state(), before);
+    assert.equal(env.hostCalls.length, calls);
+  });
+}
+
+function targetReadEffect(effect) {
+  return effect.type === "fetch" && effect.init.method === "GET" && effect.url === "/api/notes/r1";
+}
+
+const historyAuthError = { status: 401, body: { detail: "Authentication required" } };
+
+for (const destination of ["close", "current chooser", "another edit", "another fixed link", "another meeting"]) {
+  for (const op of ["saved-history-list", "saved-history-detail"]) {
+    test(`${op} cannot end the session after ${destination}`, async () => {
+      const env = setup();
+      await opened(env, { revisions: [savedEdit(3), revision({ id: "r2" })] });
+      const open = { type: "notes/location-changed", href: fixedHref };
+      const { meta } = reduce(env.state(), open).effects.find((effect) => effect.meta?.op === op);
+      env.store.dispatch(open);
+      const [pending] = env.waiting(op === "saved-history-list" ? historyIndex : fixedDetail);
+      if (destination === "close") {
+        env.dispatch("saved-history-closed", { href: fixedHref });
+        await env.answer(targetRead, 200, savedEdit(4));
+      } else if (destination === "current chooser") {
+        env.dispatch("saved-history-opened");
+      } else if (destination === "another edit") {
+        env.dispatch("saved-history-picked", { editVersion: 1, href: fixedHref });
+      } else if (destination === "another fixed link") {
+        env.dispatch("location-changed", { href: fixedHref.replace("r1", "r2") });
+      } else {
+        env.context(meeting("m2"));
+      }
+
+      const before = env.state();
+      const failed = reduce(before, { type: "notes/request-failed", meta, error: historyAuthError });
+      assert.deepEqual(failed, { state: before });
+      const body = op === "saved-history-list" ? versionIndex(5) : savedEdit(2);
+      assert.deepEqual(reduce(before, { type: "notes/response", meta, response: { body } }), { state: before });
+      assert.equal(pending.signal.aborted, true);
+    });
+  }
+}
+
+for (const op of ["saved-history-list", "saved-history-detail"]) {
+  test(`only the active ${op} can end the session`, async () => {
+    const env = setup();
+    await opened(env, { revisions: [savedEdit(3)], task: TASK });
+    const open = { type: "notes/location-changed", href: fixedHref };
+    const { meta } = reduce(env.state(), open).effects.find((effect) => effect.meta?.op === op);
+    env.store.dispatch(open);
+    const state = env.state();
+    const failure = { type: "notes/request-failed", error: historyAuthError };
+    for (const mismatch of [
+      { meetingId: "m2" }, { noteId: "r2" }, { requestId: meta.requestId - 1 },
+      ...(op === "saved-history-detail" ? [{ editVersion: 1 }] : []),
+    ]) {
+      assert.deepEqual(reduce(state, { ...failure, meta: { ...meta, ...mismatch } }), { state });
+    }
+    const expired = reduce(state, { ...failure, meta });
+    assert.ok(expired.effects.some((effect) => effect.type === "navigate" && effect.url === "/access"));
+    assert.equal(expired.state.poll.scheduled, false);
+    assert.equal(expired.state.drafts, state.drafts);
+    const body = op === "saved-history-list" ? versionIndex(4) : savedEdit(2);
+    env.dispatch("response", { meta, response: { body } });
+    const settled = env.state();
+    assert.deepEqual(reduce(settled, { ...failure, meta }), { state: settled });
+  });
+}
+
+test("a post-save history refresh supersedes the old list for the same selection", async () => {
+  const env = setup();
+  await opened(env, { revisions: [savedEdit(3)] });
+  const open = { type: "notes/saved-history-opened" };
+  const { meta } = reduce(env.state(), open).effects.find((effect) => effect.meta?.op === "saved-history-list");
+  env.store.dispatch(open);
+  const [pending] = env.waiting(historyIndex);
+  env.dispatch("draft-edited", { value: "# Saved edit 4" });
+  env.dispatch("save-clicked");
+  await env.answer((r) => r.method === "PATCH", 200, savedEdit(4));
+
+  const state = env.state();
+  assert.deepEqual(reduce(state, {
+    type: "notes/request-failed", meta, error: historyAuthError,
+  }), { state });
+  assert.equal(pending.signal.aborted, true);
+  await env.answer(historyIndex, 200, versionIndex(4));
+  assert.ok(selectView(env.state()).savedHistory.options.some((option) => option.value === "4"));
+});
+
+test("fixed Notes links accept a trailing slash and reject decoded slashes", () => {
+  assert.deepEqual(savedVersionFromHref(fixedHref.replace("/m1?", "/m%31/?")), {
+    meetingId: "m1", noteId: "r1", editVersion: 2,
+  });
+  assert.equal(savedVersionFromHref(fixedHref.replace("/m1?", "/m1%2Fm2?")), null);
+});
+
+test("explicit equivalent fixed navigation cancels latest, while background context preserves it", async () => {
+  const env = setup();
+  await historyAheadOfMeeting(env);
+  const current = { type: "notes/saved-history-closed", href: fixedHref };
+  const { meta } = reduce(env.state(), current).effects.find(targetReadEffect);
+  env.store.dispatch(current);
+  const [pending] = env.waiting(targetRead);
+  const equivalent = `${ORIGIN}/meetings/m1?notes_edit=2&notes_revision=r1#notes`;
+  env.context(meeting(), { href: equivalent });
+  assert.equal(pending.signal.aborted, false);
+  assert.equal(selectView(env.state()).savedHistory.latestPhase, "pending");
+
+  env.dispatch("location-changed", { href: equivalent });
+  assert.equal(pending.signal.aborted, true);
+  const state = env.state();
+  assert.equal(selectView(state).savedHistory.latestPhase, "");
+  assert.equal(selectView(state).savedWork.revision.edit_version, 2);
+  assert.deepEqual(reduce(state, {
+    type: "notes/response", meta, response: { body: savedEdit(5) },
+  }), { state });
+  assert.deepEqual(reduce(state, {
+    type: "notes/request-failed", meta, error: historyAuthError,
+  }), { state });
+});
+
+test("an address change to current Notes retains the fixed selection until latest is verified", async () => {
+  const env = setup();
+  await historyAheadOfMeeting(env, { dirty: true });
+  const href = `${ORIGIN}/meetings/m1#notes`;
+  env.context(meeting(), { href });
+  assert.equal(selectView(env.state()).savedWork.revision.edit_version, 2);
+  assert.equal(env.waiting(targetRead).length, 0);
+
+  env.dispatch("location-changed", { href });
+  assert.equal(selectView(env.state()).savedHistory.latestPhase, "pending");
+  await env.answer(targetRead, 200, savedEdit(3));
+  assert.equal(selectView(env.state()).savedHistory.latestPhase, "failed");
+  assert.equal(selectView(env.state()).savedWork.revision.edit_version, 2);
+  env.dispatch("saved-history-closed", { href });
+  await env.answer(targetRead, 200, savedEdit(4));
+  const work = selectView(env.state()).savedWork;
+  assert.equal(work.pinned, false);
+  assert.equal(work.revision.edit_version, 4);
+  assert.equal(work.draftValue, "# Local draft");
+  assert.ok(work.conflict);
+  assert.equal(env.hostCalls.some(([name]) => name === "replaceUrl"), false);
+});
+
+test("latest history reconciliation respects a higher version learned while the read is pending", async () => {
+  const env = setup();
+  await historyAheadOfMeeting(env);
+  env.dispatch("saved-history-picked", { editVersion: 1, href: fixedHref });
+  await env.answer((r) => r.url === "/api/notes/r1/versions/1", 200, savedEdit(1));
+  const href = fixedHref.replace("notes_edit=2", "notes_edit=1");
+  env.dispatch("saved-history-closed", { href });
+  await env.answer((r) => r.url === "/api/notes/r1/versions", 200, versionIndex(5));
+  await env.answer(targetRead, 200, savedEdit(4));
+  assert.equal(selectView(env.state()).savedWork.pinned, true);
+  assert.equal(selectView(env.state()).savedWork.revision.edit_version, 1);
+  env.dispatch("saved-history-closed", { href });
+  await env.answer(targetRead, 200, savedEdit(5));
+  assert.equal(selectView(env.state()).savedWork.revision.edit_version, 5);
+});
+
+test("a retry requires its own response for the exact meeting and Notes revision", async () => {
+  const env = setup();
+  env.context(meeting(), { href: fixedHref });
+  await env.answer(historyIndex, 200, versionIndex(4));
+  await env.answer(fixedDetail, 200, savedEdit(2));
+  const action = { type: "notes/saved-history-closed", href: fixedHref };
+  const { meta } = reduce(env.state(), action).effects.find(targetReadEffect);
+  env.store.dispatch(action);
+  await env.answer(targetRead, 200, { ...savedEdit(4), id: "r2" });
+  assert.equal(selectView(env.state()).savedWork.pinned, true);
+
+  env.store.dispatch(action);
+  env.dispatch("response", { meta, response: { status: 200, body: savedEdit(4) } });
+  assert.equal(selectView(env.state()).savedWork.pinned, true);
+  await env.answer(targetRead, 200, { ...savedEdit(4), meeting_id: "m2" });
+  assert.equal(selectView(env.state()).savedWork.pinned, true);
+
+  env.store.dispatch(action);
+  await env.answer(targetRead, 200, savedEdit(4));
+  assert.equal(selectView(env.state()).savedWork.pinned, false);
+});
+
+for (const mismatch of [{ id: "r2" }, { meeting_id: "m2" }]) {
+  test(`fixed-history replies with the wrong ${Object.keys(mismatch)[0]} cannot confirm the Note`, async () => {
+    const env = setup();
+    env.context(meeting(), { href: fixedHref });
+    await env.answer(historyIndex, 200, { ...versionIndex(4), ...mismatch });
+    await env.answer(fixedDetail, 200, { ...savedEdit(2), ...mismatch });
+    const requested = selectView(env.state());
+    assert.equal(requested.savedWork.revision, null);
+    assert.equal(requested.savedHistory.options[0].disabled, true);
+    assert.equal(text(requested.savedHistory.closeLabel), "Đóng lịch sử");
+    env.dispatch("saved-history-closed", { href: fixedHref });
+    assert.equal(env.requests.some((r) => /^\/api\/notes\/[^/]+$/.test(r.url)), false);
+    assert.equal(selectView(env.state()).savedHistory.open, false);
+  });
+}
+
+test("a fixed link without a matching revision offers a separate exit", async () => {
+  const env = setup();
+  const href = `${ORIGIN}/meetings/m1?notes_revision=missing&notes_edit=2#notes`;
+  env.context(meeting(), { href });
+  await env.answer(env.is("GET", "/api/meetings/m1/notes"), 200, notesBody([revision()]));
+  await env.answer((r) => r.url === "/api/notes/missing/versions", 404, {});
+  await env.answer((r) => r.url === "/api/notes/missing/versions/2", 404, {});
+  const requested = selectView(env.state());
+  assert.equal(requested.savedWork.selected, "missing");
+  assert.equal(requested.savedWork.revision, null);
+  assert.equal(requested.savedHistory.options.find((item) => item.value === "").disabled, true);
+  assert.equal(text(requested.savedHistory.closeLabel), "Đóng lịch sử");
+  env.dispatch("saved-history-picked", { href, editVersion: null });
+  assert.equal(selectView(env.state()).savedWork.pinned, true);
+
+  env.dispatch("saved-history-closed", { href });
+  const closed = selectView(env.state());
+  assert.equal(closed.savedHistory.open, false);
+  assert.equal(closed.savedWork.revision.id, "r1");
+});
+
+test("a retained legacy baseline explains unavailable earlier Saves after selecting a later one", async () => {
+  const env = setup();
+  await opened(env, { revisions: [revision({ edit_version: 5 })] });
+  env.dispatch("saved-history-opened");
+  const versions = {
+    id: "r1", meeting_id: "m1",
+    versions: [
+      { note_id: "r1", edit_version: 4, origin: "legacy", saved_at: "2026-11-01 10:00:00" },
+      { note_id: "r1", edit_version: 5, origin: "operator", saved_at: "2026-11-02 12:00:00" },
+    ],
+  };
+  await env.answer((r) => r.url === "/api/notes/r1/versions", 200, versions);
+  assert.match(text(selectView(env.state()).savedHistory.legacyNotice), /bản lưu 4.*Bản AI gốc/);
+  env.dispatch("saved-history-picked", { editVersion: 5, href: `${ORIGIN}/meetings/m1` });
+  await env.answer(env.is("GET", "/api/notes/r1/versions/5"), 200, revision({ edit_version: 5 }));
+  const selected = selectView(env.state());
+  assert.equal(selected.savedHistory.selected, "5");
+  assert.match(text(selected.savedHistory.legacyNotice), /bản lưu 4.*Bản AI gốc/);
+});
 
 test("opening a meeting reads its notes and the saved choice, then the run button works", async () => {
   const env = setup();
