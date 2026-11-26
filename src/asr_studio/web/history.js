@@ -2643,6 +2643,9 @@ function renderTranscription(transcription) {
   const cancelButton = $("#cancel-transcription");
   const measurements = $("#task-measurements");
   const advanced = $("#transcript-processing");
+  const statusLine = $("#transcription-status");
+  const statusHadFocus = document.activeElement === statusLine;
+  let restoreStatusFocus = false;
   const completed = Boolean(
     generation && (!task || task.status === "succeeded")
     && !view.requestBusy && !view.notice && !view.error.visible,
@@ -2652,9 +2655,9 @@ function renderTranscription(transcription) {
     advanced.dataset.presentationKey = presentationKey;
     if (!advanced.contains(document.activeElement)) advanced.open = !completed;
   }
-  const statusLine = $("#transcription-status");
   const statusHost = completed ? $("#completed-task-status") : $("#transcription-panel");
   if (statusLine.parentElement !== statusHost) {
+    restoreStatusFocus = statusHadFocus;
     if (completed) statusHost.append(statusLine);
     else $("#task-progress").after(statusLine);
   }
@@ -2726,6 +2729,12 @@ function renderTranscription(transcription) {
   }
   if (transcriptSynced(store.getState())) paintTranscriptTail(transcription);
   notifyMeetingContext();
+  if (restoreStatusFocus) {
+    // A completed status moves into collapsed details; hand off to their visible summary.
+    const target = completed && !advanced.open
+      ? advanced.querySelector(":scope > summary") : statusLine;
+    target.focus();
+  }
 }
 
 function renderLanguageControl(view) {

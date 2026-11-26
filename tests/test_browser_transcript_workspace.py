@@ -1,11 +1,26 @@
 """Transcript #283 layout and context against the real disposable application."""
 
+from uuid import uuid4
+
 import pytest
 from playwright.sync_api import expect
+from seeding import seed_meeting
+from test_browser_history import (
+    READING_SEGMENTS,
+    READING_SPEAKERS,
+    _publish_browser_generation,
+    open_reading_meeting,
+)
 from test_browser_history import live as live
-from test_browser_history import open_reading_meeting
 from test_browser_history import ready_rerun_worker as ready_rerun_worker
 from test_browser_history import signed_in as signed_in
+from test_browser_notes import _write_test_recording
+
+from asr_studio.tasks import (
+    claim_next_task,
+    publish_complete_generation,
+    update_task_progress,
+)
 
 pytestmark = pytest.mark.browser
 
@@ -161,3 +176,84 @@ def test_context_selection_keeps_notes_source_and_dirty_draft_identity(live, sig
     expect(page.locator(CHIP).first).to_be_visible()
     page.locator("#meeting-tab-transcript").click()
     expect(editor).to_have_value("Unsaved text while inspecting a saved notes source.")
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("focused_control", ["status", "search"])
+def test_completed_rerun_keeps_visible_keyboard_context(
+    live, signed_in, ready_rerun_worker, tmp_path, width, focused_control
+):
+    _context, page = signed_in(viewport={"width": width, "height": 900})
+    meeting = seed_meeting(live.settings.data_dir, "Rerun focus", "2026-10-14", duration_seconds=30)
+    _publish_browser_generation(live, meeting, segments=READING_SEGMENTS, speakers=READING_SPEAKERS)
+    _write_test_recording(live.settings.data_dir, meeting, tmp_path)
+    page.goto(f"{live.url}/meetings/{meeting}#transcript")
+    expect(page.locator(".segment-edit-button").first).to_be_enabled()
+    page.locator("#start-transcription").click()
+    submit = page.locator("#transcription-rerun-submit")
+    expect(submit).to_be_enabled()
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/tasks") and response.request.method == "POST"
+    ) as accepted:
+        submit.press("Enter")
+    assert accepted.value.status == 202
+    task = accepted.value.json()
+    status = page.locator("#transcription-status")
+    expect(status).to_be_focused()
+    search = page.locator("#transcript-search")
+    if focused_control == "search":
+        search.focus()
+        expect(search).to_be_focused()
+    owner = "browser-completion-focus"
+    claimed = claim_next_task(live.settings.data_dir, owner_id=owner)
+    assert claimed and claimed["id"] == task["id"]
+    assert update_task_progress(
+        live.settings.data_dir,
+        task["id"],
+        owner_id=owner,
+        stage="publishing",
+        elapsed_seconds=1,
+        transcript_end_seconds=30,
+        segment_count=len(READING_SEGMENTS),
+    )
+    generation = publish_complete_generation(
+        live.settings.data_dir,
+        task["id"],
+        owner_id=owner,
+        segments=[dict(segment, id=uuid4().hex) for segment in READING_SEGMENTS],
+        speakers=READING_SPEAKERS,
+        language_probability=0.9,
+        elapsed_seconds=1,
+    )
+    assert generation
+    page.evaluate(
+        "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+        meeting,
+    )
+    expect(page.locator("#transcript-context")).to_have_attribute(
+        "data-generation-id", generation["id"]
+    )
+    details = page.locator("#transcript-processing")
+    expect(details).not_to_have_attribute("open", "")
+    target = details.locator(":scope > summary") if focused_control == "status" else search
+    expect(target).to_be_focused()
+    expect(target).to_be_in_viewport()
+    assert target.evaluate("""element => {
+        const bounds = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(bounds.x + bounds.width / 2,
+            bounds.y + bounds.height / 2);
+        return hit === element || element.contains(hit);
+    }""")
+    if focused_control == "status":
+        assert target.evaluate("element => element.matches(':focus-visible')")
+        description = status.text_content().strip()
+        assert description
+        expect(target).to_have_accessible_description(description)
+    page.evaluate("window.scrollBy(0, 180)")
+    scroll = page.evaluate("window.scrollY")
+    page.evaluate(
+        "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+        meeting,
+    )
+    expect(target).to_be_focused()
+    assert page.evaluate("window.scrollY") == pytest.approx(scroll, abs=1)

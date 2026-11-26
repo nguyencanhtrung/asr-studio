@@ -3080,8 +3080,10 @@ holds the selected saved segment and the actual speaker controls. Desktop places
 the list; mobile places it before the list and initially closes it. Rerun, active/pending/error
 status, cancel and diagnostics remain outside completed metadata. Native summary activation keeps
 keyboard focus; the Notes naming link opens the context disclosure before focusing its catalog
-heading. Native audio, source links, the existing row editor and all mutation effects keep their
-owners and semantics.
+heading. When the focused ASR status moves into closed successful metadata, focus transfers to
+its visible summary, with the status supplied as its accessible description. Other focused
+controls and ordinary refresh scroll remain unchanged. Native audio, source links, the existing
+row editor and all mutation effects keep their owners and semantics.
 
 **Trade-offs.** Reassignment stays in the original row editor, reached through context Edit,
 instead of introducing another select with duplicate focus and conflict ownership. Context

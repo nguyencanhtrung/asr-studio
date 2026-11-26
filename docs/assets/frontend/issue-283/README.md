@@ -2,7 +2,9 @@
 
 The before/after images use disposable databases with the same meeting title,
 spoken text, speaker labels and generated sine-wave audio. Internal fixture IDs
-differ. The before checkout is `a112687`; after UI source is `895ef66`. No real
+differ. The before checkout is `a112687`. After images were refreshed on the candidate
+that includes the latest-main Notes merge and the ASR completion focus repair;
+the recorded bounds match the initial `895ef66` capture. No real
 recording, provider request, model inference, user credentials or model download
 is involved. The capture runner never starts audio playback.
 
