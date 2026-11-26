@@ -38,6 +38,22 @@ INVITES_RETRY = "hãy bấm để thử lại"
 NO_CONFIDENCE = "“cần kiểm tra” không xét độ tin cậy của chữ"
 
 
+def open_processing_details(page):
+    """Activate the native processing disclosure before using its completed controls."""
+    details = page.locator("#transcript-processing")
+    # The shell starts this disclosure open, but the first saved-generation paint
+    # closes it. Wait for that real render before inspecting the native state.
+    expect(page.locator("#transcript-generation")).to_be_visible()
+    expect(page.locator("#generation-title")).to_have_text(re.compile(r"^Transcript #\d+$"))
+    summary = details.locator(":scope > summary")
+    summary.focus()
+    expect(summary).to_be_focused()
+    if not details.evaluate("element => element.open"):
+        summary.press("Enter")
+    expect(details).to_have_attribute("open", "")
+    return details
+
+
 @pytest.fixture
 def worker(live):
     """A healthy GPU worker whose default model is prepared, seen by the running server."""
@@ -148,6 +164,7 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     expect(page.locator("#generation-title")).to_have_text("Transcript #1", timeout=8_000)
     expect(meta).to_contain_text("qwen3-asr-1.7b · GPU · CUDA · bfloat16")
 
+    open_processing_details(page)
     selector.select_option("pho-whisper-large")
     expect(page.locator("#transcription-model-help")).to_contain_text("Tối ưu tiếng Việt")
     expect(page.locator("#transcription-model-help")).to_contain_text("Không dành cho English")
@@ -180,6 +197,7 @@ def test_a_choice_goes_with_one_run_and_the_transcripts_can_be_compared(live, si
     # The choice belonged to that run: the system default is untouched and a new page starts over.
     assert read_runtime_profile(data_dir).model_path == worker
     page.reload()
+    open_processing_details(page)
     expect(selector).to_have_value("auto")
 
 
@@ -718,6 +736,7 @@ def test_transcript_details_follow_saved_diarization_provenance(live, signed_in,
     evidence_dir = os.environ.get("ASR_UI_EVIDENCE_DIR")
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
+    open_processing_details(page)
     expect(summary).to_be_visible()
     summary.press("Enter")
     expect(summary).to_be_focused()
@@ -758,6 +777,7 @@ def test_transcript_details_follow_saved_diarization_provenance(live, signed_in,
     )
 
     generations.select_option(off)
+    open_processing_details(page)
     expect(page.locator("#generation-mode")).to_have_text(
         "Historical version · Read-only." if english else "Bản lịch sử · Chỉ đọc."
     )
@@ -869,6 +889,7 @@ def test_only_a_transcript_without_confidence_scores_qualifies_its_review_count(
     expect(meta).not_to_contain_text(NO_CONFIDENCE)
 
     # The same warning where the model is chosen, before any count exists.
+    open_processing_details(page)
     page.get_by_role("combobox", name="Model ASR", exact=True).select_option("qwen3-asr-1.7b")
     expect(page.locator("#transcription-model-help")).to_contain_text("Không có điểm tin cậy")
 
@@ -965,6 +986,7 @@ def test_automatic_runs_the_default_from_settings_and_one_run_can_still_differ(
     expect(meta).to_contain_text("pho-whisper-large · GPU · CUDA · float16", timeout=8_000)
 
     # One run with another model leaves the default where it was.
+    open_processing_details(page)
     selector.select_option("whisper-large-v3")
     page.get_by_role("button", name="Chạy lại").click()
     expect(page.get_by_role("button", name="Hủy")).to_be_visible()
@@ -1176,6 +1198,7 @@ def test_asr_catalog_and_community_dependency(live, signed_in, layout, width, he
     expect(create).to_be_focused()
 
     page.goto(f"{live.url}/meetings/{meeting_id}")
+    open_processing_details(page)
     selector = page.locator("#transcription-model")
     expect(selector.locator("option")).to_have_count(4)
     expect(selector.locator(f'option[value="{ready}"]')).to_contain_text("Fixture V2")
@@ -1187,6 +1210,9 @@ def test_asr_catalog_and_community_dependency(live, signed_in, layout, width, he
         page.locator("#speaker-name-help").scroll_into_view_if_needed()
         evidence("rerun-and-names")
 
+    context = page.locator("#transcript-context")
+    if not context.evaluate("element => element.open"):
+        context.locator(":scope > summary").click()
     page.locator("#speaker-catalog .speaker-chip").press("Enter")
     name = page.locator(".speaker-name-form input")
     expect(name).to_be_focused()

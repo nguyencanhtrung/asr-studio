@@ -3098,5 +3098,15 @@ light/dark and VI/EN; focused regression coverage is in
 The committed capture runner reproduces the sample without provider calls or model loading.
 Independent verification and full CI remain required before issue acceptance.
 
+**R1 remediation evidence.** Reached ASR browser paths now wait for the saved-generation
+paint, focus the native processing summary, and activate it with Enter only when it is
+closed; their original visibility and value assertions remain intact. The bounded helper
+call-site rerun passed 9 nodes after reproducing the three collapsed-disclosure failures.
+The O3 capture runner now scrolls the nested speaker catalog into the context frame; the
+refreshed after-context matrix differs from the base frame while `after.json` retains the
+same measured layout, with no overflow or page errors. O1/O2 feedback and accessibility
+integration remain root-owned parallel work for the common candidate, not a deferred failure
+of this partition.
+
 **Tag / target:** design; `DESIGN.md` Transcript Workspace. Issue:
 [#283](https://github.com/nguyencanhtrung/asr-studio/issues/283).

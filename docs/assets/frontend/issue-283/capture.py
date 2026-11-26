@@ -80,11 +80,14 @@ with tempfile.TemporaryDirectory(prefix="transcript-283-") as tmp:
                             }
                         )
                         if phase == "after":
-                            page.locator(
-                                "#transcript-context > summary"
-                            ).scroll_into_view_if_needed()
-                            if not page.locator("#transcript-context").evaluate("el => el.open"):
-                                page.locator("#transcript-context > summary").click()
+                            transcript_context = page.locator("#transcript-context")
+                            summary = transcript_context.locator(":scope > summary")
+                            summary.scroll_into_view_if_needed()
+                            if not transcript_context.evaluate("el => el.open"):
+                                summary.click()
+                            catalog = page.locator("#speaker-catalog")
+                            catalog.scroll_into_view_if_needed()
+                            catalog.locator(".speaker-chip").first.scroll_into_view_if_needed()
                             page.screenshot(
                                 path=str(out / f"{phase}-context-{device}-{theme}-{lang}.png"),
                                 full_page=False,

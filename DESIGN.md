@@ -335,7 +335,9 @@ Native summary activation retains keyboard focus. The notes speaker-naming link 
 before focusing the catalog heading. On desktop the panel starts open and can scroll within
 the viewport below the sticky player. Closing it is always available. Transcript rows retain
 their existing timestamp/edit tab stops and keyboard save/cancel behavior. Playback, drafts,
-revision reads, source citations and source locks keep their existing owners and APIs.
+revision reads, source citations and source locks keep their existing owners and APIs. The
+portable evidence capture scrolls the nested speaker catalog into view before taking its
+context frame; it does not duplicate the controls or alter the base workspace measurements.
 
 The recording identity is one compact line above the unchanged native sticky player; its
 long instruction moves into processing details. Existing fonts, color tokens and centered
