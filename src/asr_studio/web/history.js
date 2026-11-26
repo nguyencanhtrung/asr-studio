@@ -2645,21 +2645,22 @@ function renderTranscription(transcription) {
   const advanced = $("#transcript-processing");
   const statusLine = $("#transcription-status");
   const statusHadFocus = document.activeElement === statusLine;
-  let restoreStatusFocus = false;
   const completed = Boolean(
     generation && (!task || task.status === "succeeded")
     && !view.requestBusy && !view.notice && !view.error.visible,
   );
   const presentationKey = `${meeting.id}:${completed}`;
-  if (advanced.dataset.presentationKey !== presentationKey) {
+  const presentationChanged = advanced.dataset.presentationKey !== presentationKey;
+  if (presentationChanged) {
     advanced.dataset.presentationKey = presentationKey;
     if (!advanced.contains(document.activeElement)) advanced.open = !completed;
   }
-  const statusHost = completed ? $("#completed-task-status") : $("#transcription-panel");
-  if (statusLine.parentElement !== statusHost) {
-    restoreStatusFocus = statusHadFocus;
-    if (completed) statusHost.append(statusLine);
-    else $("#task-progress").after(statusLine);
+  // Completion feedback stays after the transcript so a closed native disclosure cannot hide the live region or
+  // push the content-first reading surface below the fold.
+  const statusHost = $("#transcription-panel");
+  const transcriptPanel = $("#transcript-generation");
+  if (statusLine.parentElement !== statusHost || statusLine.previousElementSibling !== transcriptPanel) {
+    transcriptPanel.after(statusLine);
   }
   const measurementHost = completed ? $("#completed-task-measurements") : $("#transcription-panel");
   if (measurements.parentElement !== measurementHost) {
@@ -2686,14 +2687,18 @@ function renderTranscription(transcription) {
 
   // With the button off, the model guidance says what to do: do not also invite a click on it.
   const modelBlocked = Boolean(view.model && view.model.blocked);
+  const status = $("#transcription-status");
+  const modelGuidance = modelBlocked && view.model
+    ? tr(view.model.guidance || t("Model đã chọn chưa sẵn sàng. Chọn một model sẵn sàng để tiếp tục."))
+    : "";
   if (!task) {
-    $("#transcription-status").textContent = !recording.ready
+    setProp(status, "textContent", !recording.ready
       ? tr(recording.statusMessage)
-      : generation
-        ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
-        : modelBlocked
-          ? t("Bản ghi đã lưu.")
-          : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local.");
+      : modelBlocked
+        ? modelGuidance
+        : generation
+          ? t("Transcript hoàn chỉnh đã được lưu. Bạn có thể nghe lại các mốc hoặc chủ động chạy lại bản ghi.")
+          : t("Bản ghi đã lưu. Bấm “Chép lời” khi bạn muốn chạy nhận dạng local."));
   } else {
     const statusText = {
       accepted: t("Tác vụ đã được nhận. Worker sẽ bắt đầu xử lý."),
@@ -2708,18 +2713,21 @@ function renderTranscription(transcription) {
         ? t("Worker đã dừng giữa tác vụ. Không tự chạy lại.")
         : t("Worker đã dừng giữa tác vụ. Không tự chạy lại; hãy bấm để thử lại."),
     };
-    $("#transcription-status").textContent = workerChecking
+    setProp(status, "textContent", workerChecking
       ? task.status === "accepted"
         ? t("Đang kiểm tra worker trước khi bắt đầu xử lý.")
         : t("Đang kiểm tra worker vì heartbeat tác vụ đã cũ.")
-      : statusText[task.status] || t("Đang tải trạng thái tác vụ.");
+      : task.status === "succeeded" && modelGuidance
+        ? modelGuidance
+        : tr(statusText[task.status] || t("Đang tải trạng thái tác vụ.")));
     $("#task-stage").textContent = taskStageLabel(task);
     $("#task-elapsed").textContent = formatElapsedSeconds(task.elapsed_seconds);
     $("#task-segment-count").textContent = String(task.segment_count || 0);
     $("#task-transcript-end").textContent = formatTimestamp(task.transcript_end_seconds || 0);
   }
-  if (view.notice) $("#transcription-status").textContent = NOTICE_TEXT[view.notice];
-  const status = $("#transcription-status");
+  if (view.notice) setProp(status, "textContent", tr(NOTICE_TEXT[view.notice]));
+  // A completed success is still announced by the live region, but does not take vertical space from the reading surface.
+  status.classList.toggle("visually-hidden", completed && !modelGuidance);
   status.dataset.workerState = task && task.worker_state ? task.worker_state : "";
   status.classList.toggle("is-checking-worker", workerChecking);
   renderRerunDialog(view, startButton, status);
@@ -2729,8 +2737,8 @@ function renderTranscription(transcription) {
   }
   if (transcriptSynced(store.getState())) paintTranscriptTail(transcription);
   notifyMeetingContext();
-  if (restoreStatusFocus) {
-    // A completed status moves into collapsed details; hand off to their visible summary.
+  if (statusHadFocus && completed && presentationChanged) {
+    // A completed status hands focus to the visible summary when the disclosure is collapsed.
     const target = completed && !advanced.open
       ? advanced.querySelector(":scope > summary") : statusLine;
     target.focus();
