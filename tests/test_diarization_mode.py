@@ -135,6 +135,9 @@ def test_schema_21_additive_reads_keep_legacy_provenance_nullable(tmp_path):
         assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (
             SCHEMA_VERSION,
         )
+        assert connection.execute(
+            "SELECT version FROM schema_migrations WHERE version = 21"
+        ).fetchone() == (21,)
         task_columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
         generation_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(transcript_generations)")

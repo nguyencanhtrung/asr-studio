@@ -4,6 +4,24 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #266 — Keep transcript history actions readable in the context panel
+
+**Problem.** Visual inspection of the new transcript history found that revision metadata
+and action buttons competed for the narrow desktop context column. Flex shrinking and
+inherited word wrapping split Vietnamese button labels inside words.
+
+**Design.** Each history entry stacks its metadata above its action group at every viewport.
+Actions wrap as separate buttons and preserve whole words. This keeps the transcript reading
+column, DOM order and keyboard navigation unchanged. Widening the context panel or reducing
+the global font size would affect unrelated meeting content and was rejected.
+
+**Evidence.** `test_edit_history_actions_keep_words_readable_and_keyboard_order` in
+`tests/test_browser_meeting_tabs.py` measures rendered word ranges, horizontal overflow and
+Tab focus in desktop/mobile, light/dark and Vietnamese/English variants. The guard fails
+with the original component styling. External before/after captures accompany
+[issue #266](https://github.com/nguyencanhtrung/asr-studio/issues/266) and PR #289.
+Tag: design, accessibility. Backend history, source pins and Undo contracts are unchanged.
+
 ## #258 — Separate Auto Processing workflow settings from owner defaults
 
 **Problem.** Auto Processing exposed three owner mirrors beside its workflow controls. Those mirrors could lag the committed ASR and provider settings, and saving an owner value with the dialog open could advance the workflow-preferences revision. The Chromium fixture verifies exactly three rendered comboboxes by accessible role and name—`Ngôn ngữ transcript`, `Provider notes`, and `Ngôn ngữ đầu ra notes`—and verifies the owner links are visible. The Node fixture verifies that the workflow PATCH sends exactly four fields.
@@ -3159,3 +3177,33 @@ Tag: design. Target: `docs/frontend-design.md`.
 
 **Follow-ups.** [Issue #265](https://github.com/nguyencanhtrung/asr-studio/issues/265); trash, restore and permanent delete remain [Issue #275](https://github.com/nguyencanhtrung/asr-studio/issues/275).
 Tag: architecture, design, data-retention. Target: `docs/adr/0005-markdown-notes.md`, `docs/frontend-design.md`, `src/asr_studio/notes_history.py`.
+
+## #266 — Per-generation transcript edit history and review state
+
+**Problem.** Transcript edits previously changed the current generation without a durable
+revision journal. Speaker merges could not preview their affected scope or undo only their
+own assignments safely. Manual review state also had no persisted home separate from
+automatic confidence flags and source content.
+
+**Design.** Schema 23 adds additive, generation-scoped edit events and segment review rows.
+Text and speaker writes record their inverse changes in the same transaction as the source
+version update. Speaker merge requires a server preview count and confirmation, then uses
+optimistic assignment value/version checks for atomic apply and scoped Undo. Unrelated
+edits remain intact when every touched assignment still matches. Historical projections
+remain read-only. A new generation starts without review rows. Notes sources, citations,
+saved history and legacy exports remain owned by the existing Notes tables and routes.
+
+**Before and after.** No performance claim is made. Before, transcript edit and manual
+review state were not journaled per generation. After, the focused transcript/schema tests,
+web reducer tests and the writer fast gate pass on copied fixtures; the full CI-equivalent
+browser/media run remains an independent candidate gate.
+
+**Trade-offs and rejected options.** The journal stores inverse changes instead of copying
+every full transcript projection, which keeps unrelated edits and old-generation reads
+explicit. A schema22 binary still refuses schema23. The named rollback uses the new
+backend with predecessor web assets and is reported as UI rollback, not old-backend
+binary compatibility. No live database, provider, model or deployment state is changed.
+
+**Follow-ups.** [Issue #266](https://github.com/nguyencanhtrung/asr-studio/issues/266).
+Tag: architecture, design, data-retention. Target: `docs/adr/0006-transcript-generations.md`,
+`docs/frontend-design.md`, `src/asr_studio/transcript_history.py` and transcript history tests.

@@ -864,6 +864,7 @@ button.speaker-chip:disabled .speaker-chip-mark {
 #transcript-filters {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px 16px;
+  row-gap: 7px;
   margin: 0;
 }
 
@@ -892,6 +893,7 @@ button.speaker-chip:disabled .speaker-chip-mark {
   margin-top: 12px;
 }
 
+.transcript-reading-column,
 .transcript-reading,
 .transcript-context {
   min-width: 0;
@@ -974,6 +976,11 @@ button.speaker-chip:disabled .speaker-chip-mark {
     grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
   }
 
+  .transcript-reading-column {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
   .transcript-context {
     grid-column: 2;
     grid-row: 1;
@@ -985,10 +992,6 @@ button.speaker-chip:disabled .speaker-chip-mark {
     scroll-padding-block: 12px;
   }
 
-  .transcript-reading {
-    grid-column: 1;
-    grid-row: 1;
-  }
 }
 
 /* At tablet widths the filter status cannot share a row with navigation without
@@ -1058,9 +1061,15 @@ button.speaker-chip:disabled .speaker-chip-mark {
   }
 
   #transcript-filters .transcript-review-navigation {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-column: 1;
     grid-row: 2;
     justify-content: start;
+  }
+
+  #transcript-filters .transcript-review-navigation > button {
+    min-width: 0;
   }
 
   #transcript-filters #transcript-filter-status {

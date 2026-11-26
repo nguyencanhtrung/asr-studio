@@ -57,6 +57,9 @@ import {
   fieldValue,
   hasSegmentDraft as coreHasSegmentDraft,
   hasUnsavedDrafts,
+  activeHistoryOperation,
+  canRetryHistoryOperation,
+  historyWriteBlocked,
   initialState as transcriptInitialState,
   isEditing,
   isRenaming,
@@ -65,7 +68,9 @@ import {
   selectSegments,
   searchTimestamp,
   reduce as reduceTranscript,
+  reviewWriteBlocked,
   speakerAddReady,
+  transcriptMutationBusy,
 } from "./transcript-core.js";
 import {
   initialState as processingInitialState,
@@ -111,6 +116,15 @@ const transcriptionNow = () => {
 // The generation on screen and whether it takes edits, as the core reads them from the meeting.
 const shownGeneration = () => displayed(tstate(), transcriptionNow());
 const transcriptDraft = (generationId, field, itemId) => draftOf(tstate().drafts, generationId, field, itemId);
+const segmentReview = (generation, segmentId) => {
+  const source = generation?.reviews && typeof generation.reviews === "object"
+    ? generation.reviews
+    : tstate().history?.generationId === generation?.id ? tstate().history.reviews : {};
+  const review = source && source[segmentId];
+  return review && typeof review === "object"
+    ? { checked: Boolean(review.checked), review_version: Number(review.review_version) || 0 }
+    : { checked: false, review_version: 0 };
+};
 const isEditingSegment = (generationId, segmentId) => isEditing(tstate(), generationId, segmentId);
 const isRenamingSpeaker = (generationId, speakerId) => isRenaming(tstate(), generationId, speakerId);
 const hasSegmentDraft = (generationId, segmentId) => coreHasSegmentDraft(tstate(), generationId, segmentId);
@@ -1412,10 +1426,167 @@ function renderGenerationNavigation(transcription) {
   }
   wrapper.hidden = generations.length < 2;
   selector.value = selected;
-  return {
-    generation: generations.find((generation) => generation.id === selected),
-    editable: Boolean(current && current.id === selected && current.status === "complete"),
-  };
+  const selectedView = shownGeneration();
+  return { generation: selectedView.generation, editable: selectedView.editable };
+}
+
+const EDIT_HISTORY_LABELS = {
+  generated: t("Transcript gốc"),
+  legacy: t("Bản còn lưu khi nâng cấp"),
+  segment_text: t("Sửa nội dung đoạn"),
+  speaker_added: t("Thêm người nói"),
+  speaker_renamed: t("Đổi tên người nói"),
+  speaker_assignment: t("Đổi người nói của đoạn"),
+  speakers_merged: t("Gộp người nói"),
+  speaker_merge_undone: t("Hoàn tác gộp"),
+  segment_review: t("Đổi trạng thái kiểm tra"),
+};
+
+function historyRetryEnabled(editable) {
+  return canRetryHistoryOperation(tstate(), {
+    editable,
+    currentGenerationId: transcriptionNow()?.generation?.id,
+    blocked: shownNow().blocked,
+  });
+}
+
+function renderEditHistory(generation, editable) {
+  const panel = $("#transcript-edit-history");
+  const list = $("#transcript-edit-history-list");
+  const state = tstate().history;
+  panel.hidden = !generation || !state || state.generationId !== generation.id;
+  if (panel.hidden) {
+    list.replaceChildren();
+    delete list.dataset.historyKey;
+    return;
+  }
+  const status = state.list === "loading"
+    ? t("Đang tải lịch sử chỉnh sửa…")
+    : state.listError || (state.viewLoading ? t("Đang tải bản chỉnh sửa đã lưu…") : state.viewError)
+      || (state.revisions.length ? t("{count} bản đã lưu · mới nhất trước", { count: state.revisions.length }) : t("Chưa có lịch sử chỉnh sửa."));
+  setAttr($("#transcript-edit-history-reload"), "aria-disabled", String(state.list === "loading" || state.viewLoading));
+  const operation = activeHistoryOperation(tstate());
+  const reportsOperation = operation?.type === "undo" || (operation?.type === "merge" && !editable);
+  const retry = $("#transcript-edit-history-retry");
+  const showRetry = reportsOperation && operation.uncertain;
+  if (!showRetry && document.activeElement === retry) $("#transcript-edit-history-title").focus({ preventScroll: true });
+  retry.hidden = !showRetry;
+  setAttr(retry, "aria-disabled", String(!historyRetryEnabled(editable)));
+  setProp($("#transcript-edit-history-status"), "textContent",
+    tr(reportsOperation && operation.error ? operation.error : status));
+  const busy = transcriptMutationBusy(tstate());
+  const undoBlocked = historyWriteBlocked(tstate()) || sourceMutationUnavailable();
+  const selectedVersion = state.view?.editVersion;
+  setProp($("#transcript-edit-history-latest"), "hidden", !selectedVersion);
+  const key = JSON.stringify([generation.id, state.revisions, selectedVersion, editable, state.viewLoading, busy, undoBlocked]);
+  if (list.dataset.historyKey === key) return;
+  list.dataset.historyKey = key;
+  const focused = document.activeElement;
+  const activeKey = list.contains(focused)
+    ? [focused.dataset.readEditVersion, focused.dataset.undoEditVersion] : null;
+  list.replaceChildren();
+  for (const revision of state.revisions) {
+    const item = document.createElement("li");
+    item.className = "transcript-edit-history-item";
+    item.dataset.editVersion = String(revision.edit_version);
+    if (selectedVersion === revision.edit_version) item.classList.add("is-selected");
+    const label = document.createElement("div");
+    label.className = "transcript-edit-history-label";
+    label.textContent = t("Bản {version} · {kind} · nguồn {source}", {
+      version: revision.edit_version,
+      kind: EDIT_HISTORY_LABELS[revision.kind] || t("Bản đã lưu"),
+      source: revision.source_version,
+    });
+    const meta = document.createElement("span");
+    meta.className = "transcript-edit-history-meta";
+    const timestamp = revision.recorded_at;
+    const value = timestamp?.includes(" ") ? timestamp.replace(" ", "T") + "Z" : timestamp;
+    const formatted = value ? tr({ fmt: "timestamp", value }) : "";
+    meta.textContent = [formatted, revision.actor_role === "operator" ? t("Người dùng") : ""].filter(Boolean).join(" · ");
+    label.append(meta);
+    const actions = document.createElement("div");
+    actions.className = "transcript-edit-history-actions";
+    const read = document.createElement("button");
+    read.type = "button";
+    read.className = "secondary-button";
+    read.dataset.readEditVersion = String(revision.edit_version);
+    read.textContent = selectedVersion === revision.edit_version ? t("Đang xem") : t("Xem bản này");
+    read.disabled = state.viewLoading || busy;
+    if (selectedVersion === revision.edit_version) read.setAttribute("aria-current", "true");
+    actions.append(read);
+    if (revision.kind === "speakers_merged") {
+      const undone = state.revisions.some((entry) => entry.undo_of_version === revision.edit_version);
+      const undo = document.createElement("button");
+      undo.type = "button";
+      undo.className = "text-button";
+      undo.dataset.undoEditVersion = String(revision.edit_version);
+      undo.textContent = undone ? t("Đã hoàn tác") : t("Hoàn tác gộp");
+      undo.disabled = !editable || undone || undoBlocked;
+      actions.append(undo);
+    }
+    item.append(label, actions);
+    list.append(item);
+  }
+  if (activeKey) {
+    const [readVersion, undoVersion] = activeKey;
+    const control = [...list.querySelectorAll("button")].find((button) =>
+      button.dataset.readEditVersion === readVersion && button.dataset.undoEditVersion === undoVersion);
+    const target = control && !control.disabled ? control : $("#transcript-edit-history-title");
+    target.focus({ preventScroll: true });
+  }
+}
+
+function renderSpeakerMerge(generation, editable) {
+  const panel = $("#speaker-merge");
+  const source = $("#speaker-merge-source");
+  const target = $("#speaker-merge-target");
+  const previewButton = $("#speaker-merge-preview");
+  const confirmButton = $("#speaker-merge-confirm");
+  const retryButton = $("#speaker-merge-retry");
+  const state = tstate().history;
+  panel.hidden = !generation || !editable;
+  if (panel.hidden) return;
+  const speakers = Array.isArray(generation.speakers) ? generation.speakers : [];
+  const key = JSON.stringify([generation.id, speakers.map(({ speaker_id, display_name }) => [speaker_id, display_name])]);
+  if (source.dataset.optionsKey !== key) {
+    for (const select of [source, target]) {
+      const prior = select.value;
+      select.replaceChildren();
+      for (const speaker of speakers) {
+        const option = document.createElement("option");
+        option.value = speaker.speaker_id;
+        option.textContent = speaker.display_name || speaker.speaker_id;
+        select.append(option);
+      }
+      if (speakers.some((item) => item.speaker_id === prior)) select.value = prior;
+    }
+    if (source.value === target.value && target.options.length > 1) target.selectedIndex = 1;
+    source.dataset.optionsKey = key;
+  }
+  const preview = state.preview && state.preview.generation_id === generation.id ? state.preview : null;
+  const status = preview?.error
+    ? tr(preview.error)
+    : preview?.status === "loading" ? t("Đang tính số đoạn bị ảnh hưởng…")
+      : preview?.status === "ready" ? preview.segment_count
+        ? t("Bản xem trước: {count} đoạn sẽ đổi sang {speaker}.", { count: preview.segment_count, speaker: target.options[target.selectedIndex]?.textContent || preview.target_speaker_id })
+        : t("Không có đoạn nào bị ảnh hưởng. Xác nhận bị tắt.")
+        : "";
+  const blocked = historyWriteBlocked(tstate()) || sourceMutationUnavailable();
+  if (blocked && [source, target, previewButton, confirmButton].includes(document.activeElement)) {
+    panel.querySelector("summary").focus({ preventScroll: true });
+  }
+  source.disabled = target.disabled = blocked;
+  previewButton.disabled = speakers.length < 2 || source.value === target.value || blocked;
+  confirmButton.disabled = blocked || !preview || preview.status !== "ready"
+    || preview.source_version !== generation.source_version || preview.segment_count < 1
+    || preview.source_speaker_id !== source.value || preview.target_speaker_id !== target.value;
+  const operation = activeHistoryOperation(tstate());
+  const showRetry = operation?.type === "merge" && operation.uncertain;
+  if (!showRetry && document.activeElement === retryButton) panel.querySelector("summary").focus({ preventScroll: true });
+  retryButton.hidden = !showRetry;
+  setAttr(retryButton, "aria-disabled", String(!historyRetryEnabled(editable)));
+  setProp($("#speaker-merge-preview-status"), "textContent",
+    operation?.type === "merge" && operation.error ? tr(operation.error) : status);
 }
 
 function renderSpeakerCatalog(generation, editable) {
@@ -1593,6 +1764,8 @@ function renderTranscriptGeneration(generation, editable) {
   if (!generation) {
     list.replaceChildren();
     $("#speaker-catalog-list").replaceChildren();
+    $("#transcript-edit-history").hidden = true;
+    $("#speaker-merge").hidden = true;
     delete panel.dataset.renderKey;
     return;
   }
@@ -1606,7 +1779,7 @@ function renderTranscriptGeneration(generation, editable) {
     // Native disclosure on phones; never close it around an active field on resize or refresh.
     context.open = window.matchMedia("(min-width: 1100px)").matches;
   }
-  const renderKey = `${generation.id}:${generation.source_version}:${editable}`;
+  const renderKey = transcriptRenderKey(generation, editable);
   const mode = $("#generation-mode");
   mode.textContent = editable && !nav().notes.lockKnown
     ? t("Bản hiện tại · Đang kiểm tra khóa nguồn trước khi cho phép chỉnh sửa.")
@@ -1616,7 +1789,9 @@ function renderTranscriptGeneration(generation, editable) {
         ? t("Bản hiện tại · Bạn có thể chỉnh sửa transcript và người nói.")
         : t("Bản lịch sử · Chỉ đọc.");
   mode.classList.toggle("is-readonly", !editable || sourceMutationUnavailable());
+  renderEditHistory(generation, editable);
   if (panel.dataset.renderKey === renderKey) {
+    renderSpeakerMerge(generation, editable);
     updateActiveTranscriptIntervals();
     return;
   }
@@ -1651,6 +1826,7 @@ function renderTranscriptGeneration(generation, editable) {
     : t("{count} đoạn", { count: generation.segment_count });
   $("#generation-meta").textContent = meta.join(" · ");
   renderSpeakerCatalog(generation, editable);
+  renderSpeakerMerge(generation, editable);
 
   $("#transcript-empty").hidden = segments.length > 0;
   for (const segment of segments) list.append(buildSegmentRow(generation, segment, editable));
@@ -1888,6 +2064,30 @@ function buildSegmentRow(generation, segment, editable) {
     if (editable) head.append(buildEditButton(segment, hasDraft));
   }
   item.append(timestamp, head);
+  const reviewControl = document.createElement("label");
+  reviewControl.className = "segment-review-control";
+  const reviewInput = document.createElement("input");
+  reviewInput.type = "checkbox";
+  reviewInput.dataset.segmentReview = "true";
+  reviewInput.dataset.generationId = generation.id;
+  reviewInput.dataset.segmentId = segment.id;
+  reviewInput.setAttribute("aria-label", t("Đánh dấu đoạn đã kiểm tra · {time}", { time: formatTimestamp(segment.start_seconds) }));
+  reviewControl.append(reviewInput, document.createTextNode(t("Đã kiểm tra")));
+  const reviewStatus = document.createElement("span");
+  reviewStatus.id = `segment-review-status-${encodeURIComponent(segment.id)}`;
+  reviewStatus.dataset.reviewStatus = "";
+  reviewStatus.className = "segment-review-status";
+  reviewStatus.setAttribute("role", "status");
+  reviewInput.setAttribute("aria-describedby", reviewStatus.id);
+  const reviewReload = document.createElement("button");
+  reviewReload.type = "button";
+  reviewReload.className = "text-button";
+  reviewReload.dataset.reviewReload = "";
+  reviewReload.textContent = t("Tải lại trạng thái kiểm tra");
+  const reviewGroup = document.createElement("div");
+  reviewGroup.append(reviewControl, reviewStatus, reviewReload);
+  syncSegmentReview(reviewInput, generation, editable);
+  item.append(reviewGroup);
   if (assignmentDraft && (editing || !editable)) {
     item.append(createAssignmentDraftReview(generation, segment, assignmentDraft, editable));
   }
@@ -1994,9 +2194,13 @@ function updateAssignmentDraftReviewLabels(generation) {
   }
 }
 
+function transcriptRenderKey(generation, editable) {
+  return `${generation.id}:${generation.source_version}:${editable}:${generation.edit_version || "current"}`;
+}
+
 function updateTranscriptRenderKey(generation) {
   if (!generation || $("#generation-title").textContent !== `Transcript #${generation.generation_number}`) return;
-  $("#transcript-generation").dataset.renderKey = `${generation.id}:${generation.source_version}:true`;
+  $("#transcript-generation").dataset.renderKey = transcriptRenderKey(generation, true);
 }
 
 // ---- playback: the view of playback-core.js ----
@@ -2233,9 +2437,40 @@ function resolveTranscriptMutationFocus(descriptor) {
   return null;
 }
 
+function syncSegmentReview(input, generation, editable) {
+  const state = tstate();
+  const review = segmentReview(generation, input.dataset.segmentId);
+  const operation = activeHistoryOperation(state);
+  const ownOperation = editable && operation?.type === "review"
+    && operation.generationId === generation.id && operation.segmentId === input.dataset.segmentId
+    ? operation : null;
+  const status = input.parentElement.nextElementSibling;
+  const reload = status.nextElementSibling;
+  const reconciling = ownOperation?.uncertain && state.history.list === "loading";
+  setProp(input, "checked", review.checked);
+  setProp(input, "indeterminate", Boolean(ownOperation?.uncertain));
+  input.dataset.reviewVersion = String(review.review_version);
+  input.disabled = !editable || sourceMutationUnavailable();
+  setAttr(input, "aria-disabled", String(input.disabled || reviewWriteBlocked(state)));
+  const message = ownOperation?.busy ? t("Đang lưu trạng thái kiểm tra…")
+    : reconciling ? t("Đang tải lại trạng thái kiểm tra…")
+      : ownOperation?.uncertain ? t("Chưa xác minh trạng thái kiểm tra. Hãy tải lại.")
+        : ownOperation?.status || "";
+  setProp(status, "textContent", tr(message));
+  if (!ownOperation?.uncertain && document.activeElement === reload) input.focus();
+  reload.hidden = !ownOperation?.uncertain;
+  reload.setAttribute("aria-disabled", String(state.history.list === "loading"));
+}
+
 function syncTranscriptMutationControls() {
-  const { mutation, reload, notice, noticeRev } = tstate();
-  const busy = Boolean(mutation);
+  const { reload, notice, noticeRev } = tstate();
+  const busy = transcriptMutationBusy(tstate());
+  const { generation, editable } = shownGeneration();
+  if (generation) {
+    for (const input of $("#transcript-segments").querySelectorAll("input[data-segment-review]")) {
+      syncSegmentReview(input, generation, editable);
+    }
+  }
   for (const control of document.querySelectorAll(
     "#transcript-generation [data-transcript-mutation], "
     + "#transcription-error [data-transcript-mutation], "
@@ -2397,9 +2632,9 @@ function runTranscriptOp(op) {
       updateTranscriptRenderKey(find(op.generationId));
       break;
     case "generation": {
-      const { generation, editable } = shownGeneration();
-      if (op.force) delete $("#transcript-generation").dataset.renderKey;
-      renderTranscriptGeneration(generation, op.editable ?? editable);
+      const { generation, editable, historical } = shownGeneration();
+      if (op.force && !historical) delete $("#transcript-generation").dataset.renderKey;
+      renderTranscriptGeneration(generation, editable && (op.editable ?? true));
       break;
     }
     case "status": {
@@ -2528,7 +2763,7 @@ function paintTranscript(root, memory) {
     return;
   }
   if (!transcriptSynced(root)) {
-    dispatch({ type: slice.installed !== root.history.installRev ? "transcript/meeting-installed" : "transcript/transcription-shown" });
+    dispatch({ type: slice.installed !== root.history.installRev ? "transcript/meeting-installed" : "transcript/transcription-shown", requestEditHistory: slice.installed !== root.history.installRev });
     return;
   }
   memory.transcript = slice;
@@ -2538,7 +2773,14 @@ function paintTranscript(root, memory) {
   setProp($("#speaker-add-name"), "value", slice.addName);
   // Before focus moves: a control the write disabled takes no focus. The page rebuilds that touch the controls sync them
   // themselves, so an unchanged slice (each task poll) needs no walk.
-  if (slice !== painted) syncTranscriptMutationControls();
+  if (slice !== painted) {
+    if (slice.rev === painted.rev && transcriptMutationBusy(slice) !== transcriptMutationBusy(painted)) {
+      const { generation, editable } = shownGeneration();
+      renderEditHistory(generation, editable);
+      renderSpeakerMerge(generation, editable);
+    }
+    syncTranscriptMutationControls();
+  }
   if (slice.focus.rev !== painted.focus.rev) moveTranscriptFocus(slice.focus);
   if (slice.ops.length) dispatch({ type: "transcript/painted", through: slice.ops.at(-1).n });
 }
@@ -3107,6 +3349,38 @@ $("#automatic-processing-use-source").addEventListener("click", () => dispatch({
 $("#task-diagnostic-copy").addEventListener("click", () => dispatch({ type: "task/copy-clicked" }));
 $("#generation-selector").addEventListener("change", (event) => {
   dispatch({ type: "transcript/generation-chosen", id: event.currentTarget.value });
+  dispatch({ type: "transcript/edit-history-requested" });
+});
+$("#transcript-edit-history-latest").addEventListener("click", () => {
+  dispatch({ type: "transcript/history-return-current" });
+  $("#transcript-edit-history-title").focus({ preventScroll: true });
+});
+$("#transcript-edit-history-reload").addEventListener("click", (event) => {
+  if (event.currentTarget.getAttribute("aria-disabled") !== "true") dispatch({ type: "transcript/edit-history-reload" });
+});
+$("#transcript-edit-history-retry").addEventListener("click", () => {
+  dispatch({ type: "transcript/history-operation-retry" });
+});
+for (const selector of ["#speaker-merge-source", "#speaker-merge-target"]) {
+  $(selector).addEventListener("change", () => dispatch({ type: "transcript/merge-selection-changed" }));
+}
+$("#speaker-merge-preview").addEventListener("click", () => {
+  dispatch({
+    type: "transcript/merge-preview-requested",
+    sourceSpeakerId: $("#speaker-merge-source").value,
+    targetSpeakerId: $("#speaker-merge-target").value,
+  });
+});
+$("#speaker-merge-confirm").addEventListener("click", (event) => {
+  const sourceSpeakerId = $("#speaker-merge-source").value;
+  const targetSpeakerId = $("#speaker-merge-target").value;
+  const preview = tstate().history.preview;
+  if (event.currentTarget.disabled || !preview || sourceSpeakerId === targetSpeakerId) return;
+  if (!window.confirm(t("Gộp người nói này? {count} đoạn sẽ đổi sang người nói đích.", { count: preview.segment_count }))) return;
+  dispatch({ type: "transcript/merge-confirmed", sourceSpeakerId, targetSpeakerId, requestId: newRequestId() });
+});
+$("#speaker-merge-retry").addEventListener("click", () => {
+  dispatch({ type: "transcript/history-operation-retry" });
 });
 $("#speaker-add-name").addEventListener("input", (event) => {
   dispatch({ type: "transcript/add-name-typed", value: event.currentTarget.value });
@@ -3150,6 +3424,18 @@ function dispatchAssignment(select, reviewed) {
   });
 }
 $("#transcript-generation").addEventListener("click", (event) => {
+  const readRevision = event.target.closest("[data-read-edit-version]");
+  if (readRevision) {
+    dispatch({ type: "transcript/history-revision-chosen", editVersion: Number(readRevision.dataset.readEditVersion) });
+    return;
+  }
+  const undoRevision = event.target.closest("[data-undo-edit-version]");
+  if (undoRevision) {
+    if (window.confirm(t("Hoàn tác gộp người nói này? Chỉ các đoạn của lần gộp đó sẽ được khôi phục."))) {
+      dispatch({ type: "transcript/undo-confirmed", editVersion: Number(undoRevision.dataset.undoEditVersion), requestId: newRequestId() });
+    }
+    return;
+  }
   const reapplyAssignment = event.target.closest("button[data-reapply-assignment-draft]");
   if (reapplyAssignment) {
     const select = assignmentSelect(reapplyAssignment.dataset.generationId, reapplyAssignment.dataset.segmentId);
@@ -3271,6 +3557,11 @@ $("#transcript-segments").addEventListener("focusin", (event) => {
 $("#transcript-segments").addEventListener("click", (event) => {
   const row = event.target.closest(".transcript-segment");
   if (row) renderSegmentContext(row.dataset.segmentId);
+  const reviewReload = event.target.closest("button[data-review-reload]");
+  if (reviewReload) {
+    if (reviewReload.getAttribute("aria-disabled") !== "true") dispatch({ type: "transcript/edit-history-reload" });
+    return;
+  }
   const edit = event.target.closest("button[data-edit-segment]");
   if (edit) {
     dispatch({ type: "transcript/segment-edit-opened", segmentId: edit.closest(".transcript-segment").dataset.segmentId });
@@ -3294,6 +3585,19 @@ $("#transcript-segments").addEventListener("click", (event) => {
   if (playback && typeof playback.catch === "function") playback.catch(() => {});
 });
 $("#transcript-segments").addEventListener("change", (event) => {
+  const review = event.target.closest("input[data-segment-review]");
+  if (review) {
+    dispatch({
+      type: "transcript/review-toggled",
+      generationId: review.dataset.generationId,
+      segmentId: review.dataset.segmentId,
+      checked: review.checked,
+    });
+    // A native change also needs reconciliation when the reducer ignores it.
+    const { generation, editable } = shownGeneration();
+    if (generation && review.isConnected) syncSegmentReview(review, generation, editable);
+    return;
+  }
   const select = event.target.closest("select[data-speaker-assignment]");
   if (select) dispatchAssignment(select, false);
 });

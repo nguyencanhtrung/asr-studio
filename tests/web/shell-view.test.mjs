@@ -52,7 +52,7 @@ const rules = (source) => {
   return found;
 };
 
-const forbidden = /\b(document|window|fetch|XMLHttpRequest|setTimeout|setInterval|clearTimeout|localStorage|sessionStorage|Date\.now|new Date|Math\.random|navigator|location|crypto|performance|history|requestAnimationFrame)\b/;
+const forbidden = /\b(document|window|fetch|XMLHttpRequest|setTimeout|setInterval|clearTimeout|localStorage|sessionStorage|Date\.now|new Date|Math\.random|navigator|location|crypto|performance|requestAnimationFrame)\b|(?<![\w$.])history(?![\w$]|\s*:)/;
 
 test("core files are pure: no DOM, network, timer, storage, clock or randomness", () => {
   for (const name of CORES) absent(noStrings(code(name)), forbidden, name);

@@ -81,6 +81,13 @@ from asr_studio.tasks import (
     update_current_generation_segment_text,
     update_current_generation_speaker_name,
 )
+from asr_studio.transcript_edits import (
+    merge_transcript_speakers,
+    preview_speaker_merge,
+    read_transcript_edit_history,
+    set_transcript_segment_checked,
+    undo_transcript_speaker_merge,
+)
 from asr_studio.updates import available_version
 from asr_studio.worker import is_healthy as worker_is_healthy
 
@@ -1253,6 +1260,115 @@ def install_routes(
                 expected_generation_id=generation_id,
                 expected_source_version=payload["expected_source_version"],
                 display_name=payload["display_name"],
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    transcript_generation_route = (
+        "/api/meetings/{meeting_id}/transcript-generations/{generation_id}"
+    )
+
+    @app.get(f"{transcript_generation_route}/edit-history")
+    async def transcript_edit_history(
+        meeting_id: str, generation_id: str, edit_version: int | None = None
+    ) -> dict[str, object]:
+        try:
+            return await run_in_threadpool(
+                read_transcript_edit_history,
+                settings.data_dir,
+                meeting_id,
+                generation_id,
+                edit_version=edit_version,
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.get(f"{transcript_generation_route}/speaker-merge")
+    async def preview_transcript_speaker_merge(
+        meeting_id: str, generation_id: str, source_speaker_id: str, target_speaker_id: str
+    ) -> dict[str, object]:
+        try:
+            return await run_in_threadpool(
+                preview_speaker_merge,
+                settings.data_dir,
+                meeting_id,
+                generation_id,
+                source=source_speaker_id,
+                target=target_speaker_id,
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.post(f"{transcript_generation_route}/speaker-merge")
+    async def merge_transcript_speaker_request(
+        meeting_id: str,
+        generation_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        payload = await _json_object(
+            request,
+            required={
+                "source_speaker_id",
+                "target_speaker_id",
+                "expected_source_version",
+                "expected_segment_count",
+                "request_id",
+            },
+        )
+        try:
+            return await run_in_threadpool(
+                merge_transcript_speakers,
+                settings.data_dir,
+                meeting_id,
+                generation_id,
+                source=payload["source_speaker_id"],
+                target=payload["target_speaker_id"],
+                expected_source_version=payload["expected_source_version"],
+                expected_count=payload["expected_segment_count"],
+                request_id=payload["request_id"],
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.post(f"{transcript_generation_route}/speaker-merge/{{edit_version}}/undo")
+    async def undo_transcript_speaker_merge_request(
+        meeting_id: str,
+        generation_id: str,
+        edit_version: int,
+        request: Request,
+    ) -> dict[str, object]:
+        payload = await _json_object(request, required={"expected_source_version", "request_id"})
+        try:
+            return await run_in_threadpool(
+                undo_transcript_speaker_merge,
+                settings.data_dir,
+                meeting_id,
+                generation_id,
+                edit_version,
+                expected_source_version=payload["expected_source_version"],
+                request_id=payload["request_id"],
+            )
+        except TaskError as error:
+            _raise_task_error(error)
+
+    @app.patch(f"{transcript_generation_route}/segments/review")
+    async def review_transcript_segment(
+        meeting_id: str,
+        generation_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        payload = await _json_object(
+            request, required={"segment_id", "checked", "expected_review_version"}
+        )
+        try:
+            return await run_in_threadpool(
+                set_transcript_segment_checked,
+                settings.data_dir,
+                meeting_id,
+                generation_id,
+                payload["segment_id"],
+                checked=payload["checked"],
+                expected_review_version=payload["expected_review_version"],
             )
         except TaskError as error:
             _raise_task_error(error)

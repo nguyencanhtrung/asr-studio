@@ -24,3 +24,13 @@ Gửi lại cùng request ID và cấu hình trả về cùng task ID và cấu 
 Danh mục hiện tại dùng model Community-1 đã được operator chuẩn bị. Capability cho biết worker có thể nhận việc và server đã chuẩn bị artifact cần thiết. Community-1 vẫn được kiểm tra khi worker khởi động. Off cũng yêu cầu worker chép lời khỏe và model ASR đã sẵn sàng. Lỗi Community-1 giữ trạng thái lỗi của lần chạy và không tự chuyển qua Off.
 
 Khi quay lui, đặt `ASR_DIARIZATION_ROLLBACK_FENCE=1` cho cả app và worker. Compose truyền cùng giá trị từ môi trường triển khai cho hai service. Cổng này chặn nhận Off mới và chặn claim Off đang chờ. Để hoàn tất tác vụ đã chạy hoặc hủy tác vụ Off bằng thao tác hiện có, sau đó xác minh hàng đợi Off đã hết trước khi đổi bản chạy. Bản quay lui phải giữ migration và metadata mới. Binary trước migration từ chối mở schema đã nâng. Các kiểm tra ở đây chạy trên cơ sở dữ liệu thử nghiệm với worker runner tổng hợp.
+
+## Lịch sử chỉnh sửa trong generation
+
+Một generation vẫn là kết quả của một lần chép lời. Lịch sử chỉnh sửa được ghi riêng trong generation đó. Trình chạy tạo mốc lịch sử khi publish. Generation từ schema cũ chỉ có thể ghi nhận mốc sớm nhất mà server còn đọc được trước lần chỉnh mới. API đọc riêng dựng lại text, tên speaker và assignment từ dữ liệu hiện tại cùng các thay đổi đã ghi. API đọc transcript và lịch sử generation hiện có giữ nguyên.
+
+Các thao tác text và speaker lưu sự kiện trong cùng giao dịch với thay đổi và tăng source version. Gộp speaker dùng số đoạn từ preview và source version để kiểm tra trước khi ghi. Undo kiểm tra generation hiện tại và từng giá trị/counter assignment mà thao tác gộp đã ghi. Undo chỉ khôi phục các assignment trong phạm vi đó và giữ speaker ID gốc. Notes tiếp tục dùng snapshot nguồn đã lưu.
+
+Đánh dấu Đã kiểm tra lưu theo segment của generation và có version riêng. Nó không thay đổi các tín hiệu tự động hoặc source version của trích dẫn Notes. Một generation mới bắt đầu chưa có dấu Đã kiểm tra. Lịch sử của generation cũ vẫn đọc được.
+
+Migration thêm bảng lịch sử và trạng thái kiểm tra. Khi quay lui giao diện, giữ backend tương thích với schema và cơ chế ghi lịch sử của các luồng sửa cũ. Binary có schema thấp hơn sẽ từ chối mở bản đã nâng cấp. Nếu cần quay lui cả backend, dùng bản giữ schema và hooks tương thích. Quy trình cập nhật có đổi schema vẫn dùng bản sao lưu nguội theo hướng dẫn vận hành. Khi xóa cả meeting bằng thao tác hiện có, transaction dọn bản ghi lịch sử thuộc meeting đó cùng các bảng transcript.
