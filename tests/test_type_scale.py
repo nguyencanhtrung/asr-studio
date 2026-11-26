@@ -64,6 +64,9 @@ CUT_TEXT_JS = """() => [...document.querySelectorAll("body *")]
     if (!text || !element.getClientRects().length) return false;
     const style = getComputedStyle(element);
     if (style.display === "inline" || style.visibility === "hidden") return false;
+    if (element.closest(".visually-hidden,[aria-hidden='true']")) return false;
+    // Chromium can retain layout boxes for descendants of a closed native disclosure.
+    if (element.closest("details:not([open])")) return false;
     if (element.matches("select")) return false;
     if (style.textOverflow === "ellipsis" || style.clipPath !== "none") return false;
     return element.scrollWidth - element.clientWidth > 1
@@ -326,9 +329,14 @@ def test_open_generation_details_wrap_at_the_minimum_width(live, signed_in):
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
     page.goto(f"{live.url}/meetings/{meeting_id}")
     page.locator("#meeting-tab-transcript").click()
+    processing = page.locator("#transcript-processing")
+    processing.locator(":scope > summary").focus()
+    processing.locator(":scope > summary").press("Enter")
+    expect(processing).to_have_attribute("open", "")
     details = page.locator("#generation-details")
     expect(details).to_be_visible()
-    details.locator("summary").press("Enter")
+    details.locator(":scope > summary").focus()
+    details.locator(":scope > summary").press("Enter")
     expect(details).to_have_js_property("open", True)
     assert page.evaluate("document.documentElement.scrollWidth - innerWidth") <= 0
     assert page.evaluate(CUT_TEXT_JS) == []
@@ -424,6 +432,12 @@ def test_long_speaker_names_fit_the_narrow_transcript_forms(live, signed_in, wid
     )
     page.keyboard.press("Escape")
 
+    context = page.locator("#transcript-context")
+    summary = context.locator(":scope > summary")
+    summary.focus()
+    summary.press("Enter")
+    expect(summary).to_be_focused()
+    expect(context).to_have_attribute("open", "")
     page.locator(".speaker-chip").first.click()
     form = page.locator(".speaker-name-form")
     expect(form).to_be_visible()
@@ -439,16 +453,17 @@ def test_long_speaker_names_fit_the_narrow_transcript_forms(live, signed_in, wid
 
 @pytest.mark.browser
 @pytest.mark.parametrize("width", [1440, 1280, 1024, 760, 390, 360, 320])
-def test_transcript_controls_share_rows_before_stacking(live, signed_in, width):
+def test_transcript_controls_keep_optional_model_layout_readable(live, signed_in, width):
     _context, page = signed_in(viewport={"width": width, "height": 900})
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir, title="Transcript controls")
     page.goto(f"{live.url}/meetings/{meeting_id}#transcript")
     page.locator("#meeting-tab-transcript").click()
     expect(page.locator("#transcription-panel")).to_be_visible(timeout=10_000)
     expect(page.get_by_role("button", name="Chạy lại")).to_be_visible()
+    expect(page.locator("#transcription-model-control")).to_be_hidden()
 
-    # The model selector is conditional in the product, so expose it here to exercise both
-    # columns and make one help text wrap independently of the other.
+    # Test-only route override: expose the conditional field to exercise its layout without
+    # changing readiness-driven visibility or inventing model data in the product.
     page.evaluate(
         """() => {
           document.querySelector("#transcription-model-control").hidden = false;
@@ -478,14 +493,17 @@ def test_transcript_controls_share_rows_before_stacking(live, signed_in, width):
         }"""
     )
     assert rects["overflow"] <= 0
+    assert page.locator("#start-transcription").evaluate(
+        "element => !element.closest('.transcription-actions')"
+    )
     if width > 760:
         for row in ("Label", "Select", "Help"):
             first, second = rects[f"language{row}"], rects[f"model{row}"]
             assert abs(first["top"] - second["top"]) <= 0.5, (width, row, rects)
-        assert abs(rects["modelSelect"]["top"] - rects["rerun"]["top"]) <= 0.5, rects
     else:
         assert rects["modelLabel"]["top"] >= rects["languageHelp"]["bottom"] - 0.5, rects
-        assert rects["rerun"]["top"] >= rects["modelHelp"]["bottom"] - 0.5, rects
+        assert rects["modelSelect"]["top"] >= rects["modelLabel"]["bottom"] - 0.5, rects
+        assert rects["modelHelp"]["top"] >= rects["modelSelect"]["bottom"] - 0.5, rects
 
 
 @pytest.mark.browser
@@ -516,10 +534,10 @@ def test_transcript_row_labels_are_short_and_clear_of_their_selects(
         )
         assert 6 <= gap <= 9, (select, gap)
     if width >= 1100:
-        button = page.locator(".transcription-actions > button:visible").first.bounding_box()
-        select = page.locator("#transcription-language").bounding_box()
-        assert abs(button["y"] - select["y"]) <= 1, (button, select)
-        assert abs(button["height"] - select["height"]) <= 1, (button, select)
+        expect(page.locator("#start-transcription")).to_be_visible()
+        assert page.locator("#start-transcription").evaluate(
+            "element => !element.closest('.transcription-actions')"
+        )
 
 
 @pytest.mark.browser
@@ -812,3 +830,40 @@ def test_transcript_controls_drop_below_title_at_medium_width(live, signed_in):
         }"""
     )
     assert geometry["controlsTop"] >= geometry["titleBottom"] - 0.5, geometry
+
+
+@pytest.mark.browser
+def test_clipping_probe_ignores_assistive_text_and_closed_disclosures(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1440, "height": 900})
+    page.goto(f"{live.url}/")
+    page.evaluate(
+        """() => {
+          const hidden = document.createElement("div");
+          hidden.className = "visually-hidden";
+          const heading = document.createElement("h3");
+          heading.textContent = "Assistive heading probe";
+          hidden.append(heading);
+          const clipped = document.createElement("p");
+          clipped.style.cssText = "width:10px;white-space:nowrap;overflow:hidden";
+          clipped.textContent = "Visible text that must be detected.";
+          const details = document.createElement("details");
+          details.id = "clipping-details";
+          const summary = document.createElement("summary");
+          summary.textContent = "Open clipping probe";
+          const collapsed = document.createElement("p");
+          collapsed.style.cssText = "width:10px;white-space:nowrap;overflow:hidden";
+          collapsed.textContent = "Collapsed text is checked only after opening.";
+          details.append(summary, collapsed);
+          document.body.append(hidden, clipped, details);
+        }"""
+    )
+    expect(page.get_by_role("heading", name="Assistive heading probe")).to_have_count(1)
+    assert page.evaluate(CUT_TEXT_JS) == ["P. Visible text that must be detected."]
+    probe = page.locator("#clipping-details")
+    probe.locator(":scope > summary").focus()
+    probe.locator(":scope > summary").press("Enter")
+    expect(probe).to_have_attribute("open", "")
+    assert page.evaluate(CUT_TEXT_JS) == [
+        "P. Visible text that must be detected.",
+        "P. Collapsed text is checked only after opening.",
+    ]

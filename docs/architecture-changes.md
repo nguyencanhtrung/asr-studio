@@ -26,9 +26,11 @@ keeps the real segment ID, so the view can offer a reachable clear-filter/reveal
 that row is hidden. Filtering never changes the immutable Notes source or seeks to a visible substitute.
 A save or assignment that removes a focused row from the results returns focus to search.
 This extends ADR 0010's current core/view boundary; no new runner effect, API or persisted schema.
-The generation header keeps a short count summary. Existing model, language, runtime, diarization
-and review-policy values stay available in a native `Chi tiết transcript` disclosure, separate from
-the pipeline's `Chi tiết xử lý` diagnostics and cancel controls.
+The generation header keeps a short count summary. In the #283 workspace, completed model,
+language, runtime, diarization and review-policy metadata is inside the outer native `ASR · Chi tiết
+xử lý` disclosure, with `Chi tiết transcript` and the runtime profile as nested disclosures;
+`Chạy lại` stays beside it. Active progress, worker state, failure, cancel and task diagnostics
+remain outside that completed metadata, and unavailable model controls stay hidden.
 See [frontend transitions](frontend-design.md#1110-transcript), focused transcript/player browser tests,
 and the committed [desktop light](evidence/issue-257/hidden-target-1280-light.png),
 [desktop dark](evidence/issue-257/hidden-target-1280-dark.png),
@@ -3060,8 +3062,10 @@ These are viewport coordinates for that sample, not a general performance claim.
 **Design change.** Search leads, successful process metadata collapses, and a context disclosure
 holds the selected saved segment and the actual speaker controls. Desktop places it alongside
 the list; mobile places it before the list and initially closes it. Rerun, active/pending/error
-status, cancel and diagnostics remain outside completed metadata. Native audio, source links,
-the existing row editor and all mutation effects keep their owners and semantics.
+status, cancel and diagnostics remain outside completed metadata. Native summary activation keeps
+keyboard focus; the Notes naming link opens the context disclosure before focusing its catalog
+heading. Native audio, source links, the existing row editor and all mutation effects keep their
+owners and semantics.
 
 **Trade-offs.** Reassignment stays in the original row editor, reached through context Edit,
 instead of introducing another select with duplicate focus and conflict ownership. Context
