@@ -2655,12 +2655,12 @@ function renderTranscription(transcription) {
     advanced.dataset.presentationKey = presentationKey;
     if (!advanced.contains(document.activeElement)) advanced.open = !completed;
   }
-  // Completion feedback stays after the transcript so a closed native disclosure cannot hide the live region or
-  // push the content-first reading surface below the fold.
+  // Keep live feedback outside closed details and before the reading list: active
+  // status and recovery must stay with progress and Cancel, even for long transcripts.
   const statusHost = $("#transcription-panel");
-  const transcriptPanel = $("#transcript-generation");
-  if (statusLine.parentElement !== statusHost || statusLine.previousElementSibling !== transcriptPanel) {
-    transcriptPanel.after(statusLine);
+  const progress = $("#task-progress");
+  if (statusLine.parentElement !== statusHost || statusLine.previousElementSibling !== progress) {
+    progress.after(statusLine);
   }
   const measurementHost = completed ? $("#completed-task-measurements") : $("#transcription-panel");
   if (measurements.parentElement !== measurementHost) {

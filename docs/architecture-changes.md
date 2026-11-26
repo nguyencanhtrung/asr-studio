@@ -3080,9 +3080,11 @@ holds the selected saved segment and the actual speaker controls. Desktop places
 the list; mobile places it before the list and initially closes it. Rerun, active/pending/error
 status, cancel and diagnostics remain outside completed metadata. Native summary activation keeps
 keyboard focus; the Notes naming link opens the context disclosure before focusing its catalog
-heading. When the focused ASR status moves into closed successful metadata, focus transfers to
-its visible summary, with the status supplied as its accessible description. Other focused
-controls and ordinary refresh scroll remain unchanged. Native audio, source links, the existing
+heading. The live status stays outside closed metadata, beside progress and Cancel before the
+reading list. Ordinary success is assistive-only; a selected-model blocking reason stays visible
+and replaces misleading rerun invitation text. Unchanged polling does not rewrite the live text.
+Completion hands an already-focused status to the visible summary with its accessible description;
+other focused controls and ordinary refresh scroll remain unchanged. Native audio, source links, the existing
 row editor and all mutation effects keep their owners and semantics.
 
 **Trade-offs.** Reassignment stays in the original row editor, reached through context Edit,
@@ -3098,15 +3100,14 @@ light/dark and VI/EN; focused regression coverage is in
 The committed capture runner reproduces the sample without provider calls or model loading.
 Independent verification and full CI remain required before issue acceptance.
 
-**R1 remediation evidence.** Reached ASR browser paths now wait for the saved-generation
-paint, focus the native processing summary, and activate it with Enter only when it is
-closed; their original visibility and value assertions remain intact. The bounded helper
-call-site rerun passed 9 nodes after reproducing the three collapsed-disclosure failures.
-The O3 capture runner now scrolls the nested speaker catalog into the context frame; the
-refreshed after-context matrix differs from the base frame while `after.json` retains the
-same measured layout, with no overflow or page errors. O1/O2 feedback and accessibility
-integration remain root-owned parallel work for the common candidate, not a deferred failure
-of this partition.
+**Interaction evidence.** Reached ASR browser paths wait for the saved-generation paint,
+focus the native summary, and activate it with Enter only when closed; original visibility,
+model, default and provenance assertions remain. The context capture scrolls the actual speaker
+catalog into view. `tests/test_browser_transcript_feedback.py` covers accessible completion,
+unchanged polling, server-derived unready-model guidance and status/Cancel before a long
+reading list. Chromium semantic-role and accessibility snapshots are checked; testing with
+real assistive technology is not claimed. Source/API/model/default/recording contracts remain
+unchanged, with no speculative #266 functionality.
 
 **Tag / target:** design; `DESIGN.md` Transcript Workspace. Issue:
 [#283](https://github.com/nguyencanhtrung/asr-studio/issues/283).

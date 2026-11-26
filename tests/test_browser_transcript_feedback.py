@@ -89,7 +89,7 @@ def test_completion_status_stays_in_the_accessibility_tree_when_search_keeps_foc
     expect(details).not_to_have_attribute("open", "")
     expect(search).to_be_focused()
     success = "Transcript đã được lưu hoàn chỉnh."
-    status = page.get_by_role("status").filter(has_text=success).first
+    status = page.get_by_role("status").filter(has_text=success)
     expect(status).to_have_count(1)
     assert success in page.locator("#meeting-panel-transcript").aria_snapshot()
 
@@ -138,9 +138,14 @@ def test_unready_saved_default_keeps_rerun_disabled_with_truthful_server_guidanc
         "Model này chưa được chuẩn bị trên máy. Chạy lệnh sau trong thư mục ứng dụng "
         "(chỉ tải model, không gửi bản ghi), rồi tải lại trang."
     )
-    status = page.get_by_role("status").filter(has_text=reason).first
+    status = page.get_by_role("status").filter(has_text=reason)
+    expect(status).to_have_count(1)
     expect(status).to_be_visible()
     expect(status).to_contain_text(reason)
+    first_row = page.locator(".transcript-segment").first.bounding_box()
+    status_box = status.bounding_box()
+    assert first_row and status_box
+    assert status_box["y"] + status_box["height"] <= first_row["y"]
     assert reason in page.locator("#meeting-panel-transcript").aria_snapshot()
     expect(details.locator(":scope > summary")).to_have_accessible_description(reason)
 
@@ -151,3 +156,45 @@ def test_unready_saved_default_keeps_rerun_disabled_with_truthful_server_guidanc
     expect(selector).to_be_enabled()
     expect(page.locator("#transcription-model-guidance")).to_be_visible()
     expect(page.locator("#transcription-model-guidance")).to_contain_text(reason)
+
+
+def test_active_rerun_feedback_keeps_cancel_before_a_long_reading_list(
+    live, signed_in, ready_rerun_worker, tmp_path
+):
+    _context, page = signed_in(viewport={"width": 1440, "height": 900})
+    meeting = seed_meeting(
+        live.settings.data_dir, "Long rerun feedback", "2026-10-14", duration_seconds=30
+    )
+    segments = [
+        dict(
+            READING_SEGMENTS[0],
+            id=uuid4().hex,
+            start_seconds=index,
+            end_seconds=index + 0.8,
+            text=f"Saved transcript segment {index + 1}.",
+        )
+        for index in range(30)
+    ]
+    _publish_browser_generation(live, meeting, segments=segments, speakers=READING_SPEAKERS)
+    _write_test_recording(live.settings.data_dir, meeting, tmp_path)
+    page.goto(f"{live.url}/meetings/{meeting}#transcript")
+    expect(page.locator(".segment-edit-button").first).to_be_enabled()
+    page.locator("#start-transcription").click()
+    submit = page.locator("#transcription-rerun-submit")
+    expect(submit).to_be_enabled()
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/tasks") and response.request.method == "POST"
+    ) as accepted:
+        submit.press("Enter")
+    assert accepted.value.status == 202
+    status = page.locator("#transcription-status")
+    cancel = page.locator("#cancel-transcription")
+    expect(status).to_be_focused()
+    expect(cancel).to_be_enabled()
+    status_box = status.bounding_box()
+    first_row = page.locator(".transcript-segment").first.bounding_box()
+    assert status_box and first_row
+    assert status_box["y"] + status_box["height"] <= first_row["y"]
+    page.keyboard.press("Tab")
+    expect(cancel).to_be_focused()
+    expect(cancel).to_be_in_viewport()

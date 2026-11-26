@@ -314,10 +314,11 @@ Corners are compact and engineered: controls use the small radius, content panel
 ### Transcript Workspace (#283)
 
 Search and the existing review filter lead the transcript. Completed configuration, runtime,
-transcript model metadata, task measurements and successful process status live in **ASR ·
-Chi tiết xử lý**. **Chạy lại** remains beside that disclosure. Pending requests, active progress,
-worker checks, failures, cancellations and diagnostic commands remain visible outside it;
-opening or closing metadata must not hide the focused control. At tablet widths the review
+transcript model metadata and task measurements live in **ASR · Chi tiết xử lý**.
+**Chạy lại** remains beside that disclosure. The live status stays outside the disclosure,
+with progress and Cancel before the reading list. Ordinary completed success is assistive-only;
+selected-model blocking guidance, active status and recovery remain visible. Unchanged polling
+does not rewrite the status text. Opening or closing metadata must not hide the focused control. At tablet widths the review
 navigation and status stack below the search/filter content so both remain readable.
 
 The desktop workspace pairs the reading list with a contextual **Chi tiết · Người nói**
@@ -441,7 +442,7 @@ The **AI Provider** overview is read-only and lists the provider sub-items **Ope
 
 **ASR Model** lists the three catalog models from the real `/api/asr-models` read as hairline rows. Each row shows the name, a **Mặc định** badge on the model that **Tự động** resolves to, and a status badge with one of **Sẵn sàng**, **Chưa chuẩn bị**, **Cần GPU NVIDIA** or **Chưa kiểm tra được**. Each status badge pairs colour with text. An unprepared model shows required and remaining space and a primary **Cài đặt model** button. During installation, the status badge reads **Đang cài đặt** in the accent tint. The row shows the phase, a 6px `task-progress-bar`, received and total bytes in mono, and a secondary **Hủy** button. Conversion has no number and uses a dashed bar. A failure shows a plain danger sentence with primary **Thử lại**. Short free space disables the button and states the shortfall. The row keeps focus: the replacement button receives focus. Without a running installer, the row keeps the prepare guidance and a read-only, copyable command field that wraps the whole command and keeps the model name visible. With no worker, the rows omit the repeated reason and one line above the list states the reason. Qwen3-ASR states the GPU requirement in plain words.
 
-The dialog adds no new colour or size tokens; every size is a `--text-*` token. In the transcript workspace, the outer **ASR · Chi tiết xử lý** disclosure closes after a completed generation; its nested runtime-profile **Chi tiết xử lý** disclosure holds the runtime facts. A focused completion status moved into closed ASR details hands focus to the visible summary, which describes that status. Other controls retain focus; ordinary refreshes preserve scroll. Task measurements, generations, timestamps and diagnostic IDs use mono metadata inside flat bordered groups. Loading, saved, warning and error states pair semantic colour with explicit language. Transcript and history layouts belong to this product; preserve their scan order when restyling.
+The dialog adds no new colour or size tokens; every size is a `--text-*` token. In the transcript workspace, the outer **ASR · Chi tiết xử lý** disclosure closes after a completed generation; its nested runtime-profile **Chi tiết xử lý** disclosure holds the runtime facts. When a focused status completes and the metadata closes, focus moves to the visible summary, which describes that status. The completion live region remains accessible outside the disclosure. Other controls retain focus; ordinary refreshes preserve scroll. Task measurements, generations, timestamps and diagnostic IDs use mono metadata inside flat bordered groups. Loading, saved, warning and error states pair semantic colour with explicit language. Transcript and history layouts belong to this product; preserve their scan order when restyling.
 
 ## Do's and Don'ts
 
