@@ -3056,4 +3056,6 @@ Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#1
 
 **Evidence and follow-ups.** [Before/after fixture images and keyboard focus](assets/frontend/issue-282/), `tests/test_browser_notes_layout.py`, and existing Notes/editor/provider browser workflows. Independent tester, final reviewer and remote CI remain conductor-owned gates. [Issue #282](https://github.com/nguyencanhtrung/asr-studio/issues/282); adjacent Transcript and Settings corrections belong to #283 and #284.
 
+**Accessibility regression.** The processing disclosure uses the control type token. Layout probes distinguish assistive-only headings from visible clipping; a deliberate visible overflow remains detectable. The typography matrix retains its existing font, keyboard and overflow requirements.
+
 **Tag / target.** Design; `DESIGN.md` and `docs/frontend-design.md`.

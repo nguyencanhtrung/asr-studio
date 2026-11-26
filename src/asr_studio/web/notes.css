@@ -261,7 +261,7 @@
 .notes-task-details > summary {
   cursor: pointer;
   color: var(--ink-2);
-  font-size: var(--text-small);
+  font-size: var(--text-control);
 }
 
 .notes-task-details[open] > summary {
