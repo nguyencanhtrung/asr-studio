@@ -34,7 +34,7 @@ const EFFORT_LABELS = {
   none: t("Không suy luận (none)"),
   low: t("Thấp (low)"),
   medium: t("Trung bình (medium)"),
-  high: "Cao (high)",
+  high: t("Cao (high)"),
   xhigh: t("Rất cao (xhigh)"),
   max: t("Tối đa (max)"),
 };

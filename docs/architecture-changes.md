@@ -3047,7 +3047,6 @@ the clipboard and displays the subject separately.
 **Follow-ups.** [Issue #256](https://github.com/nguyencanhtrung/asr-studio/issues/256).
 Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#117-notes-tab-meeting-notes).
 
-
 ## #282 — Put saved Notes before completed processing and regeneration
 
 **Problem and measured cause.** The completed step list and generation group preceded the saved document, consuming the initial viewport. On a disposable persisted “Sample meeting” fixture at desktop 1440 × 900, the preview began at y=1050.859375px before this correction and y=630.921875px afterward. Source: [Chromium measurements](assets/frontend/issue-282/measurements.json), both themes and UI languages, same data for baseline `a112687` and candidate. The first content item ends at y=704.40625px after the correction. The mobile records measure improvement without claiming that the document fits its initial viewport.
@@ -3113,3 +3112,36 @@ unchanged, with no speculative #266 functionality.
 
 **Tag / target:** design; `DESIGN.md` Transcript Workspace. Issue:
 [#283](https://github.com/nguyencanhtrung/asr-studio/issues/283).
+
+## #284 — Group Settings navigation and compact provider defaults
+
+**Problem.** The modal's single navigation list mixed provider pages, processing,
+devices and app preferences. Provider model and effort fields stacked on desktop,
+pushing account controls down the scrollable content column.
+
+**Design.** Add visible navigation group labels while preserving the tab IDs,
+keyboard order, mobile top-level navigation, modal lifecycle and deep entry points.
+Place model and effort alongside each other on desktop, retaining stacked fields
+on narrow screens. Existing account and diagnostic disclosures remain available;
+no authentication, API, model catalog or device state changes are introduced.
+The high-effort option now uses the existing translation table, retaining the
+same server value while displaying its English label in English UI. Automatic
+processing and ASR align as peer items on desktop; the existing mobile parent
+relationship and overview entry points remain intact.
+
+**Evidence.** `tests/test_browser_settings_layout.py` checks the rendered field
+positions for both providers, saving provider defaults, processing and all
+top-level destinations, the mobile navigation boundary, Home/End/arrow keys,
+narrow-screen containment and focus restoration in both themes. The capture
+matrix documented in `docs/assets/frontend/issue-284/README.md` includes automatic
+processing and waits for visible panels, provider controls, fonts and idle network.
+Images are local-only artifacts outside Git; the maintained capture utility is
+`tests/visual/capture_settings.py`. Existing Settings and connection
+regressions cover account, callback, failure and modal keyboard behavior.
+
+**Trade-off.** Keep the existing modal instead of the prototype's workspace page.
+Mobile keeps the existing compact tabs and provider overview links rather than
+squeezing desktop group labels into a horizontal navigation row.
+
+**Follow-ups.** [Issue #284](https://github.com/nguyencanhtrung/asr-studio/issues/284).
+Tag: design. Target: `docs/frontend-design.md`.

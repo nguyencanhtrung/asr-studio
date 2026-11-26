@@ -489,6 +489,14 @@ The **AI Provider** overview is read-only: each provider row shows text status a
 
 The Settings section state (`launcher.section`: `ai`, `openai`, `antigravity`, `processing`, `asr`, `devices`, `theme`, `about`; `local` is disabled) opens the overview, provider page or `action.section`, and clears `asr-studio:settings-section` when the language page reopens. `settings-section-selected` changes the page. On phones the tab row contains only the five top-level sections and child pages provide a back link; desktop keeps the sub-items in the same list and skips **Local AI** in arrow-key navigation. Provider pages place the status, model, **Reasoning effort**, **Save**, **Check with synthetic data** and an always-present account disclosure in order; the disclosure is closed in a steady connected state and open while disconnected or while sign-in, an error, confirmation or focus requires it. The account rows are hidden when no account data exists. Its marker rotates over 150 ms, with the existing reduced-motion override removing that transition. Language and display mode remain owned by `i18n.js` and `theme.js`, outside the store.
 
+Settings groups the desktop navigation into providers, models and processing,
+recording and connections, and application preferences (#284). Automatic
+processing and ASR are peers in the model group. From 900 CSS pixels, provider
+model and effort fields share a row; narrower layouts stack them. The modal,
+account disclosures, Save, synthetic test, usage and authentication actions keep
+their existing behavior. At 680 CSS pixels and below, existing top-level tabs
+and provider overview links remain the navigation.
+
 **Lát `asr` (mục ASR Model, cài model từ giao diện, #159)**: state `{status, models, request, copy, installer, open, notice}`. `request` tăng ở mỗi lần đọc và mỗi lần bấm Cài đặt model, Hủy hay gặp từ chối; câu trả lời của lần đọc cũ bị bỏ theo id. Mỗi `install` trong `models` là điều máy chủ nói lần cuối, trừ hai bước lạc quan: `queued` ngay khi bấm và `cancelling` ngay khi hủy. Nút Cài đặt model chỉ hiện khi `installer.available` và `installer.models_writable`; không thì dòng giữ lệnh sao chép như trước. Việc đọc lặp chỉ chạy khi hộp thoại mở, installer còn sống và có một model `queued`, `running` hoặc `cancelling`.
 
 | Từ | Sự kiện | Tới | Effect |

@@ -20,3 +20,7 @@ reports/
 # Generated Transcript evidence stays in external artifact storage.
 /docs/assets/frontend/issue-283/*
 !/docs/assets/frontend/issue-283/README.md
+
+# Generated Settings verification images stay in external artifact storage.
+/docs/assets/frontend/issue-284/before/
+/docs/assets/frontend/issue-284/after/
