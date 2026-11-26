@@ -3277,11 +3277,22 @@ textarea:focus-visible {
 .transcript-edit-history[open] summary { margin-bottom: .5rem; }
 .transcript-edit-history-heading .field-help { margin: .2rem 0 0; }
 .transcript-edit-history-list { display: grid; gap: .45rem; margin: .75rem 0 0; padding-left: 1.2rem; }
-.transcript-edit-history-item { padding: .45rem .55rem; border-top: 1px solid var(--hairline); }
+.transcript-edit-history-item {
+  align-items: stretch;
+  flex-direction: column;
+  padding: .45rem .55rem;
+  border-top: 1px solid var(--hairline);
+}
 .transcript-edit-history-item.is-selected { background: var(--accent-soft); }
 .transcript-edit-history-label { display: grid; gap: .12rem; font-weight: 600; }
 .transcript-edit-history-meta { color: var(--ink-3); font: 0.72rem/1.3 var(--font-mono, monospace); font-weight: 400; }
 .transcript-edit-history-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+.transcript-edit-history-actions button {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow-wrap: normal;
+  word-break: normal;
+}
 .speaker-merge { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--hairline); }
 .speaker-merge summary { cursor: pointer; font-weight: 600; }
 .speaker-merge-controls { align-items: end; flex-wrap: wrap; margin-top: .7rem; }

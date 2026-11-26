@@ -31,7 +31,10 @@ from test_browser_task_progress import end_notes_run, running_notes, running_tra
 
 from asr_studio.notes import get_notes_source
 from asr_studio.storage import database_path
-from asr_studio.transcript_edits import read_transcript_edit_history
+from asr_studio.transcript_edits import (
+    read_transcript_edit_history,
+    set_transcript_segment_checked,
+)
 from asr_studio.transcript_history import track_baseline
 
 pytestmark = pytest.mark.browser
@@ -329,6 +332,72 @@ def test_transcript_edit_history_and_manual_review_controls_use_saved_state(live
     review.click()
     expect(review).to_have_attribute("data-review-version", "1")
     expect(review).to_be_checked()
+
+
+@pytest.mark.parametrize(
+    ("width", "scheme", "language"),
+    [
+        (1440, "light", "vi"),
+        (1440, "dark", "en"),
+        (390, "light", "en"),
+        (390, "dark", "vi"),
+    ],
+)
+def test_edit_history_actions_keep_words_readable_and_keyboard_order(
+    live, signed_in, width, scheme, language
+):
+    """Action labels must not split words inside the narrow transcript context."""
+    _context, page = signed_in(viewport={"width": width, "height": 900}, color_scheme=scheme)
+    if language == "en":
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            page.locator("[data-lang-toggle]").click()
+    meeting, generation, segments = seed_completed_transcript(
+        live.settings.data_dir, title="Readable edit history"
+    )
+    with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
+        track_baseline(connection, generation, 1, generated=True)
+    set_transcript_segment_checked(
+        live.settings.data_dir,
+        meeting,
+        generation,
+        segments[0],
+        checked=True,
+        expected_review_version=0,
+    )
+    open_meeting(page, live, meeting)
+    page.locator("#meeting-tab-transcript").click()
+    if page.locator("#transcript-context").get_attribute("open") is None:
+        page.locator("#transcript-context-summary").click()
+    page.locator("#transcript-edit-history-title").click()
+    actions = page.locator("#transcript-edit-history-list [data-read-edit-version]")
+    expect(actions).to_have_count(2)
+    expect(actions.first).to_be_visible()
+    page.evaluate("() => document.fonts.ready.then(() => true)")
+    broken_words = actions.evaluate_all(
+        r"""buttons => buttons.flatMap(button => {
+            const broken = [];
+            const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                for (const match of node.data.matchAll(/\S+/gu)) {
+                    const range = document.createRange();
+                    range.setStart(node, match.index);
+                    range.setEnd(node, match.index + match[0].length);
+                    const tops = new Set([...range.getClientRects()]
+                        .filter(rect => rect.width > 0)
+                        .map(rect => Math.round(rect.top * 10) / 10));
+                    if (tops.size > 1) {
+                        broken.push({word: match[0], lines: tops.size});
+                    }
+                }
+            }
+            return broken;
+        })"""
+    )
+    assert broken_words == []
+    assert page.evaluate(OVERFLOW) <= 1
+    page.locator("#transcript-edit-history-reload").focus()
+    page.keyboard.press("Tab")
+    expect(actions.first).to_be_focused()
 
 
 def refresh_transcript_meeting(page, meeting_id):

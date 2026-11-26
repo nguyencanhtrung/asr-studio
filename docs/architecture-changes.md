@@ -4,6 +4,24 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #266 — Keep transcript history actions readable in the context panel
+
+**Problem.** Visual inspection of the new transcript history found that revision metadata
+and action buttons competed for the narrow desktop context column. Flex shrinking and
+inherited word wrapping split Vietnamese button labels inside words.
+
+**Design.** Each history entry stacks its metadata above its action group at every viewport.
+Actions wrap as separate buttons and preserve whole words. This keeps the transcript reading
+column, DOM order and keyboard navigation unchanged. Widening the context panel or reducing
+the global font size would affect unrelated meeting content and was rejected.
+
+**Evidence.** `test_edit_history_actions_keep_words_readable_and_keyboard_order` in
+`tests/test_browser_meeting_tabs.py` measures rendered word ranges, horizontal overflow and
+Tab focus in desktop/mobile, light/dark and Vietnamese/English variants. The guard fails
+with the original component styling. External before/after captures accompany
+[issue #266](https://github.com/nguyencanhtrung/asr-studio/issues/266) and PR #289.
+Tag: design, accessibility. Backend history, source pins and Undo contracts are unchanged.
+
 ## #258 — Separate Auto Processing workflow settings from owner defaults
 
 **Problem.** Auto Processing exposed three owner mirrors beside its workflow controls. Those mirrors could lag the committed ASR and provider settings, and saving an owner value with the dialog open could advance the workflow-preferences revision. The Chromium fixture verifies exactly three rendered comboboxes by accessible role and name—`Ngôn ngữ transcript`, `Provider notes`, and `Ngôn ngữ đầu ra notes`—and verifies the owner links are visible. The Node fixture verifies that the workflow PATCH sends exactly four fields.
