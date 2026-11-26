@@ -438,8 +438,11 @@ function renderTask(view) {
     return;
   }
   if (!els.details.contains(document.activeElement)) {
-    const anchor = completed ? els.savedWork.nextSibling : els.savedWork;
-    if (els.details.nextSibling !== anchor) {
+    const inPosition = completed
+      ? els.savedWork.nextSibling === els.details
+      : els.details.nextSibling === els.savedWork;
+    if (!inPosition) {
+      const anchor = completed ? els.savedWork.nextSibling : els.savedWork;
       els.savedWork.parentElement.insertBefore(els.details, anchor);
     }
   }

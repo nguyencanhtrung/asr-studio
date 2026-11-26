@@ -160,6 +160,46 @@ def test_the_action_moves_after_the_document_when_the_first_notes_arrive(
     expect(page.locator("#notes-change")).to_be_focused()
 
 
+def test_open_processing_details_keeps_selection_across_an_unrelated_notes_refresh(live, signed_in):
+    _context, page = signed_in()
+    meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
+    open_notes(page, live, meeting_id)
+
+    details = page.locator("#notes-task-details")
+    expect(details).to_be_visible(timeout=10_000)
+    expect(details).not_to_have_attribute("open")
+    details.locator("summary").click()
+    before = page.evaluate(
+        """() => {
+          const details = document.querySelector('#notes-task-details');
+          const text = document.querySelector('#notes-steps');
+          document.querySelector('#notes-change').focus();
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return {
+            active: document.activeElement.id,
+            open: details.open,
+            selected: selection.toString(),
+          };
+        }"""
+    )
+
+    page.evaluate(
+        "document.querySelector('#notes-change').dispatchEvent(new Event('click', {bubbles: true}))"
+    )
+    after = page.evaluate(
+        """() => ({
+          active: document.activeElement.id,
+          open: document.querySelector('#notes-task-details').open,
+          selected: window.getSelection().toString(),
+        })"""
+    )
+    assert after == before
+
+
 def test_a_run_in_progress_keeps_its_button_and_its_cancel(live, signed_in):
     _context, page = signed_in()
     meeting_id, *_ = running_notes(live)
