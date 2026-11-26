@@ -189,8 +189,11 @@ def test_active_rerun_feedback_keeps_cancel_before_a_long_reading_list(
     assert accepted.value.status == 202
     status = page.locator("#transcription-status")
     cancel = page.locator("#cancel-transcription")
-    expect(status).to_be_focused()
+    # The 202 response acknowledges the server write before the client has
+    # necessarily consumed its body and rendered the active task controls.
+    expect(cancel).to_be_visible()
     expect(cancel).to_be_enabled()
+    expect(status).to_be_focused()
     status_box = status.bounding_box()
     first_row = page.locator(".transcript-segment").first.bounding_box()
     assert status_box and first_row
