@@ -466,6 +466,10 @@ def test_transcript_controls_keep_optional_model_layout_readable(live, signed_in
     expect(page.locator("#transcription-panel")).to_be_visible(timeout=10_000)
     expect(page.get_by_role("button", name="Chạy lại")).to_be_visible()
     expect(page.locator("#transcription-model-control")).to_be_hidden()
+    summary = page.locator("#transcript-processing > summary")
+    summary.focus()
+    summary.press("Enter")
+    expect(page.locator("#transcription-language")).to_be_visible()
 
     # Test-only route override: expose the conditional field to exercise its layout without
     # changing readiness-driven visibility or inventing model data in the product.
@@ -498,9 +502,6 @@ def test_transcript_controls_keep_optional_model_layout_readable(live, signed_in
         }"""
     )
     assert rects["overflow"] <= 0
-    assert page.locator("#start-transcription").evaluate(
-        "element => !element.closest('.transcription-actions')"
-    )
     if width > 760:
         for row in ("Label", "Select", "Help"):
             first, second = rects[f"language{row}"], rects[f"model{row}"]
@@ -509,6 +510,13 @@ def test_transcript_controls_keep_optional_model_layout_readable(live, signed_in
         assert rects["modelLabel"]["top"] >= rects["languageHelp"]["bottom"] - 0.5, rects
         assert rects["modelSelect"]["top"] >= rects["modelLabel"]["bottom"] - 0.5, rects
         assert rects["modelHelp"]["top"] >= rects["modelSelect"]["bottom"] - 0.5, rects
+
+    summary.focus()
+    summary.press("Enter")
+    expect(summary).to_be_focused()
+    expect(page.locator("#transcription-language")).to_be_hidden()
+    expect(page.locator("#transcription-model")).to_be_hidden()
+    expect(page.get_by_role("button", name="Chạy lại")).to_be_visible()
 
 
 @pytest.mark.browser
@@ -526,6 +534,10 @@ def test_transcript_row_labels_are_short_and_clear_of_their_selects(
     page.goto(f"{live.url}/meetings/{meeting_id}#transcript")
     page.locator("#meeting-tab-transcript").click()
     expect(page.locator("#transcription-panel")).to_be_visible(timeout=10_000)
+    summary = page.locator("#transcript-processing > summary")
+    summary.focus()
+    summary.press("Enter")
+    expect(page.locator("#transcription-language")).to_be_visible()
     page.evaluate(
         '() => { document.querySelector("#transcription-model-control").hidden = false; }'
     )
@@ -540,9 +552,6 @@ def test_transcript_row_labels_are_short_and_clear_of_their_selects(
         assert 6 <= gap <= 9, (select, gap)
     if width >= 1100:
         expect(page.locator("#start-transcription")).to_be_visible()
-        assert page.locator("#start-transcription").evaluate(
-            "element => !element.closest('.transcription-actions')"
-        )
 
 
 @pytest.mark.browser
