@@ -3046,14 +3046,15 @@ the clipboard and displays the subject separately.
 Tag: architecture, design. Target: [Frontend design §11.7](frontend-design.md#117-notes-tab-meeting-notes).
 
 
-## #283 — Transcript reading workspace (preparatory branch)
+## #283 — Transcript reading workspace
 
 **Problem and evidence.** Completed controls and the speaker catalog precede reading. In the
 disposable desktop fixture, the search top moved from 1301.515625px to
 588.6875px; the first segment top moved from 1467.515625px to
 807.6875px. Its final height is 89.59375px. These measurements come
-from `/tmp/asr-visual-correction/transcript-evidence/before.json` and `after.json`
-(desktop, light, VI); the fixture and browser commands are in the author report beside them.
+from the committed [before](assets/frontend/issue-283/before.json) and
+[after](assets/frontend/issue-283/after.json) records (desktop, light, VI);
+the [capture instructions](assets/frontend/issue-283/README.md) describe the fixture.
 These are viewport coordinates for that sample, not a general performance claim.
 
 **Design change.** Search leads, successful process metadata collapses, and a context disclosure
@@ -3072,10 +3073,8 @@ features from #266 or typography changes from #249 are included.
 **Verification and follow-up.** Real disposable-browser evidence covers desktop/mobile,
 light/dark and VI/EN; focused regression coverage is in
 `tests/test_browser_transcript_workspace.py` with existing history/player scenarios.
-The preparation report records exact commands, current results and environment limitations.
-Root must integrate actual main after #282, rerun affected checks, complete independent testing
-and the required independent review on the same commit, and run CI before issue acceptance.
-No remote write or merge is part of this preparation.
+The committed capture runner reproduces the sample without provider calls or model loading.
+Independent verification and full CI remain required before issue acceptance.
 
 **Tag / target:** design; `DESIGN.md` Transcript Workspace. Issue:
 [#283](https://github.com/nguyencanhtrung/asr-studio/issues/283).

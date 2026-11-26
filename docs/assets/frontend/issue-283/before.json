@@ -1,0 +1,154 @@
+[
+  {
+    "device": "desktop",
+    "theme": "light",
+    "language": "vi",
+    "search": {
+      "x": 363,
+      "y": 1301.515625,
+      "width": 986,
+      "height": 40
+    },
+    "first": {
+      "x": 363,
+      "y": 1467.515625,
+      "width": 986,
+      "height": 89.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  },
+  {
+    "device": "desktop",
+    "theme": "light",
+    "language": "en",
+    "search": {
+      "x": 363,
+      "y": 1317.703125,
+      "width": 986,
+      "height": 40
+    },
+    "first": {
+      "x": 363,
+      "y": 1483.703125,
+      "width": 986,
+      "height": 89.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  },
+  {
+    "device": "desktop",
+    "theme": "dark",
+    "language": "vi",
+    "search": {
+      "x": 363,
+      "y": 1301.515625,
+      "width": 986,
+      "height": 40
+    },
+    "first": {
+      "x": 363,
+      "y": 1467.515625,
+      "width": 986,
+      "height": 89.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  },
+  {
+    "device": "desktop",
+    "theme": "dark",
+    "language": "en",
+    "search": {
+      "x": 363,
+      "y": 1317.703125,
+      "width": 986,
+      "height": 40
+    },
+    "first": {
+      "x": 363,
+      "y": 1483.703125,
+      "width": 986,
+      "height": 89.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  },
+  {
+    "device": "mobile",
+    "theme": "light",
+    "language": "vi",
+    "search": {
+      "x": 31,
+      "y": 1885.421875,
+      "width": 328,
+      "height": 40
+    },
+    "first": {
+      "x": 31,
+      "y": 2099.421875,
+      "width": 328,
+      "height": 85.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  },
+  {
+    "device": "mobile",
+    "theme": "light",
+    "language": "en",
+    "search": {
+      "x": 31,
+      "y": 1885.8125,
+      "width": 328,
+      "height": 40
+    },
+    "first": {
+      "x": 31,
+      "y": 2099.8125,
+      "width": 328,
+      "height": 85.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  },
+  {
+    "device": "mobile",
+    "theme": "dark",
+    "language": "vi",
+    "search": {
+      "x": 31,
+      "y": 1885.421875,
+      "width": 328,
+      "height": 40
+    },
+    "first": {
+      "x": 31,
+      "y": 2099.421875,
+      "width": 328,
+      "height": 85.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  },
+  {
+    "device": "mobile",
+    "theme": "dark",
+    "language": "en",
+    "search": {
+      "x": 31,
+      "y": 1885.8125,
+      "width": 328,
+      "height": 40
+    },
+    "first": {
+      "x": 31,
+      "y": 2099.8125,
+      "width": 328,
+      "height": 85.59375
+    },
+    "overflow": false,
+    "page_errors": []
+  }
+]
