@@ -24,6 +24,7 @@ from asr_studio.diarization_runner import (
 from asr_studio.recordings import RecordingError, open_audio
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.storage import database_path
+from asr_studio.transcript_history import append_edit, track_baseline
 
 UNCERTAINTY_POLICY = ASR_UNCERTAINTY_POLICY
 DIARIZATION_MODEL_NAME = "Community-1"
@@ -1116,6 +1117,7 @@ def publish_complete_generation(
                 for row in rows
             ],
         )
+        track_baseline(connection, generation_id, 1, generated=True)
         connection.execute(
             "UPDATE meetings SET current_generation_id = ? WHERE id = ?",
             (generation_id, task["meeting_id"]),
@@ -1413,6 +1415,32 @@ def _bump_source_version(
     return next_version
 
 
+def _record_transcript_source_change(
+    connection: sqlite3.Connection,
+    generation_id: str,
+    expected_source_version: int,
+    kind: str,
+    changes: list[dict[str, Any]],
+    *,
+    request_id: str | None = None,
+    request_hash: str | None = None,
+    undo_of_version: int | None = None,
+) -> tuple[int, int]:
+    track_baseline(connection, generation_id, expected_source_version)
+    version = _bump_source_version(connection, generation_id, expected_source_version)
+    edit_version = append_edit(
+        connection,
+        generation_id,
+        version,
+        kind,
+        changes,
+        request_id=request_id,
+        request_hash=request_hash,
+        undo_of_version=undo_of_version,
+    )
+    return version, edit_version
+
+
 def update_current_generation_segment_text(
     data_dir: Path,
     meeting_id: str,
@@ -1448,7 +1476,13 @@ def update_current_generation_segment_text(
             )
             if updated.rowcount != 1:
                 raise TaskError(404, "segment_not_found", "Transcript segment not found.")
-            source_version = _bump_source_version(connection, generation_id, source_version)
+            source_version, _ = _record_transcript_source_change(
+                connection,
+                generation_id,
+                source_version,
+                "segment_text",
+                [{"entity": "segment", "id": segment_id, "before": {"text": segment["text"]}}],
+            )
         return {
             "id": segment_id,
             "generation_id": generation_id,
@@ -1536,7 +1570,13 @@ def add_current_generation_speaker(
             "first_seen_seconds, last_seen_seconds) VALUES (?, ?, ?, 0, 0)",
             (generation_id, speaker_id, name),
         )
-        source_version = _bump_source_version(connection, generation_id, source_version)
+        source_version, _ = _record_transcript_source_change(
+            connection,
+            generation_id,
+            source_version,
+            "speaker_added",
+            [{"entity": "speaker", "id": speaker_id, "before": None}],
+        )
         return {
             "generation_id": generation_id,
             "speaker_id": speaker_id,
@@ -1580,7 +1620,19 @@ def update_current_generation_speaker_name(
                 "WHERE generation_id = ? AND speaker_id = ?",
                 (name, generation_id, speaker_id),
             )
-            source_version = _bump_source_version(connection, generation_id, source_version)
+            source_version, _ = _record_transcript_source_change(
+                connection,
+                generation_id,
+                source_version,
+                "speaker_renamed",
+                [
+                    {
+                        "entity": "speaker",
+                        "id": speaker_id,
+                        "before": {"display_name": speaker["display_name"]},
+                    }
+                ],
+            )
         return {
             "generation_id": generation_id,
             "speaker_id": speaker_id,
@@ -1660,7 +1712,22 @@ def reassign_current_generation_speaker(
                     "assignment_version_changed",
                     "The speaker assignment changed. Reload before trying again.",
                 )
-            source_version = _bump_source_version(connection, generation_id, source_version)
+            source_version, _ = _record_transcript_source_change(
+                connection,
+                generation_id,
+                source_version,
+                "speaker_assignment",
+                [
+                    {
+                        "entity": "segment",
+                        "id": segment_id,
+                        "before": {
+                            "speaker_id": segment["speaker_id"],
+                            "assignment_version": expected_assignment_version,
+                        },
+                    }
+                ],
+            )
         return {
             "id": segment_id,
             "generation_id": generation_id,

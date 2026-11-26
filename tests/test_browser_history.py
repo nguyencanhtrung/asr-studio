@@ -2431,14 +2431,12 @@ def test_runtime_profile_and_saved_status_render_without_collapsing(live, browse
 def test_add_speaker_named_and_blank_names_use_the_real_api(live, browser_context):
     _context, page = browser_context
     meeting_id = seed_meeting(live.settings.data_dir, "Real speaker API", duration_seconds=30)
-    _publish_browser_generation(live, meeting_id)
+    generation = _publish_browser_generation(live, meeting_id)
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     expect(page.locator("#meeting-title")).to_have_text("Real speaker API")
 
     # This test intentionally does not intercept the add-speaker route.
-    render_key = page.locator("#transcript-generation").get_attribute("data-render-key")
-    generation_id = render_key.split(":", 1)[0]
-    speakers_url = f"/transcript-generations/{generation_id}/speakers"
+    speakers_url = f"/transcript-generations/{generation['id']}/speakers"
     add_name = page.locator("#speaker-add-name")
     add_name.fill("Browser witness")
     with page.expect_response(
@@ -2783,40 +2781,43 @@ def test_transcript_mutation_focus_restores_semantic_replacements_after_refresh(
     held_mutations = []
 
     def hold_mutation_response(route):
+        if route.request.method != "PATCH":
+            route.fallback()
+            return
         response = route.fetch()
         assert response.status == 200
         held_mutations.append((route, response))
 
     page.route(
-        re.compile(r"/api/meetings/[^/]+/transcript-(?:segments|generations)/"),
+        re.compile(
+            rf"/api/meetings/{meeting_id}/transcript-(?:"
+            rf"segments/[^/]+/(?:text|speaker)|generations/{generation_id}/speakers/[^/]+)$"
+        ),
         hold_mutation_response,
     )
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
-    expect(page.locator("#transcript-generation")).to_have_attribute(
-        "data-render-key", f"{generation_id}:2:true"
+    expect(page.locator(".segment-text")).to_have_text("A saved sentence.")
+    expect(page.locator(".segment-edit-button")).to_be_enabled()
+    expect(page.locator("#speaker-catalog-list .speaker-chip-name")).to_have_text(
+        ["Speaker 1", "Speaker 2"]
     )
 
-    def wait_for_mutation_and_refresh(expected_version, focus_selector, capture_segment=False):
+    def refresh_with_mutation_held():
         deadline = time.monotonic() + 10
         while not held_mutations and time.monotonic() < deadline:
             page.wait_for_timeout(50)
         assert len(held_mutations) == 1
         page.evaluate("window.dispatchEvent(new PopStateEvent('popstate'))")
-        expect(page.locator("#transcript-generation")).to_have_attribute(
-            "data-render-key", f"{generation_id}:{expected_version}:true"
-        )
-        assert page.evaluate("() => !window.__focusBeforeRefresh.isConnected")
+        page.wait_for_function("() => !window.__focusBeforeRefresh.isConnected")
         assert page.evaluate("() => document.activeElement === document.body")
-        replacement = page.locator(focus_selector).first
-        if capture_segment:
-            page.evaluate(
-                "() => { window.__segmentBeforeAssignmentResponse = "
-                "document.querySelector('.transcript-segment'); }"
-            )
+
+    def settle_mutation(replacement, saved_status):
         held_route, held_response = held_mutations.pop()
         held_route.fulfill(response=held_response)
         expect(replacement).to_be_focused()
-        return replacement
+        status = page.locator("#transcript-mutation-status")
+        expect(status).to_be_visible()
+        expect(status).to_have_text(saved_status)
 
     # Saving closes the editor, so focus lands on the Sửa button that replaces it.
     text_editor = edit_segment(page)
@@ -2825,35 +2826,36 @@ def test_transcript_mutation_focus_restores_semantic_replacements_after_refresh(
     text_save.focus()
     page.evaluate("() => { window.__focusBeforeRefresh = document.activeElement; }")
     text_save.press("Enter")
-    wait_for_mutation_and_refresh(3, ".segment-edit-button")
+    refresh_with_mutation_held()
+    expect(text_editor).to_have_value("Saved text focus survives refresh.")
+    settle_mutation(page.locator(".segment-edit-button"), "Đã lưu.")
     expect(page.locator(".segment-text")).to_have_text("Saved text focus survives refresh.")
-    expect(page.locator("#transcript-mutation-status")).to_be_visible()
-    expect(page.locator("#transcript-mutation-status")).to_have_text("Đã lưu.")
 
     # Likewise a saved name closes its rename and focus lands on the chip.
     speaker_name = rename_speaker(page)
     speaker_name.fill("Saved speaker focus survives refresh.")
     page.evaluate("() => { window.__focusBeforeRefresh = document.activeElement; }")
     speaker_name.press("Enter")
-    wait_for_mutation_and_refresh(4, "#speaker-catalog-list > li:first-child .speaker-chip")
-    expect(page.locator("#speaker-catalog-list > li:first-child .speaker-chip")).to_contain_text(
-        "Saved speaker focus survives refresh."
-    )
-    expect(page.locator("#transcript-mutation-status")).to_be_visible()
-    expect(page.locator("#transcript-mutation-status")).to_have_text("Đã lưu tên người nói.")
+    refresh_with_mutation_held()
+    expect(page.locator(".segment-speaker")).to_have_text("Saved speaker focus survives refresh.")
+    speaker_chip = page.locator("#speaker-catalog-list .speaker-chip").first
+    settle_mutation(speaker_chip, "Đã lưu tên người nói.")
+    expect(speaker_chip).to_have_text("Saved speaker focus survives refresh.")
 
     edit_segment(page)
     assignment = page.locator(".segment-speaker-select")
     assignment.focus()
     page.evaluate("() => { window.__focusBeforeRefresh = document.activeElement; }")
     assignment.press("ArrowDown")
-    replacement_assignment = wait_for_mutation_and_refresh(
-        5, ".segment-speaker-select", capture_segment=True
+    refresh_with_mutation_held()
+    expect(assignment.locator("option:checked")).to_have_text("Speaker 2")
+    expect(assignment).to_have_attribute("data-assignment-version", "2")
+    page.locator(".transcript-segment").evaluate(
+        "row => { window.__segmentBeforeAssignmentResponse = row; }"
     )
-    expect(replacement_assignment).to_be_focused()
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        f"{generation_id}:5:true"
-    )
+    settle_mutation(assignment, "Đã lưu lựa chọn người nói.")
+    expect(assignment.locator("option:checked")).to_have_text("Speaker 2")
+    expect(assignment).to_have_attribute("data-assignment-version", "2")
     assert page.evaluate(
         "() => window.__segmentBeforeAssignmentResponse === "
         "document.querySelector('.transcript-segment')"
@@ -2872,6 +2874,9 @@ def test_delayed_text_and_name_errors_target_replacement_statuses(live, browser_
     held = []
 
     def hold_selected_saves(route):
+        if route.request.method != "PATCH":
+            route.fallback()
+            return
         body = route.request.post_data_json
         text_save = route.request.url.endswith(
             f"transcript-segments/{generation['segments'][0]['id']}/text"
@@ -2891,9 +2896,8 @@ def test_delayed_text_and_name_errors_target_replacement_statuses(live, browser_
         hold_selected_saves,
     )
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
-    expect(page.locator("#transcript-generation")).to_have_attribute(
-        "data-render-key", f"{generation['id']}:1:true"
-    )
+    expect(page.locator(".segment-text")).to_have_text("A saved sentence.")
+    expect(page.locator(".segment-speaker")).to_have_text("Speaker 1")
 
     def wait_for_held_request():
         deadline = time.monotonic() + 10
@@ -2901,14 +2905,11 @@ def test_delayed_text_and_name_errors_target_replacement_statuses(live, browser_
             page.wait_for_timeout(50)
         assert len(held) == 1
 
-    def fail_after_refresh(status_selector, expected_version, fulfill_error):
+    def fail_after_refresh(status_selector, fulfill_error):
         old_status = page.locator(status_selector)
         old_status.evaluate("element => { window.__oldMutationStatus = element; }")
         page.evaluate("window.dispatchEvent(new PopStateEvent('popstate'))")
-        expect(page.locator("#transcript-generation")).to_have_attribute(
-            "data-render-key", f"{generation['id']}:{expected_version}:true"
-        )
-        assert page.evaluate("() => !window.__oldMutationStatus.isConnected")
+        page.wait_for_function("() => !window.__oldMutationStatus.isConnected")
         replacement = page.locator(status_selector).first
         held_route = held.pop()
         held_route.fulfill(
@@ -2936,7 +2937,11 @@ def test_delayed_text_and_name_errors_target_replacement_statuses(live, browser_
         },
     )
     assert external_text.status == 200
-    fail_after_refresh(".segment-edit-status", 2, "Synthetic delayed text save failure.")
+    fail_after_refresh(".segment-edit-status", "Synthetic delayed text save failure.")
+    expect(text).to_have_value("Delayed text failure.")
+    text.press("Escape")
+    expect(page.locator(".segment-text")).to_have_text("Saved elsewhere before delayed error.")
+    expect(page.locator(".segment-edit-button")).to_be_focused()
 
     name = rename_speaker(page)
     name.fill("Delayed name failure.")
@@ -2950,9 +2955,14 @@ def test_delayed_text_and_name_errors_target_replacement_statuses(live, browser_
     assert external_name.status == 200
     fail_after_refresh(
         "#speaker-catalog-list .speaker-form-status",
-        3,
         "Synthetic delayed speaker name failure.",
     )
+    expect(name).to_have_value("Delayed name failure.")
+    expect(page.locator(".segment-speaker")).to_have_text("Saved name elsewhere.")
+    name.press("Escape")
+    speaker_chip = page.locator("#speaker-catalog-list .speaker-chip")
+    expect(speaker_chip.locator(".speaker-chip-name")).to_have_text("Saved name elsewhere.")
+    expect(speaker_chip).to_be_focused()
 
 
 def test_same_meeting_refresh_preserves_generation_missing_from_stale_snapshot(
@@ -2972,7 +2982,23 @@ def test_same_meeting_refresh_preserves_generation_missing_from_stale_snapshot(
 
     page.goto(f"{live.url}/meetings/{meeting_id}", wait_until="domcontentloaded")
     expect(page.locator("#meeting-title")).to_have_text("Missing generation snapshot")
-    page.route(f"{live.url}/api/meetings/{meeting_id}", hold_first_read)
+    meeting_url = f"{live.url}/api/meetings/{meeting_id}"
+    page.route(meeting_url, hold_first_read)
+    # Let the held snapshot reach Chrome even if the newer refresh cancels its fetch.
+    page.evaluate(
+        """url => {
+            const fetch = window.fetch;
+            window.fetch = (input, options) => {
+                if (new URL(input, location.href).href !== url || options?.method !== "GET") {
+                    return fetch(input, options);
+                }
+                window.fetch = fetch;
+                const { signal, ...request } = options;
+                return fetch(input, request);
+            };
+        }""",
+        meeting_url,
+    )
     page.evaluate("window.dispatchEvent(new PopStateEvent('popstate'))")
     deadline = time.monotonic() + 10
     while not held_prepublication_read and time.monotonic() < deadline:
@@ -2981,17 +3007,17 @@ def test_same_meeting_refresh_preserves_generation_missing_from_stale_snapshot(
     stale_route, stale_response = held_prepublication_read[0]
     assert stale_response.json()["transcription"]["generation"] is None
 
-    generation = _publish_browser_generation(live, meeting_id)
+    _publish_browser_generation(live, meeting_id)
     page.evaluate("window.dispatchEvent(new PopStateEvent('popstate'))")
     expect(page.locator("#generation-title")).to_have_text("Transcript #1")
     expect(page.locator(".segment-text")).to_have_text("A saved sentence.")
 
-    stale_route.fulfill(response=stale_response)
+    with page.expect_response(stale_route.request.url, timeout=5_000) as delivered:
+        stale_route.fulfill(response=stale_response)
+    assert delivered.value.finished() is None
     expect(page.locator("#generation-title")).to_have_text("Transcript #1")
     expect(page.locator(".segment-text")).to_have_text("A saved sentence.")
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        f"{generation['id']}:1:true"
-    )
+    expect(page.locator(".segment-edit-button")).to_be_enabled()
 
 
 def test_speaker_add_name_clears_on_meeting_and_generation_switches(live, browser_context):
@@ -3438,9 +3464,7 @@ def test_transcription_requires_explicit_start_and_renders_poll_cancel_and_rerun
     expect(page.locator("#transcript-mutation-status")).to_be_visible()
     expect(page.locator("#transcript-mutation-status")).to_have_text("Đã lưu lựa chọn người nói.")
     expect(page.locator(".segment-original-speaker")).to_have_text("Gán ban đầu: Speaker 1")
-    expect(page.locator("#transcript-generation")).to_have_attribute(
-        "data-render-key", "generation-1:2:true"
-    )
+    expect(speaker_select.locator("option:checked")).to_have_text("Speaker 2")
     assert speaker_updates == [
         {
             "expected_generation_id": "generation-1",
@@ -3931,9 +3955,6 @@ def test_transcript_reload_cannot_replace_a_newer_successful_save(live, browser_
         "Saved after reload began."
     )
     expect(editor).to_have_value("Keep this draft while loading.")
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        "reload-race-generation:3:true"
-    )
     expect(page.get_by_role("button", name="Tải lại bản mới nhất")).to_have_count(0)
 
 
@@ -4049,19 +4070,16 @@ def test_meeting_install_preserves_newer_transcript_after_metadata_and_same_meet
     metadata_route.fulfill(response=metadata_response, json=metadata_payload)
     expect(page.locator("#meeting-title")).to_have_text("Metadata saved during transcript edit")
     expect(editor).to_have_value("Keep this unsaved transcript draft.")
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        "meeting-install-generation:2:true"
-    )
 
     stale_meeting_load["enabled"] = True
     open_calendar(page)
     page.get_by_role("button", name="Quay lại notes").click()
     expect(page.locator("#meeting-title")).to_have_text("Metadata saved during transcript edit")
     expect(editor).to_have_value("Keep this unsaved transcript draft.")
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        "meeting-install-generation:2:true"
-    )
+    editor.press("Escape")
+    expect(page.locator(".segment-text")).to_have_text("Transcript save version two.")
 
+    editor = edit_segment(page)
     editor.fill("Follow-up saved from the newest version.")
     page.get_by_role("button", name="Lưu đoạn").click()
     expect(page.locator(".segment-text")).to_have_text("Follow-up saved from the newest version.")
@@ -4081,9 +4099,7 @@ def test_meeting_install_preserves_newer_transcript_after_metadata_and_same_meet
     page.get_by_role("button", name="Lưu thay đổi").click()
     expect(page.locator("#edit-conflict")).to_contain_text("Metadata saved elsewhere")
     expect(page.locator("#edit-title")).to_have_value("Keep this metadata conflict draft")
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        "meeting-install-generation:3:true"
-    )
+    expect(page.locator(".segment-text")).to_have_text("Follow-up saved from the newest version.")
 
 
 def test_late_speaker_assignment_reconciles_after_same_meeting_reload(live, browser_context):
@@ -4171,10 +4187,13 @@ def test_late_speaker_assignment_reconciles_after_same_meeting_reload(live, brow
     expect(speaker_select).to_have_attribute("data-current-speaker", "SPEAKER_01")
     expect(speaker_select).to_have_attribute("data-assignment-version", "2")
     expect(page.locator(".segment-original-speaker")).to_have_text("Gán ban đầu: Speaker 1")
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        "late-assignment-generation:2:true"
-    )
+    expect(speaker_select.locator("option:checked")).to_have_text("Speaker 2")
+    expect(page.locator("#transcript-mutation-status")).to_have_text("Đã lưu lựa chọn người nói.")
+    page.locator(".segment-edit-actions").get_by_role("button", name="Hủy").press("Enter")
+    expect(page.locator(".segment-speaker")).to_have_text("Speaker 2")
+    expect(page.locator(".segment-edit-button")).to_be_focused()
 
+    edit_segment(page)
     speaker_select.select_option("SPEAKER_00")
     expect(speaker_select).to_have_value("SPEAKER_00")
     assert [
@@ -4183,6 +4202,7 @@ def test_late_speaker_assignment_reconciles_after_same_meeting_reload(live, brow
     ] == [(1, 1), (2, 2)]
     expect(speaker_select).to_have_attribute("data-assignment-version", "3")
     expect(speaker_select).to_have_attribute("data-current-speaker", "SPEAKER_00")
+    expect(speaker_select.locator("option:checked")).to_have_text("Speaker 1")
     assert server_generation["source_version"] == 3
 
 
@@ -4530,9 +4550,9 @@ def test_assignment_source_conflict_survives_reload_and_can_be_reapplied(live, b
         (request["expected_source_version"], request["speaker_id"])
         for request in assignment_requests
     ] == [(1, "SPEAKER_01"), (3, "SPEAKER_01")]
-    assert page.locator("#transcript-generation").get_attribute("data-render-key") == (
-        f"{generation['id']}:4:true"
-    )
+    expect(select.locator("option:checked")).to_have_text("Alice")
+    expect(select).to_have_attribute("data-assignment-version", "2")
+    expect(page.locator("#transcript-mutation-status")).to_have_text("Đã lưu lựa chọn người nói.")
 
 
 def test_assignment_current_generation_conflict_is_retained_for_recovery(live, browser_context):
@@ -4983,14 +5003,14 @@ def test_a_closed_conflicted_segment_keeps_a_reload_in_the_conflict_panel(live, 
     expect(reloads).to_have_count(1)
     expect(panel).to_be_hidden()
 
-    # Esc closes it. A read row keeps two tab stops, so the reload moves to the conflict panel.
+    # Esc closes it. The reload moves to the conflict panel, keeping the three read-row stops.
     first.locator(".segment-text-editor").press("Escape")
     expect(first.locator(".segment-text-editor")).to_have_count(0)
     expect(first.locator(".segment-edit-button")).to_be_focused()
     expect(panel).to_be_visible()
     expect(panel.get_by_role("button", name="Tải lại bản mới nhất")).to_have_count(1)
     expect(reloads).to_have_count(1)
-    assert first.evaluate(TAB_STOPS_JS) == 2
+    assert first.evaluate(TAB_STOPS_JS) == 3
 
     # So does Hủy, and so does opening another segment, which closes the editor it leaves.
     first.locator(".segment-edit-button").click()
@@ -5003,7 +5023,7 @@ def test_a_closed_conflicted_segment_keeps_a_reload_in_the_conflict_panel(live, 
     expect(second.locator(".segment-text-editor")).to_have_count(1)
     expect(panel.locator("[data-reload-latest]")).to_have_count(1)
     expect(reloads).to_have_count(1)
-    assert first.evaluate(TAB_STOPS_JS) == 2
+    assert first.evaluate(TAB_STOPS_JS) == 3
 
     # The panel's reload brings the other client's text. The draft stays, and since the latest
     # version is now on screen, closing the editor again does not offer another reload.
@@ -5398,55 +5418,58 @@ def test_past_transcript_has_no_edit_buttons_or_rename_chips(live, browser_conte
         expect(page.locator(control)).to_have_count(0)
     expect(page.locator("#speaker-catalog-list .speaker-chip")).to_have_text("Speaker 1")
     expect(page.locator("#speaker-add-form")).to_be_hidden()
+    review = page.get_by_role("checkbox", name="Đánh dấu đoạn đã kiểm tra · 0:01.00", exact=True)
+    expect(review).to_be_disabled()
+    expect(page.locator("#speaker-merge")).to_be_hidden()
     # The origin stays reachable, but only behind a collapsed "Chi tiết", never inline.
     expect(page.locator("details.segment-details")).not_to_have_attribute("open", "")
     expect(page.locator(".segment-original-speaker")).to_be_hidden()
     expect(page.locator(".segment-original-speaker")).to_have_text("Gán ban đầu: Speaker 1")
 
 
-def test_read_rows_have_two_tab_stops_and_one_shared_live_region(live, browser_context):
+def test_read_rows_have_three_tab_stops_and_one_shared_edit_live_region(live, browser_context):
     _context, page = browser_context
     open_reading_meeting(live, page)
-    stops = page.evaluate(
-        """() => [...document.querySelectorAll(".transcript-segment")].map((row) =>
-          [...row.querySelectorAll("a[href], button, input, select, textarea, summary, [tabindex]")]
-            .filter((el) => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length)
-            .length)"""
-    )
-    assert stops == [2, 2, 2]
-
-    # Walking with Tab: timestamp, Sửa, then the next row's timestamp, Sửa, and so on.
-    page.locator(".segment-timestamp").first.focus()
-    walk = []
-    for _ in range(5):
-        page.keyboard.press("Tab")
-        walk.append(
-            page.evaluate(
-                """() => {
-                  const el = document.activeElement;
-                  const kind = el.classList.contains("segment-edit-button") ? "edit"
-                    : el.classList.contains("segment-timestamp") ? "time" : el.tagName;
-                  const row = el.closest(".transcript-segment");
-                  return [kind, row ? [...row.parentElement.children].indexOf(row) : -1];
-                }"""
-            )
-        )
-    assert walk == [["edit", 0], ["time", 1], ["edit", 1], ["time", 2], ["edit", 2]]
-
-    # No row owns a live region, open editor included: one region announces every save.
     rows = page.locator(".transcript-segment")
-    in_rows = "[role=status], [role=alert], [aria-live], output"
-    expect(rows.locator(in_rows)).to_have_count(0)
+    expect(rows).to_have_count(3)
+    assert [row.evaluate(TAB_STOPS_JS) for row in rows.all()] == [3, 3, 3]
+
+    # Walk each row in order and verify that each accessible name identifies its segment.
+    page.locator(".segment-timestamp").first.focus()
+    for index, clock in enumerate(("0:01.00", "0:04.00", "0:07.00")):
+        row = rows.nth(index)
+        timestamp = row.get_by_role("button", name=f"Phát bản ghi từ {clock}", exact=True)
+        expect(timestamp).to_be_focused()
+        expect(timestamp).to_have_text(clock)
+        page.keyboard.press("Tab")
+        edit = row.get_by_role("button", name=f"Sửa đoạn bắt đầu tại {clock}", exact=True)
+        expect(edit).to_be_focused()
+        expect(edit).to_have_text("Sửa")
+        page.keyboard.press("Tab")
+        review = row.get_by_role(
+            "checkbox", name=f"Đánh dấu đoạn đã kiểm tra · {clock}", exact=True
+        )
+        expect(review).to_be_focused()
+        expect(review).not_to_be_checked()
+        if index < 2:
+            page.keyboard.press("Tab")
+
+    # Row-local status belongs to manual review. Text saves use the same shared live region.
+    live_regions = "[role=status], [role=alert], [aria-live], output"
+    review_statuses = rows.locator("[role=status][data-review-status]")
+    expect(review_statuses).to_have_count(3)
+    expect(rows.locator(live_regions)).to_have_count(3)
     shared = page.locator("#transcript-mutation-status")
     expect(shared).to_have_attribute("aria-live", "polite")
     page.evaluate("window.__sharedRegion = document.querySelector('#transcript-mutation-status')")
     for index, text in ((0, "First save."), (1, "Second save.")):
         rows.nth(index).locator(".segment-edit-button").click()
-        expect(rows.locator(in_rows)).to_have_count(0)
+        expect(rows.locator(live_regions)).to_have_count(3)
         rows.nth(index).locator(".segment-text-editor").fill(text)
         rows.nth(index).get_by_role("button", name="Lưu đoạn").click()
         expect(rows.nth(index).locator(".segment-text")).to_have_text(text)
         expect(shared).to_have_text("Đã lưu.")
+        expect(review_statuses).to_have_text(["", "", ""])
         expect(page.locator("[aria-live], [role=status]").filter(has_text="Đã lưu.")).to_have_count(
             1
         )
@@ -5573,6 +5596,33 @@ def test_reading_rows_editor_and_chips_fit_360px_in_both_themes(live, signed_in,
     # Keyboard focus is a solid 2px ring on the chip and on the Sửa button.
     tab_until(page, "el => el.classList.contains('speaker-chip')")
     assert_focus_ring(page)
+
+    merge = page.locator("#speaker-merge")
+    summary = merge.locator("summary")
+    tab_until(page, "el => el.matches('#speaker-merge summary')")
+    expect(merge).not_to_have_attribute("open", "")
+    page.keyboard.press("Enter")
+    expect(merge).to_have_attribute("open", "")
+    expect(summary).to_be_focused()
+    assert page.evaluate(OVERFLOW_JS) == {"page": 0, "wide": []}
+    for control in (
+        merge.get_by_role("combobox", name="Từ người nói", exact=True),
+        merge.get_by_role("combobox", name="Sang người nói", exact=True),
+        merge.get_by_role("button", name="Xem trước gộp", exact=True),
+    ):
+        page.keyboard.press("Tab")
+        expect(control).to_be_focused()
+        assert_focus_ring(page)
+    for _ in range(3):
+        page.keyboard.press("Shift+Tab")
+    expect(summary).to_be_focused()
+    page.keyboard.press("Enter")
+    expect(merge).not_to_have_attribute("open", "")
+    expect(summary).to_be_focused()
+    assert page.evaluate(OVERFLOW_JS) == {"page": 0, "wide": []}
+    page.keyboard.press("Tab")
+    expect(page.locator("#transcript-search")).to_be_focused()
+
     tab_until(page, "el => el.classList.contains('segment-edit-button')")
     assert_focus_ring(page)
 
@@ -5587,11 +5637,15 @@ def test_reading_rows_editor_and_chips_fit_360px_in_both_themes(live, signed_in,
     page.keyboard.press("Enter")
     expect(page.locator(".segment-text-editor")).to_be_focused()
     assert_focus_ring(page)
+    details = page.locator("details.segment-details")
     for _ in range(3):  # Lưu đoạn, Hủy, then the "Chi tiết" summary
         page.keyboard.press("Tab")
         assert_focus_ring(page)
+    expect(details.locator("summary")).to_be_focused()
     page.keyboard.press("Enter")
-    expect(page.locator("details.segment-details")).to_have_attribute("open", "")
+    expect(details).to_have_attribute("open", "")
+    expect(details.locator("summary")).to_be_focused()
+    assert page.evaluate(OVERFLOW_JS) == {"page": 0, "wide": []}
 
     # Leave a draft in the second row, return to the first, and start a rename in a chip.
     rows = page.locator(".transcript-segment")

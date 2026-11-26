@@ -6,6 +6,7 @@ import { combine, createRunner, createStore } from "../../src/asr_studio/web/sto
 import {
   SAVED,
   SAVING,
+  activeHistoryOperation,
   displayed,
   draftOf,
   hasUnsavedDrafts,
@@ -60,7 +61,7 @@ async function setup({ lock = false } = {}) {
   const run = createRunner({
     fetch: (url, init) =>
       new Promise((resolve, reject) => {
-        requests.push({ url, method: init.method, body: init.body && JSON.parse(init.body), resolve, reject, done: false, signal: init.signal });
+        requests.push({ url, method: init.method, body: init.body && JSON.parse(init.body), wireBody: init.body, resolve, reject, done: false, signal: init.signal });
       }),
     setTimeout: () => 0,
     clearTimeout: () => {},
@@ -593,6 +594,25 @@ test("an add that conflicts keeps the draft marked and is reapplied to the new c
   await env.answer((r) => r.method === "POST", 200, { speaker_id: "C", display_name: "Zed", first_seen_seconds: 0, last_seen_seconds: 1, source_version: 8 });
   assert.deepEqual(env.history().meeting.transcription.generation.speakers.map((item) => item.speaker_id), ["A", "B", "C"]);
   assert.equal(hasUnsavedDrafts(env.t()), false, "the draft of the old transcript is gone");
+});
+
+test("fixed edit revisions preserve a speaker draft without admitting reapply", async () => {
+  const env = await setup();
+  env.send("transcript/speaker-add-submitted", { name: "Zed" });
+  await env.answer((r) => r.method === "POST", 503, {});
+  env.send("transcript/edit-history-requested");
+  await env.answer(historyList("g2"), 200, listBody("g2"));
+  env.send("transcript/history-revision-chosen", { editVersion: 2 });
+  await env.answer(historyDetail, 200, exactBody);
+  assert.equal(displayed(env.t(), env.history().meeting.transcription).editable, false);
+
+  env.send("transcript/speaker-add-reapplied", { generationId: "g2" });
+  assert.equal(env.pending("POST").length, 0);
+  assert.equal(draftOf(env.t().drafts, "g2", "speakerAddName", "speaker-add-name").value, "Zed");
+
+  env.send("transcript/history-return-current");
+  env.send("transcript/speaker-add-reapplied", { generationId: "g2" });
+  assert.deepEqual(env.pending("POST")[0].body, { expected_source_version: 5, display_name: "Zed" });
 });
 
 test("adding a speaker is refused while the source is locked, before a first transcript or while a reload runs", async () => {
@@ -1226,4 +1246,398 @@ test("filters and generation toggles preserve an open draft without any write or
   env.send("transcript/meeting-switched");
   assert.equal(env.t().query, "");
   assert.equal(env.t().reviewOnly, false);
+});
+
+test("edit history reads exact revisions, protects historical controls, and fences review marks", async () => {
+  const env = await setup();
+  env.send("transcript/edit-history-requested");
+  const historyRequest = env.pending("GET").find((request) => request.url.endsWith("/transcript-generations/g2/edit-history"));
+  assert.ok(historyRequest);
+  await env.answer((request) => request === historyRequest, 200, {
+    generation_id: "g2",
+    revisions: [
+      { edit_version: 2, source_version: 6, kind: "speakers_merged", recorded_at: "2026-11-25T00:00:00Z", actor_role: "operator", undo_of_version: null },
+      { edit_version: 1, source_version: 5, kind: "generated", recorded_at: "2026-11-24T00:00:00Z", actor_role: null, undo_of_version: null },
+    ],
+    reviews: { s1: { checked: false, review_version: 0 } },
+  });
+  assert.equal(env.t().history.revisions[0].kind, "speakers_merged");
+  env.send("transcript/history-revision-chosen", { editVersion: 2 });
+  const exact = env.pending("GET").find((request) => request.url.endsWith("edit-history?edit_version=2"));
+  assert.ok(exact);
+  await env.answer((request) => request === exact, 200, {
+    id: "g2",
+    edit_version: 2,
+    source_version: 6,
+    segments: [
+      segment("s1", { speaker_id: "B", checked: true, review_version: 1 }),
+      segment("s2", { speaker_id: "B", checked: false, review_version: 0 }),
+    ],
+    speakers: [speaker("A", "Speaker 1"), speaker("B", "Bob")],
+  });
+  assert.equal(displayed(env.t(), env.history().meeting.transcription).editable, false);
+  assert.equal(displayed(env.t(), env.history().meeting.transcription).generation.segments[0].speaker_id, "B");
+
+  env.send("transcript/history-return-current");
+  env.send("transcript/edit-history-requested");
+  const currentHistory = env.pending("GET").find((request) => request.url.endsWith("/transcript-generations/g2/edit-history"));
+  assert.ok(currentHistory);
+  await env.answer((request) => request === currentHistory, 200, {
+    generation_id: "g2", revisions: [], reviews: { s1: { checked: false, review_version: 0 } },
+  });
+  env.send("transcript/review-toggled", { generationId: "g2", segmentId: "s1", checked: true });
+  const review = env.pending("PATCH").find((request) => request.url.endsWith("/segments/review"));
+  assert.deepEqual(review.body, { segment_id: "s1", checked: true, expected_review_version: 0 });
+  await env.answer((request) => request === review, 200, { generation_id: "g2", segment_id: "s1", checked: true, review_version: 1 });
+  assert.deepEqual(env.t().history.reviews.s1, { checked: true, review_version: 1 });
+});
+
+test("merge preview and undo use the exact server fences and keep retry data", async () => {
+  const env = await setup();
+  env.send("transcript/edit-history-requested");
+  const list = env.pending("GET").find((request) => request.url.endsWith("/transcript-generations/g2/edit-history"));
+  await env.answer((request) => request === list, 200, {
+    generation_id: "g2",
+    revisions: [{ edit_version: 2, source_version: 6, kind: "speakers_merged", recorded_at: "now", actor_role: "operator", undo_of_version: null }],
+    reviews: {},
+  });
+  env.send("transcript/merge-preview-requested", { sourceSpeakerId: "A", targetSpeakerId: "B" });
+  const preview = env.pending("GET").find((request) => request.url.includes("/speaker-merge?"));
+  assert.equal(new URL(`http://local${preview.url}`).searchParams.get("source_speaker_id"), "A");
+  await env.answer((request) => request === preview, 200, { generation_id: "g2", source_version: 5, source_speaker_id: "A", target_speaker_id: "B", segment_count: 2 });
+  env.send("transcript/merge-confirmed", { sourceSpeakerId: "A", targetSpeakerId: "B", requestId: "merge-request-1" });
+  const merge = env.pending("POST").find((request) => request.url.endsWith("/speaker-merge"));
+  assert.deepEqual(merge.body, { source_speaker_id: "A", target_speaker_id: "B", expected_source_version: 5, expected_segment_count: 2, request_id: "merge-request-1" });
+  const requestPreview = () => env.send("transcript/merge-preview-requested", { sourceSpeakerId: "A", targetSpeakerId: "B" });
+  requestPreview();
+  assert.equal(env.pending("GET").some((request) => request.url.includes("/speaker-merge?")), false);
+  assert.equal(activeHistoryOperation(env.t()).busy, true);
+  await env.fail((request) => request === merge);
+  requestPreview();
+  assert.equal(env.pending("GET").some((request) => request.url.includes("/speaker-merge?")), false);
+  assert.equal(activeHistoryOperation(env.t()).body.request_id, "merge-request-1");
+  assert.equal(activeHistoryOperation(env.t()).uncertain, true);
+  env.send("transcript/history-operation-retry");
+  const retry = env.pending("POST").find((request) => request.url.endsWith("/speaker-merge"));
+  assert.equal(retry.body.request_id, "merge-request-1");
+
+  const undoEnv = await setup();
+  undoEnv.send("transcript/edit-history-requested");
+  const undoList = undoEnv.pending("GET").find((request) => request.url.endsWith("/transcript-generations/g2/edit-history"));
+  await undoEnv.answer((request) => request === undoList, 200, {
+    generation_id: "g2",
+    revisions: [{ edit_version: 2, source_version: 6, kind: "speakers_merged", recorded_at: "now", actor_role: "operator", undo_of_version: null }],
+    reviews: {},
+  });
+  undoEnv.send("transcript/undo-confirmed", { editVersion: 2, requestId: "undo-request-1" });
+  const undo = undoEnv.pending("POST").find((request) => request.url.endsWith("/speaker-merge/2/undo"));
+  assert.deepEqual(undo.body, { expected_source_version: 5, request_id: "undo-request-1" });
+});
+
+test("a confirmed history write installs the refreshed meeting from the runner response body", async () => {
+  const env = await setup();
+  env.send("transcript/edit-history-requested");
+  const list = env.pending("GET").find((request) => request.url.endsWith("/transcript-generations/g2/edit-history"));
+  await env.answer((request) => request === list, 200, {
+    generation_id: "g2",
+    revisions: [{ edit_version: 1, source_version: 5, kind: "generated", recorded_at: "now", actor_role: null, undo_of_version: null }],
+    reviews: {},
+  });
+  env.send("transcript/merge-preview-requested", { sourceSpeakerId: "A", targetSpeakerId: "B" });
+  const preview = env.pending("GET").find((request) => request.url.includes("/speaker-merge?"));
+  await env.answer((request) => request === preview, 200, { generation_id: "g2", source_version: 5, source_speaker_id: "A", target_speaker_id: "B", segment_count: 1 });
+  env.send("transcript/merge-confirmed", { sourceSpeakerId: "A", targetSpeakerId: "B", requestId: "refresh-contract-1" });
+  const merge = env.pending("POST").find((request) => request.url.endsWith("/speaker-merge"));
+  await env.answer((request) => request === merge, 200, { generation_id: "g2", source_version: 6, edit_version: 2, segment_count: 1 });
+  assert.deepEqual(env.calls.at(-1), ["meeting.refresh", "m1"], "history writes must refresh through navigation");
+  env.install(meeting("m1", generation("g2", 2, { source_version: 6, segments: [segment("s1", { speaker_id: "B" }), segment("s2", { speaker_id: "B" })] })));
+  assert.equal(env.history().meeting.transcription.generation.segments[0].speaker_id, "B");
+});
+
+test("Undo reconciles a known already-undone conflict and verifies an ambiguous HTTP failure", async () => {
+  for (const terminal of [true, false]) {
+    const env = await setup();
+    const listMatch = (request) => request.url.endsWith("/transcript-generations/g2/edit-history");
+    const undoMatch = (request) => request.url.endsWith("/speaker-merge/2/undo");
+    const merge = { edit_version: 2, source_version: 5, kind: "speakers_merged", undo_of_version: null };
+    const undo = { edit_version: 3, source_version: 6, kind: "speaker_merge_undone", undo_of_version: 2 };
+    env.send("transcript/edit-history-requested");
+    await env.answer(listMatch, 200, { generation_id: "g2", revisions: [merge], reviews: {} });
+    env.send("transcript/undo-confirmed", { editVersion: 2, requestId: "undo-check" });
+    const first = await env.answer(undoMatch, terminal ? 409 : 503, terminal
+      ? { detail: { code: "speaker_merge_already_undone", message: "Already undone" } } : {});
+    env.send("transcript/history-operation-retry");
+    if (terminal) {
+      assert.equal(env.pending("POST").some(undoMatch), false);
+      assert.deepEqual(env.calls.at(-1), ["meeting.refresh", "m1"]);
+      await env.answer(listMatch, 200, { generation_id: "g2", revisions: [undo, merge], reviews: {} });
+      assert.equal(env.t().history.revisions[0].undo_of_version, 2);
+      env.send("transcript/undo-confirmed", { editVersion: 2, requestId: "second-undo" });
+      assert.equal(env.pending("POST").some(undoMatch), false);
+    } else {
+      const retry = env.pending("POST").find(undoMatch);
+      assert.equal(retry.url, first.url);
+      assert.deepEqual(retry.body, first.body);
+      assert.equal(env.pending("GET").some(listMatch), false);
+    }
+  }
+});
+
+test("the review gate honors active Notes and an in-flight ordinary source edit", async () => {
+  const env = await setup({ lock: true });
+  const listMatch = (request) => request.url.endsWith("/transcript-generations/g2/edit-history");
+  env.send("transcript/edit-history-requested");
+  await env.answer(listMatch, 200, { generation_id: "g2", revisions: [], reviews: {} });
+  const toggle = { generationId: "g2", segmentId: "s1", checked: true };
+  env.send("transcript/review-toggled", toggle);
+  env.send("transcript/merge-preview-requested", { sourceSpeakerId: "A", targetSpeakerId: "B" });
+  assert.equal(env.pending().length, 0);
+  env.send("history/notes-source-lock-reported", { meetingId: "m1", locked: false, known: true });
+  env.send("transcript/segment-saved", { generationId: "g2", segmentId: "s1", text: "New text" });
+  env.send("transcript/review-toggled", toggle);
+  assert.equal(env.pending("PATCH").length, 1);
+  await env.answer((request) => request.url.endsWith("/text"), 200, {
+    generation_id: "g2", id: "s1", text: "New text", source_version: 6,
+  });
+  assert.ok(env.pending("GET").some(listMatch));
+});
+
+const historyList = (id) => (request) => request.url.endsWith(`/${id}/edit-history`);
+const historyDetail = (request) => request.url.endsWith("/edit-history?edit_version=2");
+const savedMerge = { edit_version: 2, kind: "speakers_merged", source_version: 5 };
+const listBody = (id, reviews = {}) => ({ generation_id: id, revisions: [savedMerge], reviews });
+const exactBody = { ...generation("g2", 2, { segments: [segment("s1", { text: "fixed text" })] }), edit_version: 2 };
+const savedReview = { edit_version: 3, source_version: 5, kind: "segment_review" };
+
+test("speaker receipts must confirm the original write before notifying peers", async (t) => {
+  for (const [kind, field, wrongValue, occupied] of [
+    ["merge", "segment_count", 2],
+    ["merge", "source_version", 7],
+    ["merge", "edit_version", 1],
+    ["undo", "source_version", 5],
+    ["undo", "edit_version", savedMerge.edit_version],
+    ["merge", "edit_version", savedReview.edit_version, true],
+    ["undo", "edit_version", savedReview.edit_version, true],
+  ]) {
+    await t.test(`${kind} with ${occupied ? "occupied" : "incompatible"} ${field} ${wrongValue}`, async () => {
+      const env = await setup();
+      const post = (request) => request.method === "POST" && request.url.includes("/speaker-merge");
+      const hints = () => env.calls.filter(([name]) => name === "meeting.change");
+      if (kind === "undo" || occupied) {
+        env.send("transcript/edit-history-requested");
+        await env.answer(historyList("g2"), 200, listBody("g2"));
+      }
+      if (kind === "merge") {
+        env.send("transcript/merge-preview-requested", { sourceSpeakerId: "A", targetSpeakerId: "B" });
+        await env.answer((r) => r.url.includes("/speaker-merge?"), 200, {
+          generation_id: "g2", source_version: 5, source_speaker_id: "A", target_speaker_id: "B", segment_count: 1,
+        });
+      }
+      if (occupied) {
+        // A peer's review advances the ledger without invalidating the merge preview's source fence.
+        env.send("transcript/edit-history-requested");
+        await env.answer(historyList("g2"), 200, {
+          ...listBody("g2", { s2: { checked: true, review_version: 1 } }),
+          revisions: [savedReview, savedMerge, { edit_version: 1, source_version: 4, kind: "generated" }],
+        });
+        if (kind === "undo") {
+          env.send("transcript/edit-history-reload");
+          await env.answer(historyList("g2"), 503, {});
+        }
+      }
+      if (kind === "merge") {
+        env.send("transcript/merge-confirmed", { sourceSpeakerId: "A", targetSpeakerId: "B", requestId: "receipt-check" });
+      } else {
+        env.send("transcript/undo-confirmed", { editVersion: savedMerge.edit_version, requestId: "receipt-check" });
+      }
+      const receipt = { generation_id: "g2", source_version: 6, edit_version: kind === "merge" ? 7 : 4, segment_count: 1 };
+      const first = await env.answer(post, 200, { ...receipt, [field]: wrongValue });
+      assert.deepEqual(hints(), []);
+      assert.equal(activeHistoryOperation(env.t())?.uncertain, true);
+      assert.equal(env.pending().length, 0);
+
+      // A later read has advanced past the original receipt. Retry still uses the original body.
+      env.install(meeting("m1", generation("g2", 2, { source_version: 8 })));
+      env.send("transcript/edit-history-requested");
+      await env.answer(historyList("g2"), 200, {
+        ...listBody("g2"), revisions: [{ edit_version: 9, source_version: 8, kind: "segment_text" }, savedMerge],
+      });
+      env.send("transcript/history-operation-retry");
+      const retry = env.pending("POST").find(post);
+      assert.equal(retry?.url, first.url);
+      assert.equal(retry.wireBody, first.wireBody);
+      const id = activeHistoryOperation(env.t()).id;
+      if (!occupied || kind === "undo") {
+        env.send("history/meeting-link-clicked", { meetingId: "m2" });
+        await env.answer((r) => r.url === "/api/meetings/m2", 200, meeting("m2"));
+      }
+      const destination = env.t().history;
+      await env.answer(post, 200, receipt);
+      env.send("transcript/history-operation-succeeded", {
+        meta: { id, meetingId: "m1", generationId: "g2" }, response: { body: receipt },
+      });
+      assert.deepEqual(hints(), [["meeting.change", "m1", "transcript"]]);
+      assert.deepEqual(env.t().historyOperations, {});
+      if (env.history().meeting.id === "m2") assert.equal(env.t().history, destination);
+      else assert.deepEqual(env.calls.at(-1), ["meeting.refresh", "m1"]);
+    });
+  }
+});
+
+test("a contradictory review receipt requires an authoritative read before another toggle", async () => {
+  const env = await setup();
+  const toggle = (checked) => env.send("transcript/review-toggled", { generationId: "g2", segmentId: "s1", checked });
+  const hints = () => env.calls.filter(([name]) => name === "meeting.change");
+  const patch = (request) => request.method === "PATCH" && request.url.endsWith("/segments/review");
+  env.send("transcript/edit-history-requested");
+  await env.answer(historyList("g2"), 200, listBody("g2"));
+  toggle(false);
+  assert.equal(env.pending("PATCH").length, 0);
+  toggle(true);
+  await env.answer(patch, 200, { generation_id: "g2", segment_id: "s1", checked: true, review_version: 2 });
+  assert.deepEqual(hints(), []);
+  assert.equal(activeHistoryOperation(env.t())?.uncertain, true);
+  assert.deepEqual(env.pending().map((r) => [r.method, r.url]), [
+    ["GET", "/api/meetings/m1/transcript-generations/g2/edit-history"],
+  ]);
+  toggle(true);
+  assert.equal(env.pending("PATCH").length, 0);
+  await env.answer(historyList("g2"), 200, listBody("g2", { s1: { checked: true, review_version: 1 } }));
+  assert.equal(activeHistoryOperation(env.t()).uncertain, false);
+  assert.deepEqual(hints(), []);
+
+  toggle(false);
+  assert.equal(env.pending("PATCH").find(patch)?.body.expected_review_version, 1);
+  await env.answer(patch, 200, { generation_id: "g2", segment_id: "s1", checked: false, review_version: 2 });
+  assert.deepEqual(env.t().history.reviews.s1, { checked: false, review_version: 2 });
+  assert.deepEqual(hints(), [["meeting.change", "m1", "transcript"]]);
+});
+
+test("navigation invalidates both history reads, including when returning to the same generation", async () => {
+  for (const acrossMeetings of [false, true]) {
+    const env = await setup();
+    env.send("transcript/edit-history-requested");
+    await env.answer(historyList("g2"), 200, listBody("g2"));
+    env.send("transcript/history-revision-chosen", { editVersion: 2 });
+    env.send("transcript/edit-history-reload");
+    if (acrossMeetings) {
+      for (const meetingId of ["m2", "m1"]) {
+        env.send("history/meeting-link-clicked", { meetingId });
+        await env.answer((r) => r.url === `/api/meetings/${meetingId}`, 200, meeting(meetingId));
+      }
+    } else {
+      env.send("transcript/generation-chosen", { id: "g1" });
+      env.send("transcript/generation-chosen", { id: "g2" });
+    }
+    await env.answer(historyList("g2"), 200, listBody("g2", { s1: { checked: true, review_version: 1 } }));
+    await env.answer(historyDetail, 200, exactBody);
+    assert.equal(displayed(env.t(), env.history().meeting.transcription).editable, true);
+    assert.deepEqual(env.t().history.reviews, {});
+  }
+});
+
+test("a compatible install preserves fixed text and independent list and detail reads", async () => {
+  for (const listFirst of [false, true]) {
+    const env = await setup();
+    env.send("transcript/edit-history-requested");
+    await env.answer(historyList("g2"), 200, listBody("g2"));
+    env.send("transcript/history-revision-chosen", { editVersion: 2 });
+    env.send("transcript/edit-history-reload");
+    env.install(meeting("m1", generation("g2", 2, { source_version: 6 })));
+    const list = () => env.answer(historyList("g2"), 200, listBody("g2"));
+    const detail = () => env.answer(historyDetail, 200, exactBody);
+    if (listFirst) {
+      await list();
+      await detail();
+    } else {
+      await detail();
+      await list();
+    }
+    env.install(meeting("m1", generation("g2", 2, { source_version: 7 })));
+    const projection = displayed(env.t(), env.history().meeting.transcription);
+    assert.equal(projection.editable, false);
+    assert.equal(projection.generation.segments[0].text, "fixed text");
+    assert.equal(env.t().history.list, "ready");
+    env.send("transcript/segment-saved", textSave());
+    env.send("transcript/undo-confirmed", { editVersion: 2, requestId: "fixed-revision-write" });
+    env.send("transcript/review-toggled", { generationId: "g2", segmentId: "s1", checked: true });
+    assert.equal(env.pending("POST").length + env.pending("PATCH").length, 0);
+    env.send("transcript/history-revision-chosen", { editVersion: 2 });
+    await env.answer(historyDetail, 503, {});
+    assert.equal(displayed(env.t(), env.history().meeting.transcription).generation.segments[0].text, "fixed text");
+  }
+});
+
+test("review survives a compatible install and only a list read after rejection reconciles it", async () => {
+  const env = await setup();
+  const review = (request) => request.url.endsWith("/segments/review");
+  env.send("transcript/edit-history-requested");
+  await env.answer(historyList("g2"), 200, listBody("g2"));
+  env.send("transcript/review-toggled", { generationId: "g2", segmentId: "s1", checked: true });
+  env.install(meeting());
+  env.send("transcript/edit-history-reload");
+  await env.answer(historyList("g2"), 200, listBody("g2"));
+  env.send("transcript/review-toggled", { generationId: "g2", segmentId: "s1", checked: true });
+  assert.equal(env.pending("PATCH").length, 1);
+  env.send("transcript/edit-history-reload");
+  const staleListId = env.t().history.listRequest;
+  await env.answer(review, 409, { detail: { code: "segment_review_changed", message: "Changed" } });
+  env.send("transcript/edit-history-loaded", {
+    meta: { meetingId: "m1", generationId: "g2", editVersion: null, id: staleListId },
+    response: { body: listBody("g2") },
+  });
+  assert.equal(activeHistoryOperation(env.t()).uncertain, true);
+  env.send("transcript/history-revision-chosen", { editVersion: 2 });
+  await env.answer(historyDetail, 200, exactBody);
+  await env.answer(historyList("g2"), 200, listBody("g2", { s1: { checked: true, review_version: 1 } }));
+  assert.deepEqual(env.t().history.reviews.s1, { checked: true, review_version: 1 });
+  assert.equal(displayed(env.t(), env.history().meeting.transcription).generation.segments[0].text, "fixed text");
+});
+
+test("merge and Undo retain the original wire request across refresh and rerun", async () => {
+  for (const kind of ["merge", "undo"]) {
+    const env = await setup();
+    const post = (request) => request.method === "POST" && request.url.includes("/speaker-merge");
+    env.send("transcript/edit-history-requested");
+    await env.answer(historyList("g2"), 200, listBody("g2"));
+    if (kind === "merge") {
+      env.send("transcript/merge-preview-requested", { sourceSpeakerId: "A", targetSpeakerId: "B" });
+      await env.answer((r) => r.url.includes("/speaker-merge?"), 200, {
+        generation_id: "g2", source_version: 5, source_speaker_id: "A", target_speaker_id: "B", segment_count: 1,
+      });
+      env.send("transcript/merge-confirmed", { sourceSpeakerId: "A", targetSpeakerId: "B", requestId: "original-request" });
+    } else {
+      env.send("transcript/undo-confirmed", { editVersion: 2, requestId: "original-request" });
+    }
+    const originalAttempt = activeHistoryOperation(env.t()).id;
+    env.install(meeting());
+    const original = await env.answer(post, 200, {});
+    env.install(meeting("m1", generation("g3", 3), [generation("g2", 2), generation("g1", 1)]));
+    env.send("transcript/edit-history-requested");
+    await env.answer(historyList("g3"), 200, listBody("g3"));
+    env.send("transcript/review-toggled", { generationId: "g3", segmentId: "s1", checked: true });
+    assert.equal(env.pending("PATCH").length, 1);
+    env.send("transcript/history-operation-retry");
+    assert.equal(env.pending("POST").length, 0);
+    env.send("transcript/generation-chosen", { id: "g2" });
+    env.send("transcript/edit-history-requested");
+    await env.answer(historyList("g2"), 200, listBody("g2"));
+    env.send("transcript/undo-confirmed", { editVersion: 2, requestId: "new-historical-request" });
+    assert.equal(env.pending("POST").length, 0);
+    env.send("transcript/history-operation-retry");
+    const replay = env.pending("POST").find(post);
+    assert.equal(replay?.url, original.url);
+    assert.equal(replay.wireBody, original.wireBody);
+    const replayAttempt = activeHistoryOperation(env.t()).id;
+    for (const [id, meetingId] of [[originalAttempt, "m1"], [replayAttempt, "m2"]]) {
+      env.send("transcript/history-operation-succeeded", {
+        meta: { id, meetingId, generationId: "g2" },
+        response: { body: { generation_id: "g2", source_version: 6, edit_version: 3, segment_count: 1 } },
+      });
+      assert.equal(activeHistoryOperation(env.t()).busy, true);
+    }
+    await env.answer(post, 409, { detail: { code: "current_generation_changed", message: "Transcript changed" } });
+    env.send("transcript/history-operation-retry");
+    assert.equal(env.pending("POST").length, 0);
+  }
 });

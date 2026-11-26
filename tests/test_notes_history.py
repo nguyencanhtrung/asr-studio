@@ -25,7 +25,7 @@ from asr_studio.notes_history import (
     install_notes_history,
     list_saved_versions,
 )
-from asr_studio.storage import SCHEMA_VERSION, database_path, initialize
+from asr_studio.storage import database_path, initialize
 from asr_studio.tasks import TaskError, claim_next_task
 
 
@@ -87,7 +87,9 @@ def _legacy_schema(data_dir: Path) -> None:
         ):
             connection.execute(f"DROP TRIGGER {trigger}")
         connection.execute("DROP TABLE notes_saved_versions")
-        connection.execute("DELETE FROM schema_migrations WHERE version = ?", (SCHEMA_VERSION,))
+        connection.execute("DROP TABLE transcript_segment_reviews")
+        connection.execute("DROP TABLE transcript_edit_events")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 22")
 
 
 def test_install_backfills_current_projection_and_is_idempotent(tmp_path):
@@ -99,6 +101,10 @@ def test_install_backfills_current_projection_and_is_idempotent(tmp_path):
 
     _legacy_schema(data_dir)
     initialize(data_dir)
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        assert connection.execute(
+            "SELECT version FROM schema_migrations WHERE version = 22"
+        ).fetchone() == (22,)
     _install(data_dir)
 
     with sqlite3.connect(database_path(data_dir)) as connection:

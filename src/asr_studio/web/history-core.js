@@ -452,7 +452,7 @@ function request(key, url, method, body, ok, error, meta) {
 }
 
 const call = (name, args, key = KEY.address) => ({ type: "call", key, name, args });
-const meetingChange = (meetingId, reason) => call("meeting.change", [meetingId, reason], KEY.meetingChange);
+export const meetingChange = (meetingId, reason) => call("meeting.change", [meetingId, reason], KEY.meetingChange);
 
 // ---- list and search ----
 

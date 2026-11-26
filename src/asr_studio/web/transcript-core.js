@@ -25,6 +25,7 @@ import {
   failureOf,
   generationsFor,
   isRecord,
+  meetingChange,
 } from "./history-core.js";
 
 const t = (text, params) => (params ? { text, params } : { text });
@@ -36,6 +37,33 @@ const FIELDS = ["segmentText", "speakerName", "speakerAssignment", "speakerAddNa
 const ADD_ITEM = "speaker-add-name";
 const KEY = { mutation: "transcript/mutation", reload: "transcript/reload", copy: "transcript/copy" };
 const CONFLICTS = ["source_version_changed", "current_generation_changed"];
+const HISTORY_FAILURES = new Set([
+  "current_generation_changed",
+  "source_version_changed",
+  "speaker_merge_changed",
+  "assignment_version_changed",
+  "speaker_merge_already_undone",
+  "notes_source_locked",
+  "request_conflict",
+  "generation_not_found",
+  "speaker_merge_not_found",
+]);
+
+const emptyHistory = (request = 0, meetingId = null, generationId = null) => ({
+  meetingId,
+  generationId,
+  revisions: [],
+  reviews: {},
+  list: null,
+  listError: null,
+  view: null,
+  viewLoading: false,
+  viewError: null,
+  request,
+  listRequest: null,
+  viewRequest: null,
+  preview: null,
+});
 
 export const initialState = {
   query: "", // local search of saved text, speaker identity and timestamps
@@ -56,7 +84,9 @@ export const initialState = {
   focus: { rev: 0, mode: null, target: null, from: null, sameMeeting: true }, // where focus goes after painting
   ops: [], // paint commands not acknowledged yet
   opSeq: 0,
-  ids: 0, // last mutation or reload id
+  ids: 0, // last write, merge preview or reload id
+  history: emptyHistory(),
+  historyOperations: {}, // [meetingId, generationId] -> write attempt, recovery or last status
   rev: 0, // the transcript half of the page is due a repaint
 };
 
@@ -86,7 +116,7 @@ export function navigation(state, transcription) {
   if (current && current.id !== lastCurrent) {
     const previous = lastCurrent;
     lastCurrent = current.id;
-    if (!selected || selected === previous) selected = current.id;
+    if (!selected || (selected === previous && state.history.view?.generationId !== selected)) selected = current.id;
   }
   if (!generations.some((item) => item.id === selected)) selected = current ? current.id : generations.at(-1).id;
   const cleared = Boolean(state.selected && state.selected !== selected);
@@ -97,14 +127,30 @@ export function navigation(state, transcription) {
 export function displayed(state, transcription) {
   const { generations, selected } = navigation(state, transcription);
   const current = transcription && transcription.generation;
-  const generation = generations.find((item) => item.id === selected);
-  return { generation, selected, editable: Boolean(generation && current && current.id === generation.id && generation.status === "complete") };
+  const historical = state.history?.view && state.history.view.generationId === selected
+    ? state.history.view.generation
+    : null;
+  const generation = historical || generations.find((item) => item.id === selected);
+  return {
+    generation,
+    selected,
+    historical: Boolean(historical),
+    editable: Boolean(!historical && generation && current && current.id === generation.id && generation.status === "complete"),
+  };
 }
 
-function synced(state, transcription) {
-  const next = navigation(state, transcription);
-  if (!next.changed) return state;
-  return repaint({ ...state, selected: next.selected, lastCurrent: next.lastCurrent, addName: next.cleared ? "" : state.addName });
+function synced(state, shown) {
+  const meetingId = shown?.id ?? null;
+  const sameMeeting = state.history.meetingId === meetingId;
+  const base = sameMeeting ? state : { ...state, selected: null, lastCurrent: null };
+  const next = navigation(base, transcriptionOf(shown));
+  if (sameMeeting && !next.changed) return state;
+  const sameSelection = sameMeeting && next.selected === state.selected;
+  return repaint({
+    ...state, selected: next.selected, lastCurrent: next.lastCurrent,
+    addName: sameSelection ? state.addName : "",
+    history: sameSelection ? state.history : emptyHistory(state.history.request, meetingId, next.selected),
+  });
 }
 
 export const isEditing = (state, generationId, segmentId) => Boolean(state.editing && state.editing.generationId === generationId && state.editing.segmentId === segmentId);
@@ -296,12 +342,355 @@ function showConflictNotice(state, shown, generationId, code) {
   return shown && shown.id ? setError(state, shown.id, generationId, message, true) : state;
 }
 
-// A closed row or chip cannot hold the reload (a read row keeps two tab stops), so a conflict still waiting on it
-// moves to the panel when its editor closes, and back beside the editor's buttons when it reopens.
+// Move the conflict reload to the panel when its editor closes to preserve the three regular
+// read-row tab stops. Move it back beside the editor's buttons when the editor reopens.
 function placeLatestReload(state, shown, generationId, field, itemId, currentValue, editorOpen) {
   const draft = draftOf(state.drafts, generationId, field, itemId);
   if (!awaitsLatestReload(draft, currentValue)) return state;
   return editorOpen ? clearError(state, generationId) : showConflictNotice(state, shown, generationId, draft.conflictCode);
+}
+
+// ---- saved edit history, merge operations and manual review marks ----
+
+const historyMessage = (code, fallback) => ({
+  current_generation_changed: t("Transcript hiện tại đã đổi. Tải lại rồi thử lại thao tác."),
+  source_version_changed: t("Transcript đã đổi. Tải lại để cập nhật hàng rào phiên bản."),
+  speaker_merge_changed: t("Danh sách đoạn đã đổi. Xem lại bản xem trước trước khi gộp."),
+  assignment_version_changed: t("Một đoạn đã đổi người nói. Tải lại để xem lại thao tác."),
+  speaker_merge_already_undone: t("Lần gộp này đã được hoàn tác."),
+}[code] || fallback);
+
+const historyBody = (body) => Boolean(body && typeof body === "object" && !Array.isArray(body));
+const historyGeneration = (body) => {
+  if (!historyBody(body) || !Array.isArray(body.segments) || !Array.isArray(body.speakers)) return null;
+  return body;
+};
+
+function historyEffect(meetingId, generationId, id, editVersion = null) {
+  const query = editVersion === null ? "" : `?edit_version=${encodeURIComponent(editVersion)}`;
+  return {
+    type: "fetch",
+    key: editVersion === null ? "transcript/edit-history" : "transcript/edit-history-view",
+    url: `/api/meetings/${enc(meetingId)}/transcript-generations/${enc(generationId)}/edit-history${query}`,
+    init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" },
+    ok: "transcript/edit-history-loaded",
+    error: "transcript/edit-history-failed",
+    meta: { meetingId, generationId, id, editVersion },
+  };
+}
+
+function requestHistory(state, shown, generationId, editVersion = null) {
+  if (!shown?.id || !generationId || shown.id !== state.history.meetingId
+    || generationId !== state.history.generationId) return out(state);
+  const id = state.history.request + 1;
+  const next = {
+    ...state,
+    history: {
+      ...state.history,
+      request: id,
+      ...(editVersion === null
+        ? { list: "loading", listError: null, listRequest: id }
+        : { viewLoading: true, viewError: null, viewRequest: id }),
+    },
+  };
+  return out(repaint(next), [historyEffect(shown.id, generationId, id, editVersion)]);
+}
+
+const historyScope = ({ meetingId, generationId }) => JSON.stringify([meetingId, generationId]);
+
+export const activeHistoryOperation = (state) => state.historyOperations[historyScope(state.history)];
+
+function withHistoryOperation(state, owner, operation) {
+  const key = historyScope(owner);
+  const historyOperations = { ...state.historyOperations };
+  if (operation) historyOperations[key] = operation;
+  else delete historyOperations[key];
+  return { ...state, historyOperations };
+}
+
+function pendingHistoryOperation(state, { meta }, type) {
+  const operation = state.historyOperations[historyScope(meta)];
+  if (operation?.busy && operation.id === meta.id && (operation.type === "review") === (type === "review")) {
+    return operation;
+  }
+  return null;
+}
+
+export const transcriptMutationBusy = (state) => Boolean(state.mutation || activeHistoryOperation(state)?.busy);
+
+export const historyWriteBlocked = (state) => transcriptMutationBusy(state)
+  || Boolean(activeHistoryOperation(state)?.uncertain);
+
+export const reviewWriteBlocked = (state) => historyWriteBlocked(state)
+  || state.history.list !== "ready";
+
+export function canRetryHistoryOperation(state, { editable, currentGenerationId, blocked }) {
+  const operation = activeHistoryOperation(state);
+  return Boolean(operation?.body && operation.uncertain && !transcriptMutationBusy(state)
+    && (editable ? !blocked : currentGenerationId !== operation.generationId));
+}
+
+function requestMergePreview(state, action) {
+  const { shown } = action;
+  const { generation, editable } = displayed(state, transcriptionOf(shown));
+  if (!shown?.id || !generation || !editable || !action.sourceSpeakerId || !action.targetSpeakerId
+    || action.sourceSpeakerId === action.targetSpeakerId || shown.blocked || historyWriteBlocked(state)) return out(state);
+  const operation = activeHistoryOperation(state);
+  const next = operation?.type === "merge" && operation.error
+    ? withHistoryOperation(state, operation, null)
+    : state;
+  const id = next.ids + 1;
+  return out(repaint({
+    ...next,
+    ids: id,
+    history: {
+      ...next.history,
+      preview: {
+        requestId: id, status: "loading", generation_id: generation.id,
+        source_speaker_id: action.sourceSpeakerId, target_speaker_id: action.targetSpeakerId,
+      },
+    },
+  }), [{
+    type: "fetch", key: "transcript/speaker-merge-preview",
+    url: `/api/meetings/${enc(shown.id)}/transcript-generations/${enc(generation.id)}/speaker-merge?source_speaker_id=${enc(action.sourceSpeakerId)}&target_speaker_id=${enc(action.targetSpeakerId)}`,
+    init: { method: "GET", headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" },
+    ok: "transcript/merge-preview-loaded", error: "transcript/merge-preview-failed",
+    meta: { id, meetingId: shown.id, generationId: generation.id, sourceSpeakerId: action.sourceSpeakerId, targetSpeakerId: action.targetSpeakerId },
+  }]);
+}
+
+function mergePreviewLoaded(state, action) {
+  if (action.meta.id !== state.history.preview?.requestId) return out(state);
+  const body = action.response?.body;
+  if (!historyBody(body)
+    || body.generation_id !== action.meta.generationId
+    || body.source_speaker_id !== action.meta.sourceSpeakerId
+    || body.target_speaker_id !== action.meta.targetSpeakerId
+    || !Number.isInteger(body.source_version) || !Number.isInteger(body.segment_count)) {
+    return out(repaint({ ...state, history: { ...state.history, preview: { ...state.history.preview, status: "error", error: t("Máy chủ không trả về bản xem trước gộp hợp lệ.") } } }));
+  }
+  return out(repaint({ ...state, history: { ...state.history, preview: { ...body, status: "ready" } } }));
+}
+
+function mergePreviewFailed(state, action) {
+  if (action.meta.id !== state.history.preview?.requestId) return out(state);
+  const failure = failureOf(action.error, t("Không tải được bản xem trước gộp."));
+  return out(repaint({ ...state, history: { ...state.history, preview: { ...state.history.preview, status: "error", error: failure.api ? historyMessage(failure.code, failure.message) : failure.message } } }));
+}
+
+function ownsHistoryResponse(h, meta) {
+  const id = meta.editVersion === null ? h.listRequest : h.viewRequest;
+  return id !== null && meta.id === id && meta.meetingId === h.meetingId && meta.generationId === h.generationId;
+}
+
+function historyLoaded(state, action) {
+  const h = state.history;
+  if (!ownsHistoryResponse(h, action.meta)) return out(state);
+  const body = action.response?.body;
+  if (action.meta.editVersion === null) {
+    if (body?.generation_id !== action.meta.generationId || !Array.isArray(body.revisions)
+      || !historyBody(body.reviews) || !Object.values(body.reviews).every((review) =>
+        typeof review?.checked === "boolean" && Number.isInteger(review.review_version))) {
+      return historyFailed(state, action, t("Máy chủ không trả về lịch sử transcript hợp lệ."));
+    }
+    const operation = activeHistoryOperation(state);
+    const next = { ...state, history: { ...h, list: "ready", listRequest: null, listError: null, revisions: body.revisions, reviews: body.reviews } };
+    if (operation?.type !== "review" || !operation.uncertain) return out(repaint(next));
+    const status = Boolean(body.reviews[operation.segmentId]?.checked) === operation.checked
+      ? t("Trạng thái kiểm tra đã tải lại.")
+      : t("Thay đổi chưa được lưu. Trạng thái kiểm tra đã tải lại.");
+    return out(repaint(withHistoryOperation(next, operation, { ...operation, uncertain: false, error: null, status })));
+  }
+  const generation = historyGeneration(body);
+  if (!generation || body.id !== action.meta.generationId || body.edit_version !== action.meta.editVersion) {
+    return out(repaint({ ...state, history: { ...h, viewRequest: null, viewLoading: false, viewError: t("Máy chủ không trả về đúng bản transcript lịch sử.") } }));
+  }
+  const reviews = Object.fromEntries(generation.segments
+    .filter((segment) => typeof segment.id === "string" && typeof segment.checked === "boolean")
+    .map((segment) => [segment.id, { checked: segment.checked, review_version: segment.review_version }]));
+  const enriched = { ...generation, reviews };
+  return out(repaint({ ...state, history: { ...h, view: { generationId: action.meta.generationId, editVersion: action.meta.editVersion, generation: enriched }, viewRequest: null, viewLoading: false, viewError: null } }));
+}
+
+function historyFailed(state, action, fallback = t("Không tải được lịch sử transcript.")) {
+  const h = state.history;
+  if (!ownsHistoryResponse(h, action.meta)) return out(state);
+  const failure = failureOf(action.error, fallback);
+  const message = failure.api ? historyMessage(failure.code, failure.message) : failure.message;
+  return out(repaint({
+    ...state,
+    history: action.meta.editVersion === null
+      ? { ...h, list: "error", listRequest: null, listError: message }
+      : { ...h, viewRequest: null, viewLoading: false, viewError: message },
+  }));
+}
+
+function selectedRevision(state, action) {
+  const version = Number(action.editVersion);
+  const revision = state.history.revisions.find((item) => item.edit_version === version);
+  const { shown } = action;
+  if (!shown?.id || transcriptMutationBusy(state) || !revision || !Number.isInteger(version) || version < 1) return out(state);
+  return requestHistory(state, shown, state.history.generationId, version);
+}
+
+function refreshHistoryAndMeeting(state, operation, shown) {
+  if (shown?.view !== "meeting" || historyScope(state.history) !== historyScope(operation)) return out(repaint(state));
+  const next = { ...state, history: { ...state.history, preview: null } };
+  const refreshed = requestHistory(next, { id: operation.meetingId }, operation.generationId);
+  if (transcriptionOf(shown)?.generation?.id !== operation.generationId) return refreshed;
+  return out(refreshed.state, [
+    { type: "call", key: "transcript/history-meeting-refresh", name: "meeting.refresh", args: [operation.meetingId] },
+    ...refreshed.effects,
+  ]);
+}
+
+function notifyConfirmedHistoryWrite(result, operation) {
+  return out(result.state, [meetingChange(operation.meetingId, "transcript"), ...result.effects]);
+}
+
+function refreshAfterHistoryWrite(state, action, operation) {
+  const receipt = action.response?.body;
+  if (!historyBody(receipt) || receipt.generation_id !== operation.generationId
+    || !Number.isInteger(receipt.source_version) || receipt.source_version !== operation.body.expected_source_version + 1
+    || !Number.isInteger(receipt.edit_version) || receipt.edit_version <= operation.priorEditVersion
+    || !Number.isInteger(receipt.segment_count) || receipt.segment_count < 1
+    || (operation.type === "merge" && receipt.segment_count !== operation.body.expected_segment_count)) {
+    return out(repaint(withHistoryOperation(state, operation, {
+      ...operation, busy: false, error: t("Máy chủ chưa xác nhận thay đổi transcript."), uncertain: true,
+    })));
+  }
+  const refreshed = refreshHistoryAndMeeting(withHistoryOperation(state, operation, null), operation, action.shown);
+  return notifyConfirmedHistoryWrite(refreshed, operation);
+}
+
+function historyOperationFailed(state, action) {
+  const operation = pendingHistoryOperation(state, action);
+  if (!operation) return out(state);
+  const failure = failureOf(action.error, t("Thao tác transcript chưa hoàn tất."));
+  const terminal = HISTORY_FAILURES.has(failure.code);
+  const next = repaint(withHistoryOperation(state, operation, {
+    ...operation, busy: false, uncertain: !terminal,
+    error: failure.api ? historyMessage(failure.code, failure.message) : failure.message,
+  }));
+  return terminal ? refreshHistoryAndMeeting(next, operation, action.shown) : out(next);
+}
+
+function historyOperationStarted(state, operation, effect) {
+  return out(repaint(withHistoryOperation({ ...state, ids: operation.id }, operation, {
+    ...operation, busy: true, error: null,
+  })), [effect]);
+}
+
+function startSpeakerOperation(state, operation) {
+  // A loading or failed list still holds known revisions. Review can advance the
+  // ledger without changing the source version, even after the merge preview.
+  let priorEditVersion = Math.max(1, operation.editVersion ?? 1);
+  if (historyScope(state.history) === historyScope(operation)) {
+    for (const revision of state.history.revisions) {
+      if (Number.isInteger(revision?.edit_version)) priorEditVersion = Math.max(priorEditVersion, revision.edit_version);
+    }
+  }
+  return sendSpeakerOperation(state, { ...operation, priorEditVersion });
+}
+
+function sendSpeakerOperation(state, operation) {
+  const suffix = operation.type === "merge"
+    ? "speaker-merge"
+    : `speaker-merge/${encodeURIComponent(operation.editVersion)}/undo`;
+  return historyOperationStarted(state, operation, {
+    type: "fetch", key: `transcript/history-write/${operation.id}`,
+    url: `/api/meetings/${enc(operation.meetingId)}/transcript-generations/${enc(operation.generationId)}/${suffix}`,
+    init: { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, credentials: "same-origin", cache: "no-store", body: JSON.stringify(operation.body) },
+    ok: "transcript/history-operation-succeeded", error: "transcript/history-operation-failed", meta: { id: operation.id, meetingId: operation.meetingId, generationId: operation.generationId },
+  });
+}
+
+function retryHistoryOperation(state, shown) {
+  const transcription = transcriptionOf(shown);
+  if (shown?.view !== "meeting" || !transcription || !canRetryHistoryOperation(state, {
+    editable: displayed(state, transcription).editable,
+    currentGenerationId: transcription.generation?.id,
+    blocked: shown.blocked,
+  })) return out(state);
+  // Keep the submission's ledger floor and body. The server checks the original receipt
+  // before the current-generation fence, so an old generation can only replay or refuse.
+  return sendSpeakerOperation(state, { ...activeHistoryOperation(state), id: state.ids + 1 });
+}
+
+function reviewSucceeded(state, action) {
+  const operation = pendingHistoryOperation(state, action, "review");
+  if (!operation) return out(state);
+  const body = action.response?.body;
+  if (!historyBody(body) || body.generation_id !== operation.generationId || body.segment_id !== operation.segmentId
+    || body.checked !== operation.checked || !Number.isInteger(body.review_version)
+    || body.review_version !== operation.expectedReviewVersion + 1) {
+    return reconcileReview(state, operation);
+  }
+  const next = withHistoryOperation(state, operation, null);
+  if (historyScope(state.history) !== historyScope(operation)) {
+    return notifyConfirmedHistoryWrite(out(repaint(next)), operation);
+  }
+  const reviews = { ...state.history.reviews, [body.segment_id]: { checked: body.checked, review_version: body.review_version } };
+  const refreshed = requestHistory({ ...next, history: { ...state.history, reviews } },
+    { id: operation.meetingId }, operation.generationId);
+  return notifyConfirmedHistoryWrite(refreshed, operation);
+}
+
+function reconcileReview(state, operation) {
+  const next = repaint(withHistoryOperation(state, operation, { ...operation, busy: false, uncertain: true }));
+  return requestHistory(next, { id: operation.meetingId }, operation.generationId);
+}
+
+function reviewFailed(state, action) {
+  const operation = pendingHistoryOperation(state, action, "review");
+  return operation ? reconcileReview(state, operation) : out(state);
+}
+
+function startMerge(state, action) {
+  const { shown } = action;
+  const preview = state.history.preview;
+  const { generation, editable } = displayed(state, transcriptionOf(shown));
+  if (!shown?.id || !editable || !preview || preview.status !== "ready" || shown.blocked
+    || preview.generation_id !== generation.id || preview.source_version !== generation.source_version
+    || preview.source_speaker_id !== action.sourceSpeakerId || preview.target_speaker_id !== action.targetSpeakerId
+    || preview.segment_count < 1 || historyWriteBlocked(state)) return out(state);
+  const body = {
+    source_speaker_id: preview.source_speaker_id,
+    target_speaker_id: preview.target_speaker_id,
+    expected_source_version: preview.source_version,
+    expected_segment_count: preview.segment_count,
+    request_id: action.requestId,
+  };
+  return startSpeakerOperation(state, { type: "merge", id: state.ids + 1, meetingId: shown.id, generationId: generation.id, body });
+}
+
+function startUndo(state, action) {
+  const { shown } = action;
+  const revision = state.history.revisions.find((item) => item.edit_version === Number(action.editVersion));
+  const { generation, editable } = displayed(state, transcriptionOf(shown));
+  if (!shown?.id || !revision || revision.kind !== "speakers_merged" || !editable || shown.blocked
+    || generation.id !== state.history.generationId || historyWriteBlocked(state)
+    || state.history.revisions.some((entry) => entry.undo_of_version === revision.edit_version)) return out(state);
+  const body = { expected_source_version: generation.source_version, request_id: action.requestId };
+  return startSpeakerOperation(state, { type: "undo", id: state.ids + 1, meetingId: shown.id, generationId: generation.id, editVersion: revision.edit_version, body });
+}
+
+function startReview(state, action) {
+  const { shown } = action;
+  const { generation, editable } = displayed(state, transcriptionOf(shown));
+  const review = state.history.reviews[action.segmentId] || { checked: false, review_version: 0 };
+  if (!shown?.id || !editable || shown.blocked || generation.id !== action.generationId
+    || generation.id !== state.history.generationId || reviewWriteBlocked(state)
+    || !generation.segments.some((segment) => segment.id === action.segmentId)
+    || Boolean(action.checked) === review.checked) return out(state);
+  const operation = { type: "review", id: state.ids + 1, meetingId: shown.id, generationId: generation.id, segmentId: action.segmentId, checked: Boolean(action.checked), expectedReviewVersion: Number(review.review_version) || 0, busy: false, error: null, code: null };
+  const effect = {
+    type: "fetch", key: `transcript/history-write/${operation.id}`,
+    url: `/api/meetings/${enc(shown.id)}/transcript-generations/${enc(generation.id)}/segments/review`,
+    init: { method: "PATCH", headers: { Accept: "application/json", "Content-Type": "application/json" }, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ segment_id: operation.segmentId, checked: operation.checked, expected_review_version: operation.expectedReviewVersion }) },
+    ok: "transcript/review-succeeded", error: "transcript/review-failed", meta: { id: operation.id, meetingId: shown.id, generationId: generation.id, segmentId: operation.segmentId },
+  };
+  return historyOperationStarted(state, operation, effect);
 }
 
 // Swap one row (or chip) between read mode and editor.
@@ -362,7 +751,8 @@ function mutationMessage(failure, fallback) {
 const enc = encodeURIComponent;
 
 export function speakerAddReady(state, generation, draft, blocked) {
-  return Boolean(generation && generation.status === "complete" && !blocked && !(draft && draft.conflictCode) && !state.mutation && !state.reload);
+  return Boolean(generation && generation.status === "complete" && !state.history.view && !blocked
+    && !(draft && draft.conflictCode) && !transcriptMutationBusy(state) && !state.reload);
 }
 
 // Start a write. The two descriptors say which control had focus and which one reports the result.
@@ -423,7 +813,7 @@ const focusNow = (state, target, extra = {}) => ({ ...state, focus: { rev: state
 function openEditor(state, action) {
   const { shown } = action;
   const { generation, editable } = displayed(state, transcriptionOf(shown));
-  if (!editable || (shown && shown.blocked) || state.mutation) return state;
+  if (!editable || shown.blocked || transcriptMutationBusy(state)) return state;
   const previous = state.editing;
   let next = { ...state, editing: { generationId: generation.id, segmentId: action.segmentId } };
   // One editor at a time: the row it leaves keeps its unsaved text in the draft store.
@@ -451,7 +841,7 @@ function cancelEditor(state, action) {
 function openRename(state, action) {
   const { shown } = action;
   const { generation, editable } = displayed(state, transcriptionOf(shown));
-  if (!editable || (shown && shown.blocked) || state.mutation) return state;
+  if (!editable || shown.blocked || transcriptMutationBusy(state)) return state;
   const previous = state.renaming;
   let next = { ...state, renaming: { generationId: generation.id, speakerId: action.speakerId } };
   if (previous && previous.speakerId !== action.speakerId) next = replaceChip(next, shown, previous.generationId, previous.speakerId);
@@ -483,9 +873,10 @@ const currentOf = (shown) => {
 
 function saveSegmentText(state, action) {
   const { shown } = action;
+  if (state.history.view) return out(state);
   const generation = currentOf(shown);
   const segment = generation && generation.segments.find((item) => item.id === action.segmentId);
-  if (!shown || !shown.meeting || shown.blocked || !generation || generation.id !== action.generationId || !segment || state.mutation) return out(state);
+  if (!shown || !shown.meeting || shown.blocked || !generation || generation.id !== action.generationId || !segment || transcriptMutationBusy(state)) return out(state);
   const target = withMeeting(action.status, shown);
   let next = clearStatus(state, target);
   const remembered = remember(next, transcriptionOf(shown), generation.id, "segmentText", segment.id, action.text);
@@ -512,9 +903,10 @@ function saveSegmentText(state, action) {
 
 function saveSpeakerName(state, action) {
   const { shown } = action;
+  if (state.history.view) return out(state);
   const generation = currentOf(shown);
   const speaker = generation && generation.speakers.find((item) => item.speaker_id === action.speakerId);
-  if (!shown || !shown.meeting || shown.blocked || !generation || generation.id !== action.generationId || !speaker || state.mutation) return out(state);
+  if (!shown || !shown.meeting || shown.blocked || !generation || generation.id !== action.generationId || !speaker || transcriptMutationBusy(state)) return out(state);
   const target = withMeeting(action.status, shown);
   let next = clearStatus(state, target);
   const remembered = remember(next, transcriptionOf(shown), generation.id, "speakerName", action.speakerId, action.name, Boolean(action.reviewed));
@@ -536,9 +928,10 @@ function saveSpeakerName(state, action) {
 
 function saveAssignment(state, action) {
   const { shown } = action;
+  if (state.history.view) return out(state);
   const generation = currentOf(shown);
   const segment = generation && generation.segments.find((item) => item.id === action.segmentId);
-  if (!shown || !shown.meeting || shown.blocked || !generation || generation.id !== action.generationId || !segment || state.mutation) return out(state);
+  if (!shown || !shown.meeting || shown.blocked || !generation || generation.id !== action.generationId || !segment || transcriptMutationBusy(state)) return out(state);
   const remembered = remember(state, transcriptionOf(shown), generation.id, "speakerAssignment", action.segmentId, action.value, Boolean(action.reviewed));
   let next = remembered.state;
   if (remembered.draft && remembered.draft.conflictCode && !action.reviewed) {
@@ -671,7 +1064,15 @@ function succeeded(state, action) {
   } else {
     next = speakerAdded(next, action, mutation);
   }
-  return out(settle(next, shown));
+  const settled = settle(next, shown);
+  const receipt = action.response.body;
+  const before = currentOf({ meeting: mutation.meeting });
+  if (shown.id === mutation.meetingId && settled.history.generationId === mutation.generationId
+    && receipt.generation_id === mutation.generationId && before?.id === mutation.generationId
+    && Number.isInteger(receipt.source_version) && receipt.source_version > before.source_version) {
+    return requestHistory(settled, shown, mutation.generationId);
+  }
+  return out(settled);
 }
 
 // A speaker the server added (or added again from a draft): put into the generation it names.
@@ -785,7 +1186,7 @@ function reloadFailed(state, action) {
 // ---- the reducer ----
 
 export function reduce(state, action) {
-  const synchronized = action.shown !== undefined ? synced(state, transcriptionOf(action.shown)) : state;
+  const synchronized = action.shown !== undefined ? synced(state, action.shown) : state;
   const result = step(synchronized, action);
   return result.state === state && !result.effects.length ? out(state) : result;
 }
@@ -793,15 +1194,16 @@ export function reduce(state, action) {
 function step(state, action) {
   const { shown } = action;
   switch (action.type) {
-    case "transcript/transcription-shown":
+    case "transcript/transcription-shown": {
       return out(state);
+    }
     case "transcript/meeting-installed": {
       const installed = shown ? shown.installRev : state.installed;
-      const next = reconcile({ ...state, installed }, transcriptionOf(shown));
-      return out(repaint(next));
+      const next = repaint(reconcile({ ...state, installed }, transcriptionOf(shown)));
+      return action.requestEditHistory ? requestHistory(next, shown, next.history.generationId) : out(next);
     }
     case "transcript/meeting-switched":
-      return out(repaint({ ...state, selected: null, lastCurrent: null, error: null, editing: null, renaming: null, query: "", reviewOnly: false, reviewCursor: null, addName: "", ops: [] }));
+      return out(repaint({ ...state, selected: null, lastCurrent: null, error: null, editing: null, renaming: null, query: "", reviewOnly: false, reviewCursor: null, addName: "", ops: [], history: emptyHistory(state.history.request) }));
     case "transcript/painted":
       return out(state.ops.some((op) => op.n <= action.through) ? { ...state, ops: state.ops.filter((op) => op.n > action.through) } : state);
 
@@ -825,8 +1227,57 @@ function step(state, action) {
       const id = review[at].id;
       return out(emit({ ...state, reviewCursor: id }, { op: "reveal-segment", id }));
     }
-    case "transcript/generation-chosen":
-      return out(repaint({ ...state, selected: action.id, reviewCursor: null, addName: state.selected !== action.id ? "" : state.addName }));
+    case "transcript/generation-chosen": {
+      if (action.id === state.selected || !generationsFor(transcriptionOf(shown)).some(({ id }) => id === action.id)) return out(state);
+      return out(repaint({
+        ...state, selected: action.id, reviewCursor: null, addName: "",
+        history: emptyHistory(state.history.request, shown.id, action.id),
+      }));
+    }
+    case "transcript/edit-history-requested": {
+      const selected = displayed(state, transcriptionOf(shown)).selected;
+      if (!selected || state.history.list === "loading") return out(state);
+      return requestHistory(state, shown, selected);
+    }
+    case "transcript/history-return-current":
+      return out(repaint({ ...state, history: { ...state.history, view: null, viewRequest: null, viewLoading: false, viewError: null } }));
+    case "transcript/history-revision-chosen":
+      return selectedRevision(state, action);
+    case "transcript/edit-history-reload":
+      return requestHistory(state, shown, state.history.generationId);
+    case "transcript/edit-history-loaded":
+      return historyLoaded(state, action);
+    case "transcript/edit-history-failed":
+      return historyFailed(state, action);
+    case "transcript/merge-selection-changed":
+      return out(repaint({ ...state, history: { ...state.history, preview: null } }), [
+        { type: "cancel", key: "transcript/speaker-merge-preview" },
+      ]);
+    case "transcript/merge-preview-requested":
+      return requestMergePreview(state, action);
+    case "transcript/merge-preview-loaded":
+      return mergePreviewLoaded(state, action);
+    case "transcript/merge-preview-failed":
+      return mergePreviewFailed(state, action);
+    case "transcript/merge-confirmed":
+      return startMerge(state, action);
+    case "transcript/undo-confirmed":
+      return startUndo(state, action);
+    case "transcript/history-operation-succeeded": {
+      const operation = pendingHistoryOperation(state, action);
+      if (!operation) return out(state);
+      return refreshAfterHistoryWrite(state, action, operation);
+    }
+    case "transcript/history-operation-failed":
+      return historyOperationFailed(state, action);
+    case "transcript/history-operation-retry":
+      return retryHistoryOperation(state, shown);
+    case "transcript/review-toggled":
+      return startReview(state, action);
+    case "transcript/review-succeeded":
+      return reviewSucceeded(state, action);
+    case "transcript/review-failed":
+      return reviewFailed(state, action);
     case "transcript/segment-edit-opened":
       return out(openEditor(state, action));
     case "transcript/segment-edit-cancelled":

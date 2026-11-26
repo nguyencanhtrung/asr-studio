@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from asr_studio import storage as storage_module
 from asr_studio.notes import get_note, notes_state
 from asr_studio.storage import (
     SCHEMA_VERSION,
@@ -94,6 +95,245 @@ def _create_legacy_database(database, *, version: int) -> None:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
+def _create_populated_v22_database(data_dir):
+    """Create a disposable v22-shaped database with real Notes and transcript rows."""
+    database = initialize(data_dir)
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "INSERT INTO meetings(id, title, meeting_date, language_hint) "
+            "VALUES ('migration-meeting', 'Migration fixture', '2026-11-26', 'en')"
+        )
+        connection.execute(
+            "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
+            "model_name, device, compute_type, language_hint, status, stage, result_scope, "
+            "audio_duration_seconds, transcript_end_seconds, segment_count) VALUES "
+            "('migration-transcription-task', 'migration-transcription-request', "
+            "'migration-transcription-hash', 'migration-meeting', 'transcription', "
+            "'/models/whisper-small', 'whisper-small', 'cpu', 'int8', 'en', 'succeeded', "
+            "'complete', 'transcript_only', 12.0, 3.0, 1)"
+        )
+        connection.execute(
+            "INSERT INTO transcript_generations(id, meeting_id, task_id, generation_number, "
+            "status, language_hint, model_name, uncertainty_policy, segment_count) VALUES "
+            "('migration-generation', 'migration-meeting', 'migration-transcription-task', 1, "
+            "'complete', 'en', 'whisper-small', 'legacy-policy', 1)"
+        )
+        connection.execute(
+            "INSERT INTO generation_speakers(generation_id, speaker_id, display_name, "
+            "first_seen_seconds, last_seen_seconds) VALUES "
+            "('migration-generation', 'SPEAKER_00', 'Speaker 1', 1.0, 3.0)"
+        )
+        connection.execute(
+            "INSERT INTO transcript_segments(id, generation_id, sequence, start_seconds, "
+            "end_seconds, text, original_speaker_id, speaker_id, uncertain) VALUES "
+            "('migration-segment', 'migration-generation', 0, 1.0, 3.0, "
+            "'Pinned transcript text.', 'SPEAKER_00', 'SPEAKER_00', 0)"
+        )
+        connection.execute(
+            "UPDATE meetings SET current_generation_id = 'migration-generation' "
+            "WHERE id = 'migration-meeting'"
+        )
+        snapshot = '{"segments":[{"id":"migration-segment","text":"Pinned transcript text."}]}'
+        connection.execute(
+            "INSERT INTO notes_sources(id, meeting_id, generation_id, source_version, "
+            "notes_source_version, meeting_date, snapshot_json) VALUES "
+            "('migration-source', 'migration-meeting', 'migration-generation', 1, 1, "
+            "'2026-11-26', ?)",
+            (snapshot,),
+        )
+        connection.execute(
+            "INSERT INTO tasks(id, request_id, request_hash, meeting_id, kind, model_path, "
+            "model_name, device, compute_type, language_hint, status, stage, result_scope, "
+            "audio_duration_seconds, notes_provider, notes_connection_version, notes_model, "
+            "notes_reasoning_effort, notes_prompt_version, notes_schema_version, "
+            "notes_source_id, notes_output_language) VALUES "
+            "('migration-notes-task', 'migration-notes-request', 'migration-notes-hash', "
+            "'migration-meeting', 'notes', '', 'gpt-notes', 'auto', 'provider', 'en', "
+            "'succeeded', 'succeeded', 'notes_only', 12.0, 'chatgpt', 3, 'gpt-notes', "
+            "'standard', 'notes-v22', 1, 'migration-source', 'en')"
+        )
+        connection.execute(
+            "INSERT INTO notes_revisions(id, meeting_id, source_snapshot_id, task_id, "
+            "markdown, edit_version, provider, model, reasoning_effort, connection_version, "
+            "prompt_version, schema_version, output_language) VALUES "
+            "('migration-note', 'migration-meeting', 'migration-source', 'migration-notes-task', "
+            "'## Pinned notes v1', 1, 'chatgpt', 'gpt-notes', 'standard', 3, 'notes-v22', "
+            "1, 'en')"
+        )
+        connection.execute(
+            "UPDATE notes_revisions SET markdown = '## Pinned notes v2', edit_version = 2 "
+            "WHERE id = 'migration-note'"
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM notes_saved_versions WHERE note_id = 'migration-note'"
+        ).fetchone() == (2,)
+
+        # The current initializer provides the complete schema; remove only v23's additive
+        # objects to make a real, populated v22-shaped fixture without an absolute path.
+        connection.execute("DROP TABLE transcript_segment_reviews")
+        connection.execute("DROP TABLE transcript_edit_events")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 23")
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (22,)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    return database
+
+
+def _migration_fixture_snapshot(connection):
+    return {
+        "versions": connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall(),
+        "meeting": connection.execute(
+            "SELECT current_generation_id FROM meetings WHERE id = 'migration-meeting'"
+        ).fetchone(),
+        "generation": connection.execute(
+            "SELECT id, source_version, segment_count FROM transcript_generations "
+            "WHERE id = 'migration-generation'"
+        ).fetchone(),
+        "segment": connection.execute(
+            "SELECT id, text, speaker_id, assignment_version FROM transcript_segments "
+            "WHERE id = 'migration-segment'"
+        ).fetchone(),
+        "source": connection.execute(
+            "SELECT id, generation_id, source_version, snapshot_json FROM notes_sources "
+            "WHERE id = 'migration-source'"
+        ).fetchone(),
+        "revision": connection.execute(
+            "SELECT id, markdown, edit_version, source_snapshot_id FROM notes_revisions "
+            "WHERE id = 'migration-note'"
+        ).fetchone(),
+        "saved_versions": connection.execute(
+            "SELECT edit_version, markdown, source_id, origin FROM notes_saved_versions "
+            "WHERE note_id = 'migration-note' ORDER BY edit_version"
+        ).fetchall(),
+    }
+
+
+def test_schema_v23_preserves_populated_v22_notes_pins_and_transcript(tmp_path):
+    data_dir = tmp_path / "populated-v22-data"
+    database = _create_populated_v22_database(data_dir)
+
+    with sqlite3.connect(database) as connection:
+        before = _migration_fixture_snapshot(connection)
+        assert before["versions"][-1] == (22,)
+
+    initialize(data_dir)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        after = _migration_fixture_snapshot(connection)
+        assert after["versions"] == before["versions"] + [(23,)]
+        assert after["meeting"] == before["meeting"]
+        assert after["generation"] == before["generation"]
+        assert after["segment"] == before["segment"]
+        assert after["source"] == before["source"]
+        assert after["revision"] == before["revision"]
+        assert after["saved_versions"] == before["saved_versions"]
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("SELECT COUNT(*) FROM transcript_edit_events").fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM transcript_segment_reviews").fetchone() == (
+            0,
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="notes_sources_are_immutable"):
+            connection.execute(
+                "UPDATE notes_sources SET snapshot_json = '{}' WHERE id = 'migration-source'"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="notes_saved_versions_are_immutable"):
+            connection.execute(
+                "UPDATE notes_saved_versions SET markdown = 'tampered' "
+                "WHERE note_id = 'migration-note' AND edit_version = 1"
+            )
+        connection.execute(
+            "UPDATE notes_revisions SET markdown = '## Pinned notes v3', edit_version = 3 "
+            "WHERE id = 'migration-note'"
+        )
+        assert connection.execute(
+            "SELECT markdown, origin FROM notes_saved_versions "
+            "WHERE note_id = 'migration-note' AND edit_version = 3"
+        ).fetchone() == ("## Pinned notes v3", "operator")
+
+
+def test_schema_v23_install_is_idempotent_and_foreign_keys_stay_clean(tmp_path):
+    data_dir = tmp_path / "idempotent-v22-data"
+    database = _create_populated_v22_database(data_dir)
+
+    initialize(data_dir)
+    with sqlite3.connect(database) as connection:
+        first = _migration_fixture_snapshot(connection)
+        first_tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+
+    initialize(data_dir)
+
+    with sqlite3.connect(database) as connection:
+        assert _migration_fixture_snapshot(connection) == first
+        assert {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        } == first_tables
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("SELECT COUNT(*) FROM transcript_edit_events").fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM transcript_segment_reviews").fetchone() == (
+            0,
+        )
+
+
+def test_schema_v23_failure_rolls_back_new_schema_and_allows_clean_retry(tmp_path, monkeypatch):
+    data_dir = tmp_path / "rollback-v22-data"
+    database = _create_populated_v22_database(data_dir)
+    real_install = storage_module.install_transcript_history
+    calls = []
+    with sqlite3.connect(database) as connection:
+        before_failure = _migration_fixture_snapshot(connection)
+
+    def fail_after_real_install(connection):
+        calls.append(True)
+        real_install(connection)
+        connection.execute(
+            "INSERT INTO transcript_edit_events "
+            "(generation_id, edit_version, source_version, kind, changes_json) VALUES "
+            "('migration-generation', 1, 1, 'generated', '[]')"
+        )
+        raise RuntimeError("injected v23 migration failure")
+
+    monkeypatch.setattr(storage_module, "install_transcript_history", fail_after_real_install)
+    with pytest.raises(RuntimeError, match="injected v23 migration failure"):
+        initialize(data_dir)
+
+    with sqlite3.connect(database) as connection:
+        assert calls == [True]
+        after_failure = _migration_fixture_snapshot(connection)
+        assert after_failure["versions"] == before_failure["versions"]
+        assert after_failure["meeting"] == before_failure["meeting"]
+        assert after_failure["generation"] == before_failure["generation"]
+        assert after_failure["segment"] == before_failure["segment"]
+        assert after_failure["source"] == before_failure["source"]
+        assert after_failure["revision"] == before_failure["revision"]
+        assert after_failure["saved_versions"] == before_failure["saved_versions"]
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert "transcript_edit_events" not in tables
+        assert "transcript_segment_reviews" not in tables
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    monkeypatch.setattr(storage_module, "install_transcript_history", real_install)
+    initialize(data_dir)
+    initialize(data_dir)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (23,)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("SELECT COUNT(*) FROM transcript_edit_events").fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM transcript_segment_reviews").fetchone() == (
+            0,
+        )
+
+
 def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
     data_dir = tmp_path / "persistent-data"
     database = initialize(data_dir)
@@ -121,6 +361,8 @@ def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
         "processing_slot",
         "transcript_generations",
         "transcript_segments",
+        "transcript_edit_events",
+        "transcript_segment_reviews",
         "generation_speakers",
         "notes_sources",
         "notes_revisions",
@@ -624,6 +866,8 @@ def test_schema_v15_records_the_runtime_of_existing_generations(tmp_path):
         connection.execute("DROP TRIGGER notes_saved_versions_after_insert")
         connection.execute("DROP TRIGGER notes_saved_versions_after_save")
         connection.execute("DROP TABLE notes_saved_versions")
+        connection.execute("DROP TABLE transcript_segment_reviews")
+        connection.execute("DROP TABLE transcript_edit_events")
         for trigger in (
             "extension_recordings_ready_insert_guard",
             "extension_recordings_ready_update_guard",
@@ -657,8 +901,10 @@ def test_schema_v15_records_the_runtime_of_existing_generations(tmp_path):
         connection.execute("DROP TABLE extension_auth_installation")
         connection.execute("ALTER TABLE tasks DROP COLUMN asr_model")
         connection.execute("ALTER TABLE tasks DROP COLUMN owner_role")
+        connection.execute("ALTER TABLE tasks DROP COLUMN diarization_mode")
         connection.execute("ALTER TABLE transcript_generations DROP COLUMN device")
         connection.execute("ALTER TABLE transcript_generations DROP COLUMN compute_type")
+        connection.execute("ALTER TABLE transcript_generations DROP COLUMN diarization_mode")
         connection.execute(
             "INSERT INTO meetings(id, title, language_hint) VALUES ('m', 'Older', 'vi')"
         )

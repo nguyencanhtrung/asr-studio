@@ -339,6 +339,19 @@ def _finalize_database_delete(data_dir: Path, meeting_id: str) -> None:
             connection.execute("DELETE FROM notes_revisions WHERE meeting_id = ?", (meeting_id,))
             connection.execute("DELETE FROM notes_sources WHERE meeting_id = ?", (meeting_id,))
             connection.execute(
+                "DELETE FROM transcript_segment_reviews WHERE segment_id IN "
+                "(SELECT segments.id FROM transcript_segments AS segments "
+                "JOIN transcript_generations AS generations "
+                "ON generations.id = segments.generation_id "
+                "WHERE generations.meeting_id = ?)",
+                (meeting_id,),
+            )
+            connection.execute(
+                "DELETE FROM transcript_edit_events WHERE generation_id IN "
+                "(SELECT id FROM transcript_generations WHERE meeting_id = ?)",
+                (meeting_id,),
+            )
+            connection.execute(
                 "DELETE FROM transcript_segments WHERE generation_id IN "
                 "(SELECT id FROM transcript_generations WHERE meeting_id = ?)",
                 (meeting_id,),

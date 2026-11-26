@@ -7,18 +7,20 @@ temporary database, so the page reads it through the real endpoints.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import time
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from notes_helpers import seed_completed_transcript
+from notes_helpers import rerun_transcript, seed_completed_transcript
 from playwright.sync_api import expect
 from seeding import seed_meeting
-from test_browser_history import FIXED_NOW, open_calendar
+from test_browser_history import FIXED_NOW, hold_first, open_calendar, settle
 from test_browser_history import live as live
 from test_browser_history import signed_in as browser_signed_in  # noqa: F401
 from test_browser_notes import _seed_saved_notes, _task_source_id, _write_test_recording
@@ -29,6 +31,8 @@ from test_browser_task_progress import end_notes_run, running_notes, running_tra
 
 from asr_studio.notes import get_notes_source
 from asr_studio.storage import database_path
+from asr_studio.transcript_edits import read_transcript_edit_history
+from asr_studio.transcript_history import track_baseline
 
 pytestmark = pytest.mark.browser
 
@@ -38,6 +42,35 @@ TRANSCRIPT_TAB = "#meeting-tab-transcript"
 DESKTOP = {"width": 1280, "height": 900}
 PHONE = {"width": 390, "height": 844}
 NARROW = {"width": 360, "height": 740}
+
+
+def seed_speaker_merge_transcript(data_dir):
+    meeting_id, generation_id, segment_ids = seed_completed_transcript(
+        data_dir, title="Speaker merge"
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        track_baseline(connection, generation_id, 1, generated=True)
+        connection.execute(
+            "INSERT INTO generation_speakers(generation_id, speaker_id, display_name, "
+            "first_seen_seconds, last_seen_seconds) VALUES (?, 'SPEAKER_01', 'Taylor', 4.0, 5.0)",
+            (generation_id,),
+        )
+        connection.execute(
+            "UPDATE transcript_segments SET speaker_id = 'SPEAKER_01' WHERE id = ?",
+            (segment_ids[1],),
+        )
+    return meeting_id, generation_id, segment_ids
+
+
+def save_frontend_evidence(page, name):
+    capture_dir = os.environ.get("ASR_ISSUE_266_SCREENSHOT_DIR")
+    if not capture_dir:
+        return
+    evidence_dir = Path(capture_dir)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(evidence_dir / name), full_page=True, animations="disabled")
+
+
 MINIMUM = {"width": 320, "height": 640}
 OVERFLOW = "document.documentElement.scrollWidth - document.documentElement.clientWidth"
 
@@ -256,6 +289,7 @@ def test_transcript_tab_holds_the_recording_block_and_the_transcript_with_counts
     ):
         expect(panel.locator(selector).first).to_be_visible()
     expect(panel.locator("#transcript-segments > li")).to_have_count(3)
+
     expect(panel.locator("#notes-panel")).to_have_count(0)
 
     # The label counts the segments and those that show the "Cần kiểm tra" cue. A literal space sets
@@ -268,6 +302,739 @@ def test_transcript_tab_holds_the_recording_block_and_the_transcript_with_counts
     expect(cues).to_have_count(2)
     expect(cues.filter(has_text="Cần kiểm tra · Có lời nói chồng lấn")).to_have_count(1)
     expect(cues.filter(has_text="Nên nghe lại")).to_have_count(1)
+
+
+def test_transcript_edit_history_and_manual_review_controls_use_saved_state(live, signed_in):
+    """The current transcript shows server-backed history and an independent review mark."""
+    _context, page = signed_in()
+    meeting_id, generation_id, _ = seed_completed_transcript(
+        live.settings.data_dir, title="History controls"
+    )
+    with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
+        track_baseline(connection, generation_id, 1, generated=True)
+    open_meeting(page, live, meeting_id)
+    expect(page.locator("#transcript-edit-history")).to_be_visible()
+    record = page.locator("#transcript-edit-history-list li")
+    expect(record).to_have_count(1)
+    expect(record).to_be_hidden()
+    page.locator("#transcript-edit-history-title").press("Enter")
+    expect(record).to_be_visible()
+    record.get_by_role("button", name="Xem bản này").click()
+    expect(record.get_by_role("button", name="Đang xem")).to_have_attribute("aria-current", "true")
+    expect(page.locator("#transcript-edit-history-title")).to_be_focused()
+    page.locator("#transcript-edit-history-latest").click()
+    expect(page.locator("#transcript-edit-history-title")).to_be_focused()
+    review = page.locator("input[data-segment-review]").first
+    expect(review).not_to_be_checked()
+    review.click()
+    expect(review).to_have_attribute("data-review-version", "1")
+    expect(review).to_be_checked()
+
+
+def refresh_transcript_meeting(page, meeting_id):
+    assert page.evaluate(
+        """async (meetingId) => {
+            const { meetingHistory } = await import("/assets/history.js");
+            return meetingHistory.refreshMeeting(meetingId);
+        }""",
+        meeting_id,
+    )
+
+
+def test_native_fixed_revision_keeps_text_and_keyboard_position_through_refresh(live, signed_in):
+    _context, page = signed_in()
+    meeting, generation, segments = seed_speaker_merge_transcript(live.settings.data_dir)
+    open_meeting(page, live, meeting)
+    page.locator("#transcript-edit-history-title").press("Enter")
+    page.locator("[data-read-edit-version='1']").press("Enter")
+    expect(page.locator("[data-read-edit-version='1']")).to_have_attribute("aria-current", "true")
+    row = page.locator(".transcript-segment").first
+    text = row.locator(".segment-text")
+    timestamp = row.locator(".segment-timestamp")
+    tab_to(page, ".transcript-segment:first-child .segment-timestamp")
+    expect(text).to_have_text("We need a launch plan.")
+    assert page.evaluate(
+        """async ({ url, generation }) => {
+            const response = await fetch(url, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    expected_generation_id: generation,
+                    expected_source_version: 1,
+                    text: "An edit arrived from another tab.",
+                }),
+            });
+            return response.ok;
+        }""",
+        {
+            "url": f"/api/meetings/{meeting}/transcript-segments/{segments[0]}/text",
+            "generation": generation,
+        },
+    )
+    refresh_transcript_meeting(page, meeting)
+    expect(page.locator("[data-read-edit-version='2']")).to_be_visible()
+    expect(page.locator("[data-read-edit-version='1']")).to_have_attribute("aria-current", "true")
+    expect(text).to_have_text("We need a launch plan.")
+    expect(timestamp).to_be_focused()
+    expect(row.locator(".segment-edit-button")).to_have_count(0)
+    expect(row.locator("input[data-segment-review]")).to_be_disabled()
+    expect(page.locator("#generation-mode")).to_contain_text("Chỉ đọc")
+    save_frontend_evidence(page, "fixed-revision-after-refresh.png")
+    reload = page.locator("#transcript-edit-history-reload")
+    tab_to(page, "#transcript-edit-history-reload")
+    refresh_transcript_meeting(page, meeting)
+    expect(reload).to_be_enabled()
+    expect(reload).to_be_focused()
+    page.locator("#transcript-edit-history-latest").press("Enter")
+    expect(text).to_have_text("An edit arrived from another tab.")
+    expect(row.locator(".segment-edit-button")).to_be_enabled()
+
+
+def tab_to(page, selector):
+    for _ in range(120):
+        page.keyboard.press("Tab")
+        if page.evaluate("(selector) => document.activeElement.matches(selector)", selector):
+            return
+    pytest.fail(f"Tab did not reach {selector}")
+
+
+@pytest.mark.parametrize("move_focus", [False, True])
+def test_native_review_rapid_toggle_keeps_one_saved_event(live, signed_in, move_focus):
+    _context, page = signed_in()
+    data = live.settings.data_dir
+    meeting, generation, segments = seed_speaker_merge_transcript(data)
+    open_meeting(page, live, meeting)
+    page.locator("#transcript-edit-history-title").press("Enter")
+    selector = f"input[data-segment-review][data-segment-id='{segments[0]}']"
+    review = page.locator(selector)
+    expect(review).not_to_be_checked()
+    expect(review).to_be_enabled()
+    requests = []
+    page.route("**/segments/review", lambda route: requests.append(route))
+    tab_to(page, selector)
+    with page.expect_request("**/segments/review"):
+        page.keyboard.press("Space")
+    refresh_transcript_meeting(page, meeting)
+    expect(review).to_be_focused()
+    expect(review).to_have_attribute("aria-disabled", "true")
+    page.keyboard.press("Space")
+    expect(review).not_to_be_checked()
+    if move_focus:
+        page.keyboard.press("Tab")
+        other_focus = page.evaluate_handle("document.activeElement")
+    requests[0].continue_()
+    expect(review).to_have_attribute("data-review-version", "1")
+    expect(review).to_be_checked()
+    expect(page.locator("#transcript-edit-history-list li").first).to_have_attribute(
+        "data-edit-version", "2"
+    )
+    expect(page.locator("#transcript-edit-history-list li")).to_have_count(2)
+    if move_focus:
+        assert page.evaluate("(previous) => document.activeElement === previous", other_focus)
+    else:
+        expect(review).to_be_focused()
+    history = read_transcript_edit_history(data, meeting, generation)
+    assert history["reviews"][segments[0]] == {"checked": True, "review_version": 1}
+    assert [row["kind"] for row in history["revisions"]] == ["segment_review", "generated"]
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("fail_reload", [False, True])
+def test_native_review_rejected_uncheck_reconciles_saved_checkbox(live, signed_in, fail_reload):
+    _context, page = signed_in()
+    data = live.settings.data_dir
+    meeting, generation, segments = seed_speaker_merge_transcript(data)
+    open_meeting(page, live, meeting)
+    selector = f"input[data-segment-review][data-segment-id='{segments[0]}']"
+    review = page.locator(selector)
+    tab_to(page, selector)
+    page.keyboard.press("Space")
+    expect(review).to_have_attribute("data-review-version", "1")
+    expect(review).to_be_enabled()
+    page.route(
+        "**/segments/review",
+        lambda route: route.fulfill(
+            status=409, json={"detail": {"code": "segment_review_changed", "message": "Changed"}}
+        ),
+    )
+    if fail_reload:
+        page.route("**/edit-history", lambda route: route.fulfill(status=503))
+    review.focus()
+    with page.expect_response("**/edit-history", timeout=5_000):
+        page.keyboard.press("Space")
+    status = review.locator("xpath=../..").locator("[data-review-status]")
+    if fail_reload:
+        expect(status).to_contain_text("Chưa xác minh")
+        assert review.evaluate("(input) => input.indeterminate")
+        page.unroute("**/edit-history")
+        reload_button = review.locator("xpath=../..").locator("[data-review-reload]")
+        tab_to(page, "[data-review-reload]:not([hidden])")
+        expect(reload_button).to_be_focused()
+        page.keyboard.press("Enter")
+    expect(review).to_be_checked()
+    expect(status).to_contain_text("đã tải lại")
+    assert not review.evaluate("(input) => input.indeterminate")
+    expect(review).to_be_focused()
+    expect(page.locator("#transcript-edit-history-list")).to_be_hidden()
+    history = read_transcript_edit_history(data, meeting, generation)
+    assert history["reviews"][segments[0]]["checked"]
+    assert len(history["revisions"]) == 2
+
+
+@pytest.mark.parametrize("lost_operation", ["merge", "undo"])
+def test_native_merge_and_undo_verify_original_receipts(live, signed_in, lost_operation):
+    _context, page = signed_in()
+    data = live.settings.data_dir
+    meeting, generation, _segments = seed_speaker_merge_transcript(data)
+    open_meeting(page, live, meeting)
+    page.on("dialog", lambda dialog: dialog.accept())
+    requests = []
+
+    def lose_first_receipt(route):
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        request = (route.request.url, route.request.post_data)
+        response = route.fetch()
+        assert response.ok
+        payload = response.json()
+        route.fulfill(json={} if request not in requests else payload)
+        requests.append(request)
+
+    pattern = "**/speaker-merge" if lost_operation == "merge" else "**/speaker-merge/*/undo"
+    page.route(pattern, lose_first_receipt)
+    tab_to(page, "#speaker-merge summary")
+    page.keyboard.press("Enter")
+    tab_to(page, "#speaker-merge-preview")
+    page.keyboard.press("Enter")
+    expect(page.locator("#speaker-merge-confirm")).to_be_enabled()
+    tab_to(page, "#speaker-merge-confirm")
+    page.keyboard.press("Enter")
+    if lost_operation == "merge":
+        expect(page.locator("#speaker-merge-preview-status")).to_contain_text("chưa xác nhận")
+        assert read_transcript_edit_history(data, meeting, generation)["revisions"][0]["kind"] == (
+            "speakers_merged"
+        )
+        tab_to(page, "#speaker-merge-retry")
+        page.keyboard.press("Enter")
+        expect(page.locator("#speaker-merge-retry")).to_be_hidden()
+    expect(page.locator(".segment-speaker").first).to_have_text("Taylor")
+
+    tab_to(page, "#transcript-edit-history-title")
+    page.keyboard.press("Enter")
+    expect(page.locator("[data-undo-edit-version='2']")).to_be_enabled()
+    tab_to(page, "[data-undo-edit-version='2']")
+    page.keyboard.press("Enter")
+    if lost_operation == "undo":
+        expect(page.locator("#transcript-edit-history-status")).to_contain_text("chưa xác nhận")
+        assert read_transcript_edit_history(data, meeting, generation)["revisions"][0]["kind"] == (
+            "speaker_merge_undone"
+        )
+        tab_to(page, "#transcript-edit-history-retry")
+        page.keyboard.press("Enter")
+    expect(page.locator(".segment-speaker").first).to_have_text("Morgan")
+    expect(page.locator("#transcript-edit-history-list li")).to_have_count(3)
+    expect(page.locator("[data-undo-edit-version='2']")).to_be_disabled()
+    assert len(requests) == 2
+    assert requests[0] == requests[1]
+    history = read_transcript_edit_history(data, meeting, generation)
+    assert [row["kind"] for row in history["revisions"]] == [
+        "speaker_merge_undone",
+        "speakers_merged",
+        "generated",
+    ]
+    assert history["revisions"][0]["undo_of_version"] == 2
+
+
+@pytest.mark.parametrize(
+    ("operation", "committed"), [("merge", True), ("undo", True), ("undo", False)]
+)
+def test_native_old_generation_receipt_recovery_is_scoped(live, signed_in, operation, committed):
+    _context, page = signed_in()
+    data = live.settings.data_dir
+    meeting, generation, _segments = seed_speaker_merge_transcript(data)
+    open_meeting(page, live, meeting)
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.locator("#speaker-merge summary").press("Enter")
+
+    def merge():
+        page.locator("#speaker-merge-preview").press("Enter")
+        expect(page.locator("#speaker-merge-confirm")).to_be_enabled()
+        page.locator("#speaker-merge-confirm").press("Enter")
+
+    if operation == "undo":
+        merge()
+        expect(page.locator(".segment-speaker").first).to_have_text("Taylor")
+    page.locator("#transcript-edit-history-title").press("Enter")
+    requests = []
+    original_receipts = []
+    pattern = "**/speaker-merge" if operation == "merge" else "**/speaker-merge/*/undo"
+
+    def hold_first_receipt(route):
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        requests.append((route.request.url, route.request.post_data_buffer))
+        if len(requests) > 1:
+            route.continue_()
+            return
+        if committed:
+            response = route.fetch()
+            assert response.ok
+            original_receipts.append(response.json())
+        held.append(route)
+        page.evaluate("document.documentElement.dataset.fixtureReceiptHeld = 'true'")
+
+    held = []
+    page.route(pattern, hold_first_receipt)
+    if operation == "merge":
+        merge()
+    else:
+        page.locator("[data-undo-edit-version='2']").press("Enter")
+    expect(page.locator("#transcript-generation")).to_have_attribute("aria-busy", "true")
+    focus = page.locator(
+        "#speaker-merge summary" if operation == "merge" else "#transcript-edit-history-title"
+    )
+    expect(focus).to_be_focused()
+    refresh_transcript_meeting(page, meeting)
+    expect(page.locator("#transcript-generation")).to_have_attribute("aria-busy", "true")
+    expect(focus).to_be_focused()
+    expect(page.locator("html")).to_have_attribute("data-fixture-receipt-held", "true")
+    before = read_transcript_edit_history(data, meeting, generation)
+
+    rerun_transcript(data, meeting)
+    with sqlite3.connect(database_path(data)) as connection:
+        latest = connection.execute(
+            "SELECT current_generation_id FROM meetings WHERE id = ?", (meeting,)
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO generation_speakers(generation_id, speaker_id, display_name, "
+            "first_seen_seconds, last_seen_seconds) VALUES (?, 'SPEAKER_01', 'Taylor', 4.0, 5.0)",
+            (latest,),
+        )
+    refresh_transcript_meeting(page, meeting)
+    expect(page.locator("#generation-selector")).to_have_value(latest)
+    expect(page.locator(".segment-text").first).to_have_text("A fresh pass heard the opening.")
+    expect(page.locator(".segment-edit-button").first).to_be_enabled()
+    expect(page.locator("#speaker-merge-preview")).to_be_enabled()
+    latest_review = page.locator("input[data-segment-review]").first
+    expect(latest_review).to_have_attribute("aria-disabled", "false")
+    held[0].fulfill(json={})
+    latest_review.click()
+    expect(latest_review).to_be_checked()
+    expect(page.locator("#transcript-edit-history-retry")).to_be_hidden()
+    expect(page.locator("#speaker-merge-retry")).to_be_hidden()
+
+    page.locator("#generation-selector").select_option(generation)
+    page.locator("[data-read-edit-version='1']").press("Enter")
+    expect(page.locator("[data-read-edit-version='1']")).to_have_attribute("aria-current", "true")
+    expect(page.locator(".segment-text").first).to_have_text("We need a launch plan.")
+    expect(page.locator(".segment-speaker").first).to_have_text("Morgan")
+    expect(page.locator("#generation-mode")).to_contain_text("Chỉ đọc")
+    expect(page.locator(".segment-edit-button")).to_have_count(0)
+    expect(page.locator("#speaker-merge")).to_be_hidden()
+    retry = page.locator("#transcript-edit-history-retry")
+    expect(retry).to_be_enabled()
+    with page.expect_response(
+        lambda response: response.request.method == "POST" and response.url == requests[0][0]
+    ) as replay:
+        retry.press("Enter")
+    assert replay.value.status == (200 if committed else 409)
+    if committed:
+        assert replay.value.json() == original_receipts[0]
+    else:
+        assert replay.value.json()["detail"]["code"] == "current_generation_changed"
+        expect(page.locator("#transcript-edit-history-status")).to_contain_text("đã đổi")
+    expect(retry).to_be_hidden()
+    expect(page.locator("#transcript-edit-history-title")).to_be_focused()
+    expect(page.locator("[data-read-edit-version='1']")).to_have_attribute("aria-current", "true")
+    expect(page.locator(".segment-speaker").first).to_have_text("Morgan")
+    assert requests[0] == requests[1]
+    changed = json.loads(requests[0][1])
+    changed["expected_source_version"] += 1
+    assert page.evaluate(
+        """async ({ url, body }) => {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            return [response.status, (await response.json()).detail.code];
+        }""",
+        {"url": requests[0][0], "body": changed},
+    ) == [409, "request_conflict" if committed else "current_generation_changed"]
+    assert read_transcript_edit_history(data, meeting, generation) == before
+    save_frontend_evidence(page, f"older-{operation}-{'replayed' if committed else 'terminal'}.png")
+
+    page.locator("#generation-selector").select_option(latest)
+    expect(latest_review).to_be_checked()
+    expect(page.locator(".segment-edit-button").first).to_be_enabled()
+    expect(page.locator("#speaker-merge-preview")).to_be_enabled()
+
+
+def test_speaker_merge_undo_refreshes_navigation_and_preserves_unrelated_assignment(
+    live, signed_in
+):
+    """Confirmed merge and Undo install the server copy while leaving an unrelated edit intact."""
+    _context, page = signed_in()
+    meeting_id, _generation_id, segment_ids = seed_speaker_merge_transcript(live.settings.data_dir)
+    open_meeting(page, live, meeting_id)
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.locator("#speaker-merge summary").click()
+    page.locator("#speaker-merge-source").select_option("SPEAKER_00")
+    page.locator("#speaker-merge-target").select_option("SPEAKER_01")
+    page.locator("#speaker-merge-preview").click()
+    status = page.locator("#speaker-merge-preview-status")
+    confirm = page.locator("#speaker-merge-confirm")
+    expect(status).to_contain_text("1 đoạn")
+    expect(confirm).to_be_enabled()
+    page.locator("#speaker-merge-target").select_option("SPEAKER_00")
+    expect(confirm).to_be_disabled()
+    expect(status).to_be_empty()
+    page.locator("#speaker-merge-target").select_option("SPEAKER_01")
+    expect(confirm).to_be_disabled()
+    page.locator("#speaker-merge-preview").click()
+    expect(status).to_contain_text("1 đoạn")
+    confirm.click()
+    rows = page.locator(".transcript-segment")
+    expect(rows.nth(0).locator(".segment-speaker")).to_have_text("Taylor")
+
+    page.locator("#transcript-edit-history-title").click()
+    # The unrelated segment was already on the target speaker. Change it after the merge.
+    page.locator(f"[data-segment-id='{segment_ids[1]}'] [data-edit-segment]").click()
+    unrelated = page.locator(f"[data-segment-id='{segment_ids[1]}'] .segment-speaker-select")
+    unrelated.select_option("SPEAKER_00")
+    expect(unrelated).to_have_value("SPEAKER_00")
+    expect(page.locator("#transcript-mutation-status")).to_contain_text("Đã lưu lựa chọn người nói")
+
+    expect(page.locator("#transcript-edit-history-list li").first).to_have_attribute(
+        "data-edit-version", "3"
+    )
+    page.locator("[data-undo-edit-version='2']").click()
+    expect(page.locator(f"[data-segment-id='{segment_ids[0]}'] .segment-speaker")).to_have_text(
+        "Morgan"
+    )
+    expect(
+        page.locator(f"[data-segment-id='{segment_ids[1]}'] .segment-speaker-select")
+    ).to_have_value("SPEAKER_00")
+    review = page.locator("input[data-segment-review]").first
+    review.click()
+    expect(review).to_have_attribute("data-review-version", "1")
+    expect(review).to_be_checked()
+    page.reload()
+    expect(page.locator("input[data-segment-review]").first).to_be_checked()
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.locator("#transcript-edit-history-title").click()
+    page.locator("[data-read-edit-version='1']").click()
+    expect(page.locator("[data-read-edit-version='1']")).to_have_attribute("aria-current", "true")
+    expect(page.locator("input[data-segment-review]").first).to_be_disabled()
+    expect(page.locator("input[data-segment-review]").first).not_to_be_checked()
+    page.locator("#transcript-edit-history-latest").click()
+    expect(page.locator("input[data-segment-review]").first).to_be_checked()
+    save_frontend_evidence(page, "merge-undo-1440-light.png")
+    page.locator("[data-theme-toggle]").click()
+    save_frontend_evidence(page, "merge-undo-1440-dark.png")
+    page.set_viewport_size(PHONE)
+    save_frontend_evidence(page, "merge-undo-390-dark.png")
+
+
+@pytest.mark.parametrize("operation", ["merge", "undo", "review"])
+def test_confirmed_transcript_history_write_refreshes_peer(
+    live,
+    browser_signed_in,  # noqa: F811
+    operation,
+):
+    context, writer = browser_signed_in()
+    data = live.settings.data_dir
+    meeting, generation, segments = seed_speaker_merge_transcript(data)
+    if operation == "review":
+        destination = seed_meeting(data, "Away from the transcript", "2026-10-13")
+    open_meeting(writer, live, meeting)
+    speaker_selector = ".segment-speaker"
+    review_selector = "input[data-segment-review]"
+    confirm = writer.locator("#speaker-merge-confirm")
+    history_title = "#transcript-edit-history-title"
+    history_latest = "#transcript-edit-history-list li"
+    accept_confirmation = operation == "undo"
+    writer.on("dialog", lambda dialog: dialog.accept() if accept_confirmation else dialog.dismiss())
+
+    if operation in ("merge", "undo"):
+        writer.locator("#speaker-merge summary").click()
+        writer.locator("#speaker-merge-preview").click()
+        expect(confirm).to_be_enabled()
+    if operation == "undo":
+        confirm.click()
+        expect(writer.locator(speaker_selector).first).to_have_text("Taylor")
+        writer.locator(history_title).click()
+
+    peer = context.new_page()
+    open_meeting(peer, live, meeting)
+    peer_speaker = peer.locator(speaker_selector).first
+    peer_review = peer.locator(review_selector).first
+    expect(peer_speaker).to_have_text("Taylor" if operation == "undo" else "Morgan")
+    expect(peer_review).not_to_be_checked()
+    peer.locator(history_title).click()
+    expect(peer.locator(history_latest).first).to_have_attribute(
+        "data-edit-version", "2" if operation == "undo" else "1"
+    )
+    peer.evaluate(
+        """() => {
+            window.meetingChanges = [];
+            window.meetingChangeObserver = new BroadcastChannel('asr-studio:meeting-changes');
+            window.meetingChangeObserver.onmessage = event =>
+                window.meetingChanges.push(event.data);
+        }"""
+    )
+    meeting_url = f"{live.url}/api/meetings/{meeting}"
+    history_url = f"{meeting_url}/transcript-generations/{generation}/edit-history"
+    peer_reads = []
+    peer.on(
+        "request",
+        lambda request: (
+            peer_reads.append(request.url)
+            if request.method == "GET" and request.url in (meeting_url, history_url)
+            else None
+        ),
+    )
+
+    if operation == "merge":
+        writes = []
+        writer.on(
+            "request",
+            lambda request: writes.append(request.url) if request.method == "POST" else None,
+        )
+        confirm.click()
+        settle(peer)
+        assert writes == []
+        assert peer.evaluate("window.meetingChanges") == []
+        accept_confirmation = True
+
+        def lose_receipt(route):
+            assert route.fetch().ok
+            route.fulfill(json={})
+
+        writer.route("**/speaker-merge", lose_receipt, times=1)
+        confirm.click()
+        retry = writer.locator("#speaker-merge-retry")
+        expect(retry).to_be_visible()
+        settle(peer)
+        assert peer.evaluate("window.meetingChanges") == []
+        expect(peer_speaker).to_have_text("Morgan")
+        retry.click()
+        expect(writer.locator(speaker_selector).first).to_have_text("Taylor")
+        expect(peer_speaker).to_have_text("Taylor", timeout=3_000)
+    elif operation == "undo":
+        pinned = context.new_page()
+        open_meeting(pinned, live, meeting)
+        pinned.locator(history_title).click()
+        fixed = pinned.locator("[data-read-edit-version='2']")
+        fixed.click()
+        expect(fixed).to_have_attribute("aria-current", "true")
+        pinned_review = pinned.locator(review_selector).first
+        timestamp = pinned.locator(".segment-timestamp").first
+        timestamp.focus()
+
+        writer.locator("[data-undo-edit-version='2']").click()
+        expect(writer.locator(speaker_selector).first).to_have_text("Morgan")
+        expect(peer_speaker).to_have_text("Morgan", timeout=3_000)
+        expect(pinned.locator(history_latest).first).to_have_attribute("data-edit-version", "3")
+        expect(fixed).to_have_attribute("aria-current", "true")
+        expect(pinned.locator(speaker_selector).first).to_have_text("Taylor")
+        expect(pinned_review).to_be_disabled()
+        expect(timestamp).to_be_focused()
+    else:
+        review = writer.locator(review_selector).first
+        writer.route(
+            "**/segments/review",
+            lambda route: route.fulfill(
+                status=409,
+                json={"detail": {"code": "segment_review_changed", "message": "Changed"}},
+            ),
+        )
+        review.click()
+        expect(review.locator("xpath=../..").locator("[data-review-status]")).to_contain_text(
+            "đã tải lại"
+        )
+        settle(peer)
+        assert peer.evaluate("window.meetingChanges") == []
+        writer.unroute("**/segments/review")
+
+        peer.locator(".segment-edit-button").nth(1).click()
+        draft = peer.locator(".segment-text-editor")
+        draft.fill("Keep this unsaved peer draft")
+        source_version = context.request.get(meeting_url).json()["transcription"]["generation"][
+            "source_version"
+        ]
+        held = hold_first(writer, r"/segments/review$", "PATCH")
+        with writer.expect_request("**/segments/review"):
+            review.click()
+        expect(review).to_have_attribute("aria-disabled", "true")
+        assert held
+        writer.locator("#recent-list a").filter(has_text="Away from the transcript").click()
+        writer.wait_for_url(f"{live.url}/meetings/{destination}")
+        expect(writer.locator("#meeting-title")).to_have_text("Away from the transcript")
+        assert peer.evaluate("window.meetingChanges") == []
+        with writer.expect_response("**/segments/review") as reply:
+            held[0].continue_()
+        assert reply.value.ok
+        expect(peer_review).to_have_attribute("data-review-version", "1", timeout=3_000)
+        expect(peer_review).to_be_checked()
+        expect(draft).to_have_value("Keep this unsaved peer draft")
+        expect(draft).to_be_focused()
+        expect(writer.locator("#meeting-title")).to_have_text("Away from the transcript")
+        assert (
+            context.request.get(meeting_url).json()["transcription"]["generation"]["source_version"]
+            == source_version
+        )
+        history = read_transcript_edit_history(data, meeting, generation)
+        assert history["reviews"][segments[0]] == {"checked": True, "review_version": 1}
+
+    expected_version = "3" if operation == "undo" else "2"
+    expect(peer.locator(history_latest).first).to_have_attribute(
+        "data-edit-version", expected_version
+    )
+    settle(peer)
+    assert peer_reads == [meeting_url, history_url]
+    messages = peer.evaluate("window.meetingChanges")
+    assert len(messages) == 1, "expected one notification without a receiver echo"
+    assert messages[0]["meetingId"] == meeting
+    assert messages[0]["reason"] == "transcript"
+
+
+def test_stale_two_tab_merge_announces_fresh_count_and_cancel_keeps_assignments(live, signed_in):
+    _context, page = signed_in()
+    # A separate context represents another signed-in window that missed the broadcast.
+    _editor_context, editor = signed_in()
+    data = live.settings.data_dir
+    meeting, generation, segments = seed_speaker_merge_transcript(data)
+    open_meeting(page, live, meeting)
+    open_meeting(editor, live, meeting)
+
+    messages = []
+
+    def answer(dialog):
+        assert dialog.type == "confirm"
+        messages.append(dialog.message)
+        if len(messages) == 1:
+            dialog.accept()
+        else:
+            dialog.dismiss()
+
+    page.on("dialog", answer)
+    page.locator("#speaker-merge summary").click()
+    page.locator("#speaker-merge-source").select_option("SPEAKER_00")
+    page.locator("#speaker-merge-target").select_option("SPEAKER_01")
+    preview = page.locator("#speaker-merge-preview")
+    status = page.locator("#speaker-merge-preview-status")
+    confirm = page.locator("#speaker-merge-confirm")
+    preview.click()
+    expect(status).to_contain_text("1 đoạn")
+    expect(confirm).to_be_enabled()
+
+    second_row = editor.locator(f".transcript-segment[data-segment-id='{segments[1]}']")
+    second_row.locator("[data-edit-segment]").click()
+    second_row.locator(".segment-speaker-select").select_option("SPEAKER_00")
+    expect(editor.locator("#transcript-mutation-status")).to_contain_text(
+        "Đã lưu lựa chọn người nói"
+    )
+
+    with page.expect_response("**/speaker-merge") as stale:
+        confirm.click()
+    assert stale.value.status == 409
+    assert stale.value.json()["detail"]["code"] == "source_version_changed"
+    expect(status).to_contain_text("Transcript đã đổi")
+    expect(page.locator(".segment-speaker").nth(1)).to_have_text("Morgan")
+
+    before = read_transcript_edit_history(data, meeting, generation)
+    preview.click()
+    expect(confirm).to_be_enabled()
+    fresh_status = status.inner_text()
+    save_frontend_evidence(page, "merge-fresh-count-two.png")
+    posts = []
+    page.on("request", lambda request: posts.append(request) if request.method == "POST" else None)
+    tab_to(page, "#speaker-merge-confirm")
+    page.keyboard.press("Enter")
+    expect(confirm).to_be_focused()
+    expect(page.locator(".segment-speaker")).to_have_text(["Morgan", "Morgan"])
+    assert not posts
+    assert read_transcript_edit_history(data, meeting, generation) == before
+    assert len(messages) == 2
+    assert ("2 đoạn" in fresh_status, "1 đoạn" in messages[0], "2 đoạn" in messages[1]) == (
+        True,
+        True,
+        True,
+    ), (fresh_status, messages)
+
+
+def test_fixed_revision_blocks_keyboard_speaker_draft_reapply_until_current(live, signed_in):
+    _context, page = signed_in()
+    data = live.settings.data_dir
+    meeting, generation, _segments = seed_speaker_merge_transcript(data)
+    open_meeting(page, live, meeting)
+
+    pattern = "**/speakers"
+    page.route(pattern, lambda route: route.fulfill(status=503))
+    name = page.locator("#speaker-add-name")
+    name.fill("Draft speaker")
+    name.press("Enter")
+    reapply = page.locator("[data-reapply-speaker-add-draft]")
+    expect(reapply).to_be_enabled()
+    page.unroute(pattern)
+
+    page.locator("#transcript-edit-history-title").press("Enter")
+    fixed = page.locator("[data-read-edit-version='1']")
+    fixed.press("Enter")
+    expect(fixed).to_have_attribute("aria-current", "true")
+    draft = page.locator(".transcript-speaker-add-draft-review")
+    expect(draft).to_contain_text("Draft speaker")
+    before = read_transcript_edit_history(data, meeting, generation)
+    posts = []
+    page.on("request", lambda request: posts.append(request) if request.method == "POST" else None)
+
+    # Enter stays on the search input when the disabled button cannot take focus.
+    page.locator("#transcript-search").focus()
+    reapply.press("Enter")
+    expect(reapply).to_be_disabled()
+    expect(reapply).not_to_be_focused()
+    assert not posts
+    assert read_transcript_edit_history(data, meeting, generation) == before
+    save_frontend_evidence(page, "fixed-speaker-draft-read-only.png")
+
+    page.locator("#transcript-edit-history-latest").press("Enter")
+    expect(reapply).to_be_enabled()
+    tab_to(page, "[data-reapply-speaker-add-draft]")
+    with page.expect_response(pattern) as added:
+        page.keyboard.press("Enter")
+    assert added.value.ok
+    expect(reapply).to_have_count(0)
+    assert len(posts) == 1
+    latest = read_transcript_edit_history(data, meeting, generation, edit_version=2)
+    assert any(speaker["display_name"] == "Draft speaker" for speaker in latest["speakers"])
+    save_frontend_evidence(page, "current-speaker-draft-reapplied.png")
+
+
+def test_stale_speaker_merge_undo_reports_conflict_and_keeps_history_readable(live, signed_in):
+    """Undo reports a changed affected assignment and keeps the saved history visible."""
+    _context, page = signed_in()
+    meeting_id, generation_id, segment_ids = seed_speaker_merge_transcript(live.settings.data_dir)
+    open_meeting(page, live, meeting_id)
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.locator("#speaker-merge summary").click()
+    page.locator("#speaker-merge-source").select_option("SPEAKER_00")
+    page.locator("#speaker-merge-target").select_option("SPEAKER_01")
+    page.locator("#speaker-merge-preview").click()
+    page.locator("#speaker-merge-confirm").click()
+    page.locator("#transcript-edit-history-title").click()
+    expect(page.locator("[data-undo-edit-version='2']")).to_be_visible()
+    with sqlite3.connect(database_path(live.settings.data_dir)) as connection:
+        connection.execute(
+            "UPDATE transcript_segments SET assignment_version = assignment_version + 1 "
+            "WHERE id = ?",
+            (segment_ids[0],),
+        )
+    page.locator("[data-undo-edit-version='2']").click()
+    expect(page.locator("#transcript-edit-history-status")).to_contain_text("đổi")
+    expect(page.locator("[data-edit-version='2']")).to_be_visible()
 
 
 def test_the_transcript_label_has_no_counts_until_there_is_a_transcript(live, signed_in):
