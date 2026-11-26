@@ -3136,7 +3136,8 @@ narrow-screen containment and focus restoration in both themes. The capture
 matrix documented in `docs/assets/frontend/issue-284/README.md` includes automatic
 processing and waits for visible panels, provider controls, fonts and idle network.
 Images are local-only artifacts outside Git; the maintained capture utility is
-`tests/visual/capture_settings.py`. Existing Settings and connection
+`tests/visual/capture_settings.py`. It disables animations during screenshots to
+settle finite tab transitions without changing product behavior. Existing Settings and connection
 regressions cover account, callback, failure and modal keyboard behavior.
 
 **Trade-off.** Keep the existing modal instead of the prototype's workspace page.

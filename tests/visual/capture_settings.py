@@ -72,7 +72,10 @@ with TemporaryDirectory(prefix="visual-settings-") as tmp:
                         expect(page.locator(selector)).to_be_enabled()
                     page.evaluate("document.fonts.ready")
                     page.wait_for_load_state("networkidle", timeout=10_000)
-                    page.screenshot(path=str(out / f"{section}-{scheme}-{width}-{lang}.png"))
+                    page.screenshot(
+                        path=str(out / f"{section}-{scheme}-{width}-{lang}.png"),
+                        animations="disabled",
+                    )
                 context.close()
             browser.close()
     finally:
