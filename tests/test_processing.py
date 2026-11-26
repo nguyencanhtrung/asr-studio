@@ -7,6 +7,7 @@ import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from notes_helpers import StubNotesProvider
@@ -15,10 +16,11 @@ from asr_studio import processing as processing_module
 from asr_studio.antigravity import AntigravityProvider
 from asr_studio.asr_models import read_default_model, write_default_model
 from asr_studio.auth import AuthStore
-from asr_studio.chatgpt import ChatGPTProvider
+from asr_studio.chatgpt import ChatGPTError, ChatGPTProvider
 from asr_studio.config import Settings
 from asr_studio.extension_ingest import publish_ready_derivative
 from asr_studio.meeting_deletion import _mark_meeting_for_deletion
+from asr_studio.notes import publish_notes_revision
 from asr_studio.notes_document import PROMPT_VERSION, SCHEMA_VERSION
 from asr_studio.processing import (
     AutomaticProcessingScheduler,
@@ -36,6 +38,7 @@ from asr_studio.processing import (
     save_processing_preferences,
     use_current_source,
 )
+from asr_studio.recordings import RecordingError, update_meeting
 from asr_studio.storage import database_path, initialize
 from asr_studio.tasks import (
     accept_transcription_task,
@@ -1501,6 +1504,88 @@ def test_successful_transcript_freezes_source_and_notes_retry_reuses_it(tmp_path
     resumed_notes = next(step for step in resumed["steps"] if step["kind"] == "notes")
     assert resumed_notes["waiting_reason"] is None
     assert len(resumed["attempts"]) == len(retried["attempts"])
+
+
+@pytest.mark.parametrize("configured", [False, True], ids=["unconfigured", "disconnected"])
+def test_scheduler_waits_without_choosing_an_alternate_notes_provider(
+    tmp_path, monkeypatch, configured
+):
+    data_dir, meeting_id, before = _ready_notes_workflow(tmp_path)
+    previous = next(step for step in before["steps"] if step["kind"] == "notes")
+    if not configured:
+        with _connect(data_dir) as connection, connection:
+            connection.execute(
+                "UPDATE processing_workflows SET notes_provider = NULL, notes_model = NULL WHERE id = ?",
+                (before["id"],),
+            )
+    selected_calls = []
+
+    def refuse_selected_provider():
+        selected_calls.append("chatgpt")
+        raise ChatGPTError(409, "provider_disconnected", "Fixture account is disconnected.")
+
+    def reject_alternate_provider():
+        pytest.fail("The scheduler invoked an alternate provider.")
+
+    settings = Settings(data_dir=data_dir, auth_dir=tmp_path / "auth")
+    monkeypatch.setattr(processing_module.notes_service, "is_ready", lambda _path: True)
+    scheduler = AutomaticProcessingScheduler(
+        settings,
+        SimpleNamespace(assert_notes_acceptable=refuse_selected_provider),
+        SimpleNamespace(assert_notes_acceptable=reject_alternate_provider),
+    )
+    assert scheduler.reconcile_once() == 0
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    step = next(item for item in state["steps"] if item["kind"] == "notes")
+    reason = "provider_unavailable" if configured else "provider_unconfigured"
+    assert (step["state"], step["waiting_reason"]) == ("waiting", reason)
+    assert step["source_snapshot_id"] == previous["source_snapshot_id"]
+    assert selected_calls == (["chatgpt"] if configured else [])
+    with _connect(data_dir) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM tasks WHERE meeting_id = ? AND kind = 'notes'", (meeting_id,)
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_automatic_notes_retains_the_frozen_source_across_a_date_edit_before_admission(tmp_path):
+    data_dir, meeting_id, before = _ready_notes_workflow(tmp_path)
+    notes_step = next(step for step in before["steps"] if step["kind"] == "notes")
+    snapshot = notes_step["source_snapshot_id"]
+    assert snapshot
+    updated = update_meeting(
+        data_dir,
+        meeting_id,
+        expected_version=before["current_source"]["metadata_version"],
+        fields={"meeting_date": "2026-01-01"},
+    )
+    admitted = _admit_notes_for_state(data_dir, meeting_id, _notes_pin())
+    assert admitted is not None and not admitted["replay"]
+    task = claim_next_task(data_dir, owner_id="date-edit-fixture-owner", role="notes")
+    assert task is not None and task["id"] == admitted["task_id"]
+    with pytest.raises(RecordingError) as locked:
+        update_meeting(
+            data_dir,
+            meeting_id,
+            expected_version=updated["metadata_version"],
+            fields={"meeting_date": "2026-01-02"},
+        )
+    assert (locked.value.status_code, locked.value.code) == (409, "notes_source_locked")
+    revision = publish_notes_revision(
+        data_dir,
+        task["id"],
+        owner_id="date-edit-fixture-owner",
+        markdown="Fixture Notes from the admitted source.",
+        elapsed_seconds=0.1,
+    )
+    assert revision is not None
+    assert (revision["source_snapshot_id"], revision["source_state"]) == (snapshot, "stale")
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    assert (state["state"], state["epoch"]) == ("succeeded", before["epoch"])
 
 
 def test_automatic_notes_uses_production_contract_with_real_notes_runner(
