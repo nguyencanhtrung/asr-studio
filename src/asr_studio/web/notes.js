@@ -72,6 +72,13 @@ const els = {
   errorMessage: $("#notes-error-message"),
   savedWork: $("#notes-saved-work"),
   selector: $("#notes-revision-selector"),
+  history: $("#notes-history"),
+  historyOpen: $("#notes-history-open"),
+  historySelector: $("#notes-history-selector"),
+  historyLink: $("#notes-history-copy-link"),
+  historyClose: $("#notes-history-close"),
+  historyStatus: $("#notes-history-status"),
+  historyLegacy: $("#notes-history-legacy"),
   save: $("#notes-save"),
   editCancel: $("#notes-edit-cancel"),
   copyRich: $("#notes-copy-rich"),
@@ -93,6 +100,7 @@ const els = {
   keepDraft: $("#notes-keep-draft"),
   useLatest: $("#notes-use-latest"),
   revisionMeta: $("#notes-revision-meta"),
+  modeControls: $("#notes-mode-controls"),
   modeView: $("#notes-mode-view"),
   modeWrite: $("#notes-mode-write"),
   modeRich: $("#notes-mode-rich"),
@@ -486,18 +494,57 @@ function renderLinkWarning(warning) {
   els.linkWarning.replaceChildren(tr(warningLine(warning)), first);
 }
 
-function renderSavedWork(work) {
-  if (els.selector.dataset.optionsKey !== work.selectorKey) {
-    els.selector.replaceChildren(...work.options.map((item) => {
+function renderSavedOptions(select, options, selected, key) {
+  if (select.dataset.optionsKey !== key) {
+    select.replaceChildren(...options.map((item) => {
       const option = document.createElement("option");
       option.value = item.value;
       option.textContent = tr(item.text);
+      option.disabled = Boolean(item.disabled);
       return option;
     }));
-    setData(els.selector, "optionsKey", work.selectorKey);
+    setData(select, "optionsKey", key);
   }
-  setProp(els.selector, "value", work.selected);
+  setProp(select, "value", selected);
+}
+
+function renderSavedHistory(history) {
+  const focused = document.activeElement;
+  const focusInHistory = els.history.contains(focused);
+  const previousPhase = els.history.dataset.latestPhase;
+  setData(els.history, "latestPhase", history.latestPhase);
+  setAttr(els.historyOpen, "aria-expanded", String(history.open));
+  setProp(els.history, "hidden", !history.open);
+  if (!history.open) {
+    if (previousPhase === "pending" && focusInHistory) focusHistoryTrigger();
+    return;
+  }
+  renderSavedOptions(els.historySelector, history.options, history.selected, JSON.stringify(history.options));
+  setProp(els.historyLink, "disabled", history.linkDisabled);
+  setProp(els.historyClose, "textContent", tr(history.closeLabel));
+  setAttr(els.historyClose, "aria-disabled", String(history.latestPhase === "pending"));
+  const legacyNotice = tr(history.legacyNotice);
+  setProp(els.historyLegacy, "textContent", legacyNotice);
+  setProp(els.historyLegacy, "hidden", !legacyNotice);
+  const status = tr(history.status);
+  setProp(els.historyStatus, "textContent", status);
+  setProp(els.historyStatus, "hidden", !status);
+  if (previousPhase === "pending" && history.latestPhase === "failed"
+    && (focusInHistory || focused === els.historyOpen)) {
+    els.historyClose.focus();
+  } else if (previousPhase === "pending" && !history.latestPhase && history.selected === ""
+    && focused === els.historyClose) {
+    els.historySelector.focus();
+  }
+}
+
+function renderSavedWork(work) {
+  renderSavedOptions(els.selector, work.options, work.selected, work.selectorKey);
   setProp(els.savedWork, "hidden", work.hidden);
+  setProp(els.historyOpen, "hidden", !work.selected || !work.options.length);
+  setProp(els.modeControls, "hidden", work.pinned);
+  setProp(els.save, "hidden", work.pinned);
+  setProp(els.editCancel, "hidden", work.pinned);
   const write = work.mode === "write";
   const rich = work.mode === "rich";
   setAttr(els.modeView, "aria-pressed", String(!write && !rich));
@@ -600,6 +647,7 @@ function render(state) {
   setProp(els.error, "hidden", !view.error);
   setProp(els.errorMessage, "textContent", tr(view.error));
   renderSavedWork(view.savedWork);
+  renderSavedHistory(view.savedHistory);
   // Move only after saved work settles, preserving focus on generation controls.
   els.heading.classList.toggle("visually-hidden", !view.savedWork.hidden);
   const urgent = Boolean(view.error || (view.task && !view.task.steps.every((step) => step === "done")));
@@ -767,7 +815,32 @@ els.language.addEventListener("change", (event) => dispatch({ type: "notes/langu
 els.provider.addEventListener("change", (event) => dispatch({ type: "notes/provider-picked", provider: event.currentTarget.value }));
 els.model.addEventListener("change", (event) => dispatch({ type: "notes/model-picked", model: event.currentTarget.value }));
 els.cancel.addEventListener("click", () => dispatch({ type: "notes/cancel-clicked" }));
-els.selector.addEventListener("change", (event) => dispatch({ type: "notes/revision-picked", id: event.currentTarget.value }));
+els.selector.addEventListener("change", (event) => dispatch({
+  type: "notes/revision-picked", id: event.currentTarget.value, href: window.location.href,
+}));
+function focusHistoryTrigger() {
+  if (els.historyOpen.getClientRects().length) els.historyOpen.focus();
+  else $("#meeting-tab-notes").focus();
+}
+
+function closeSavedHistory() {
+  dispatch({ type: "notes/saved-history-closed", href: window.location.href });
+  if (els.history.hidden) focusHistoryTrigger();
+}
+
+els.historyOpen.addEventListener("click", () => {
+  if (els.historyOpen.getAttribute("aria-expanded") === "true") closeSavedHistory();
+  else {
+    dispatch({ type: "notes/saved-history-opened" });
+    els.historySelector.focus();
+  }
+});
+els.historySelector.addEventListener("change", (event) => {
+  const { value } = event.currentTarget;
+  dispatch({ type: "notes/saved-history-picked", editVersion: value === "" ? null : Number(value), href: window.location.href });
+});
+els.historyLink.addEventListener("click", () => dispatch({ type: "notes/saved-history-link" }));
+els.historyClose.addEventListener("click", closeSavedHistory);
 els.markdown.addEventListener("beforeinput", (event) => {
   const textarea = event.currentTarget;
   setData(textarea, "markdownSelectionBefore", JSON.stringify({

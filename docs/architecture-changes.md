@@ -3146,3 +3146,16 @@ squeezing desktop group labels into a horizontal navigation row.
 
 **Follow-ups.** [Issue #284](https://github.com/nguyencanhtrung/asr-studio/issues/284).
 Tag: design. Target: `docs/frontend-design.md`.
+
+## #265 — Immutable saved Notes history
+
+**Problem.** Notes previously kept only the latest Markdown projection for each generated revision. A later Save could therefore replace the content needed by an old link or export, while pre-migration data could not truthfully reconstruct overwritten AI or operator versions.
+
+**Design.** Schema 22 adds `notes_saved_versions` as an additive, immutable SQLite table. Migration backfills only the current projection that still exists, and triggers journal generated Notes plus compatible legacy Saves in the caller's transaction. Each row keeps the Notes revision's source snapshot, saved timestamp and observed origin (`ai`, `operator`, or `legacy`). Versioned routes and the reducer/view use an exact revision-plus-edit-version address for fixed links and selected-history copy, email preview and export; legacy reads continue to resolve the latest Save of that same revision. A compatible older runtime can retain the table and triggers, while raw schema-21 binaries are refused by the existing guard. Meeting deletion removes related history in its existing fixture-only transaction. No trash/restore/permanent-delete API is added.
+
+**Before and after numbers.** No performance claim is made. On the candidate, the writer fast gate recorded 2,519 passed and 876 skipped in 228.91 seconds; source: `/tmp/asr-visual-correction/issue-265-formal/writer-fast-rerun.log`.
+
+**Trade-offs.** Old overwritten history remains unavailable and is disclosed instead of being invented. The UI blocks editing a fixed version and reconciles the latest projection before returning to editing, which preserves draft/focus safety at the cost of an extra authenticated read. Migration and destructive checks use disposable SQLite fixtures only.
+
+**Follow-ups.** [Issue #265](https://github.com/nguyencanhtrung/asr-studio/issues/265); trash, restore and permanent delete remain [Issue #275](https://github.com/nguyencanhtrung/asr-studio/issues/275).
+Tag: architecture, design, data-retention. Target: `docs/adr/0005-markdown-notes.md`, `docs/frontend-design.md`, `src/asr_studio/notes_history.py`.

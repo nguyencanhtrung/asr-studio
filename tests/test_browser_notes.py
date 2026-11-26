@@ -30,6 +30,7 @@ from asr_studio.notes import (
     update_note,
 )
 from asr_studio.notes_document import render_markdown
+from asr_studio.notes_history import install_notes_history
 from asr_studio.storage import database_path
 from asr_studio.tasks import claim_next_task, finish_canceled_task, transcription_state
 
@@ -294,7 +295,9 @@ def _accept(
     )
 
 
-def _complete_fake_task(data_dir: Path, task_id: str, request_id: str, markdown: str):
+def _complete_fake_task(
+    data_dir: Path, task_id: str, request_id: str, markdown: str, *, citations=None
+):
     owner_id = f"notes-browser-worker-{request_id}"
     claimed = claim_next_task(data_dir, owner_id=owner_id)
     assert claimed is not None and claimed["id"] == task_id
@@ -304,6 +307,7 @@ def _complete_fake_task(data_dir: Path, task_id: str, request_id: str, markdown:
         owner_id=owner_id,
         markdown=markdown,
         elapsed_seconds=0.1,
+        citations=citations,
     )
     assert revision is not None
     return revision
@@ -1552,6 +1556,569 @@ def test_regenerate_adopts_updated_single_source_only_after_confirmation(
     assert requests[1]["expected_source_version"] == 2
     assert requests[1]["request_id"] != requests[0]["request_id"]
     assert preference_writes == []
+
+
+@pytest.mark.parametrize(("width", "theme"), [(1440, "light"), (390, "dark")])
+def test_saved_notes_history_keeps_exact_versions_and_drafts(
+    live, signed_in, tmp_path, width, theme
+):
+    context, page = signed_in(viewport={"width": width, "height": 900})
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=live.url)
+    page.emulate_media(color_scheme=theme)
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    meeting_id, revision, snapshot, _segments = _seed_saved_notes(live.settings.data_dir)
+    note_id = revision["id"]
+    data_dir = live.settings.data_dir
+    version_two = "# Saved edit two\n\n**Two is immutable.**\n"
+    version_three = "# Saved edit three\n\nThree is the latest save.\n"
+    update_note(data_dir, note_id, expected_edit_version=1, markdown=version_two)
+    update_note(data_dir, note_id, expected_edit_version=2, markdown=version_three)
+    _open_saved_notes(live, page, meeting_id)
+
+    page.locator("#notes-mode-write").click()
+    unsaved = "# Keep this draft\n"
+    page.locator("#notes-markdown").fill(unsaved)
+    history = page.locator("#notes-history-selector")
+    trigger = page.locator("#notes-history-open")
+    trigger.press("Enter")
+    expect(history).to_be_focused()
+    expect(history.locator("option")).to_have_count(4)
+    expect(history.locator('option[value="1"]')).to_contain_text("Bản AI gốc")
+    history.select_option("2")
+    expect(page.locator("#notes-preview")).to_contain_text("Two is immutable.")
+    expect(page.locator("#notes-preview")).not_to_contain_text("Three is the latest save.")
+    expect(page.locator("#notes-save")).to_be_hidden()
+    expect(page.locator("#notes-markdown")).to_be_hidden()
+    assert page.evaluate("document.documentElement.scrollWidth - innerWidth") == 0
+    page.screenshot(
+        path=str(tmp_path / f"notes-history-{theme}-{width}.png"),
+        animations="disabled",
+        full_page=True,
+    )
+
+    link_button = page.locator("#notes-history-copy-link")
+    link_button.click()
+    expect(page.locator("#notes-history-status")).to_contain_text("Đã sao chép liên kết")
+    fixed_url = page.evaluate("navigator.clipboard.readText()")
+    params = parse_qs(urlsplit(fixed_url).query)
+    assert params == {"notes_revision": [note_id], "notes_edit": ["2"]}
+    assert page.url == fixed_url
+
+    page.locator("#notes-copy").click()
+    expect(page.locator("#notes-copy-export-status")).to_contain_text("edit 2")
+    assert page.evaluate("navigator.clipboard.readText()") == version_two
+    with page.expect_download() as download:
+        page.locator("#notes-export").click()
+    version_download = tmp_path / "fixed.md"
+    download.value.save_as(version_download)
+    assert version_download.read_text() == version_two
+
+    for trigger_id in ("notes-copy-rich", "notes-copy-email"):
+        with page.expect_response(f"**/api/notes/{note_id}/versions/2") as reply:
+            page.locator(f"#{trigger_id}").click()
+        assert reply.value.ok
+        expect(page.locator("#notes-copy-dialog")).to_be_visible()
+        expect(page.locator("#notes-copy-pin")).to_contain_text("edit 2")
+        expect(page.locator("#notes-copy-document")).to_contain_text("Two is immutable.")
+        page.keyboard.press("Escape")
+        expect(page.locator("#notes-copy-dialog")).to_be_hidden()
+
+    page.locator("#notes-history-close").press("Enter")
+    expect(trigger).to_be_focused()
+    expect(history).to_be_hidden()
+    expect(page.locator("#notes-markdown")).to_have_value(unsaved)
+    assert not urlsplit(page.url).query
+    page.locator("#notes-edit-cancel").click()
+    expect(page.locator("#notes-preview")).to_contain_text("Three is the latest save.")
+    page.locator("#notes-mode-write").click()
+    version_four = "# Saved edit four\n\nFour is the latest save.\n"
+    page.locator("#notes-markdown").fill(version_four)
+    page.locator("#notes-save").click()
+    expect(page.locator("#notes-copy-export-status")).to_contain_text("Markdown đã được lưu")
+    assert get_note(data_dir, note_id)["source_snapshot_id"] == snapshot["id"]
+    assert page.request.get(f"{live.url}/api/notes/{note_id}/export").text() == version_four
+
+    page.goto(fixed_url)
+    expect(page.locator("#notes-preview")).to_contain_text("Two is immutable.")
+    expect(history.locator('option[value="4"]')).to_have_count(1)
+    expect(page.locator("#notes-copy")).to_be_enabled()
+    exact_export = page.request.get(f"{live.url}/api/notes/{note_id}/versions/2/export")
+    assert exact_export.ok and exact_export.text() == version_two
+
+    page.goto(fixed_url.replace("notes_edit=2", "notes_edit=99"))
+    expect(page.locator("#notes-history-status")).to_contain_text("Không thể đọc bản Notes")
+    expect(page.locator("#notes-copy")).to_be_disabled()
+    expect(page.locator("#notes-preview")).not_to_contain_text("Four is the latest save.")
+    page.locator("#notes-history-close").click()
+    expect(page.locator("#notes-markdown")).to_have_value(version_four)
+    assert page_errors == []
+
+
+@pytest.mark.parametrize(
+    ("control", "refuse", "width"), [("button", False, 1440), ("select", True, 390)]
+)
+def test_fixed_link_returns_to_the_linked_notes_latest_while_detail_is_unavailable(
+    live, signed_in, control, refuse, width
+):
+    _context, page = signed_in(viewport={"width": width, "height": 900})
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, linked, snapshot, _segments = _seed_saved_notes(data_dir)
+    linked_id = linked["id"]
+    latest_text = "# Latest of the linked Notes revision\n"
+    update_note(data_dir, linked_id, expected_edit_version=1, markdown=latest_text)
+    regenerated = _accept(
+        data_dir, meeting_id, snapshot["generation_id"], request_id="unrelated-regenerated-notes"
+    )
+    newer_text = "# Newer generated Notes revision\n"
+    newer = _complete_fake_task(
+        data_dir, regenerated["id"], "unrelated-regenerated-notes", newer_text
+    )
+    assert newer["id"] != linked_id
+
+    held = []
+    page.route(f"**/api/notes/{linked_id}/versions/1", lambda route: held.append(route))
+    page.goto(f"{live.url}/meetings/{meeting_id}?notes_revision={linked_id}&notes_edit=1#notes")
+    work_selector = page.locator("#notes-revision-selector")
+    expect(work_selector.locator(f'option[value="{newer["id"]}"]')).to_have_count(1)
+    assert len(held) == 1
+    if refuse:
+        held.pop().fulfill(status=404, json={"detail": {"code": "notes_version_not_found"}})
+        expect(page.locator("#notes-history-status")).to_have_text(
+            "The requested saved Notes version could not be read."
+        )
+    expect(page.locator("#notes-save")).to_be_hidden()
+
+    history = page.locator("#notes-history-selector")
+    if control == "button":
+        page.get_by_role("button", name="Return to latest").press("Enter")
+        expect(history).to_be_hidden()
+        expect(page.locator("#notes-history-open")).to_be_focused()
+    else:
+        history.select_option("")
+        expect(history).to_be_visible()
+    expect(work_selector).to_have_value(linked_id)
+    expect(page.locator("#notes-preview")).to_contain_text("Latest of the linked Notes revision")
+    expect(page.locator("#notes-save")).to_be_visible()
+    assert not urlsplit(page.url).query
+
+
+@pytest.mark.parametrize(
+    ("index_seen", "hold_projection"),
+    [(True, False), (False, False), (True, True)],
+    ids=["index-v4", "index-pending", "projection-pending"],
+)
+@pytest.mark.parametrize(("control", "width"), [("button", 1440), ("select", 390)])
+def test_return_to_latest_reconciles_a_newer_save_before_editing_or_copying(
+    live, signed_in, tmp_path, control, width, index_seen, hold_projection
+):
+    context, page = signed_in(viewport={"width": width, "height": 900})
+    context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    fixed = "# Fixed save two\n"
+    obsolete = "# Obsolete save three\n"
+    latest = "# Reconciled save four\n"
+    update_note(data_dir, note_id, expected_edit_version=1, markdown=fixed)
+    update_note(data_dir, note_id, expected_edit_version=2, markdown=obsolete)
+    index_reads = []
+    latest_reads = []
+    page.route(f"**/api/notes/{note_id}/versions", lambda route: index_reads.append(route))
+    page.route(f"**/api/notes/{note_id}", lambda route: latest_reads.append(route))
+    fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
+    meeting_url = f"**/api/meetings/{meeting_id}/notes"
+    meeting_reads = []
+    if hold_projection:
+        request_id = "unrelated-notes-in-delayed-projection"
+        task = _accept(data_dir, meeting_id, snapshot["generation_id"], request_id=request_id)
+        other = _complete_fake_task(data_dir, task["id"], request_id, "# Other saved Notes")
+        page.route(meeting_url, lambda route: meeting_reads.append(route))
+        with page.expect_request(meeting_url):
+            page.goto(fixed_url)
+    else:
+        with page.expect_response(meeting_url) as meeting_read:
+            page.goto(fixed_url)
+    preview = page.locator("#notes-preview")
+    chooser = page.locator("#notes-history-selector")
+    close = page.locator("#notes-history-close")
+    status = page.locator("#notes-history-status")
+    save = page.locator("#notes-save")
+    expect(preview).to_contain_text("Fixed save two")
+    projection = meeting_reads[0].fetch() if hold_projection else meeting_read.value
+    revision = next(item for item in projection.json()["revisions"] if item["id"] == note_id)
+    assert (revision["edit_version"], revision["markdown"]) == (3, obsolete)
+    assert len(index_reads) == 1
+    update_note(data_dir, note_id, expected_edit_version=3, markdown=latest)
+    index_route = index_reads.pop()
+    if index_seen:
+        index_reply = index_route.fetch()
+        assert index_reply.json()["latest_edit_version"] == 4
+        index_route.fulfill(response=index_reply)
+        expect(chooser.locator('option[value="4"]')).to_have_count(1)
+    else:
+        expect(chooser.locator('option[value="4"]')).to_have_count(0)
+
+    expect(close).to_have_text("Return to latest")
+    expect(chooser.locator('option[value=""]')).to_be_enabled()
+    if control == "button":
+        close.press("Enter")
+    else:
+        chooser.focus()
+        chooser.press("Home")
+    expect(status).to_have_text("Reading the latest saved version…")
+    expect(close if control == "button" else chooser).to_be_focused()
+    expect(preview).to_contain_text("Fixed save two")
+    expect(chooser).to_have_value("2")
+    expect(save).to_be_hidden()
+    assert page.url == fixed_url
+    assert len(latest_reads) == 1
+    assert latest_reads[0].request.method == "GET"
+    latest_reads.pop().fulfill(status=503, json={})
+    expect(status).to_have_text(
+        "Could not load the latest Notes. The fixed saved version is still selected."
+    )
+    expect(close).to_have_text("Retry loading latest")
+    expect(close).to_be_focused()
+    expect(preview).to_contain_text("Fixed save two")
+    expect(preview).not_to_contain_text("Obsolete save three")
+    expect(page.locator("#notes-mode-write")).to_be_hidden()
+    expect(save).to_be_hidden()
+    assert page.url == fixed_url
+    assert page.evaluate("document.documentElement.scrollWidth - innerWidth") == 0
+    ordering = (
+        "projection-pending" if hold_projection else ("index-v4" if index_seen else "index-pending")
+    )
+    page.screenshot(path=tmp_path / f"{control}-{width}-{ordering}-failed.png", full_page=True)
+
+    copy_status = page.locator("#notes-copy-export-status")
+    page.locator("#notes-copy").click()
+    expect(copy_status).to_contain_text("edit 2")
+    assert page.evaluate("navigator.clipboard.readText()") == fixed
+    assert not latest_reads
+
+    close.press("Enter")
+    expect(status).to_have_text("Reading the latest saved version…")
+    expect(close).to_be_focused()
+    assert len(latest_reads) == 1
+    latest_reads.pop().continue_()
+    expect(preview).to_contain_text("Reconciled save four")
+    expect(save).to_be_visible()
+    assert not urlsplit(page.url).query
+    if control == "button":
+        expect(chooser).to_be_hidden()
+        expect(page.locator("#notes-history-open")).to_be_focused()
+    else:
+        expect(chooser).to_be_visible()
+        expect(chooser).to_have_value("")
+        expect(chooser).to_be_focused()
+        assert len(index_reads) == 1
+        index_reads.pop().continue_()
+        expect(chooser.locator('option[value="4"]')).to_have_count(1)
+    page.screenshot(path=tmp_path / f"{control}-{width}-{ordering}-latest.png", full_page=True)
+
+    if hold_projection:
+        meeting_reads.pop().fulfill(response=projection)
+        work_selector = page.locator("#notes-revision-selector")
+        expect(work_selector.locator(f'option[value="{other["id"]}"]')).to_have_count(1)
+        expect(work_selector).to_have_value(note_id)
+        expect(preview).to_contain_text("Reconciled save four")
+        expect(preview).not_to_contain_text("Obsolete save three")
+
+    with page.expect_request(f"**/api/notes/{note_id}"):
+        page.locator("#notes-copy").click()
+    assert len(latest_reads) == 1
+    assert latest_reads[0].request.method == "GET"
+    latest_reads.pop().continue_()
+    expect(copy_status).to_contain_text("edit 4")
+    assert page.evaluate("navigator.clipboard.readText()") == latest
+
+
+@pytest.mark.parametrize("kind", ["copy", "export", "rich", "email"])
+def test_fixed_share_survives_the_delayed_meeting_list(live, signed_in, kind):
+    context, page = signed_in()
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=live.url)
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    asset = context.request.get(f"{live.url}/assets/notes-core.js")
+    assert asset.ok and asset.body() == Path("src/asr_studio/web/notes-core.js").read_bytes()
+
+    data_dir = live.settings.data_dir
+    meeting_id, note, _snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    fixed = "# Fixed two\n\nKeep **these bytes**.\n"
+    update_note(data_dir, note_id, expected_edit_version=1, markdown=fixed)
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# New three\n")
+    meeting_reads = []
+    meeting_endpoint = f"**/api/meetings/{meeting_id}/notes"
+    page.route(meeting_endpoint, lambda route: meeting_reads.append(route))
+    fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
+    page.goto(fixed_url)
+    expect(page.locator("#notes-preview")).to_contain_text("Fixed two")
+    option = page.locator(f'#notes-revision-selector option[value="{note_id}"]')
+    expect(option).to_have_text("Saved version 2")
+
+    share_reads = []
+    detail_endpoint = f"**/api/notes/{note_id}/versions/2"
+    if kind != "email":
+        page.route(detail_endpoint, lambda route: share_reads.append(route))
+    trigger_id = f"notes-copy-{kind}" if kind in ("rich", "email") else f"notes-{kind}"
+    trigger = page.locator(f"#{trigger_id}")
+    with page.expect_request(detail_endpoint):
+        trigger.click()
+    dialog = page.locator("#notes-copy-dialog")
+    confirm = dialog.locator("#notes-copy-confirm")
+    if kind == "email":
+        expect(dialog).to_be_visible()
+        confirm.focus()
+
+    projection = meeting_reads[0].fetch()
+    assert projection.ok and projection.json()["revisions"][0]["edit_version"] == 3
+    meeting_reads.pop().fulfill(response=projection)
+    expect(option).not_to_have_text("Saved version 2")
+    expect(page.locator("#notes-preview")).to_contain_text("Fixed two")
+    assert page.url == fixed_url
+
+    status = page.locator("#notes-copy-export-status")
+    if kind == "export":
+        with page.expect_download() as download:
+            share_reads.pop().continue_()
+        assert download.value.path().read_bytes() == fixed.encode()
+        expect(status).to_contain_text("edit 2")
+        expect(trigger).to_be_focused()
+    elif kind == "copy":
+        share_reads.pop().continue_()
+        expect(status).to_have_text("Copied saved version · edit 2.")
+        assert page.evaluate("navigator.clipboard.readText()") == fixed
+        expect(trigger).to_be_focused()
+    else:
+        if kind == "rich":
+            share_reads.pop().continue_()
+        expect(dialog).to_be_visible()
+        expect(dialog.locator("#notes-copy-pin")).to_contain_text("edit 2")
+        expect(dialog.locator("#notes-copy-document")).to_contain_text("Fixed two")
+        if kind == "email":
+            expect(confirm).to_be_focused()
+        confirm.click()
+        expect(dialog.locator("#notes-copy-result")).to_have_text("Formatted content copied.")
+        assert page.evaluate("navigator.clipboard.readText()") == fixed
+        html = page.evaluate(
+            """async () => {
+              const [item] = await navigator.clipboard.read();
+              return (await item.getType('text/html')).text();
+            }"""
+        )
+        assert "<strong>these bytes</strong>" in html
+        assert "New three" not in html
+        expect(confirm).to_be_focused()
+        page.keyboard.press("Escape")
+        expect(dialog).to_be_hidden()
+        expect(trigger).to_be_focused()
+
+
+def test_fixed_return_to_latest_keeps_the_projected_floor_after_omission(live, signed_in):
+    _context, page = signed_in()
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, _snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    for previous, heading in enumerate(("Fixed two", "Save three", "Stale four"), start=1):
+        update_note(data_dir, note_id, expected_edit_version=previous, markdown=f"# {heading}\n")
+
+    meeting_endpoint = f"**/api/meetings/{meeting_id}/notes"
+    current_endpoint = f"**/api/notes/{note_id}"
+    meeting_reads = []
+    current_reads = []
+    page.route(meeting_endpoint, lambda route: meeting_reads.append(route))
+    page.route(current_endpoint, lambda route: current_reads.append(route))
+    fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
+    page.goto(fixed_url)
+    preview = page.locator("#notes-preview")
+    chooser = page.locator("#notes-history-selector")
+    status = page.locator("#notes-history-status")
+    retry = page.locator("#notes-history-close")
+    option = page.locator(f'#notes-revision-selector option[value="{note_id}"]')
+    expect(preview).to_contain_text("Fixed two")
+    expect(option).to_have_text("Saved version 2")
+    expect(chooser.locator('option[value="4"]')).to_have_count(1)
+    chooser.focus()
+    chooser.press("Home")
+    expect(status).to_have_text("Reading the latest saved version…")
+    expect(chooser).to_be_focused()
+    stale = current_reads[0].fetch()
+    assert stale.ok and stale.json()["edit_version"] == 4
+
+    update_note(data_dir, note_id, expected_edit_version=4, markdown="# Latest five\n")
+    meeting_route = meeting_reads.pop()
+    projection = meeting_route.fetch()
+    body = projection.json()
+    assert projection.ok and body["revisions"][0]["edit_version"] == 5
+    meeting_route.fulfill(response=projection)
+    expect(option).not_to_have_text("Saved version 2")
+    with page.expect_request(meeting_endpoint):
+        page.evaluate(
+            "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+            meeting_id,
+        )
+    meeting_reads.pop().fulfill(json={**body, "revisions": []})
+    expect(option).to_have_text("Saved version 2")
+    current_reads.pop().fulfill(response=stale)
+    expect(status).to_have_text(
+        "Could not load the latest Notes. The fixed saved version is still selected."
+    )
+    expect(retry).to_be_focused()
+    expect(chooser).to_have_value("2")
+    expect(preview).to_contain_text("Fixed two")
+    expect(page.locator("#notes-save")).to_be_hidden()
+    assert page.url == fixed_url
+
+    with page.expect_request(current_endpoint):
+        retry.press("Enter")
+    current_reads.pop().continue_()
+    expect(chooser).to_be_focused()
+    expect(chooser).to_have_value("")
+    expect(preview).to_contain_text("Latest five")
+    expect(page.locator("#notes-save")).to_be_visible()
+    assert not urlsplit(page.url).query
+
+
+@pytest.mark.parametrize(("navigation", "locale"), [("back", "en"), ("citation", "vi")])
+def test_fixed_history_reconciles_latest_on_navigation(live, signed_in, navigation, locale):
+    _context, page = signed_in()
+    page.add_init_script(f"localStorage.setItem('asr-studio:lang', {json.dumps(locale)})")
+    data_dir = live.settings.data_dir
+    meeting_id, generation_id, _segments = seed_completed_transcript(data_dir)
+    task = _accept(data_dir, meeting_id, generation_id, request_id="seed-navigation")
+    snapshot = get_notes_source(data_dir, _task_source_id(data_dir, task["id"]))
+    original = "The team reviewed its launch plan."
+    segment = snapshot["segments"][0]
+    note = _complete_fake_task(
+        data_dir,
+        task["id"],
+        "navigation",
+        f"## Overview\n\n- {original}\n",
+        citations=[
+            {
+                "section": "Overview",
+                "text": original,
+                "sources": [{"id": segment["id"], "start_seconds": segment["start_seconds"]}],
+            }
+        ],
+    )
+    note_id = note["id"]
+    update_note(data_dir, note_id, expected_edit_version=1, markdown="# Cached save two\n")
+    current_url = f"{live.url}/meetings/{meeting_id}#notes"
+    page.goto(current_url)
+    preview = page.locator("#notes-preview")
+    expect(preview).to_contain_text("Cached save two")
+    page.locator("#notes-mode-write").click()
+    draft = "# Unsaved local draft"
+    editor = page.locator("#notes-markdown")
+    editor.fill(draft)
+
+    # Preserve the cached meeting projection while the versions endpoint sees a newer save.
+    page.route(f"**/api/meetings/{meeting_id}/notes", lambda route: route.abort())
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# Latest save three\n")
+    if navigation == "back":
+        # The chooser replaces its entry. Give it a separate same-document entry so
+        # the real browser Back button can restore the ordinary Notes address.
+        page.evaluate("history.pushState(history.state, '', location.href)")
+    page.locator("#notes-history-open").press("Enter")
+    chooser = page.locator("#notes-history-selector")
+    chooser.select_option("1")
+    expect(chooser.locator('option[value="3"]')).to_have_count(1)
+    expect(preview).to_contain_text(original)
+    fixed_url = page.url
+
+    endpoint = f"**/api/notes/{note_id}"
+    pending = []
+    page.route(endpoint, lambda route: pending.append(route))
+    if navigation == "back":
+        chooser.focus()
+        page.go_back()
+        assert page.url == current_url
+    else:
+        preview.locator('a[href*="notes_source="]').first.click()
+        expect(page.locator("#notes-source-view")).to_be_visible()
+        assert urlsplit(page.url).fragment == "transcript"
+        assert not pending
+        # Back from the citation restores the exact fixed entry, then the Notes
+        # tab from the citation address reconciles the current entry.
+        page.go_back()
+        assert page.url == fixed_url
+        expect(preview).to_contain_text(original)
+        assert not pending
+        preview.locator('a[href*="notes_source="]').first.click()
+        page.locator("#meeting-tab-notes").click()
+        assert "notes_source=" in page.url and urlsplit(page.url).fragment == "notes"
+
+    status = page.locator("#notes-history-status")
+    waiting, failed = (
+        (
+            "Reading the latest saved version…",
+            "Could not load the latest Notes. The fixed saved version is still selected.",
+        )
+        if locale == "en"
+        else (
+            "Đang đọc phiên bản đã lưu mới nhất…",
+            "Không thể đọc bản Notes mới nhất. Vẫn đang chọn bản lưu cố định.",
+        )
+    )
+    expect(status).to_have_text(waiting)
+    focused = chooser if navigation == "back" else page.locator("#meeting-tab-notes")
+    expect(focused).to_be_focused()
+    expect(preview).to_contain_text(original)
+    expect(editor).to_be_hidden()
+    assert len(pending) == 1
+    pending.pop().fulfill(status=503, json={"detail": "Temporary failure"})
+    expect(status).to_have_text(failed)
+    retry = page.locator("#notes-history-close")
+    expect(retry if navigation == "back" else focused).to_be_focused()
+    expect(editor).to_be_hidden()
+
+    with page.expect_request(endpoint):
+        retry.press("Enter")
+    pending.pop().continue_()
+    expect(editor).to_have_value(draft)
+    expect(page.locator("#notes-history-open")).to_be_focused()
+    assert get_note(data_dir, note_id)["markdown"] == "# Latest save three\n"
+    expect(page.locator("#notes-conflict")).to_be_visible()
+    page.locator("#notes-use-latest").click()
+    expect(editor).to_have_value("# Latest save three\n")
+
+
+@pytest.mark.parametrize("locale", ["en", "vi"])
+def test_notes_history_explains_which_legacy_versions_are_available(live, signed_in, locale):
+    _context, page = signed_in(viewport={"width": 390, "height": 900})
+    page.add_init_script(f"localStorage.setItem('asr-studio:lang', {json.dumps(locale)})")
+    data_dir = live.settings.data_dir
+    meeting_id, revision, _snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = revision["id"]
+    update_note(data_dir, note_id, expected_edit_version=1, markdown="# Retained legacy save\n")
+    # Recreate the legacy baseline from the surviving projection in this test's database.
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("DELETE FROM notes_saved_versions WHERE note_id = ?", (note_id,))
+        install_notes_history(connection)
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# New save after upgrade\n")
+
+    _open_saved_notes(live, page, meeting_id)
+    page.locator("#notes-history-open").press("Enter")
+    history = page.locator("#notes-history-selector")
+    notice = page.locator("#notes-history-legacy")
+    expected = (
+        "Retained history starts at save 2. The AI original and earlier saves were overwritten "
+        "before the upgrade."
+        if locale == "en"
+        else "Lịch sử còn lưu bắt đầu ở bản lưu 2. Bản AI gốc và các lần lưu trước đó "
+        "đã bị ghi đè trước khi nâng cấp."
+    )
+    expect(notice).to_have_text(expected)
+    expect(history.locator('option[value="1"]')).to_have_count(0)
+    history.select_option("3")
+    expect(page.locator("#notes-preview")).to_contain_text("New save after upgrade")
+    expect(notice).to_have_text(expected)
+    expect(history).to_have_accessible_description(re.compile(re.escape(expected)))
 
 
 def _contrast(foreground: str, background: str) -> float:

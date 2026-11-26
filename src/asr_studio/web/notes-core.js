@@ -12,7 +12,7 @@
 // history.replaceState leave as `call` effects.
 
 import { errorMessageForCode, isWorkspaceAuthenticationFailure, responseCode, responseMessage } from "./shell-core.js";
-import { recordingReady } from "./history-core.js";
+import { meetingIdFromPathname, recordingReady } from "./history-core.js";
 
 export const VIEW_MODE_KEY = "asr-studio:notes-view-mode";
 export const ACTIVE_TASK_STATES = ["accepted", "running", "stopping"];
@@ -1660,6 +1660,13 @@ const EMPTY_NOTES = Object.freeze({
   actionMessage: "",
 });
 
+const EMPTY_SAVED_HISTORY = {
+  requestId: 0, listRequestId: 0, noteId: "", editVersion: null, open: false,
+  latestEditVersion: 0, returning: null,
+  list: [], detail: null, listPending: false, detailPending: false, status: "",
+};
+const SAVED_HISTORY_LATEST = "notes/saved-history-latest";
+
 export const initialState = {
   mode: "view",
   // Once rich mode falls back to Markdown, keep that editor active until the
@@ -1718,10 +1725,13 @@ export const initialState = {
   taskSteps: {},
   snapshots: {}, // saved transcript snapshots by id
   readId: 0, // id of the latest notes read
+  readRetainedNoteIds: [], // current Notes confirmed since that meeting-wide read began
+  latestReadId: 0, // attempt to reconcile the current projection with saved history
   selectionId: 0, // changes even when the operator switches away and back
   previewContextId: 0, // dialog and clipboard results belong to the Notes context that opened them
   copyPreview: null,
   previewLoading: false,
+  savedHistory: EMPTY_SAVED_HISTORY,
   poll: { token: 0, scheduled: false },
   source: { id: 0, key: "", current: null, visible: false, status: "", focus: 0, seekIntent: 0 },
 };
@@ -1757,6 +1767,11 @@ function request(key, url, method, body, op, meta) {
 
 const notesEndpoint = (meetingId) => `/api/meetings/${encodeURIComponent(meetingId)}/notes`;
 const noteEndpoint = (noteId) => `/api/notes/${encodeURIComponent(noteId)}`;
+const savedVersionEndpoint = (noteId, editVersion = null) =>
+  `${noteEndpoint(noteId)}/versions${editVersion === null ? "" : `/${editVersion}`}`;
+const versionSelected = (state) => state.savedHistory.open && state.savedHistory.editVersion !== null;
+const displayedRevision = (state) => versionSelected(state) ? state.savedHistory.detail : selectedRevision(state);
+const displayedNoteId = (state) => versionSelected(state) ? state.savedHistory.noteId : selectedRevision(state)?.id;
 
 // A transition is { state, effects }; `then` runs the next step on the state the last one left.
 const out = (state, effects = []) => ({ state, effects });
@@ -2092,6 +2107,204 @@ function selectedRevision(state) {
   return (data && data.revisions.find((item) => item.id === data.selectedNoteId)) || null;
 }
 
+const validEditVersion = (version) => Number.isSafeInteger(version) && version > 0;
+
+function meetingAddress(href) {
+  if (typeof href !== "string") return null;
+  try {
+    const url = new URL(href, "https://asr.invalid");
+    const meetingId = meetingIdFromPathname(url.pathname);
+    return meetingId ? { url, meetingId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function savedVersionAt(address) {
+  if (!address) return null;
+  const { url, meetingId } = address;
+  const noteId = url.searchParams.get("notes_revision");
+  const value = url.searchParams.get("notes_edit");
+  const editVersion = Number(value);
+  if (!noteId || !/^[A-Za-z0-9._:-]{1,128}$/.test(noteId)
+    || !/^[1-9]\d*$/.test(value || "") || !validEditVersion(editVersion)) return null;
+  return { meetingId, noteId, editVersion };
+}
+
+export const savedVersionFromHref = (href) => savedVersionAt(meetingAddress(href));
+
+function savedVersionHref(meetingId, noteId, editVersion) {
+  const query = new URLSearchParams({ notes_revision: noteId, notes_edit: editVersion });
+  return `/meetings/${encodeURIComponent(meetingId)}?${query}#notes`;
+}
+
+function readSavedHistoryList(state) {
+  const { requestId, listRequestId: previousId, noteId } = state.savedHistory;
+  const listRequestId = previousId + 1;
+  const meta = { requestId, listRequestId, meetingId: state.meetingId, noteId };
+  return out({
+    ...state,
+    savedHistory: { ...state.savedHistory, listRequestId, listPending: true },
+  }, [request("notes/saved-history-list", savedVersionEndpoint(noteId), "GET", undefined, "saved-history-list", meta)]);
+}
+
+function openSavedHistory(state, noteId, editVersion = null) {
+  if (!state.meetingId || !noteId || (editVersion !== null && !validEditVersion(editVersion))) return out(state);
+  const requestId = state.savedHistory.requestId + 1;
+  const meetingId = state.meetingId;
+  const previous = state.savedHistory;
+  const sameNote = previous.noteId === noteId;
+  const next = {
+    ...patchNotes(state, meetingId, { actionMessage: "" }),
+    savedHistory: {
+      ...EMPTY_SAVED_HISTORY,
+      requestId, noteId, editVersion, open: true,
+      list: sameNote ? previous.list : [],
+      latestEditVersion: sameNote ? previous.latestEditVersion : 0,
+      detailPending: editVersion !== null,
+    },
+  };
+  const meta = { requestId, meetingId, noteId };
+  const result = readSavedHistoryList(next);
+  if (previous.returning) result.effects.push({ type: "cancel", key: SAVED_HISTORY_LATEST });
+  if (editVersion !== null) {
+    result.effects.push(request("notes/saved-history-detail", savedVersionEndpoint(noteId, editVersion), "GET", undefined,
+      "saved-history-detail", { ...meta, editVersion }));
+  } else if (previous.detailPending) {
+    result.effects.push({ type: "cancel", key: "notes/saved-history-detail" });
+  }
+  return result;
+}
+
+function closeSavedHistory(state, href = "") {
+  if (!state.savedHistory.open) return out(state);
+  const next = {
+    ...(state.meetingId ? patchNotes(state, state.meetingId, { actionMessage: "" }) : state),
+    savedHistory: { ...EMPTY_SAVED_HISTORY, requestId: state.savedHistory.requestId + 1 },
+  };
+  const effects = [
+    { type: "cancel", key: "notes/saved-history-list" },
+    { type: "cancel", key: "notes/saved-history-detail" },
+  ];
+  if (state.savedHistory.returning) effects.push({ type: "cancel", key: SAVED_HISTORY_LATEST });
+  if (savedVersionFromHref(href)) {
+    const url = new URL(href, state.origin || "https://asr.invalid");
+    url.searchParams.delete("notes_revision");
+    url.searchParams.delete("notes_edit");
+    effects.push(call("replaceUrl", [`${url.pathname}${url.search}${url.hash}`]));
+  }
+  return out(next, effects);
+}
+
+function finishReturnToLatest(state, noteId, href, close) {
+  const closed = closeSavedHistory(state, href);
+  const selected = currentEntry(state).selectedNoteId === noteId
+    ? closed
+    : then(closed, (next) => out({
+      ...patchNotes(next, next.meetingId, { selectedNoteId: noteId }),
+      richFallback: false,
+    }));
+  return close ? selected : then(selected, (next) => openSavedHistory(next, noteId));
+}
+
+function cancelLatestHistory(state) {
+  if (!state.savedHistory.returning) return out(state);
+  return out({
+    ...state,
+    savedHistory: { ...state.savedHistory, returning: null },
+  }, [{ type: "cancel", key: SAVED_HISTORY_LATEST }]);
+}
+
+function returnToLatest(state, href, close, navigation = false) {
+  const history = state.savedHistory;
+  if (!history.open) return out(state);
+  if (history.returning?.phase === "pending") {
+    if (!navigation || (history.returning.href === href && history.returning.close === close)) return out(state);
+    return out({ ...state, savedHistory: { ...history, returning: { phase: "pending", href, close } } });
+  }
+  if (!navigation && !history.latestEditVersion) return close ? closeSavedHistory(state, href) : out(state);
+  // The retry button retains the intent of the original control.
+  if (!navigation && close && history.returning) close = history.returning.close;
+  if (!versionSelected(state)) return finishReturnToLatest(state, history.noteId, href, close);
+  const latestReadId = state.latestReadId + 1;
+  return out({
+    ...state,
+    latestReadId,
+    savedHistory: { ...history, returning: { phase: "pending", close, href } },
+  }, [request(SAVED_HISTORY_LATEST, noteEndpoint(history.noteId), "GET", undefined, "saved-history-latest", {
+    meetingId: state.meetingId, noteId: history.noteId, requestId: history.requestId, latestReadId,
+  })]);
+}
+
+function matchesSavedHistory(state, { meetingId, noteId, requestId }) {
+  const history = state.savedHistory;
+  return history.open && state.meetingId === meetingId && history.noteId === noteId && history.requestId === requestId;
+}
+
+function staleSavedHistoryRead(state, meta) {
+  const history = state.savedHistory;
+  if (meta.op === "saved-history-list") {
+    return !matchesSavedHistory(state, meta) || !history.listPending || history.listRequestId !== meta.listRequestId;
+  }
+  if (meta.op === "saved-history-detail") {
+    return !matchesSavedHistory(state, meta) || !history.detailPending || history.editVersion !== meta.editVersion;
+  }
+  return false;
+}
+
+function staleLatestRead(state, meta) {
+  return meta.op === "saved-history-latest" && (!matchesSavedHistory(state, meta)
+    || state.savedHistory.returning?.phase !== "pending" || state.latestReadId !== meta.latestReadId);
+}
+
+function latestHistoryAnswered(state, action, failed = false) {
+  const history = state.savedHistory;
+  const { meetingId, noteId } = action.meta;
+  const latest = failed ? null : parseDetail(object(action.response.body));
+  if (!latest || latest.id !== noteId || latest.meeting_id !== meetingId
+    || !validEditVersion(latest.edit_version) || latest.edit_version < history.latestEditVersion) {
+    return out({ ...state, savedHistory: { ...history, returning: { ...history.returning, phase: "failed" } } });
+  }
+  const next = patchNotes(state, meetingId, { revisions: replaceRevision(currentEntry(state), latest) });
+  return finishReturnToLatest({
+    ...next,
+    readRetainedNoteIds: [...new Set([...state.readRetainedNoteIds, noteId])],
+  }, noteId, history.returning.href, history.returning.close);
+}
+
+function savedHistoryAnswered(state, action, failed = false) {
+  const history = state.savedHistory;
+  const { meetingId, noteId, editVersion } = action.meta;
+  const values = object(action.response?.body) || {};
+  const message = t("Không thể đọc bản Notes đã lưu theo yêu cầu.");
+  if (action.meta.op === "saved-history-list") {
+    const list = !failed && values.id === noteId && values.meeting_id === meetingId && Array.isArray(values.versions)
+      ? values.versions.filter((item) => item?.note_id === noteId && validEditVersion(item.edit_version)
+        && ["ai", "operator", "legacy"].includes(item.origin) && typeof item.saved_at === "string")
+      : null;
+    const latestEditVersion = list
+      ? list.reduce((highest, item) => Math.max(highest, item.edit_version),
+        Math.max(history.latestEditVersion, validEditVersion(values.latest_edit_version) ? values.latest_edit_version : 0))
+      : history.latestEditVersion;
+    return out({
+      ...state,
+      savedHistory: { ...history, latestEditVersion, listPending: false, list: list || history.list, status: list ? history.status : message },
+    });
+  }
+  const detail = failed ? null : parseDetail(values);
+  const matches = detail && detail.meeting_id === meetingId && detail.id === noteId && detail.edit_version === editVersion;
+  return out({
+    ...(matches ? patchNotes(state, meetingId, { selectedNoteId: noteId }) : state),
+    savedHistory: {
+      ...history,
+      latestEditVersion: matches ? Math.max(history.latestEditVersion, editVersion) : history.latestEditVersion,
+      detailPending: false,
+      detail: matches ? detail : null,
+      status: matches ? history.status : message,
+    },
+  });
+}
+
 const draftIsDirty = (draft) => Boolean(draft && draft.value !== draft.baselineMarkdown);
 
 // Dirty drafts make the page ask before it unloads (history.js adds its own transcript drafts).
@@ -2137,8 +2350,7 @@ function reconcileDraft(draft, revision) {
   return draft;
 }
 
-// What the old view did while rendering: the selected revision gets its draft made or reconciled with the
-// saved text, and a running task's step is remembered. Idempotent, so it runs after every action.
+// Reconcile derived state after each action, including every accepted meeting projection.
 function settle(state) {
   const id = state.meetingId;
   const data = id && state.notes[id];
@@ -2148,6 +2360,14 @@ function settle(state) {
   if (revision) {
     const draft = reconcileDraft(state.drafts[revision.id], revision);
     if (draft !== state.drafts[revision.id]) next = { ...next, drafts: { ...next.drafts, [revision.id]: draft } };
+  }
+  const history = state.savedHistory;
+  if (history.open) {
+    // The linked Note's observed edit outlives any omission from the meeting list.
+    const projected = data.revisions.find((item) => item.id === history.noteId)?.edit_version;
+    if (validEditVersion(projected) && projected > history.latestEditVersion) {
+      next = { ...next, savedHistory: { ...history, latestEditVersion: projected } };
+    }
   }
   const task = data.task;
   if (task && isActiveStatus(task.status) && Object.hasOwn(TASK_STEP_OF_STAGE, task.stage)) {
@@ -2162,7 +2382,7 @@ function replaceRevision(data, updated) {
   if (!normalized) return data.revisions;
   const index = data.revisions.findIndex((item) => item.id === normalized.id);
   if (index < 0) return [normalized, ...data.revisions];
-  return data.revisions.map((item, at) => (at === index ? normalized : item));
+  return data.revisions.map((item, at) => (at === index && normalized.edit_version >= item.edit_version ? normalized : item));
 }
 
 const patchDraft = (state, revisionId, patch) => ({
@@ -2174,7 +2394,7 @@ const patchDraft = (state, revisionId, patch) => ({
 
 function readNotes(state, meetingId, poll = null, broadcast = false) {
   const id = state.readId + 1;
-  return out({ ...state, readId: id }, [request(`notes/read/${id}`, notesEndpoint(meetingId), "GET", undefined, "read", { id, meetingId, poll, broadcast })]);
+  return out({ ...state, readId: id, readRetainedNoteIds: [] }, [request(`notes/read/${id}`, notesEndpoint(meetingId), "GET", undefined, "read", { id, meetingId, poll, broadcast })]);
 }
 
 function stopPolling(state) {
@@ -2227,7 +2447,21 @@ function notesChanged(before, parsed) {
 function installNotes(state, meetingId, parsed, broadcast = false) {
   const before = entryOf(state, meetingId);
   const wasActive = activeTask(before);
-  let result = out(patchNotes(state, meetingId, { revisions: parsed.revisions, task: parsed.task }));
+  // A meeting read can predate an independently read or acknowledged Save.
+  const previous = new Map(before.revisions.map((revision) => [revision.id, revision]));
+  const revisions = parsed.revisions.map((revision) => {
+    const cached = previous.get(revision.id);
+    return cached && cached.edit_version > revision.edit_version
+      ? { ...cached, source_state: revision.source_state }
+      : revision;
+  });
+  // The in-flight list may have been fetched before a Note confirmed by a later current GET existed.
+  const listed = new Set(parsed.revisions.map((revision) => revision.id));
+  for (const id of state.readRetainedNoteIds) {
+    const cached = previous.get(id);
+    if (cached && !listed.has(id)) revisions.push(cached);
+  }
+  let result = out(patchNotes(state, meetingId, { revisions, task: parsed.task }));
   // A finished run frees its provider, so catalogs that were blocked can load again.
   if (wasActive && !activeTask(entryOf(result.state, meetingId))) {
     result = then(result, (s) => loadChoice(patchChoice(s, { message: "" }), meetingId));
@@ -2259,7 +2493,7 @@ function installNotes(state, meetingId, parsed, broadcast = false) {
     if (sameRequest) result.effects.push({ type: "cancel", key: `notes/start/${meetingId}` });
   }
   result.effects.push(lockEffect(meetingId, parsed.sourceLocked, true));
-  if (broadcast && notesChanged(before, parsed)) result.effects.push(meetingChangeEffect(meetingId, "notes"));
+  if (broadcast && notesChanged(before, { ...parsed, revisions })) result.effects.push(meetingChangeEffect(meetingId, "notes"));
   return then(result, (s) => startPolling(s, meetingId, entryOf(s, meetingId).task));
 }
 
@@ -2691,6 +2925,7 @@ function cancelFailed(state, meta, error) {
 // ---- saving a revision and the saved copy ----
 
 function saveSelectedNote(state) {
+  if (versionSelected(state)) return out(state);
   const meetingId = state.meetingId;
   const data = currentEntry(state);
   const revision = data && data.revisions.find((item) => item.id === data.selectedNoteId);
@@ -2725,7 +2960,12 @@ function saveAnswered(state, action) {
     conflict: null,
     generatedEntities: [],
   });
-  return out(doneSaving(next, meetingId, revisionId, { runError: "", actionMessage: t("Markdown đã được lưu.") }), [meetingChangeEffect(meetingId, "notes")]);
+  const savedState = doneSaving(next, meetingId, revisionId, { runError: "", actionMessage: t("Markdown đã được lưu.") });
+  const result = out(savedState, [meetingChangeEffect(meetingId, "notes")]);
+  if (savedState.meetingId === meetingId && savedState.savedHistory.open && savedState.savedHistory.noteId === revisionId) {
+    return then(result, readSavedHistoryList);
+  }
+  return result;
 }
 
 function saveFailed(state, action) {
@@ -2793,38 +3033,45 @@ const blockedSavedAction = (data, noteId, draft) => draftIsDirty(draft) || Boole
 function readSavedMarkdown(state, action) {
   const meetingId = state.meetingId;
   const data = currentEntry(state);
-  const revision = selectedRevision(state);
+  const exactVersion = versionSelected(state) ? state.savedHistory.editVersion : null;
+  const revision = displayedRevision(state);
   if (!revision) return out(state);
   const draft = state.drafts[revision.id];
-  if (blockedSavedAction(data, revision.id, draft)) {
+  if (exactVersion === null && blockedSavedAction(data, revision.id, draft)) {
     return out(patchNotes(state, meetingId, { actionMessage: t("Lưu hoặc giải quyết bản nháp trước khi sao chép hay tải xuống.") }));
   }
   const preview = isPreviewAction(action);
   if (preview && state.activeTab !== "notes") return out(state);
   const next = preview
     ? { ...patchNotes(state, meetingId, { actionMessage: "" }), previewLoading: true }
-    : patchNotes(state, meetingId, { actionMessage: t("Đang đọc phiên bản đã lưu mới nhất…") });
+    : patchNotes(state, meetingId, { actionMessage: t("Đang đọc bản Notes đã lưu…") });
+  const endpoint = exactVersion === null ? noteEndpoint(revision.id) : savedVersionEndpoint(revision.id, exactVersion);
   return out(next, [
-    request(preview ? PREVIEW_READ : `notes/authoritative/${action}`, noteEndpoint(revision.id), "GET", undefined, "authoritative", {
+    request(preview ? PREVIEW_READ : `notes/authoritative/${action}`, endpoint, "GET", undefined, "authoritative", {
       previewContextId: preview ? state.previewContextId : null,
       selectionId: state.selectionId,
       meetingId,
       noteId: revision.id,
       action,
-      currentValue: draft.value,
-      expectedVersion: draft.expectedEditVersion,
+      exactVersion,
+      currentValue: draft?.value,
+      expectedVersion: draft?.expectedEditVersion,
     }),
   ]);
 }
 
 function savedMarkdownRead(state, action, failed) {
-  const { meetingId, noteId, currentValue, expectedVersion } = action.meta;
+  const { meetingId, noteId, currentValue, expectedVersion, exactVersion } = action.meta;
   if (isPreviewAction(action.meta.action)) state = { ...state, previewLoading: false };
   const message = (actionMessage) => out(patchNotes(state, meetingId, { actionMessage }));
   if (failed) return message(apiError(action.error).message || t("Không thể đọc bản notes đã lưu mới nhất."));
   const latest = parseDetail(object(action.response.body));
   if (!latest) return message(t("Máy chủ không trả về revision notes hợp lệ."));
   if (latest.id !== noteId || latest.meeting_id !== meetingId) return message(t("Revision notes mới nhất không khớp cuộc họp."));
+  if (exactVersion !== null && exactVersion !== undefined) {
+    if (latest.edit_version !== exactVersion) return message(t("Không thể đọc bản Notes đã lưu theo yêu cầu."));
+    return performSavedMarkdownAction(state, action.meta.action, latest);
+  }
   const data = currentEntry(state);
   const draft = state.drafts[noteId];
   if (data.saving[noteId] || latest.edit_version < selectedRevision(state).edit_version) {
@@ -2844,28 +3091,32 @@ function savedMarkdownRead(state, action, failed) {
       generatedEntities: [],
     });
   }
-  if (action.meta.action === "copy") {
-    return out(patchNotes(next, meetingId, { actionMessage: "" }), [
+  return performSavedMarkdownAction(next, action.meta.action, latest);
+}
+
+function performSavedMarkdownAction(state, kind, latest) {
+  const { meetingId } = state;
+  if (kind === "copy") {
+    return out(patchNotes(state, meetingId, { actionMessage: "" }), [
       call("copy", [latest.markdown], { key: "notes/copy", ok: "notes/copied", error: "notes/copy-failed", meta: { editVersion: latest.edit_version, selectionId: state.selectionId } }),
     ]);
   }
-  if (action.meta.action === "export") {
+  if (kind === "export") {
     return out(
-      patchNotes(next, meetingId, { actionMessage: t("Đã tải bản đã lưu · edit {version}.", { version: latest.edit_version }) }),
+      patchNotes(state, meetingId, { actionMessage: t("Đã tải bản đã lưu · edit {version}.", { version: latest.edit_version }) }),
       [call("download", [safeFilename(state.meeting && state.meeting.title), latest.markdown])],
     );
   }
-  const kind = action.meta.action;
   const blocks = markdownBlocks(latest.markdown, latest, state.origin, "clipboard");
   const heading = headingText(blocks[0]);
   const content = {
-    kind, noteId, editVersion: latest.edit_version,
+    kind, noteId: latest.id, editVersion: latest.edit_version,
     blocks: kind === "email" ? emailBlocks(blocks) : blocks,
     subject: kind === "email"
       ? ((!emailSectionName(heading) && heading) || state.meeting?.title || "").replace(/\s+/g, " ").trim() : "",
     markdown: latest.markdown,
   };
-  return out({ ...patchNotes(next, meetingId, { actionMessage: "" }), copyPreview: { content, copying: false, status: "" } });
+  return out({ ...patchNotes(state, meetingId, { actionMessage: "" }), copyPreview: { content, copying: false, status: "" } });
 }
 
 function copyPreview(state) {
@@ -3028,8 +3279,28 @@ function closeSource(state, href) {
   return out(next, effects);
 }
 
+function handleLocation(state, href, navigation) {
+  const address = meetingAddress(href);
+  const version = savedVersionAt(address);
+  if (version && version.meetingId === state.meetingId && state.view === "meeting") {
+    const { noteId, editVersion } = version;
+    const same = state.savedHistory.noteId === noteId && state.savedHistory.editVersion === editVersion && versionSelected(state);
+    const fixed = same
+      ? (navigation ? cancelLatestHistory(state) : out(state))
+      : openSavedHistory(state, noteId, editVersion);
+    return then(fixed, (s) => s.source.key ? closeSource(s, null) : out(s));
+  }
+  // A context refresh can repeat the current address while a reconciliation is
+  // pending or has failed. Only navigation away from the fixed entry requests latest.
+  const result = navigation && versionSelected(state) && state.activeTab === "notes"
+      && address?.meetingId === state.meetingId
+    ? returnToLatest(state, href, true, true)
+    : out(state);
+  return then(result, (s) => handleSourceLocation(s, href));
+}
+
 // One flow for a chip click, a pasted link, Back and Forward: open the source the page address names.
-function handleLocation(state, href) {
+function handleSourceLocation(state, href) {
   const reference = sourceFromHref(href);
   if (!reference || reference.meetingId !== state.meetingId || state.view !== "meeting") {
     return !reference && state.source.key ? closeSource(state, null) : out(state);
@@ -3080,12 +3351,15 @@ function meetingContext(state, action) {
   }
   if (leavingNotes) {
     next = { ...next, previewContextId: state.previewContextId + 1, copyPreview: null, previewLoading: false };
+    const canceled = cancelLatestHistory(next);
+    next = canceled.state;
+    previewEffects.push(...canceled.effects);
   }
   const meetingId = meeting && meeting.id;
   if (!meetingId) {
     const stopped = stopPolling(patchRegenerate({ ...next, meetingId: null }, { open: false, error: "" }));
     stopped.effects.push(...previewEffects);
-    return stopped;
+    return then(stopped, closeSavedHistory);
   }
   const changed = state.meetingId !== meetingId;
   next = { ...next, meetingId };
@@ -3093,6 +3367,7 @@ function meetingContext(state, action) {
   if (changed) {
     if (state.meetingId) result = then(result, (s) => out(patchNotes(s, state.meetingId, { actionMessage: "" })));
     result = then(result, stopPolling);
+    result = then(result, closeSavedHistory);
     result = then(result, (s) => out(patchChoice(s, { open: false })));
     result = then(result, (s) => out(patchRegenerate(s, { open: false, error: "" })));
     result = then(result, (s) => out(patchNotes(s, meetingId, { sourceLockKnown: false, known: false })));
@@ -3112,14 +3387,16 @@ function meetingContext(state, action) {
   // authoritative context; repeated paints still update local state and lock effects.
   if (changed || previousMeeting !== meeting) result = then(result, (s) => readNotes(s, meetingId));
   if (changed || !result.state.choice.loaded) result = then(result, (s) => loadChoice(s, meetingId));
-  return then(result, (s) => handleLocation(s, action.href));
+  // Tab clicks push through History without a popstate event.
+  const enteringNotes = state.activeTab !== "notes" && activeTab === "notes";
+  return then(result, (s) => handleLocation(s, action.href, enteringNotes));
 }
 
 // ---- the reducer ----
 
 function response(state, action) {
   const { meta } = action;
-  if (staleAuthoritativeRead(state, meta)) return out(state);
+  if (staleAuthoritativeRead(state, meta) || staleLatestRead(state, meta) || staleSavedHistoryRead(state, meta)) return out(state);
   if (staleTaskRequest(state, meta)) return out(state);
   switch (meta.op) {
     case "read": {
@@ -3145,6 +3422,11 @@ function response(state, action) {
       return conflictLatest(state, action, false);
     case "authoritative":
       return savedMarkdownRead(state, action, false);
+    case "saved-history-list":
+    case "saved-history-detail":
+      return savedHistoryAnswered(state, action);
+    case "saved-history-latest":
+      return latestHistoryAnswered(state, action);
     case "source-snapshot":
       return snapshotAnswered(state, action);
     default:
@@ -3154,7 +3436,7 @@ function response(state, action) {
 
 function requestFailed(state, action) {
   const { meta } = action;
-  if (staleAuthoritativeRead(state, meta)) return out(state);
+  if (staleAuthoritativeRead(state, meta) || staleLatestRead(state, meta) || staleSavedHistoryRead(state, meta)) return out(state);
   if (staleTaskRequest(state, meta)) return out(state);
   if (isWorkspaceAuthenticationFailure(action.error?.status, action.error?.body)) {
     const meetingId = state.meetingId || meta.meetingId;
@@ -3190,6 +3472,11 @@ function requestFailed(state, action) {
       return conflictLatest(state, action, true);
     case "authoritative":
       return savedMarkdownRead(state, action, true);
+    case "saved-history-list":
+    case "saved-history-detail":
+      return savedHistoryAnswered(state, action, true);
+    case "saved-history-latest":
+      return latestHistoryAnswered(state, action, true);
     case "source-snapshot":
       return action.meta.id === state.source.id ? sourceFailed(state, error.message) : out(state);
     default:
@@ -3232,7 +3519,7 @@ function transition(state, action) {
     case "notes/context":
       return meetingContext(state, action);
     case "notes/location-changed":
-      return handleLocation(state, action.href);
+      return handleLocation(state, action.href, true);
     case "notes/response":
       return response(state, action);
     case "notes/request-failed":
@@ -3339,13 +3626,14 @@ function transition(state, action) {
       return action.model ? savePreference(state, selectedProvider(state, null), action.model) : out(state);
     case "notes/revision-picked": {
       if (!state.meetingId) return out(state);
-      return out({
-        ...patchNotes(state, state.meetingId, { selectedNoteId: action.id || null, actionMessage: "" }),
+      return then(closeSavedHistory(state, action.href), (s) => out({
+        ...patchNotes(s, s.meetingId, { selectedNoteId: action.id || null, actionMessage: "" }),
         richFallback: false,
-      });
+      }));
     }
     case "notes/draft-edited":
     case "notes/rich-edited": {
+      if (versionSelected(state)) return out(state);
       const revision = selectedRevision(state);
       if (!revision || currentEntry(state).saving[revision.id]) return out(state);
       const draft = state.drafts[revision.id];
@@ -3374,8 +3662,9 @@ function transition(state, action) {
       }), state.meetingId, { actionMessage: "" }));
     }
     case "notes/mode-chosen":
-      return ["view", "write", "rich"].includes(action.mode) ? changeMode(state, action.mode) : out(state);
+      return !versionSelected(state) && ["view", "write", "rich"].includes(action.mode) ? changeMode(state, action.mode) : out(state);
     case "notes/edit-canceled": {
+      if (versionSelected(state)) return out(state);
       const revision = selectedRevision(state);
       if (!revision || currentEntry(state).saving[revision.id]) return out(state);
       const draft = state.drafts[revision.id];
@@ -3387,9 +3676,40 @@ function transition(state, action) {
     case "notes/save-clicked":
       return saveSelectedNote(state);
     case "notes/keep-draft-clicked":
-      return keepDraftAndSaveLatest(state);
+      return versionSelected(state) ? out(state) : keepDraftAndSaveLatest(state);
     case "notes/use-latest-clicked":
-      return useLatestSavedNote(state);
+      return versionSelected(state) ? out(state) : useLatestSavedNote(state);
+    case "notes/saved-history-opened": {
+      const note = selectedRevision(state);
+      return note ? openSavedHistory(state, note.id) : out(state);
+    }
+    case "notes/saved-history-picked": {
+      if (!state.savedHistory.open || (action.editVersion !== null && !validEditVersion(action.editVersion))) return out(state);
+      const { noteId } = state.savedHistory;
+      if (action.editVersion === null) return returnToLatest(state, action.href, false);
+      if (action.editVersion === state.savedHistory.editVersion) return out(state);
+      const opened = openSavedHistory(state, noteId, action.editVersion);
+      opened.effects.push(call("replaceUrl", [savedVersionHref(state.meetingId, noteId, action.editVersion)]));
+      return opened;
+    }
+    case "notes/saved-history-link": {
+      const { detail, requestId } = state.savedHistory;
+      if (!detail || !versionSelected(state)) return out(state);
+      const href = savedVersionHref(state.meetingId, detail.id, detail.edit_version);
+      return out(state, [call("copy", [`${state.origin}${href}`], {
+        key: "notes/saved-history-link", ok: "notes/saved-history-link-copied",
+        error: "notes/saved-history-link-failed", meta: { requestId },
+      })]);
+    }
+    case "notes/saved-history-link-copied":
+    case "notes/saved-history-link-failed": {
+      if (state.savedHistory.requestId !== action.meta.requestId) return out(state);
+      const status = action.type === "notes/saved-history-link-copied"
+        ? t("Đã sao chép liên kết bản Notes đã lưu.") : t("Không thể sao chép liên kết bản Notes.");
+      return out({ ...state, savedHistory: { ...state.savedHistory, status } });
+    }
+    case "notes/saved-history-closed":
+      return returnToLatest(state, action.href, true);
     case "notes/copy-clicked":
       return readSavedMarkdown(state, "copy");
     case "notes/export-clicked":
@@ -3512,19 +3832,21 @@ export function reduce(state, action) {
   const result = transition(state, action);
   let next = settle(result.state);
   const effects = result.effects;
-  const previous = selectedRevision(state);
-  const selected = selectedRevision(next);
-  if (state.meetingId !== next.meetingId || previous?.id !== selected?.id) {
+  const noteChanged = state.meetingId !== next.meetingId || displayedNoteId(state) !== displayedNoteId(next);
+  if (noteChanged || state.savedHistory.editVersion !== next.savedHistory.editVersion) {
     next = {
       ...next,
       selectionId: state.selectionId + 1,
       copyPreview: null,
       previewLoading: false,
-      richFallback: false,
+      richFallback: noteChanged ? false : next.richFallback,
     };
     for (const key of AUTHORITATIVE_KEYS) effects.push({ type: "cancel", key });
-  } else if (next.copyPreview && selected && blockedSavedAction(currentEntry(next), selected.id, next.drafts[selected.id])) {
-    next = { ...next, copyPreview: null };
+  } else if (!versionSelected(next) && next.copyPreview) {
+    const selected = selectedRevision(next);
+    if (selected && blockedSavedAction(currentEntry(next), selected.id, next.drafts[selected.id])) {
+      next = { ...next, copyPreview: null };
+    }
   }
   const summary = selectSummary(next);
   if (summary && (action.type === "notes/context" || !sameSummary(selectSummary(state), summary))) {
@@ -3689,24 +4011,104 @@ function revisionOptionLabel(revision, index, count) {
   return provenance.length ? [label, ` · ${provenance.join(" / ")}`] : label;
 }
 
-function savedWorkView(state, data) {
-  const revision = selectedRevision(state);
-  const optionsKey = data
-    ? data.revisions.map((item) => `${item.id}\u0001${item.provider || ""}\u0001${item.model || ""}`).join("\u0000")
-    : "";
-  const options = [];
-  if (data && data.selectedNoteId && !data.revisions.some((item) => item.id === data.selectedNoteId)) {
-    options.push({ value: data.selectedNoteId, text: t("Phiên bản đã chọn không còn trong danh sách") });
+function revisionMeta(revision) {
+  return [
+    SOURCE_STATE_LABELS[revision.source_state] || t("Nguồn chưa xác định"),
+    t("Ngôn ngữ: {language}", { language: OUTPUT_LANGUAGE_LABELS[revision.output_language] || OUTPUT_LANGUAGE_LABELS.en }),
+    revisionProvenance(revision).join(" · "),
+    `Edit ${revision.edit_version}`,
+  ].filter(Boolean).flatMap((part, index) => (index ? [" · ", part] : [part]));
+}
+
+function revisionWarnings(revision) {
+  const warnings = revision?.warnings;
+  return warnings?.length ? { count: warnings.length, first: warnings[0].href } : null;
+}
+
+function savedHistoryView(state) {
+  const { open, list, listPending, editVersion, detail, detailPending, returning, status, latestEditVersion } = state.savedHistory;
+  const hasLatestTarget = latestEditVersion > 0;
+  const latestPhase = returning?.phase || "";
+  const legacy = list.find((item) => item.origin === "legacy");
+  const origins = { ai: t("Bản AI gốc"), operator: t("Người dùng lưu"), legacy: t("Bản còn lưu khi nâng cấp") };
+  const options = [{ value: "", text: t("Bản mới nhất"), disabled: !hasLatestTarget || latestPhase === "pending" }];
+  for (const item of list.slice().reverse()) {
+    options.push({
+      value: String(item.edit_version),
+      text: [
+        t("Bản lưu {version} · {origin}", { version: item.edit_version, origin: origins[item.origin] }),
+        " · ",
+        { fmt: "timestamp", value: item.saved_at.includes(" ") ? item.saved_at.replace(" ", "T") + "Z" : item.saved_at },
+      ],
+    });
   }
-  if (data) data.revisions.forEach((item, index) => options.push({ value: item.id, text: revisionOptionLabel(item, index, data.revisions.length) }));
+  if (editVersion !== null && !list.some((item) => item.edit_version === editVersion)) {
+    options.push({ value: String(editVersion), text: t("Bản lưu {version}", { version: editVersion }) });
+  }
+  return {
+    open,
+    options,
+    selected: editVersion === null ? "" : String(editVersion),
+    linkDisabled: !detail,
+    latestPhase,
+    closeLabel: !hasLatestTarget ? t("Đóng lịch sử") : latestPhase === "failed"
+      ? t("Thử đọc lại bản mới nhất") : t("Về bản mới nhất"),
+    legacyNotice: legacy
+      ? t("Lịch sử còn lưu bắt đầu ở bản lưu {version}. Bản AI gốc và các lần lưu trước đó đã bị ghi đè trước khi nâng cấp.", { version: legacy.edit_version })
+      : "",
+    status: {
+      pending: t("Đang đọc phiên bản đã lưu mới nhất…"),
+      failed: t("Không thể đọc bản Notes mới nhất. Vẫn đang chọn bản lưu cố định."),
+    }[latestPhase] || (detailPending || (listPending && !detail)
+      ? t("Đang đọc lịch sử lưu Notes…")
+      : status || (detail ? t("Đang xem bản lưu cố định. Có thể sao chép hoặc tải bản này.") : "")),
+  };
+}
+
+function savedWorkView(state, data) {
+  const pinned = versionSelected(state);
+  const revision = displayedRevision(state);
+  const selected = (pinned ? state.savedHistory.noteId : data?.selectedNoteId) || "";
+  const revisions = data?.revisions || [];
+  const missing = selected && !revisions.some((item) => item.id === selected) ? selected : "";
+  const fixedVersion = pinned && state.savedHistory.latestEditVersion > 0 ? state.savedHistory.editVersion : "";
+  const missingKey = missing ? `${missing}\u0001${Boolean(data?.known)}\u0001${fixedVersion}` : "";
+  const optionsKey = [missingKey, ...revisions.map((item) => `${item.id}\u0001${item.provider || ""}\u0001${item.model || ""}`)].join("\u0000");
+  const options = [];
+  if (missing) {
+    options.push({ value: missing, text: fixedVersion
+      ? t("Bản lưu {version}", { version: fixedVersion })
+      : data?.known
+      ? t("Phiên bản đã chọn không còn trong danh sách")
+      : t("Đang đọc lịch sử lưu Notes…") });
+  }
+  revisions.forEach((item, index) => options.push({ value: item.id, text: revisionOptionLabel(item, index, revisions.length) }));
   const view = {
-    hidden: !revision,
-    mode: state.mode,
+    hidden: !revision && !pinned,
+    pinned,
+    mode: pinned ? "view" : state.mode,
     selectorKey: optionsKey,
     options,
-    selected: data && data.selectedNoteId ? data.selectedNoteId : "",
+    selected,
     revision,
   };
+  if (pinned) {
+    return {
+      ...view,
+      selectionId: state.selectionId,
+      draftValue: "",
+      textareaDisabled: true,
+      meta: revision ? revisionMeta(revision) : "",
+      warning: revisionWarnings(revision),
+      blocks: revision ? markdownBlocks(revision.markdown, revision, state.origin, "view") : [],
+      saveDisabled: true,
+      copyDisabled: !revision,
+      cancelDisabled: true,
+      draftStatus: "",
+      viewDraftHidden: true,
+      writeLabel: t("Viết"),
+    };
+  }
   if (!revision) {
     return {
       ...view,
@@ -3717,7 +4119,6 @@ function savedWorkView(state, data) {
   const draft = state.drafts[revision.id];
   const dirty = draftIsDirty(draft);
   const busy = Boolean(data.saving[revision.id]);
-  const provenance = revisionProvenance(revision).join(" · ");
   const blocks = state.mode === "write" ? [] : markdownBlocks(draft.value, revision, state.origin, state.mode);
   const richFallback = state.mode === "rich" && (state.richFallback || !canEditRich(blocks));
   return {
@@ -3727,13 +4128,8 @@ function savedWorkView(state, data) {
     selectionId: state.selectionId,
     draftValue: draft.value,
     textareaDisabled: busy,
-    meta: [
-      SOURCE_STATE_LABELS[revision.source_state] || t("Nguồn chưa xác định"),
-      t("Ngôn ngữ: {language}", { language: OUTPUT_LANGUAGE_LABELS[revision.output_language] || OUTPUT_LANGUAGE_LABELS.en }),
-      provenance,
-      `Edit ${revision.edit_version}`,
-    ].filter(Boolean).flatMap((part, index) => (index ? [" · ", part] : [part])),
-    warning: revision.warnings.length ? { count: revision.warnings.length, first: revision.warnings[0].href } : null,
+    meta: revisionMeta(revision),
+    warning: revisionWarnings(revision),
     blocks,
     saveDisabled: !dirty || busy,
     copyDisabled: blockedSavedAction(data, revision.id, draft),
@@ -3752,11 +4148,12 @@ function savedWorkView(state, data) {
 
 function sourceView(state) {
   const { current, visible, status, focus } = state.source;
+  const revision = displayedRevision(state);
   return {
-    members: current ? (selectedRevision(state)?.display_citations || [])
+    members: current ? (revision?.display_citations || [])
       .flatMap((entry) => entry.sources)
-      .filter((group) => selectedRevision(state).source_snapshot_id === current.snapshotId && group.members?.length > 1 && group.members.map((member) => member.id).join(",") === current.group && group.members.some((member) => member.id === current.segmentId))
-      .slice(0, 1).flatMap((group) => group.members.length > 1 ? group.members.map((member) => citationChip(selectedRevision(state), member, current.group)) : []) : [],
+      .filter((group) => revision.source_snapshot_id === current.snapshotId && group.members?.length > 1 && group.members.map((member) => member.id).join(",") === current.group && group.members.some((member) => member.id === current.segmentId))
+      .slice(0, 1).flatMap((group) => group.members.length > 1 ? group.members.map((member) => citationChip(revision, member, current.group)) : []) : [],
     hidden: !visible,
     context: current ? t("Đang xem bản chụp transcript bất biến. Nội dung này không đổi khi transcript hiện tại được sửa.") : "",
     time: current ? formatSeconds(current.startSeconds) : "",
@@ -3964,6 +4361,7 @@ export function selectView(state) {
     error: data ? data.runError || data.readError : "",
     regenerateDialog: regenerateView(state, data, pending),
     savedWork,
+    savedHistory: savedHistoryView(state),
     actionMessage: data?.actionMessage || (state.previewLoading ? t("Đang đọc phiên bản đã lưu mới nhất…") : ""),
     copyPreview: state.copyPreview,
     source: sourceView(state),

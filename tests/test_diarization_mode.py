@@ -10,7 +10,7 @@ from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 from asr_studio import routes
 from asr_studio.config import Settings
 from asr_studio.runtime import RuntimeProfile, write_runtime_profile
-from asr_studio.storage import database_path, initialize
+from asr_studio.storage import SCHEMA_VERSION, database_path, initialize
 from asr_studio.tasks import (
     TaskError,
     accept_transcription_task,
@@ -132,7 +132,9 @@ def test_schema_21_additive_reads_keep_legacy_provenance_nullable(tmp_path):
     )
 
     with sqlite3.connect(database_path(data_dir)) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (21,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (
+            SCHEMA_VERSION,
+        )
         task_columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
         generation_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(transcript_generations)")
