@@ -500,7 +500,7 @@
 
 .notes-trash-item-time {
   color: var(--ink-2);
-  font-size: var(--text-micro);
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
@@ -510,7 +510,7 @@
 
 .notes-trash-item-link {
   color: var(--accent);
-  font-size: var(--text-micro);
+  font-size: var(--text-label);
   line-height: 1.4;
 }
 
