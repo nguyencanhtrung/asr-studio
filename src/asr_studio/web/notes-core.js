@@ -1795,6 +1795,9 @@ export const initialState = {
   latestReadId: 0, // attempt to reconcile the current projection with saved history
   selectionId: 0, // changes even when the operator switches away and back
   previewContextId: 0, // dialog and clipboard results belong to the Notes context that opened them
+  authoritativeReadId: 0,
+  authoritativeReads: {}, // effect key -> owned read attempt
+  authoritativeMessageId: null, // owns the shared plain-copy/export status line
   copyPreview: null,
   previewLoading: false,
   savedHistory: EMPTY_SAVED_HISTORY,
@@ -2398,20 +2401,22 @@ function lifecycleError(error) {
     : t("Không thể hoàn tất thao tác. Hãy kiểm tra trạng thái rồi thử lại."));
 }
 
-function readTrash(state, meetingId) {
+function readTrash(state, meetingId, { force = false } = {}) {
   if (!meetingId) return out(state);
   const current = trashOf(state, meetingId);
-  if (current.pending) return out(state);
+  if (current.pending && !force) return out(state);
   const readId = current.readId + 1;
+  const effects = current.pending ? [{ type: "cancel", key: trashReadKey(meetingId) }] : [];
+  effects.push(request(trashReadKey(meetingId), notesTrashEndpoint(meetingId), "GET", undefined, "trash-read", {
+    meetingId,
+    readId,
+  }));
   return out(patchTrash(state, meetingId, {
     meetingId,
     readId,
     pending: true,
     error: "",
-  }), [request(trashReadKey(meetingId), notesTrashEndpoint(meetingId), "GET", undefined, "trash-read", {
-    meetingId,
-    readId,
-  })]);
+  }), effects);
 }
 
 function sameTrashSnapshot(left, right) {
@@ -2739,7 +2744,7 @@ function lifecycleMutationFailed(state, action) {
   });
   if (action.error?.status === 409 || action.error?.status === 410) {
     next = patchTrash(next, meetingId, { confirmation: null });
-    return then(out(next), (s) => readTrash(s, meetingId));
+    return then(out(next), (s) => readTrash(s, meetingId, { force: true }));
   }
   return out(next);
 }
@@ -2776,9 +2781,12 @@ function lifecycleMutationAnswered(state, action, failed = false) {
     lifecycleEpoch: state.lifecycleEpoch + 1,
   };
   if (mutation && lifecycleFixedTarget(state, mutation)) {
-    return then(out(next), (s) => openSavedHistory(s, s.savedHistory.noteId, s.savedHistory.editVersion));
+    const refreshed = then(out(next), (s) => readTrash(s, meetingId, { force: true }));
+    const reopened = then(refreshed, (s) => openSavedHistory(s, s.savedHistory.noteId, s.savedHistory.editVersion));
+    return then(reopened, retireInvalidatedAuthoritativeReads);
   }
-  return then(out(next), (s) => readTrash(s, meetingId));
+  const refreshed = then(out(next), (s) => readTrash(s, meetingId, { force: true }));
+  return then(refreshed, retireInvalidatedAuthoritativeReads);
 }
 
 const draftIsDirty = (draft) => Boolean(draft && draft.value !== draft.baselineMarkdown);
@@ -3499,8 +3507,81 @@ const PREVIEW_READ = "notes/authoritative/preview";
 const AUTHORITATIVE_KEYS = ["notes/authoritative/copy", "notes/authoritative/export", PREVIEW_READ];
 const isPreviewAction = (action) => action === "rich" || action === "email" || action === "preview-copy";
 
+function beginAuthoritativeRead(state, key, action, meetingId) {
+  const requestId = state.authoritativeReadId + 1;
+  return {
+    requestId,
+    state: {
+      ...state,
+      authoritativeReadId: requestId,
+      authoritativeReads: {
+        ...(state.authoritativeReads || {}),
+        [key]: {
+          requestId,
+          action,
+          meetingId,
+          lifecycleEpoch: state.lifecycleEpoch,
+          previewContextId: isPreviewAction(action) ? state.previewContextId : null,
+        },
+      },
+      authoritativeMessageId: isPreviewAction(action) ? state.authoritativeMessageId : requestId,
+    },
+  };
+}
+
+function finishAuthoritativeRead(state, meta) {
+  const current = state.authoritativeReads?.[meta.key];
+  if (!current || current.requestId !== meta.requestId) return state;
+  const authoritativeReads = { ...state.authoritativeReads };
+  delete authoritativeReads[meta.key];
+  return {
+    ...state,
+    authoritativeReads,
+    authoritativeMessageId: state.authoritativeMessageId === meta.requestId
+      ? null : state.authoritativeMessageId,
+  };
+}
+
+function retireInvalidatedAuthoritativeReads(state) {
+  const reads = state.authoritativeReads || {};
+  const retired = Object.entries(reads).filter(([, read]) => read.lifecycleEpoch !== state.lifecycleEpoch);
+  if (!retired.length) return out(state);
+  const authoritativeReads = { ...reads };
+  let next = state;
+  let messageRetired = false;
+  const message = t("Không thể đọc bản Notes đã lưu theo yêu cầu.");
+  const effects = [];
+  for (const [key, read] of retired) {
+    delete authoritativeReads[key];
+    effects.push({ type: "cancel", key });
+    if (key === PREVIEW_READ) {
+      next = { ...next, previewLoading: false };
+      if (read.action === "preview-copy" && next.copyPreview) {
+        next = {
+          ...next,
+          copyPreview: { ...next.copyPreview, copying: false, status: message },
+        };
+      } else if (next.authoritativeMessageId === null) {
+        next = patchNotes(next, read.meetingId, { actionMessage: message });
+      }
+    }
+    if (next.authoritativeMessageId === read.requestId) {
+      next = patchNotes(next, read.meetingId, { actionMessage: message });
+      messageRetired = true;
+    }
+  }
+  return out({
+    ...next,
+    authoritativeReads,
+    authoritativeMessageId: messageRetired ? null : next.authoritativeMessageId,
+  }, effects);
+}
+
 function staleAuthoritativeRead(state, meta) {
-  const stale = meta.op === "authoritative" && (meta.selectionId !== state.selectionId
+  const owned = state.authoritativeReads?.[meta.key];
+  const stale = meta.op === "authoritative" && (!owned || owned.requestId !== meta.requestId
+    || (!isPreviewAction(meta.action) && state.authoritativeMessageId !== meta.requestId)
+    || meta.selectionId !== state.selectionId
     || (meta.lifecycleEpoch !== undefined && meta.lifecycleEpoch !== state.lifecycleEpoch)
     || (isPreviewAction(meta.action) && (state.activeTab !== "notes" || meta.previewContextId !== state.previewContextId)));
   return stale;
@@ -3526,12 +3607,16 @@ function readSavedMarkdown(state, action) {
       : state.copyPreview;
     return out({ ...patchNotes(state, meetingId, { actionMessage: t("Không thể đọc bản Notes đã lưu theo yêu cầu.") }), copyPreview: nextPreview });
   }
+  const key = preview ? PREVIEW_READ : `notes/authoritative/${action}`;
+  const owned = beginAuthoritativeRead(state, key, action, meetingId);
   const next = preview
-    ? { ...patchNotes(state, meetingId, { actionMessage: "" }), previewLoading: true }
-    : patchNotes(state, meetingId, { actionMessage: t("Đang đọc bản Notes đã lưu…") });
+    ? { ...patchNotes(owned.state, meetingId, { actionMessage: "" }), previewLoading: true }
+    : patchNotes(owned.state, meetingId, { actionMessage: t("Đang đọc bản Notes đã lưu…") });
   const endpoint = exactVersion === null ? noteEndpoint(revision.id) : savedVersionEndpoint(revision.id, exactVersion);
   return out(next, [
     request(preview ? PREVIEW_READ : `notes/authoritative/${action}`, endpoint, "GET", undefined, "authoritative", {
+      key,
+      requestId: owned.requestId,
       previewContextId: preview ? state.previewContextId : null,
       selectionId: state.selectionId,
       lifecycleEpoch: state.lifecycleEpoch,
@@ -3547,6 +3632,7 @@ function readSavedMarkdown(state, action) {
 
 function savedMarkdownRead(state, action, failed) {
   const { meetingId, noteId, currentValue, expectedVersion, exactVersion } = action.meta;
+  state = finishAuthoritativeRead(state, action.meta);
   if (isPreviewAction(action.meta.action)) state = { ...state, previewLoading: false };
   const message = (actionMessage) => out(patchNotes(state, meetingId, { actionMessage }));
   if (failed) {
@@ -3632,12 +3718,15 @@ function copyPreview(state) {
   const content = preview.content;
   if (!content || typeof content.noteId !== "string" || !validEditVersion(content.editVersion)
     || !state.meetingId || state.activeTab !== "notes") return out(state);
+  const owned = beginAuthoritativeRead(state, PREVIEW_READ, "preview-copy", state.meetingId);
   const next = {
-    ...state,
+    ...owned.state,
     previewLoading: true,
     copyPreview: { ...preview, copying: true, status: "" },
   };
   return out(next, [request(PREVIEW_READ, savedVersionEndpoint(content.noteId, content.editVersion), "GET", undefined, "authoritative", {
+    key: PREVIEW_READ,
+    requestId: owned.requestId,
     previewContextId: state.previewContextId,
     selectionId: state.selectionId,
     lifecycleEpoch: state.lifecycleEpoch,
@@ -3869,6 +3958,17 @@ function meetingContext(state, action) {
   }
   if (leavingNotes) {
     next = { ...next, previewContextId: state.previewContextId + 1, copyPreview: null, previewLoading: false };
+    const previewRead = next.authoritativeReads?.[PREVIEW_READ];
+    if (previewRead) {
+      const authoritativeReads = { ...next.authoritativeReads };
+      delete authoritativeReads[PREVIEW_READ];
+      next = {
+        ...next,
+        authoritativeReads,
+        authoritativeMessageId: next.authoritativeMessageId === previewRead.requestId
+          ? null : next.authoritativeMessageId,
+      };
+    }
     const canceled = cancelLatestHistory(next);
     next = canceled.state;
     previewEffects.push(...canceled.effects);
@@ -4300,7 +4400,20 @@ function transition(state, action) {
     case "notes/email-preview-clicked":
       return readSavedMarkdown(state, "email");
     case "notes/preview-closed":
-      return out({ ...state, copyPreview: null });
+      {
+        const current = state.authoritativeReads?.[PREVIEW_READ];
+        if (!current) return out({ ...state, copyPreview: null, previewLoading: false });
+        const authoritativeReads = { ...state.authoritativeReads };
+        delete authoritativeReads[PREVIEW_READ];
+        return out({
+          ...state,
+          authoritativeReads,
+          authoritativeMessageId: state.authoritativeMessageId === current.requestId
+            ? null : state.authoritativeMessageId,
+          copyPreview: null,
+          previewLoading: false,
+        }, [{ type: "cancel", key: PREVIEW_READ }]);
+      }
     case "notes/preview-copy-clicked":
       return copyPreview(state);
     case "notes/preview-copied":
@@ -4418,6 +4531,8 @@ export function reduce(state, action) {
     next = {
       ...next,
       selectionId: state.selectionId + 1,
+      authoritativeReads: {},
+      authoritativeMessageId: null,
       copyPreview: null,
       previewLoading: false,
       richFallback: noteChanged ? false : next.richFallback,

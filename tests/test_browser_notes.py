@@ -2321,6 +2321,97 @@ def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, mon
     )
 
 
+def test_copy_read_settles_after_unrelated_restore_ack(live, signed_in):
+    context, page = signed_in()
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=live.url)
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    update_note(data_dir, note_id, expected_edit_version=1, markdown="# A fixed two\n")
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# A latest three\n")
+
+    second_task = _accept(
+        data_dir, meeting_id, snapshot["generation_id"], request_id="copy-lifetime-other"
+    )
+    second_snapshot = get_notes_source(data_dir, _task_source_id(data_dir, second_task["id"]))
+    other = _complete_fake_task(data_dir, second_task["id"], "copy-lifetime-other", "# B first\n")
+    other_id = other["id"]
+    update_note(data_dir, other_id, expected_edit_version=1, markdown="# B fixed two\n")
+    update_note(data_dir, other_id, expected_edit_version=2, markdown="# B latest three\n")
+    assert second_snapshot["generation_id"] == snapshot["generation_id"]
+    moved = trash_version(
+        data_dir,
+        meeting_id,
+        operation_id="copy-lifetime-trash-b",
+        note_id=other_id,
+        edit_version=2,
+    )
+    assert moved["historical_outcome"]["status"] == "succeeded"
+
+    fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
+    page.goto(fixed_url)
+    expect(page.locator("#notes-preview")).to_contain_text("A fixed two")
+    page.evaluate("navigator.clipboard.writeText('clipboard sentinel')")
+    restore = page.locator(
+        f'#notes-trash-items button[data-trash-restore][data-note-id="{other_id}"]'
+        '[data-edit-version="2"]'
+    )
+    expect(restore).to_be_enabled()
+
+    held_posts = []
+    restore_url = f"{live.url}/api/meetings/{meeting_id}/notes-trash/{other_id}/2/restore"
+
+    def hold_restore(route):
+        held_posts.append((route, route.fetch(timeout=5_000)))
+
+    page.route(restore_url, hold_restore)
+    restore.click()
+    for _ in range(500):
+        if held_posts:
+            break
+        page.wait_for_timeout(10)
+    assert len(held_posts) == 1
+    expect(page.locator("#notes-copy")).to_be_enabled()
+
+    held_reads = []
+    detail_url = f"{live.url}/api/notes/{note_id}/versions/2"
+    page.route(detail_url, lambda route: held_reads.append(route))
+    page.locator("#notes-copy").click()
+    for _ in range(500):
+        if held_reads:
+            break
+        page.wait_for_timeout(10)
+    assert len(held_reads) == 1
+    expect(page.locator("#notes-copy-export-status")).to_have_text(
+        "Reading the saved Notes version…"
+    )
+
+    held_posts[0][0].fulfill(response=held_posts[0][1])
+    expect(page.locator("#notes-trash-status")).to_contain_text("Complete")
+    held_reads[0].fulfill(response=held_reads[0].fetch(timeout=5_000))
+    expect(page.locator("#notes-copy-export-status")).to_have_text(
+        "The requested saved Notes version could not be read."
+    )
+    assert page.evaluate("navigator.clipboard.readText()") == "clipboard sentinel"
+
+    page.unroute(detail_url)
+    fresh_reads = []
+    page.route(detail_url, lambda route: fresh_reads.append(route))
+    page.locator("#notes-copy").click()
+    for _ in range(500):
+        if fresh_reads:
+            break
+        page.wait_for_timeout(10)
+    assert len(fresh_reads) == 1
+    expect(page.locator("#notes-copy-export-status")).to_have_text(
+        "Reading the saved Notes version…"
+    )
+    fresh_reads[0].fulfill(response=fresh_reads[0].fetch(timeout=5_000))
+    expect(page.locator("#notes-copy-export-status")).to_have_text("Copied saved version · edit 2.")
+    assert page.evaluate("navigator.clipboard.readText()") == "# A fixed two\n"
+
+
 def test_returning_to_notes_refreshes_canceled_trash_read(live, signed_in):
     _context, page = signed_in()
     page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")

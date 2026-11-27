@@ -626,6 +626,8 @@ Core `notes-core.js` (`initialState`, `reduce`, `selectView`, `hasUnsavedDraft` 
 
 **Id chống response cũ.** `readId` và `poll.token` bảo vệ lượt đọc danh sách. `choice.loadId`, `choice.saveId` và `source.id` bảo vệ luồng lựa chọn và mở nguồn tương ứng. Mỗi lần đổi meeting hoặc revision (kể cả đổi đi rồi quay lại) tăng `selectionId` và hủy các request `notes/authoritative/copy`, `notes/authoritative/export` và `notes/authoritative/preview`. History gửi tab đang chọn qua context hiện có. Rời Notes tăng `previewContextId`, đóng dialog và chỉ hủy lượt đọc preview. Reducer kiểm tra id trước khi dùng kết quả hoặc lỗi, kể cả lỗi hết phiên. Hai action copy plain và export Markdown có key riêng.
 
+Mỗi lượt đọc authoritative còn có chủ sở hữu theo `effect key`, `requestId` và `lifecycleEpoch`; ACK của Restore/Trash làm nghỉ lượt đọc đã lỗi thời và hủy effect của nó, không tự dùng lại câu trả lời cũ hoặc tự copy. Cờ `previewLoading`, `copyPreview.copying` và dòng trạng thái copy/xuất được settle về lỗi có thể thử lại; chỉ một action Copy mới tạo `requestId` và GET mới. Khi ACK cần làm mới snapshot Trash đang chờ, lượt đọc mới thay thế lượt cũ (kể cả khi `pending` đã tồn tại), để producer không giữ lại snapshot trước mutation.
+
 **Vào trang và đọc notes**:
 
 | Từ | Sự kiện | Tới | Effect |
