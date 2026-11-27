@@ -124,8 +124,6 @@ const els = {
   sourceClose: $("#notes-source-close"),
 };
 
-let trashEls;
-
 function makeTrashButton(id, className) {
   const button = document.createElement("button");
   button.id = id;
@@ -135,8 +133,6 @@ function makeTrashButton(id, className) {
 }
 
 function mountTrashControls() {
-  if (trashEls) return;
-
   const lifecycleNotice = document.createElement("p");
   lifecycleNotice.id = "notes-lifecycle-notice";
   lifecycleNotice.className = "notes-lifecycle-notice";
@@ -238,7 +234,7 @@ function mountTrashControls() {
   root.append(status);
 
   els.history.append(root);
-  trashEls = {
+  const refs = {
     root,
     lifecycleNotice,
     title,
@@ -299,6 +295,7 @@ function mountTrashControls() {
     });
   });
   cancel.addEventListener("click", () => dispatch({ type: "notes/trash-confirmation-cancelled" }));
+  return refs;
 }
 
 function setData(element, name, value) {
@@ -1105,7 +1102,7 @@ const run = createRunner({
 });
 const store = createStore({ reduce, initialState, run });
 const { dispatch } = store;
-mountTrashControls();
+const trashEls = mountTrashControls();
 store.subscribe(render);
 
 // ---- events in ----

@@ -4803,17 +4803,17 @@ function trashConfirmationItems(state, trash, confirmation) {
 
 function trashView(state) {
   const trash = trashOf(state);
-  const history = state.savedHistory;
-  const detail = history.open && history.editVersion !== null ? history.detail : null;
-  const selectedItem = history.list.find((item) => item.edit_version === history.editVersion) || null;
-  const selectedCanTrash = canTrashHistoryItem(selectedItem, history.latestEditVersion)
+  const savedHistory = state.savedHistory;
+  const detail = savedHistory.open && savedHistory.editVersion !== null ? savedHistory.detail : null;
+  const selectedItem = savedHistory.list.find((item) => item.edit_version === savedHistory.editVersion) || null;
+  const selectedCanTrash = canTrashHistoryItem(selectedItem, savedHistory.latestEditVersion)
     && lifecycleOf(detail) === "active";
   const selectedCanRestore = Boolean(detail?.can_restore && detail.transition_id);
   const mutation = trash.mutation;
   const items = trash.items.map((item) => trashItemView(state, item));
   const confirmationItems = trashConfirmationItems(state, trash, trash.confirmation);
   return {
-    visible: Boolean(history.open),
+    visible: Boolean(savedHistory.open),
     meetingId: state.meetingId || "",
     meetingTitle: trash.meetingTitle || state.meeting?.title || "",
     count: trash.count,
@@ -4847,14 +4847,14 @@ function trashView(state) {
       items: confirmationItems,
     } : null,
     versionAction: {
-      visible: Boolean(history.open && history.editVersion !== null && history.detail),
+      visible: Boolean(savedHistory.open && savedHistory.editVersion !== null && savedHistory.detail),
       canTrash: selectedCanTrash,
       canRestore: selectedCanRestore,
       lifecycleStatus: lifecycleOf(detail),
-      noteId: history.noteId,
-      editVersion: history.editVersion,
+      noteId: savedHistory.noteId,
+      editVersion: savedHistory.editVersion,
       transitionId: detail?.transition_id || selectedItem?.transition_id || "",
-      disabled: trash.pending || lifecycleMutationBusy(mutation) || history.detailPending,
+      disabled: trash.pending || lifecycleMutationBusy(mutation) || savedHistory.detailPending,
     },
   };
 }
