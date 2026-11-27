@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -208,7 +209,7 @@ def _process_is_running(pid: int) -> bool:
         state = stat.rsplit(") ", 1)[1].split(maxsplit=1)[0]
     except (IndexError, ValueError):
         return False
-    return state != "Z"
+    return state not in {"Z", "X", "x"}
 
 
 @pytest.mark.skipif(
@@ -251,7 +252,9 @@ def test_bounded_media_child_dies_with_disposable_parent(tmp_path):
             parent.kill()
         parent.wait(timeout=5)
         if child_pid is not None and _process_is_running(child_pid):
-            os.kill(child_pid, signal.SIGKILL)
+            # The child may exit between the liveness read and cleanup.
+            with suppress(ProcessLookupError):
+                os.kill(child_pid, signal.SIGKILL)
 
 
 @pytest.mark.parametrize("streaming", [True, False])
