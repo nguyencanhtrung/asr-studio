@@ -34,4 +34,4 @@ The [amd64 inventory](runtime-inventory-amd64.json) describes its recorded artif
 - [User guide](../user-guide.md): installation, access, providers, and diagnostics.
 - [Third-party notices](../../third_party/README.md): licenses, source bundles, and image checks.
 - [Development checks](../agents/development.md): local checks and CI commands.
-- [Acceptance report](../acceptance-report.md): historical product acceptance results.
+- Acceptance report (đã lưu ngoài Git): historical product acceptance results.
