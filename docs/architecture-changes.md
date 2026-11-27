@@ -2,7 +2,7 @@
 
 ## 1. Mở đầu
 
-**Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem [báo cáo nghiệm thu](acceptance-report.md)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
+**Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem báo cáo nghiệm thu (đã lưu ngoài Git)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
 ## #266 — Keep transcript history actions readable in the context panel
 
@@ -1210,7 +1210,7 @@ Hiệu năng; Kiến trúc; Quyền riêng tư
 
 ## 4. Mốc AC-13 (#16 → #99 → #104)
 
-Đã chuyển bảng mốc và điều kiện đo vào [báo cáo nghiệm thu](acceptance-report.md).
+Đã chuyển bảng mốc và điều kiện đo vào báo cáo nghiệm thu (đã lưu ngoài Git).
 
 ## 5. Đang làm / tiếp theo
 
@@ -1939,7 +1939,7 @@ vượt mục chương trình được bỏ. Chấm độc lập 34 pool đã th
 trọng; bản cuối tái sử dụng đúng 33 pool đã chấm này và 256 pool của lượt chấm đầy đủ ban đầu,
 không có pool chưa được kiểm. Kết quả cố định: 11/12, đủ 7/7 điểm quan trọng, 0 claim quan trọng
 thiếu nguồn hỗ trợ, 0 ID không tồn tại; G09 còn một phần. Kết quả cuối nằm trong
-[báo cáo nghiệm thu](acceptance-report.md); bằng chứng chi tiết giữ bền cục bộ (gitignored).
+báo cáo nghiệm thu (đã lưu ngoài Git); bằng chứng chi tiết giữ bền cục bộ (gitignored).
 Lượt thực đo v23 là 474,498 giây/11 call; v24 replay đúng request cũ, không phải lượt đo
 end-to-end mới. Mốc ngoài cửa sổ hoặc bị ASR đổi quá xa vẫn chưa được liên kết.
 
@@ -2002,7 +2002,7 @@ phải giữ ở mục cần xác nhận. Chất lượng phán đoán vẫn ph�
 
 Issue [#183](https://github.com/nguyencanhtrung/asr-studio/issues/183).
 Tag: architecture, quality, performance. Đích: `docs/backend-contract.md`,
-[báo cáo nghiệm thu](acceptance-report.md). Dữ liệu chi tiết chỉ lưu cục bộ, không đưa vào tài liệu.
+báo cáo nghiệm thu (đã lưu ngoài Git). Dữ liệu chi tiết chỉ lưu cục bộ, không đưa vào tài liệu.
 
 ### #183 (tiếp) — Gemini reconcile hai view song song (`notes-hierarchical-v35`)
 

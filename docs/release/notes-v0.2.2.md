@@ -22,12 +22,12 @@ See the [user guide](../user-guide.md#install-a-release) and [Network access](..
 
 ## Known limitations
 
-- Gemini notes do not pass acceptance: 4 important claims without a source remain on the long sample. Use ChatGPT for notes that need full source support. See the [acceptance report](../acceptance-report.md).
+- Gemini notes do not pass acceptance: 4 important claims without a source remain on the long sample. Use ChatGPT for notes that need full source support. See the acceptance report (đã lưu ngoài Git).
 - `app`, `notes-service` and `model-installer` can reach the internet. `--offline` does not block this.
 - Speaker labels can still drift. See [#80](https://github.com/nguyencanhtrung/asr-studio/issues/80).
 
 ## Measurements
 
-New measurements: notes acceptance for ChatGPT and Gemini Flash in the [acceptance report](../acceptance-report.md) ([#181](https://github.com/nguyencanhtrung/asr-studio/pull/181), [#184](https://github.com/nguyencanhtrung/asr-studio/pull/184)); diarization memory in [diarization-memory.md](diarization-memory.md).
+New measurements: notes acceptance for ChatGPT and Gemini Flash in the acceptance report (đã lưu ngoài Git) ([#181](https://github.com/nguyencanhtrung/asr-studio/pull/181), [#184](https://github.com/nguyencanhtrung/asr-studio/pull/184)); diarization memory in [diarization-memory.md](diarization-memory.md).
 Reused evidence: none.
 Omitted measurements: the full ASR acceptance dataset and a new ASR benchmark. ASR timing applies only to [the v0.2.1 measurement](performance-v0.2.1.md).
