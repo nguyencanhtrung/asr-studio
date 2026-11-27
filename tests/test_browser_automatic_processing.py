@@ -51,6 +51,23 @@ def _open_automatic_processing(page, language="vi"):
     expect(page.locator("#automatic-preferences-form")).to_have_attribute("aria-busy", "false")
 
 
+def _hold_stage_policy_read(monkeypatch, *, fail=False):
+    from asr_studio import processing_routes
+
+    entered, release = threading.Event(), threading.Event()
+    read_policy = processing_routes.processing_stage_policy
+
+    def delayed_read(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=15), "test did not release the real stage-policy GET"
+        if fail:
+            raise RuntimeError("held stage-policy read failed")
+        return read_policy(*args, **kwargs)
+
+    monkeypatch.setattr(processing_routes, "processing_stage_policy", delayed_read)
+    return entered, release
+
+
 def _seed_ready_processing_meeting(
     live, title: str = "Automatic processing browser fixture"
 ) -> str:
@@ -232,8 +249,20 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
 
         # Conflict does not overwrite the draft. Reload is explicit, then the
         # same draft can be reviewed and saved against the new version.
-        reload_button.click()
+        reload_button.focus()
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "GET"
+                and response.url.endswith("/api/processing-stage-policy/v1")
+            )
+        ) as reloaded:
+            page.keyboard.press("Enter")
+        assert reloaded.value.status == 200
         expect(form).to_have_attribute("aria-busy", "false")
+        assert page.evaluate("document.activeElement?.id") in {
+            "processing-stage-policy-reload",
+            "processing-stage-policy-status",
+        }
         expect(asr).not_to_be_checked()
         expect(diarization).to_be_checked()
         expect(notes).to_be_checked()
@@ -258,6 +287,118 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
         final = _processing_request(page, "/api/processing-stage-policy/v1")
         assert final["policy"] == {"asr": False, "diarization": True, "notes": True}
     finally:
+        context.close()
+
+
+def test_stage_policy_reload_failure_preserves_draft_and_actionable_focus(
+    live, signed_in, monkeypatch
+):
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    release = None
+    try:
+        _open_automatic_processing(page)
+        form = page.locator("#processing-stage-policy-form")
+        expect(form).to_have_attribute("aria-busy", "false")
+        entered, release = _hold_stage_policy_read(monkeypatch, fail=True)
+        asr = page.locator("#processing-stage-policy-asr")
+        diarization = page.locator("#processing-stage-policy-diarization")
+        notes = page.locator("#processing-stage-policy-notes")
+        reload_button = page.locator("#processing-stage-policy-reload")
+        error = page.locator("#processing-stage-policy-error")
+        status = page.locator("#processing-stage-policy-status")
+
+        asr.uncheck()
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        reload_button.focus()
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "GET"
+                and response.url.endswith("/api/processing-stage-policy/v1")
+            )
+        ) as reloaded:
+            page.keyboard.press("Enter")
+            assert entered.wait(timeout=5), "the real stage-policy GET did not start"
+            expect(form).to_have_attribute("aria-busy", "true")
+            release.set()
+        assert reloaded.value.status == 500
+        expect(form).to_have_attribute("aria-busy", "false")
+        expect(error).to_be_visible()
+        expect(error).not_to_have_text("")
+        expect(status).not_to_have_text("")
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        assert page.evaluate("document.activeElement?.id") in {
+            "processing-stage-policy-reload",
+            "processing-stage-policy-status",
+        }
+    finally:
+        if release:
+            release.set()
+        context.close()
+
+
+@pytest.mark.parametrize(
+    "movement",
+    ["advanced", "other-control", "leave-section", "close-modal"],
+    ids=["advanced", "other-control", "leave-section", "close-modal"],
+)
+def test_stage_policy_reload_does_not_steal_focus_after_user_movement(
+    live, signed_in, monkeypatch, movement
+):
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    release = None
+    try:
+        _open_automatic_processing(page)
+        form = page.locator("#processing-stage-policy-form")
+        expect(form).to_have_attribute("aria-busy", "false")
+        entered, release = _hold_stage_policy_read(monkeypatch)
+        reload_button = page.locator("#processing-stage-policy-reload")
+        reload_button.focus()
+
+        if movement == "close-modal":
+            with page.expect_response(
+                lambda response: (
+                    response.request.method == "GET"
+                    and response.url.endswith("/api/processing-stage-policy/v1")
+                )
+            ) as reloaded:
+                page.keyboard.press("Enter")
+                assert entered.wait(timeout=5), "the real stage-policy GET did not start"
+                page.locator("#connections-close").click()
+                release.set()
+            assert reloaded.value.status == 200
+            expect(page.locator("#connections-dialog")).to_be_hidden()
+            expect(page.locator("#settings-open")).to_be_focused()
+            return
+
+        target = {
+            "advanced": page.locator(".stage-policy-advanced summary"),
+            "other-control": page.locator("#automatic-preferences-asr-language"),
+            "leave-section": page.locator("#settings-tab-asr"),
+        }[movement]
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "GET"
+                and response.url.endswith("/api/processing-stage-policy/v1")
+            )
+        ) as reloaded:
+            page.keyboard.press("Enter")
+            assert entered.wait(timeout=5), "the real stage-policy GET did not start"
+            if movement == "leave-section":
+                target.click()
+            else:
+                target.focus()
+            expect(target).to_be_focused()
+            release.set()
+        assert reloaded.value.status == 200
+        expect(form).to_have_attribute("aria-busy", "false")
+        expect(target).to_be_focused()
+    finally:
+        if release:
+            release.set()
         context.close()
 
 

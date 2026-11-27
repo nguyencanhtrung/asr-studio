@@ -776,6 +776,18 @@ function renderProcessingStagePolicy(state) {
   setProp(elements.save, "disabled", !view.canSave);
   setProp(elements.save, "textContent", view.saving ? t("Đang lưu công tắc…") : t("Lưu công tắc"));
   setProp(elements.reload, "disabled", view.loading || view.saving);
+  if (elements.form.dataset.focusReload) {
+    const visible = state.open && els.dialog.open && elements.form.getClientRects().length > 0;
+    if (!visible) {
+      delete elements.form.dataset.focusReload;
+    } else if (!view.loading) {
+      delete elements.form.dataset.focusReload;
+      const active = document.activeElement;
+      if (!active || active === document.body || active === document.documentElement) {
+        elements.reload.focus({ preventScroll: true });
+      }
+    }
+  }
   // A completed save returns focus to its status unless the user has already
   // moved to another control or left the panel while the request was pending.
   if (state.open && !view.saving && (view.error || view.notice)
@@ -1072,6 +1084,7 @@ for (const provider of [CHATGPT.id, ANTIGRAVITY.id]) {
 }
 
 function selectSection(section, focus = false) {
+  if (section !== "processing") delete processingStagePolicyEls.form.dataset.focusReload;
   const previous = store.getState().launcher.section;
   dispatch({ type: "provider/settings-section-selected", section, previousSection: previous });
   settingsBody.scrollTop = 0;
@@ -1130,7 +1143,10 @@ settingsTabs.addEventListener("keydown", (event) => {
 
 els.close.addEventListener("click", () => els.dialog.close());
 // Esc, the close button and a click outside all end here: stop reading the install state.
-els.dialog.addEventListener("close", () => dispatch({ type: "provider/dialog-closed" }));
+els.dialog.addEventListener("close", () => {
+  delete processingStagePolicyEls.form.dataset.focusReload;
+  dispatch({ type: "provider/dialog-closed" });
+});
 els.dialog.addEventListener("click", (event) => {
   if (event.target === els.dialog) els.dialog.close();
 });
@@ -1146,8 +1162,19 @@ function forgetPreferenceFocusOnMovement(event) {
     delete processingPreferenceEls.form.dataset.focusMutation;
   }
 }
+function forgetStagePolicyFocusOnMovement(event) {
+  const form = processingStagePolicyEls.form;
+  if (!form.dataset.focusReload) return;
+  if (event.type === "focusin" && event.target === processingStagePolicyEls.reload) return;
+  if (event.type === "focusin"
+    && (event.target === document.body || event.target === document.documentElement)
+    && store.getState().processingStagePolicy.status === "loading") return;
+  delete form.dataset.focusReload;
+}
 document.addEventListener("focusin", forgetPreferenceFocusOnMovement);
 document.addEventListener("pointerdown", forgetPreferenceFocusOnMovement, true);
+document.addEventListener("focusin", forgetStagePolicyFocusOnMovement);
+document.addEventListener("pointerdown", forgetStagePolicyFocusOnMovement, true);
 document.addEventListener("focusin", forgetDeviceFocusOnMovement);
 document.addEventListener("pointerdown", forgetDeviceFocusOnMovement, true);
 
@@ -1172,7 +1199,12 @@ processingStagePolicyEls.form.addEventListener("submit", (event) => {
 for (const [field, control] of Object.entries({ asr: processingStagePolicyEls.asr, diarization: processingStagePolicyEls.diarization, notes: processingStagePolicyEls.notes })) {
   control.addEventListener("change", () => dispatch({ type: "provider/processing-stage-policy-edited", field, value: control.checked }));
 }
-processingStagePolicyEls.reload.addEventListener("click", () => dispatch({ type: "provider/processing-stage-policy-reload-requested" }));
+processingStagePolicyEls.reload.addEventListener("click", () => {
+  if (document.activeElement === processingStagePolicyEls.reload) {
+    processingStagePolicyEls.form.dataset.focusReload = "true";
+  }
+  dispatch({ type: "provider/processing-stage-policy-reload-requested" });
+});
 deviceEls.form.addEventListener("submit", (event) => {
   event.preventDefault();
   dispatch({ type: "extension/devices-code-requested" });
