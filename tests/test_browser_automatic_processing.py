@@ -359,18 +359,26 @@ def test_stage_policy_reload_does_not_steal_focus_after_user_movement(
         reload_button.focus()
 
         if movement == "close-modal":
-            with page.expect_response(
-                lambda response: (
-                    response.request.method == "GET"
-                    and response.url.endswith("/api/processing-stage-policy/v1")
+            with page.expect_request(
+                lambda request: (
+                    request.method == "GET"
+                    and request.url.endswith("/api/processing-stage-policy/v1")
                 )
-            ) as reloaded:
+            ) as reloading:
                 page.keyboard.press("Enter")
-                assert entered.wait(timeout=5), "the real stage-policy GET did not start"
-                page.locator("#connections-close").click()
-                release.set()
-            assert reloaded.value.status == 200
+            request = reloading.value
+            assert entered.wait(timeout=5), "the real stage-policy GET did not start"
+            expect(form).to_have_attribute("aria-busy", "true")
+            page.locator("#connections-close").click()
             expect(page.locator("#connections-dialog")).to_be_hidden()
+            expect(form).to_have_attribute("aria-busy", "false")
+            release.set()
+            # Closing cancels this read; it need not produce an HTTP response.
+            response = request.response()
+            if response is None:
+                assert request.failure and "ERR_ABORTED" in request.failure
+            else:
+                assert response.status == 200
             expect(page.locator("#settings-open")).to_be_focused()
             return
 
