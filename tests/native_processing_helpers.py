@@ -63,7 +63,7 @@ def processing_settings(settings, directory, adapter):
             "asr_studio.cli",
             "stage-policy",
             "enable",
-            "--acknowledge-compatible-processes-stopped",
+            "--acknowledge-old-processes-stopped",
             "--json",
         ],
         check=True,

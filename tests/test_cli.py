@@ -38,8 +38,12 @@ def test_version_json_reports_application_version_and_supported_schema(capsys):
     assert captured.err == ""
 
 
+@pytest.mark.parametrize(
+    "ack_flag",
+    ["--acknowledge-old-processes-stopped", "--acknowledge-compatible-processes-stopped"],
+)
 def test_stage_policy_cli_requires_acknowledgement_and_reports_cutover_state(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, ack_flag
 ):
     data_dir = tmp_path / "data"
     initialize(data_dir)
@@ -51,14 +55,14 @@ def test_stage_policy_cli_requires_acknowledgement_and_reports_cutover_state(
     assert initial["drained"] is True
 
     assert main(["stage-policy", "enable", "--json"]) == 2
-    assert "acknowledge-compatible-processes-stopped" in capsys.readouterr().err
+    assert "acknowledge-old-processes-stopped" in capsys.readouterr().err
 
     assert (
         main(
             [
                 "stage-policy",
                 "enable",
-                "--acknowledge-compatible-processes-stopped",
+                ack_flag,
                 "--json",
             ]
         )

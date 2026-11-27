@@ -90,6 +90,20 @@ jobs:
           ASR_RUN_BROWSER_TESTS: "1"
           ASR_REQUIRE_MEDIA_TOOLS: "1"
         run: ./scripts/check.sh
+      - name: Capture Settings demo
+        env:
+          PYTHONPATH: src:tests
+        run: >-
+          timeout --kill-after=10s 180s
+          uv run --no-sync python tests/visual/capture_settings.py
+          "${RUNNER_TEMP}/settings-evidence"
+      - name: Upload Settings demo
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: asr-studio-settings-${{ github.sha }}
+          path: ${{ runner.temp }}/settings-evidence/*.png
+          if-no-files-found: error
+          retention-days: 30
       - name: Test native Chrome extension
         env:
           ASR_RUN_EXTENSION_TESTS: "1"
@@ -97,6 +111,15 @@ jobs:
         run: >-
           timeout --kill-after=10s 720s xvfb-run -a -s '-screen 0 1280x1024x24'
           uv run --no-sync pytest -q tests/test_browser_extension_capture.py
+          -k 'not native_stage_matrix'
+      - name: Test native Extension stage combinations
+        env:
+          ASR_RUN_EXTENSION_TESTS: "1"
+          ASR_EXTENSION_DISPOSABLE_XVFB: "1"
+        run: >-
+          timeout --kill-after=10s 720s xvfb-run -a -s '-screen 0 1280x1024x24'
+          uv run --no-sync pytest -q tests/test_browser_extension_capture.py
+          -k native_stage_matrix
       - name: Build internal Chrome extension bundle
         run: >-
           python3 scripts/bundle-extension.py

@@ -52,10 +52,12 @@ class RequestLog(list):
     fail_create_responses = False
     cancel_not_found = False
     reject_recording_requests = False
+    hide_stage_policy = False
 
     def __init__(self):
         super().__init__()
         self.create_bodies = []
+        self.hidden_stage_policy_reads = 0
 
 
 def _approve_host_permission(page, server_url: str) -> None:
@@ -202,6 +204,13 @@ def capture_server(tmp_path, request):
             # The server hides a session from another device's owner behind this 404.
             return JSONResponse({"error": {"code": "recording_not_found"}}, status_code=404)
         response = await call_next(request)
+        if requests.hide_stage_policy and request.url.path == "/api/extension/v1/capabilities":
+            # Emulate changed advertised format knowledge only. The real session
+            # and replay handlers still own the persisted first request/ACK.
+            payload = json.loads(b"".join([part async for part in response.body_iterator]))
+            payload["features"].pop("stage_policy")
+            requests.hidden_stage_policy_reads += 1
+            return JSONResponse(payload, status_code=response.status_code)
         if (
             requests.fail_create_responses
             and request.method == "POST"
@@ -256,6 +265,24 @@ def capture_server(tmp_path, request):
 def _status(page):
     return page.evaluate(
         "async () => (await chrome.runtime.sendMessage({target:'worker',type:'GET_STATUS'})).status"
+    )
+
+
+def _local_capture_row(page, recording_id):
+    return page.evaluate(
+        """async id => {
+        const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('asr-extension-production-v1');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        return await new Promise((resolve, reject) => {
+            const request = db.transaction('sessions').objectStore('sessions').get(id);
+            request.onsuccess = () => { db.close(); resolve(request.result); };
+            request.onerror = () => { db.close(); reject(request.error); };
+        });
+    }""",
+        recording_id,
     )
 
 
@@ -898,6 +925,9 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
         for method, path in requests
     )
 
+    assert _local_capture_row(control, session["id"])["upload"]["createAttempted"]
+    assert requests.create_bodies[0]["stage_policy"] == {"format_version": 1}
+    requests.hide_stage_policy = True
     cdp = context.browser.new_browser_cdp_session()
     try:
         targets = cdp.send("Target.getTargets")["targetInfos"]
@@ -980,6 +1010,7 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
     )
     assert len(requests.create_bodies) >= 2
     assert all(body == requests.create_bodies[0] for body in requests.create_bodies)
+    assert requests.hidden_stage_policy_reads > 0
     assert any(path.endswith("/cancel") for _method, path in requests)
     assert not any(path.endswith("/finalize") for _method, path in requests)
 
@@ -1013,11 +1044,15 @@ def test_native_stage_intent_write_failure_keeps_create_at_zero(capture_server, 
         assert db.execute("SELECT count(*) FROM recordings").fetchone() == (0,)
 
 
-def test_native_stage_old_unposted_row_survives_refresh_as_legacy(capture_server, paired_capture):
+def test_native_stage_old_unposted_row_survives_refresh_as_legacy(
+    capture_server, paired_capture, monkeypatch
+):
+    from asr_studio import extension_routes
+
     settings, _url, requests, _tls = capture_server
     context, _worker, _operator, control, tab = paired_capture
-    requests.reject_recording_requests = True
-
+    version = extension_routes.EXTENSION_API_VERSION
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version + 1)
     popup = NativePopup(context, tab)
     popup.click("#start-button")
     popup.wait_text("#capture-state", "Recording")
@@ -1025,48 +1060,54 @@ def test_native_stage_old_unposted_row_survives_refresh_as_legacy(capture_server
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         session = _status(control)["sessions"][0]
-        if session["capture"]["chunkCount"] > 0 and requests.create_bodies:
+        if session["capture"]["chunkCount"] > 0:
             break
         control.wait_for_timeout(100)
     assert session["capture"]["chunkCount"] > 0, session
-    assert requests.create_bodies
+    control.locator("#stop-button").click()
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        session = _status(control)["sessions"][0]
+        if session["capture"]["captureComplete"]:
+            break
+        control.wait_for_timeout(100)
+    assert session["capture"]["captureComplete"]
+    local = _local_capture_row(control, session["id"])
+    assert local["upload"]["createAttempted"] is False
+    assert local["upload"]["serverSessionId"] is None
+    assert requests.create_bodies == []
 
-    # Simulate an unposted row written by the pre-intent client. The row keeps
-    # its own legacy wire body while a control-page reload exercises recovery.
-    control.evaluate("""async () => {
+    # The incompatible preflight let the production recorder retain real local
+    # chunks without a create attempt. Seed only the pre-intent row shape; never
+    # reset an attempt marker or rewrite an already attempted request.
+    legacy_body = control.evaluate("""async () => {
         const db = await new Promise((resolve, reject) => {
             const request = indexedDB.open('asr-extension-production-v1');
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
-        await new Promise((resolve, reject) => {
+        return await new Promise((resolve, reject) => {
             const transaction = db.transaction('sessions', 'readwrite');
             const store = transaction.objectStore('sessions');
             const request = store.getAll();
+            let payload;
             request.onsuccess = () => {
                 const [row] = request.result;
+                if (row.upload.createAttempted) throw new Error('unexpected create attempt');
                 const endpoint = {...row.endpoint};
                 delete endpoint.stagePolicy;
                 const capture = {...row.capture};
                 delete capture.createIntent;
-                store.put({
-                    ...row,
-                    endpoint,
-                    capture,
-                    upload: {...row.upload, createAttempted: false, serverSessionId: null,
-                        serverEpoch: null, state: 'waiting_for_stop'}
-                });
+                payload = capture.createPayload;
+                store.put({...row, endpoint, capture});
             };
-            transaction.oncomplete = resolve;
-            transaction.onerror = () => reject(transaction.error);
+            transaction.oncomplete = () => { db.close(); resolve(payload); };
+            transaction.onerror = () => { db.close(); reject(transaction.error); };
         });
-        db.close();
     }""")
-    requests.reject_recording_requests = False
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version)
     control.reload()
-    control.wait_for_timeout(500)
-    control.locator("#stop-button").click()
-
+    expect(control.locator("#global-error")).to_have_text("", timeout=20000)
     deadline = time.monotonic() + 60
     saved = None
     while time.monotonic() < deadline:
@@ -1075,17 +1116,15 @@ def test_native_stage_old_unposted_row_survives_refresh_as_legacy(capture_server
             break
         control.wait_for_timeout(150)
     assert saved and saved["upload"]["cleaned"], saved
-    assert len(requests.create_bodies) >= 2
-    assert "stage_policy" in requests.create_bodies[0]
-    assert "stage_policy" not in requests.create_bodies[-1]
-    assert (
-        requests.create_bodies[0]["client_recording_id"]
-        == requests.create_bodies[-1]["client_recording_id"]
-    )
-    assert requests.create_bodies[0]["capture_epoch"] == requests.create_bodies[-1]["capture_epoch"]
+    assert requests.create_bodies == [legacy_body]
+    assert "stage_policy" not in legacy_body
+    assert legacy_body["client_recording_id"] == session["id"] == saved["id"]
     assert saved["upload"]["receipt"]["recording_id"]
     with sqlite3.connect(database_path(settings.data_dir)) as db:
         assert db.execute("SELECT count(*) FROM recordings").fetchone() == (1,)
+        assert db.execute(
+            "SELECT stage_policy_format, stage_policy_intent_json FROM extension_recording_sessions"
+        ).fetchall() == [(0, None)]
 
 
 def _record_then_close_source_tab(settings, context, control, tab):
@@ -1590,7 +1629,8 @@ def test_paired_extension_retains_and_retries_audio_after_server_api_change(
     popup = NativePopup(context, tab)
     popup.click("#start-button")
     popup.wait_text("#capture-state", "Recording")
-    # Pairing already minted a token, so the rejected request must trigger a fresh probe.
+    # The fresh preflight rejects the incompatible API before any create POST,
+    # even though pairing had already minted a cached session token.
     warning = "Incompatible API. Check the extension and server versions."
     popup.wait_text("#error-copy", warning)
     assert popup.evaluate("!document.querySelector('#error-copy').parentElement.hidden")
@@ -2120,10 +2160,36 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
         "notes_output_language": "en",
     }
 
+    hidden_models = []
+    unavailable = []
+    if not asr:
+        unavailable.append(settings.asr_model_path)
+    if not asr or not diarization:
+        unavailable.append(settings.diarization_model_path)
+    for path in unavailable:
+        assert path.is_relative_to(tmp_path) and path.is_dir()
+        hidden = path.with_name(path.name + "-fixture-hidden")
+        path.rename(hidden)
+        hidden_models.append((path, hidden))
+        assert not path.exists()
+
     worker_scope = (
         synthetic_processing_worker(settings, tmp_path, monkeypatch) if asr else nullcontext()
     )
     with worker_scope:
+        if not asr:
+            catalog = operator.evaluate("async () => (await fetch('/api/asr-models')).json()")
+            assert catalog["asr_models"] and all(
+                not model["ready"] for model in catalog["asr_models"]
+            )
+        if not asr or not diarization:
+            capability = operator.evaluate(
+                "async () => (await fetch('/api/diarization-capability')).json()"
+            )
+            assert capability["community_1"]["operator_prepared"] is False
+            assert capability["community_1"]["reason"] == "model_unavailable"
+            if asr:
+                assert capability["off"]["ready"] is True
         with hold_derivative_normalization(monkeypatch) as normalizing:
             popup = NativePopup(context, tab)
             popup.click("#start-button")
@@ -2248,12 +2314,38 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
                 assert len(notes_rows) == 1
                 assert steps["notes"]["source_snapshot_id"] == notes_rows[0][0]
                 assert steps["notes"]["source_generation_id"] == notes_rows[0][1]
+                source_row = db.execute(
+                    "SELECT generation_id, source_version, snapshot_json "
+                    "FROM notes_sources WHERE id = ?",
+                    (notes_rows[0][0],),
+                ).fetchone()
+                assert source_row[:2] == (generation[0], 1)
+                source = json.loads(source_row[2])
+                assert source["generation_id"] == generation[0] and source["source_version"] == 1
+                segment_id = db.execute(
+                    "SELECT id FROM transcript_segments WHERE generation_id = ?", (generation[0],)
+                ).fetchone()[0]
+                expected_speaker = "SPEAKER_00" if diarization else None
+                assert source["segments"] == [
+                    {
+                        "id": segment_id,
+                        "sequence": 0,
+                        "start_seconds": 1.1,
+                        "end_seconds": 1.5,
+                        "text": "Synthetic meeting transcript.",
+                        "original_speaker_id": expected_speaker,
+                        "speaker_id": expected_speaker,
+                        "speaker_name": "Speaker 1" if diarization else None,
+                    }
+                ]
             else:
                 assert notes_rows == []
 
         # Matrix 001 proves that a later manual transcript does not auto-create
         # Notes even though the pinned Notes switch was on.
         if recipe == (False, False, True):
+            for path, hidden in hidden_models:
+                hidden.rename(path)
             with synthetic_processing_worker(settings, tmp_path, monkeypatch):
                 accepted = operator.evaluate(
                     """async ({meetingId, requestId}) => {

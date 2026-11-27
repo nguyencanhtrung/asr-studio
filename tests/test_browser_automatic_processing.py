@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import uuid
 from itertools import product
 
@@ -244,12 +245,54 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
             else "Processing switches for new Extension recordings saved"
         )
         expect(notice).to_contain_text(expected_notice)
+        expect(status).to_be_focused()
+        expect(error).to_be_hidden()
+        expect(status).to_contain_text(
+            "Máy chủ chưa cho phép chạy stage"
+            if language == "vi"
+            else "The server does not allow stages to run"
+        )
         assert page.evaluate(
             "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
         )
         final = _processing_request(page, "/api/processing-stage-policy/v1")
         assert final["policy"] == {"asr": False, "diarization": True, "notes": True}
     finally:
+        context.close()
+
+
+def test_stage_policy_save_keeps_focus_when_user_moves_during_request(live, signed_in, monkeypatch):
+    from asr_studio import processing_routes
+
+    entered, release = threading.Event(), threading.Event()
+    save_policy = processing_routes.save_processing_stage_policy
+
+    def delayed_save(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=15), "test did not release the real stage-policy save"
+        return save_policy(*args, **kwargs)
+
+    monkeypatch.setattr(processing_routes, "save_processing_stage_policy", delayed_save)
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    try:
+        _open_automatic_processing(page)
+        page.locator("#processing-stage-policy-asr").uncheck()
+        page.locator("#processing-stage-policy-save").click()
+        assert entered.wait(timeout=5)
+        summary = page.locator(".stage-policy-advanced summary")
+        summary.focus()
+        summary.press("Enter")
+        expect(summary).to_be_focused()
+        release.set()
+        expect(page.locator("#processing-stage-policy-notice")).to_contain_text("Đã lưu công tắc")
+        expect(summary).to_be_focused()
+        expect(page.locator("#processing-stage-policy-status")).to_contain_text(
+            "Máy chủ chưa cho phép"
+        )
+        actual = _processing_request(page, "/api/processing-stage-policy/v1")
+        assert actual["policy"]["asr"] is False
+    finally:
+        release.set()
         context.close()
 
 

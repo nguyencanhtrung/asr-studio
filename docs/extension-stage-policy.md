@@ -3,31 +3,34 @@
 Status: maintained design and compatibility contract. The #277 implementation adds
 server storage, authenticated stage preferences, immutable ready snapshots and runtime
 fences, bounded operator cutover commands, Settings controls and the Extension's durable
-capability/create boundary. Joint native acceptance is pending for this integration
-checkpoint. A saved choice or create receipt is not a processing-success claim.
+capability/create boundary. The acceptance evidence belongs to the delivery PR; a saved
+choice or create receipt is not a processing-success claim.
 
-The format-1 API checkpoint is `8c1df7a`; runtime and gate remediation is `1b0e914`.
-The contract is refreshed
-against the current implementation of [Extension ingest](../src/asr_studio/extension_ingest.py),
+The contract follows the current implementation of [Extension ingest](../src/asr_studio/extension_ingest.py),
 [processing](../src/asr_studio/processing.py), [Notes](../src/asr_studio/notes.py), and
 [transcript history/review](../src/asr_studio/transcript_edits.py). The current
 manual diarization capability is the #261 rerun contract in
 [`routes.py`](../src/asr_studio/routes.py); it is not automatic Extension admission.
 
-## Current behavior and proposed boundary
+## Preserved behavior and policy boundary
 
-| Input or workflow | Current behavior on main | Future policy after #277 |
+| Input or workflow | Preserved legacy behavior | Policy-aware behavior |
 | --- | --- | --- |
 | File import, auto-ASR checked | The import flow saves media and hands off ASR once, using the meeting model/language. It does not create an automatic Extension Notes workflow. | Unchanged; Extension policy has no authority over file import. |
 | File import, auto-ASR unchecked | Media is saved and manual Start remains available. | Unchanged, even when a future Extension ASR choice is on. |
 | Browser choice and meeting options | `asr-studio:auto-transcribe`, the selected ASR model, and meeting language remain the import inputs. | Preserve the key, saved choice, model, and language exactly. |
 | Existing Extension sessions, old clients, and existing workflows | Existing all-on stages, pinned recipes, attempts, epochs, source fences, and waiting states remain in force. | Decode absent policy fields as legacy all-on; never rewrite a running snapshot from current preferences. |
-| New capable Extension recording | A capable create may persist only `stage_policy: {format_version: 1}`; stage booleans are not client input. | Choose and persist the current preference recipe only at the ready handoff described below. The v1 gate currently reports `disabled / execution_not_ready`. |
+| New capable Extension recording | A capable create may persist only `stage_policy: {format_version: 1}`; stage booleans are not client input. | Choose and persist the current preference recipe only at the ready handoff described below. Admission starts as `disabled / execution_not_ready` until the explicit compatible cutover. |
 
-The future default recipe is `{asr: true, diarization: true, notes: true}`. It is
+The initial default recipe is `{asr: true, diarization: true, notes: true}`. It is
 captured once for a new capable Extension recording; preference edits never silently
 rewrite an existing workflow. The policy owns stages only. It does not own the browser
 checkbox, ASR model, language, Notes provider/account, or credentials.
+
+Policy-aware capture requires the updated Extension bundle and a compatible server with
+admission enabled. Saving choices does not update an installed Extension or a running
+deployment. Older clients continue to create legacy all-on sessions even when the saved
+choices differ.
 
 ## Capability negotiation and reverse compatibility
 
@@ -111,7 +114,7 @@ The commands use the current source's `ASR_DATA_DIR` and do not initialize a mis
 ```text
 python -m asr_studio.cli stage-policy status --json
 python -m asr_studio.cli stage-policy disable --reason binary-replacement --json
-python -m asr_studio.cli stage-policy enable --acknowledge-compatible-processes-stopped --json
+python -m asr_studio.cli stage-policy enable --acknowledge-old-processes-stopped --json
 python -m asr_studio.cli stage-policy rollback --reason incompatible-rollback --json
 ```
 
@@ -137,7 +140,10 @@ too. Stop the app, scheduler and workers only after the reported drain, then rep
 a schema-compatible build and keep admission disabled during maintenance. Stopping the workers
 before they settle running tasks cannot make a drain complete.
 
-The acknowledgement is an operator assertion about process compatibility, not an automatic
+The older `--acknowledge-compatible-processes-stopped` spelling remains an alias. Both
+spellings assert that the old processes have stopped and the remaining deployment is
+compatible; they do not require stopping compatible workers before they can settle running
+cancellations. The acknowledgement is an operator assertion about process compatibility, not an automatic
 process probe. `rollback` is the same disable-and-reconcile fence with a rollback reason.
 `asr-studio-stage-policy-maintenance-v1` names this compatible source's disabled-gate mode;
 it is not a published image/tag or an older released binary. A pre-migration binary that
@@ -154,8 +160,7 @@ compatibility semantics.
 
 Store all three strict booleans even when ASR-off makes downstream choices ineffective.
 Keep separate: policy `format_version` (schema meaning), preference `version` (optimistic
-concurrency), and workflow `epoch` (execution/source fence). A future additive API may
-expose these values, but the existing `/api/processing-preferences` PUT/PATCH contracts
+concurrency), and workflow `epoch` (execution/source fence). The versioned stage endpoint and workflow projection expose them separately; the existing `/api/processing-preferences` PUT/PATCH contracts
 remain unchanged and are not a stage-policy endpoint.
 
 `Run` below means eligible after the existing readiness, source, slot, and epoch checks;

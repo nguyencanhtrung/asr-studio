@@ -776,11 +776,15 @@ function renderProcessingStagePolicy(state) {
   setProp(elements.save, "disabled", !view.canSave);
   setProp(elements.save, "textContent", view.saving ? t("Đang lưu công tắc…") : t("Lưu công tắc"));
   setProp(elements.reload, "disabled", view.loading || view.saving);
-  // Keep focus on a useful live region after a save failure without stealing focus
-  // from a user who has moved elsewhere in the dialog.
-  if (view.error && elements.form.dataset.focusMutation === String(state.mutation)) {
+  // A completed save returns focus to its status unless the user has already
+  // moved to another control or left the panel while the request was pending.
+  if (state.open && !view.saving && (view.error || view.notice)
+    && elements.form.dataset.focusMutation === String(state.mutation)) {
     delete elements.form.dataset.focusMutation;
-    elements.status.focus({ preventScroll: true });
+    const active = document.activeElement;
+    if (!active || active === document.body || active === elements.save || active === elements.status) {
+      elements.status.focus({ preventScroll: true });
+    }
   }
 }
 

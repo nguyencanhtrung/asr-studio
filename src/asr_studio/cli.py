@@ -362,7 +362,7 @@ def stage_policy_command(settings: Settings, arguments: argparse.Namespace) -> i
         else:
             if arguments.stage_policy_command == "enable" and not arguments.acknowledge:
                 print(
-                    "Refusing enable: pass --acknowledge-compatible-processes-stopped after "
+                    "Refusing enable: pass --acknowledge-old-processes-stopped after "
                     "stopping old app/scheduler/worker processes.",
                     file=sys.stderr,
                 )
@@ -442,13 +442,15 @@ def _parser() -> argparse.ArgumentParser:
     status_parser = stage_policy_commands.add_parser("status", help="show gate and drain state")
     status_parser.add_argument("--json", action="store_true", help="print a JSON status report")
     enable_parser = stage_policy_commands.add_parser(
-        "enable", help="enable admission after compatible processes have been stopped"
+        "enable",
+        help="enable admission after old processes have stopped and the deployment is compatible",
     )
     enable_parser.add_argument(
+        "--acknowledge-old-processes-stopped",
         "--acknowledge-compatible-processes-stopped",
         dest="acknowledge",
         action="store_true",
-        help="acknowledge the required compatible app/scheduler/worker cutover",
+        help="confirm old app/scheduler/workers stopped; remaining processes must be compatible",
     )
     enable_parser.add_argument("--json", action="store_true", help="print a JSON status report")
     disable_parser = stage_policy_commands.add_parser(

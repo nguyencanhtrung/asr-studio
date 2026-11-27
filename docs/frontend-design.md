@@ -4,6 +4,11 @@
 
 Tài liệu này là chuẩn thiết kế frontend v1 để triển khai. [Đặc tả sản phẩm](specification.md) quy định hành vi, dữ liệu, xác thực và phạm vi nghiệm thu; tài liệu này cụ thể hóa cách trình bày và tương tác. Việc duyệt thiết kế không có nghĩa backend, model, lưu trữ hoặc xác thực đã được triển khai.
 
+Đợt UX v2 giữ các nghiệp vụ dưới đây và cập nhật cách trình bày theo handoff. Xem
+[phạm vi đã giao và giới hạn backend](ux-v2-delivery.md) để đối chiếu code, hợp đồng,
+issue/PR và khác biệt có chủ đích với prototype. Ảnh prototype không xác nhận backend đã hỗ trợ
+một khả năng; Settings vẫn là modal và footer Settings/GitHub/Version giữ bố cục gốc.
+
 ## 1. Bản thiết kế được chọn
 
 - Ứng dụng web dùng trên trình duyệt laptop/desktop; v1 truy cập qua localhost bằng token.
