@@ -7,6 +7,7 @@ import pytest
 
 from asr_studio import storage as storage_module
 from asr_studio.notes import get_note, notes_state
+from asr_studio.processing import processing_stage_capabilities
 from asr_studio.storage import (
     SCHEMA_VERSION,
     _migrate_v2,
@@ -18,6 +19,7 @@ from asr_studio.storage import (
     _migrate_v8,
     _migrate_v9,
     _migrate_v10,
+    database_path,
     initialize,
 )
 
@@ -394,6 +396,62 @@ def test_schema_v24_failure_rolls_back_lifecycle_install_and_retries(tmp_path, m
         assert connection.execute(
             "SELECT COUNT(*) FROM notes_saved_versions WHERE note_id = 'migration-note'"
         ).fetchone() == (2,)
+
+
+def test_schema_v24_disposable_upgrade_keeps_maintenance_format_knowledge_and_refuses_old_source(
+    tmp_path, monkeypatch
+):
+    """A real v24-shaped disposable copy upgrades additively and stays fenced."""
+    data_dir = tmp_path / "v24-stage-policy-data"
+    initialize(data_dir)
+    database = database_path(data_dir)
+    with sqlite3.connect(database) as connection:
+        for table, column in (
+            ("processing_preferences", "stage_policy_format"),
+            ("processing_preferences", "stage_asr_enabled"),
+            ("processing_preferences", "stage_diarization_enabled"),
+            ("processing_preferences", "stage_notes_enabled"),
+            ("processing_workflows", "stage_policy_format"),
+            ("processing_workflows", "stage_asr_enabled"),
+            ("processing_workflows", "stage_diarization_enabled"),
+            ("processing_workflows", "stage_notes_enabled"),
+            ("extension_recording_sessions", "stage_policy_format"),
+            ("extension_recording_sessions", "stage_policy_intent_json"),
+        ):
+            connection.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        connection.execute("DROP TABLE processing_cutover_gate")
+        connection.execute("DELETE FROM schema_migrations WHERE version = 25")
+        connection.commit()
+
+    initialize(data_dir)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (
+            SCHEMA_VERSION,
+        )
+        assert connection.execute(
+            "SELECT stage_policy_format, stage_asr_enabled, stage_diarization_enabled, "
+            "stage_notes_enabled FROM processing_preferences WHERE id = 1"
+        ).fetchone() == (1, 1, 1, 1)
+        assert connection.execute(
+            "SELECT format_version, admission, reason FROM processing_cutover_gate WHERE id = 1"
+        ).fetchone() == (1, "disabled", "execution_not_ready")
+
+    # The current source is the explicitly named compatible maintenance runtime: it knows the
+    # v1 format, but its persisted gate keeps execution disabled until a capable worker ships.
+    assert processing_stage_capabilities(data_dir) == {
+        "contract_version": 1,
+        "format_version": 1,
+        "supported": True,
+        "admission": {
+            "state": "disabled",
+            "reason": "execution_not_ready",
+            "format_version": 1,
+        },
+    }
+
+    monkeypatch.setattr(storage_module, "SCHEMA_VERSION", 24)
+    with pytest.raises(RuntimeError, match="schema is newer"):
+        initialize(data_dir)
 
 
 def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):

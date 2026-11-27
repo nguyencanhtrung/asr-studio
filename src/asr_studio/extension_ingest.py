@@ -42,6 +42,7 @@ from asr_studio.media import (
     normalize_extension_media,
 )
 from asr_studio.service_runtime import acquire_service_lock, write_service_heartbeat
+from asr_studio.stage_policy import StagePolicyValidationError, validate_intent
 from asr_studio.storage import database_path
 
 SESSION_ID_RE = re.compile(r"[0-9a-f]{32}\Z")
@@ -207,7 +208,7 @@ def _normalized_create_payload(payload: object) -> dict[str, object]:
     if (
         not isinstance(payload, dict)
         or not required.issubset(payload)
-        or set(payload) - (required | {"language_hint"})
+        or set(payload) - (required | {"language_hint", "stage_policy"})
     ):
         raise ExtensionIngestError(400, "invalid_request", "The JSON fields are invalid.")
     client_recording_id = _safe_text(
@@ -226,6 +227,17 @@ def _normalized_create_payload(payload: object) -> dict[str, object]:
         not isinstance(language_hint, str) or language_hint not in {"en", "vi"}
     ):
         raise ExtensionIngestError(400, "invalid_language_hint", "language_hint must be en or vi.")
+    stage_policy_omitted = "stage_policy" not in payload
+    stage_policy_format = 0
+    stage_policy_intent_json = None
+    if not stage_policy_omitted:
+        try:
+            stage_policy_format = validate_intent(payload["stage_policy"])
+        except StagePolicyValidationError as error:
+            raise ExtensionIngestError(400, error.code, error.message) from None
+        stage_policy_intent_json = json.dumps(
+            {"format_version": stage_policy_format}, separators=(",", ":")
+        )
     return {
         "client_recording_id": client_recording_id,
         "capture_epoch": capture_epoch,
@@ -234,6 +246,9 @@ def _normalized_create_payload(payload: object) -> dict[str, object]:
         "metadata": _validate_metadata(payload["metadata"]),
         "language_hint": language_hint,
         "language_hint_omitted": language_hint_omitted,
+        "stage_policy_format": stage_policy_format,
+        "stage_policy_intent_json": stage_policy_intent_json,
+        "stage_policy_omitted": stage_policy_omitted,
     }
 
 
@@ -247,6 +262,8 @@ def _request_fingerprint(payload: dict[str, object], *, language_hint: str) -> s
         "language_hint": language_hint,
         "language_hint_omitted": payload["language_hint_omitted"],
     }
+    if not payload.get("stage_policy_omitted", True):
+        immutable["stage_policy"] = {"format_version": payload["stage_policy_format"]}
     return hashlib.sha256(_canonical_json(immutable)).hexdigest()
 
 
@@ -634,7 +651,13 @@ def _session_summary(row: sqlite3.Row, *, backend_id: str, settings: Settings) -
     error = None
     if row["error_code"] is not None:
         error = {"code": row["error_code"], "message": row["error_message"]}
-    return {
+    stage_intent = None
+    if row["stage_policy_intent_json"] is not None:
+        try:
+            stage_intent = json.loads(row["stage_policy_intent_json"])
+        except (TypeError, ValueError):
+            stage_intent = None
+    summary = {
         "id": row["id"],
         "backend_id": backend_id,
         "state": row["state"],
@@ -664,6 +687,12 @@ def _session_summary(row: sqlite3.Row, *, backend_id: str, settings: Settings) -
             ),
         },
     }
+    if int(row["stage_policy_format"]) != 0 or stage_intent is not None:
+        summary["stage_policy"] = {
+            "format_version": int(row["stage_policy_format"]),
+            "intent": stage_intent,
+        }
+    return summary
 
 
 def _retry_unavailable(message: str) -> ExtensionIngestError:
@@ -904,8 +933,8 @@ def create_recording_session(
             "INSERT INTO extension_recording_sessions("
             "id, owner_id, client_recording_id, capture_epoch, payload_fingerprint, language_hint, "
             "language_hint_omitted, mime_type, state, epoch, next_sequence, next_offset, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'receiving', 1, 0, 0, ?, ?)",
+            "stage_policy_format, stage_policy_intent_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'receiving', 1, 0, 0, ?, ?, ?, ?)",
             (
                 session_id,
                 identity.owner_id,
@@ -915,6 +944,8 @@ def create_recording_session(
                 selected_language,
                 int(bool(normalized["language_hint_omitted"])),
                 normalized["mime_type"],
+                normalized["stage_policy_format"],
+                normalized["stage_policy_intent_json"],
                 created_at,
                 created_at,
             ),
