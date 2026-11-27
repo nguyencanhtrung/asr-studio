@@ -193,6 +193,38 @@ def _run_start(
     return result
 
 
+def test_required_quality_waits_for_both_independent_lanes():
+    jobs = load_yaml(PIPELINE_PATH)["jobs"]
+    quality = jobs["quality"]
+    assert quality["name"] == "Quality and browser tests"
+    assert set(quality["needs"]) == {"browser_checks", "extension_checks"}
+    assert "always()" in quality["if"]
+    assert "github.event_name != 'workflow_dispatch'" in quality["if"]
+    for lane in ("browser_checks", "extension_checks"):
+        assert jobs[lane]["if"] == "github.event_name != 'workflow_dispatch'"
+        assert "needs" not in jobs[lane]
+    step = next(step for step in quality["steps"] if step["name"] == "Require both test lanes")
+    assert step["env"] == {
+        "BROWSER_RESULT": "${{ needs.browser_checks.result }}",
+        "EXTENSION_RESULT": "${{ needs.extension_checks.result }}",
+    }
+
+
+@pytest.mark.parametrize("browser", ["success", "failure", "cancelled", "skipped", ""])
+@pytest.mark.parametrize("extension", ["success", "failure", "cancelled", "skipped", ""])
+def test_quality_aggregate_requires_both_successes(browser, extension):
+    quality = load_yaml(PIPELINE_PATH)["jobs"]["quality"]
+    step = next(step for step in quality["steps"] if step["name"] == "Require both test lanes")
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env={**os.environ, "BROWSER_RESULT": browser, "EXTENSION_RESULT": extension},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode == 0) is (browser == "success" and extension == "success")
+
+
 def test_pipeline_gates_pull_requests_main_and_version_tags():
     pipeline = load_yaml(PIPELINE_PATH)
     triggers = pipeline["on"]
@@ -202,7 +234,7 @@ def test_pipeline_gates_pull_requests_main_and_version_tags():
     assert triggers["push"]["tags"] == ["v*"]
     assert pipeline["permissions"] == {"contents": "read"}
 
-    quality = pipeline["jobs"]["quality"]
+    quality = pipeline["jobs"]["browser_checks"]
     check_step = next(step for step in quality["steps"] if step["name"] == "Run repository checks")
     release_check = next(
         step for step in quality["steps"] if step["name"] == "Check release tag and package version"
@@ -232,11 +264,33 @@ def test_pipeline_gates_pull_requests_main_and_version_tags():
     assert check_step["env"]["ASR_REQUIRE_MEDIA_TOOLS"] == "1"
 
 
+def test_ci_transcript_probe_keeps_the_complete_repository_check():
+    steps = load_yaml(PIPELINE_PATH)["jobs"]["browser_checks"]["steps"]
+    probe = next(step for step in steps if step["name"] == "Check transcript return navigation")
+    complete = next(step for step in steps if step["name"] == "Run repository checks")
+    assert (
+        "test_meeting_install_preserves_newer_transcript_after_metadata_and_same_meeting_load"
+        in probe["run"]
+    )
+    assert probe["env"]["ASR_RUN_BROWSER_TESTS"] == "1"
+    assert probe["env"]["ASR_REQUIRE_MEDIA_TOOLS"] == "1"
+    assert "if" not in probe and "continue-on-error" not in probe
+    assert steps.index(probe) < steps.index(complete)
+    assert complete["run"] == "./scripts/check.sh"
+    assert "if" not in complete and "continue-on-error" not in complete
+
+
 def test_internal_extension_artifact_requires_native_capture_gate():
-    quality = load_yaml(PIPELINE_PATH)["jobs"]["quality"]
-    steps = quality["steps"]
+    native_lane = load_yaml(PIPELINE_PATH)["jobs"]["extension_checks"]
+    steps = native_lane["steps"]
     names = [step["name"] for step in steps]
     native = steps[names.index("Test native Chrome extension")]
+    matrix = steps[names.index("Test native Extension stage combinations")]
+    assert matrix["env"] == native["env"]
+    assert "-k 'not native_stage_matrix'" in native["run"]
+    assert "-k native_stage_matrix" in matrix["run"]
+    for suite in (native, matrix):
+        assert "timeout --kill-after=10s 720s" in suite["run"]
     assert native["env"] == {
         "ASR_RUN_EXTENSION_TESTS": "1",
         "ASR_EXTENSION_DISPOSABLE_XVFB": "1",
@@ -250,8 +304,13 @@ def test_internal_extension_artifact_requires_native_capture_gate():
     assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["path"].endswith("asr-studio-extension.zip*")
-    assert names.index(native["name"]) < names.index(bundle["name"]) < names.index(upload["name"])
-    assert all("if" not in step for step in (native, bundle, upload))
+    assert names.index(native["name"]) < names.index(matrix["name"])
+    assert names.index(matrix["name"]) < names.index(bundle["name"]) < names.index(upload["name"])
+    assert all("if" not in step for step in (native, matrix, bundle, upload))
+    locked = steps[names.index("Install locked native environment")]
+    assert locked["run"] == "uv sync --all-groups --locked"
+    assert names.index(locked["name"]) < names.index("Install Chromium")
+    assert names.index("Check native test environment") < names.index(native["name"])
     checks = (ROOT / "scripts/check.sh").read_text()
     assert "'extensions/chrome/tests/*.test.mjs'" in checks
 
@@ -1028,7 +1087,11 @@ def test_recovery_manifest_guard_requires_confirmed_absence(tmp_path, state, suc
 
 def test_recovery_builds_verified_tag_inputs_and_publishes_source_before_image():
     pipeline = load_yaml(PIPELINE_PATH)
-    assert pipeline["jobs"]["quality"]["if"] == "github.event_name != 'workflow_dispatch'"
+    assert pipeline["jobs"]["quality"]["if"] == (
+        "${{ always() && github.event_name != 'workflow_dispatch' }}"
+    )
+    for lane in ("browser_checks", "extension_checks"):
+        assert pipeline["jobs"][lane]["if"] == "github.event_name != 'workflow_dispatch'"
     assert pipeline["jobs"]["container"]["if"] == "github.event_name != 'workflow_dispatch'"
     steps = load_yaml(PIPELINE_PATH.parent / "recover-amd64.yml")["jobs"]["publish"]["steps"]
     names = [step["name"] for step in steps]

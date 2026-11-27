@@ -38,6 +38,21 @@ Explicit activation keeps mixed-version deployment fail-closed at the cost of an
 cutover step. Silently treating unknown capability as a legacy request, sampling defaults at
 create time, and changing import defaults were rejected because they break recovery or parity.
 
+**CI isolation.** Repository/browser checks and native Extension capture run on independent
+runners. A browser failure therefore retains the opportunity to collect native evidence.
+The existing required `Quality and browser tests` check waits for both lanes and runs even
+after either fails; its executable gate accepts only two actual successful lane results.
+The public release and recovery paths keep that required check name and dependency.
+A focused transcript-navigation precheck gives early feedback in the CI browser before the
+complete repository run. Its diagnostic fixture records only Escape event metadata, focus
+and meeting-read ordering; the original assertions and production behavior remain unchanged.
+The single historical CI-only Escape failure remains unclassified unless further evidence
+identifies it. Local green retries are not reported as a product correction.
+Native environment setup stays locked and preflighted, both native selections retain their
+existing deadlines, and the internal bundle waits for both selections. A diagnostic internal
+artifact does not authorize publication. Maintained delivery tests exercise successful,
+failed, canceled, skipped and absent lane results; the PR records actual execution evidence.
+
 Issue [#277](https://github.com/nguyencanhtrung/asr-studio/issues/277).
 Tag: architecture, reliability, frontend design. Targets: `docs/extension-stage-policy.md`,
 `docs/extension-automatic-processing.md`, `docs/frontend-design.md` and the Extension guide.
