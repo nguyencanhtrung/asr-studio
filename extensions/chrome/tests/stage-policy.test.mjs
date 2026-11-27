@@ -76,7 +76,10 @@ test("the create intent persists exact JSON and adds only the capable stage fiel
   });
   assert.deepEqual(intent.create_json, payload);
   assert.equal(intent.format_version, "legacy");
-  assert.deepEqual(createPayloadForSession({ capture: { createIntent: intent } }), payload);
+  assert.deepEqual(createPayloadForSession({
+    clientRecordingId: payload.client_recording_id,
+    capture: { captureEpoch: payload.capture_epoch, createIntent: intent },
+  }), payload);
   assert.equal(validateCreateResponse({}, intent), null);
   assert.deepEqual(validateCreateResponse({ stage_policy: { format_version: 0, intent: null } }, intent), {
     format_version: 0,
@@ -90,7 +93,10 @@ test("the create intent persists exact JSON and adds only the capable stage fiel
     stagePolicy: disabled,
     createJson: payload,
   });
-  const capablePayload = createPayloadForSession({ capture: { createIntent: blocked } });
+  const capablePayload = createPayloadForSession({
+    clientRecordingId: payload.client_recording_id,
+    capture: { captureEpoch: payload.capture_epoch, createIntent: blocked },
+  });
   assert.deepEqual(capablePayload.stage_policy, { format_version: 1 });
   assert.equal(Object.hasOwn(capablePayload, "asr"), false);
   assert.deepEqual(validateCreateResponse({ stage_policy: { format_version: 1, intent: { format_version: 1 } } }, blocked), {
@@ -122,7 +128,10 @@ test("draining is known and fenced without changing the capable wire", () => {
     stagePolicy: draining,
     createJson: payload,
   });
-  assert.deepEqual(createPayloadForSession({ capture: { createIntent: intent } }).stage_policy, { format_version: 1 });
+  assert.deepEqual(createPayloadForSession({
+    clientRecordingId: payload.client_recording_id,
+    capture: { captureEpoch: payload.capture_epoch, createIntent: intent },
+  }).stage_policy, { format_version: 1 });
 });
 
 test("old rows with an unexpected stage field are not treated as legacy", () => {
@@ -138,5 +147,5 @@ test("a new row with an explicit empty intent stays fenced instead of becoming l
     capture: { createPayload: payload, createIntent: null },
   };
   assert.throws(() => createPayloadForSession(row), { code: "intent_missing" });
-  assert.throws(() => validateCreateResponseForSession({}, row), { code: "stage_policy_not_ready" });
+  assert.throws(() => validateCreateResponseForSession({}, row), { code: "invalid_create_intent" });
 });

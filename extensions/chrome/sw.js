@@ -466,6 +466,7 @@ async function checkPairedApi(context, timeoutMs) {
       stagePolicy: unknownStagePolicy(error?.code || "capability_unavailable")
     })).catch(() => {});
     if (error.code === "api_version_mismatch") {
+      sessionTokens.delete(key);
       if (!incompatibleBindings.has(key)) {
         incompatibleBindings.set(key, safeError(error));
         void broadcastStatus().catch(() => {});
@@ -484,10 +485,10 @@ async function checkApiAfterRejection(context, error, timeoutMs, deadlineAt = nu
   }
 }
 
-async function ensureSessionToken(context, { timeoutMs = 15000, deadlineAt = null, capabilitiesVerified = false, allowStaleApi = false } = {}) {
+async function ensureSessionToken(context, { timeoutMs = 15000, deadlineAt = null, capabilitiesVerified = false } = {}) {
   const key = contextKey(context.binding);
   const cached = sessionTokens.get(key);
-  if (cached && cached.expiresAt > Date.now() + 30000 && (allowStaleApi || !safeApiError(context.binding))) return cached.token;
+  if (cached && cached.expiresAt > Date.now() + 30000 && !safeApiError(context.binding)) return cached.token;
   if (!context.deviceToken) throw makeError("pair_required", "Pair the extension with ASR Studio first.");
   if (!capabilitiesVerified) await checkPairedApi(context, remainingTimeout(deadlineAt, timeoutMs));
   const response = await requestJson(
@@ -508,8 +509,8 @@ async function ensureSessionToken(context, { timeoutMs = 15000, deadlineAt = nul
   return payload.session_token;
 }
 
-async function authorizedRequest(context, relativePath, init = {}, allowRenew = true, timeoutMs = 15000, deadlineAt = null, allowStaleApi = false) {
-  const token = await ensureSessionToken(context, { timeoutMs, deadlineAt, allowStaleApi });
+async function authorizedRequest(context, relativePath, init = {}, allowRenew = true, timeoutMs = 15000, deadlineAt = null) {
+  const token = await ensureSessionToken(context, { timeoutMs, deadlineAt });
   const headers = new Headers(init.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   try {
@@ -522,7 +523,7 @@ async function authorizedRequest(context, relativePath, init = {}, allowRenew = 
   } catch (error) {
     if (allowRenew && error.status === 401) {
       sessionTokens.delete(contextKey(context.binding));
-      return authorizedRequest(context, relativePath, init, false, timeoutMs, deadlineAt, allowStaleApi);
+      return authorizedRequest(context, relativePath, init, false, timeoutMs, deadlineAt);
     }
     await checkApiAfterRejection(context, error, timeoutMs, deadlineAt);
     throw error;
@@ -765,17 +766,9 @@ async function startFromTab(tabId, source = "action") {
       };
     }
     // Refresh format knowledge before the capture's durable intent is written.
-    // Keep the last known binding for this capture if the fresh probe fails. It
-    // gives the first request a pinned wire shape. The trusted context remains
-    // unknown, so the next capture cannot guess a legacy request.
-    const initialBinding = current.binding;
-    let capabilityError = null;
-    try {
-      await checkPairedApi(current, 15000);
-    } catch (error) {
-      capabilityError = error;
-    }
-    const captureBinding = capabilityError ? initialBinding : current.binding;
+    // A failed or malformed probe is unknown; local recording may continue, but
+    // prepareCreateSession must re-negotiate before any create POST.
+    await checkPairedApi(current, 15000).catch(() => {});
     await reconcileCaptureOwner({ duringStart: true }).catch(() => {});
     const existing = await getActiveCapture();
     if (existing) throw makeError("capture_busy", "Đã có một bản ghi đang chạy.");
@@ -790,11 +783,11 @@ async function startFromTab(tabId, source = "action") {
     const created = await createCaptureSession({
       clientRecordingId,
       captureEpoch,
-      endpoint: captureBinding,
+      endpoint: current.binding,
       title: "ASR Studio capture",
       mimeType: MIME_TYPE,
       metadata: { sources: ["tab", "microphone"], mix: "mono", prototype: false },
-      limits: captureBinding.limits
+      limits: current.binding.limits
     });
     if (!created.created) throw makeError("duplicate_start", "The local capture ID already exists.");
 
@@ -961,7 +954,7 @@ async function createRemoteSession(session, context, options = {}) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(createPayloadForSession(current))
-    }, allowRenew, timeoutMs, deadlineAt, true),
+    }, allowRenew, timeoutMs, deadlineAt),
     persistResult: (current, response) => {
       const remote = validateSessionResponse(response.body, current.endpoint);
       validateCreateResponseForSession(response.body, current);

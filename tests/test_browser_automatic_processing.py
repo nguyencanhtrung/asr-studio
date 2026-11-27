@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from itertools import product
 import uuid
 
 import pytest
@@ -148,8 +149,11 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
 
 @pytest.mark.parametrize(
     ("width", "theme", "language"),
-    [(1024, "light", "vi"), (390, "dark", "en")],
-    ids=["desktop-vi-light", "mobile-en-dark"],
+    list(product((1440, 390), ("light", "dark"), ("vi", "en"))),
+    ids=[
+        f"{'desktop' if width == 1440 else 'mobile'}-{language}-{theme}"
+        for width, theme, language in product((1440, 390), ("light", "dark"), ("vi", "en"))
+    ],
 )
 def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
     live, signed_in, width, theme, language
@@ -177,6 +181,17 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
         expect(asr).to_be_checked()
         expect(diarization).to_be_checked()
         expect(notes).to_be_checked()
+        expect(status).to_contain_text(
+            "Máy chủ chưa cho phép chạy stage. Bản ghi không được xem là đã xử lý."
+            if language == "vi"
+            else "The server does not allow stages to run. Do not treat the recording as processed."
+        )
+        advanced = page.locator(".stage-policy-advanced")
+        advanced.locator("summary").click()
+        expect(page.locator("#processing-stage-policy-version")).to_have_text("v1")
+        expect(page.locator("#processing-stage-policy-format")).to_have_text("v1")
+        expect(page.locator("#processing-stage-policy-admission")).to_contain_text("disabled")
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
         baseline = _processing_request(page, "/api/processing-stage-policy/v1")
 
         # The dependent values stay checked in the draft while ASR makes them
@@ -187,6 +202,7 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
         expect(notes).to_be_disabled()
         expect(diarization).to_be_checked()
         expect(notes).to_be_checked()
+        expect(notice).to_be_hidden()
         _processing_request(
             page,
             "/api/processing-stage-policy/v1",
@@ -202,6 +218,7 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
 
         save.click()
         expect(error).to_be_visible()
+        expect(notice).to_be_hidden()
         expect(status).to_be_focused()
         expect(status).to_contain_text(
             "Cài đặt đã đổi ở nơi khác" if language == "vi" else "The settings changed elsewhere"
@@ -225,6 +242,7 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
             else "Processing switches for new Extension recordings saved"
         )
         expect(notice).to_contain_text(expected_notice)
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
         final = _processing_request(page, "/api/processing-stage-policy/v1")
         assert final["policy"] == {"asr": False, "diarization": True, "notes": True}
     finally:

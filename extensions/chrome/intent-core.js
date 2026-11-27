@@ -42,6 +42,9 @@ function exactCreateJson(createJson, stagePolicy) {
 }
 
 function replayableCreatePayload(session) {
+  // Only pre-intent rows are legacy rows. A new row with a null or corrupt
+  // intent has no proven first body and must fail closed after createAttempted.
+  if (!isLegacyCaptureRow(session)) return null;
   const payload = session?.capture?.createPayload;
   const clientRecordingId = session?.clientRecordingId;
   const captureEpoch = session?.capture?.captureEpoch;
@@ -49,6 +52,29 @@ function replayableCreatePayload(session) {
     || payload.client_recording_id !== clientRecordingId) return null;
   if (captureEpoch !== undefined && (!validIdentity(captureEpoch) || payload.capture_epoch !== captureEpoch)) return null;
   return payload;
+}
+
+function validStoredIntent(intent, session) {
+  const clientRecordingId = session?.clientRecordingId;
+  const captureEpoch = session?.capture?.captureEpoch;
+  const createJson = intent?.create_json;
+  if (!isObject(intent) || !validIdentity(clientRecordingId) || !validIdentity(captureEpoch)
+    || intent.client_recording_id !== clientRecordingId || intent.capture_epoch !== captureEpoch
+    || !isObject(createJson) || createJson.client_recording_id !== clientRecordingId
+    || createJson.capture_epoch !== captureEpoch || !isObject(intent.capability)) return false;
+  if (intent.format_version === "legacy") {
+    return intent.capability.knowledge === "absent"
+      && intent.capability.contract_version === null
+      && intent.capability.format_version === null
+      && !Object.hasOwn(createJson, "stage_policy");
+  }
+  return intent.format_version === 1
+    && intent.capability.knowledge === "known"
+    && intent.capability.contract_version === 1
+    && intent.capability.format_version === 1
+    && isObject(createJson.stage_policy)
+    && createJson.stage_policy.format_version === 1
+    && Object.keys(createJson.stage_policy).length === 1;
 }
 
 function replayIntentForSession(session) {
@@ -124,21 +150,11 @@ export function createPayloadForSession(session) {
   if (isLegacyCaptureRow(session)) return capture.createPayload;
   const intent = capture.createIntent;
   if (!intent) return replayOrThrow(session, "intent_missing", "The durable capture intent is missing.");
-  if (intent.capability?.knowledge === "known" && intent.format_version === 1
-    && intent.capability.format_version === 1 && isObject(intent.create_json)
-    && intent.create_json.stage_policy?.format_version === 1
-    && Object.keys(intent.create_json.stage_policy).length === 1
-    && intent.create_json.client_recording_id === intent.client_recording_id
-    && intent.create_json.capture_epoch === intent.capture_epoch) {
+  if (!validStoredIntent(intent, session)) {
+    throw makeError("invalid_create_intent", "The durable capture intent does not match its recording identity or format.");
+  }
+  if (intent.format_version === 1) {
     return intent.create_json;
-  }
-  if (intent.format_version !== "legacy" || intent.capability?.knowledge !== "absent") {
-    return replayOrThrow(session, "stage_policy_not_ready", "The server has not confirmed the new capture format is ready.");
-  }
-  if (!isObject(intent.create_json)
-    || intent.create_json.client_recording_id !== intent.client_recording_id
-    || intent.create_json.capture_epoch !== intent.capture_epoch) {
-    return replayOrThrow(session, "invalid_create_intent", "The durable capture intent does not match its recording identity.");
   }
   return intent.create_json;
 }
@@ -148,7 +164,11 @@ export function validateCreateResponseForSession(response, session) {
   if (session?.upload?.createAttempted === true && !session?.capture?.createIntent) {
     return validateCreateResponse(response, replayIntentForSession(session));
   }
-  return validateCreateResponse(response, session?.capture?.createIntent);
+  const intent = session?.capture?.createIntent;
+  if (!validStoredIntent(intent, session)) {
+    throw makeError("invalid_create_intent", "The durable capture intent does not match its recording identity or format.");
+  }
+  return validateCreateResponse(response, intent);
 }
 
 export function validateCreateResponse(response, intent) {
