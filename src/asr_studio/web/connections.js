@@ -76,6 +76,8 @@ const processingStagePolicyEls = {
   title: document.querySelector("#processing-stage-policy-title"),
   form: document.querySelector("#processing-stage-policy-form"),
   version: document.querySelector("#processing-stage-policy-version"),
+  format: document.querySelector("#processing-stage-policy-format"),
+  admission: document.querySelector("#processing-stage-policy-admission"),
   asr: document.querySelector("#processing-stage-policy-asr"),
   diarization: document.querySelector("#processing-stage-policy-diarization"),
   notes: document.querySelector("#processing-stage-policy-notes"),
@@ -738,13 +740,10 @@ function stagePolicyStatusText(view) {
   if (view.status === "saving") return t("Đang lưu công tắc xử lý…");
   if (view.status === "ready") return t("Đã tải công tắc xử lý từ máy chủ.");
   if (view.status === "paused") {
-    const reason = view.admission?.reason;
     if (view.admission?.state === "draining") {
-      return t("Lựa chọn đã lưu; máy chủ đang chuyển trạng thái, không giả định bản ghi đã được xử lý.");
+      return t("Máy chủ đang chuyển trạng thái. Stage chưa chạy.");
     }
-    return reason
-      ? t("Lựa chọn đã lưu; máy chủ đang tạm dừng chạy stage ({reason}).", { reason })
-      : t("Lựa chọn đã lưu; máy chủ đang tạm dừng chạy stage.");
+    return t("Máy chủ chưa cho phép chạy stage. Bản ghi không được xem là đã xử lý.");
   }
   if (view.status === "unsupported") return t("Máy chủ chưa hỗ trợ công tắc xử lý cho Extension mới.");
   if (view.status === "conflict") return t("Cài đặt đã đổi ở nơi khác. Hãy tải lại trước khi lưu.");
@@ -757,10 +756,16 @@ function renderProcessingStagePolicy(state) {
   const elements = processingStagePolicyEls;
   const draft = view.draft;
   setProp(elements.version, "textContent", view.version ? `v${view.version}` : "");
+  setProp(elements.format, "textContent", view.formatVersion ? `v${view.formatVersion}` : "");
+  setProp(elements.admission, "textContent", view.admission
+    ? `${view.admission.state}${view.admission.reason ? ` · ${view.admission.reason}` : ""}`
+    : "");
   setAttr(elements.version, "data-state", view.status);
   setAttr(elements.status, "data-state", view.status);
   setProp(elements.status, "textContent", stagePolicyStatusText(view));
-  setProp(elements.notice, "textContent", view.notice ? tr(view.notice) : view.message ? tr(view.message) : "");
+  // Only an acknowledged response may populate the success notice. Admission
+  // is a separate server gate and must not make a draft look saved.
+  setProp(elements.notice, "textContent", view.notice ? tr(view.notice) : "");
   setProp(elements.error, "hidden", !view.error);
   setProp(elements.error, "textContent", view.error ? tr(view.error.text) : "");
   setAttr(elements.form, "aria-busy", view.loading || view.saving ? "true" : "false");

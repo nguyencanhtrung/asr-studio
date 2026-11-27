@@ -37,16 +37,25 @@ Stage policy is a separate, versioned contract. The authenticated operator reads
 readiness claim. Existing six-field Preferences PUT and four-field Preferences PATCH
 remain unchanged.
 
+The Settings panel keeps the three stage switches compact. It explains the server admission gate
+separately from the saved draft. A successful save notice appears only after the response confirms
+the submitted version and values. Version, format, and admission reason stay in Advanced details.
+Notes needs a transcript but does not need speaker diarization.
+
 The extension capability response exposes the same format knowledge under
 `features.stage_policy`, but does not expose Settings booleans. A capable extension
 pins only the exact create intent `stage_policy: {format_version: 1}` before its first
-recording-session POST. An omitted intent retains the legacy create fingerprint and
-legacy all-on semantics; malformed or unsupported intent is rejected rather than
-downgraded.
+recording-session POST. The public connection object keeps its established identity shape; stage
+knowledge stays in the trusted binding and the durable capture intent. A row from before durable
+intents is legacy only when it has no `createIntent`, no endpoint stage-policy binding, and no
+`stage_policy` member in its stored request. An explicit unknown or malformed new intent is never
+treated as legacy. Before `createAttempted`, a successful capability probe may rebuild the intent
+from the exact stored request. After `createAttempted`, recovery replays that stored request
+without changing its identity, credentials, language, or first body.
 
 ## Meeting status
 
-The meeting page shows a compact automatic-processing panel with separate Transcript and Notes steps. It translates durable waiting and failure reasons such as worker offline, unavailable model, busy slot, unconfigured provider, unavailable provider, changed recipe, and source confirmation required.
+The meeting page shows a compact automatic-processing panel with separate Transcript and Notes steps. It translates durable waiting and failure reasons such as worker offline, unavailable model, busy slot, unconfigured provider, unavailable provider, changed recipe, and source confirmation required. A disabled stage is shown as **Skipped**, not as waiting, error, or canceled. A workflow with ASR or Notes disabled does not claim that missing generated output completed.
 
 The workflow supports these public actions:
 
@@ -57,7 +66,7 @@ The workflow supports these public actions:
 
 The UI reads the current workflow and preference/source versions immediately before adoption. Notes retry creates only a notes attempt. It does not rerun ASR. Cancel fences the workflow and does not restart it. Current-source adoption is explicit and cannot overwrite unconfirmed transcript or metadata edits.
 
-When no current transcript generation exists, current-source adoption is the explicit confirmation of the meeting metadata and Notes-source revisions. It starts a fresh ASR attempt against the original recording, resets the waiting transcription and Notes steps, and creates no Notes snapshot until ASR publishes a real transcript. Existing-transcript adoption keeps the established Notes-only behavior and does not rerun ASR.
+When no current transcript generation exists, current-source adoption is the explicit confirmation of the meeting metadata and Notes-source revisions. With ASR enabled, it starts a fresh ASR attempt against the original recording, resets the waiting transcription and Notes steps, and creates no Notes snapshot until ASR publishes a real transcript. With ASR disabled, the action confirms the recorded part without promising transcription or Notes. Existing-transcript adoption keeps the established Notes-only behavior and does not rerun ASR. Notes does not require diarization.
 
 A saved prefix of an interrupted capture (`capture_complete: false`) creates its workflow in `needs_attention` with waiting reason `interrupted_recording`. The scheduler skips it until the operator adopts the current source; the UI labels that action **Transcribe recorded part**. The recording keeps `recording.interrupted = {code}` after processing starts.
 

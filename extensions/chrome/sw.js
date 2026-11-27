@@ -19,7 +19,11 @@ import {
   validateReceipt,
   validateSessionResponse
 } from "./protocol.js";
-import { createPayloadForSession, validateCreateResponse } from "./intent-core.js";
+import {
+  createCaptureIntentForSession,
+  createPayloadForSession,
+  validateCreateResponseForSession
+} from "./intent-core.js";
 import {
   cleanupReceipt,
   commitRecoveryChoice,
@@ -462,7 +466,6 @@ async function checkPairedApi(context, timeoutMs) {
       stagePolicy: unknownStagePolicy(error?.code || "capability_unavailable")
     })).catch(() => {});
     if (error.code === "api_version_mismatch") {
-      sessionTokens.delete(key);
       if (!incompatibleBindings.has(key)) {
         incompatibleBindings.set(key, safeError(error));
         void broadcastStatus().catch(() => {});
@@ -481,10 +484,10 @@ async function checkApiAfterRejection(context, error, timeoutMs, deadlineAt = nu
   }
 }
 
-async function ensureSessionToken(context, { timeoutMs = 15000, deadlineAt = null, capabilitiesVerified = false } = {}) {
+async function ensureSessionToken(context, { timeoutMs = 15000, deadlineAt = null, capabilitiesVerified = false, allowStaleApi = false } = {}) {
   const key = contextKey(context.binding);
   const cached = sessionTokens.get(key);
-  if (cached && cached.expiresAt > Date.now() + 30000 && !safeApiError(context.binding)) return cached.token;
+  if (cached && cached.expiresAt > Date.now() + 30000 && (allowStaleApi || !safeApiError(context.binding))) return cached.token;
   if (!context.deviceToken) throw makeError("pair_required", "Pair the extension with ASR Studio first.");
   if (!capabilitiesVerified) await checkPairedApi(context, remainingTimeout(deadlineAt, timeoutMs));
   const response = await requestJson(
@@ -505,8 +508,8 @@ async function ensureSessionToken(context, { timeoutMs = 15000, deadlineAt = nul
   return payload.session_token;
 }
 
-async function authorizedRequest(context, relativePath, init = {}, allowRenew = true, timeoutMs = 15000, deadlineAt = null) {
-  const token = await ensureSessionToken(context, { timeoutMs, deadlineAt });
+async function authorizedRequest(context, relativePath, init = {}, allowRenew = true, timeoutMs = 15000, deadlineAt = null, allowStaleApi = false) {
+  const token = await ensureSessionToken(context, { timeoutMs, deadlineAt, allowStaleApi });
   const headers = new Headers(init.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   try {
@@ -519,7 +522,7 @@ async function authorizedRequest(context, relativePath, init = {}, allowRenew = 
   } catch (error) {
     if (allowRenew && error.status === 401) {
       sessionTokens.delete(contextKey(context.binding));
-      return authorizedRequest(context, relativePath, init, false, timeoutMs, deadlineAt);
+      return authorizedRequest(context, relativePath, init, false, timeoutMs, deadlineAt, allowStaleApi);
     }
     await checkApiAfterRejection(context, error, timeoutMs, deadlineAt);
     throw error;
@@ -762,9 +765,17 @@ async function startFromTab(tabId, source = "action") {
       };
     }
     // Refresh format knowledge before the capture's durable intent is written.
-    // A failed or malformed capability read is retained as unknown by the helper;
-    // it must never silently turn a new capture into a legacy one.
-    await checkPairedApi(current, 15000).catch(() => {});
+    // Keep the last known binding for this capture if the fresh probe fails. It
+    // gives the first request a pinned wire shape. The trusted context remains
+    // unknown, so the next capture cannot guess a legacy request.
+    const initialBinding = current.binding;
+    let capabilityError = null;
+    try {
+      await checkPairedApi(current, 15000);
+    } catch (error) {
+      capabilityError = error;
+    }
+    const captureBinding = capabilityError ? initialBinding : current.binding;
     await reconcileCaptureOwner({ duringStart: true }).catch(() => {});
     const existing = await getActiveCapture();
     if (existing) throw makeError("capture_busy", "Đã có một bản ghi đang chạy.");
@@ -779,11 +790,11 @@ async function startFromTab(tabId, source = "action") {
     const created = await createCaptureSession({
       clientRecordingId,
       captureEpoch,
-      endpoint: current.binding,
+      endpoint: captureBinding,
       title: "ASR Studio capture",
       mimeType: MIME_TYPE,
       metadata: { sources: ["tab", "microphone"], mix: "mono", prototype: false },
-      limits: current.binding.limits
+      limits: captureBinding.limits
     });
     if (!created.created) throw makeError("duplicate_start", "The local capture ID already exists.");
 
@@ -851,6 +862,31 @@ function isRetryable(error) {
   return ["network_error", "timeout", "backend_unavailable", "backend_storage", "byte_limit", "api_version_mismatch"].includes(error?.code) || error?.status >= 500;
 }
 
+function canNegotiateCreateIntent(stagePolicy) {
+  return stagePolicy?.knowledge === "known" && stagePolicy.formatVersion === 1
+    || stagePolicy?.knowledge === "absent" && stagePolicy.admission === "legacy";
+}
+
+async function prepareCreateSession(session, context, timeoutMs, deadlineAt) {
+  try {
+    createPayloadForSession(session);
+    return session;
+  } catch (error) {
+    // A fresh capability failure can leave a new row with an unknown intent.
+    // Re-negotiate only before the durable create marker. Once the marker is
+    // set, createPayloadForSession replays the stored first body unchanged.
+    if (session.upload?.createAttempted || !["intent_missing", "invalid_create_intent", "stage_policy_not_ready"].includes(error?.code)) {
+      throw error;
+    }
+    await checkPairedApi(context, remainingTimeout(deadlineAt, timeoutMs));
+    if (!canNegotiateCreateIntent(context.binding?.stagePolicy)) {
+      throw makeError("stage_policy_not_ready", "The server has not confirmed a supported capture format.");
+    }
+    const createIntent = createCaptureIntentForSession(session, context.binding.stagePolicy);
+    return patchSession(session.clientRecordingId, "capture", { createIntent });
+  }
+}
+
 async function sessionContext(session) {
   const stored = await storageGet(TRUSTED_CONTEXTS);
   const contexts = stored[TRUSTED_CONTEXTS] || {};
@@ -908,7 +944,6 @@ async function cancelRemoteSession(session, context, options = {}) {
 
 async function createRemoteSession(session, context, options = {}) {
   if (session.upload.serverSessionId) return session;
-  createPayloadForSession(session);
   const {
     allowRenew = true,
     canCommit = () => true,
@@ -916,6 +951,7 @@ async function createRemoteSession(session, context, options = {}) {
     persist = true,
     timeoutMs = 15000
   } = options;
+  session = await prepareCreateSession(session, context, timeoutMs, deadlineAt);
   return runCreateWithAttempt({
     session,
     persistAttempt: (current) => current.upload.createAttempted
@@ -925,10 +961,10 @@ async function createRemoteSession(session, context, options = {}) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(createPayloadForSession(current))
-    }, allowRenew, timeoutMs, deadlineAt),
+    }, allowRenew, timeoutMs, deadlineAt, true),
     persistResult: (current, response) => {
       const remote = validateSessionResponse(response.body, current.endpoint);
-      validateCreateResponse(response.body, current.capture.createIntent);
+      validateCreateResponseForSession(response.body, current);
       const uploadPatch = {
         state: "receiving",
         serverSessionId: remote.id,

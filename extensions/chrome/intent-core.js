@@ -41,6 +41,33 @@ function exactCreateJson(createJson, stagePolicy) {
   return exact;
 }
 
+function replayableCreatePayload(session) {
+  const payload = session?.capture?.createPayload;
+  const clientRecordingId = session?.clientRecordingId;
+  const captureEpoch = session?.capture?.captureEpoch;
+  if (session?.upload?.createAttempted !== true || !isObject(payload) || !validIdentity(clientRecordingId)
+    || payload.client_recording_id !== clientRecordingId) return null;
+  if (captureEpoch !== undefined && (!validIdentity(captureEpoch) || payload.capture_epoch !== captureEpoch)) return null;
+  return payload;
+}
+
+function replayIntentForSession(session) {
+  const payload = replayableCreatePayload(session);
+  if (!payload) throw makeError("stage_policy_not_ready", "The create response cannot be matched to its durable intent.");
+  const stage = payload.stage_policy;
+  if (stage === undefined) return { format_version: "legacy" };
+  if (isObject(stage) && stage.format_version === 1 && Object.keys(stage).length === 1) {
+    return { format_version: 1 };
+  }
+  throw makeError("protocol_mismatch", "The stored create request has an invalid stage policy.");
+}
+
+function replayOrThrow(session, code, message) {
+  const payload = replayableCreatePayload(session);
+  if (payload) return payload;
+  throw makeError(code, message);
+}
+
 export function createCaptureIntent({ clientRecordingId, captureEpoch, stagePolicy, createJson }) {
   if (!validIdentity(clientRecordingId) || !validIdentity(captureEpoch) || !isObject(stagePolicy)
     || !KNOWLEDGE.has(stagePolicy.knowledge) || !isObject(createJson)
@@ -67,16 +94,36 @@ export function createCaptureIntent({ clientRecordingId, captureEpoch, stagePoli
   };
 }
 
+// Rows written before durable create intents have no createIntent key and no
+// endpoint stage-policy binding. Their payload is the only wire contract that
+// can be replayed. A present null or malformed intent is a new-row failure,
+// not evidence of a legacy row.
+export function isLegacyCaptureRow(session) {
+  const capture = session?.capture;
+  const endpoint = session?.endpoint;
+  return isObject(capture)
+    && isObject(endpoint)
+    && !Object.hasOwn(capture, "createIntent")
+    && isObject(capture.createPayload)
+    && !Object.hasOwn(capture.createPayload, "stage_policy")
+    && !Object.hasOwn(endpoint, "stagePolicy");
+}
+
+export function createCaptureIntentForSession(session, stagePolicy) {
+  const payload = session?.capture?.createPayload;
+  return createCaptureIntent({
+    clientRecordingId: session?.clientRecordingId,
+    captureEpoch: session?.capture?.captureEpoch,
+    stagePolicy,
+    createJson: payload,
+  });
+}
+
 export function createPayloadForSession(session) {
   const capture = session?.capture || {};
+  if (isLegacyCaptureRow(session)) return capture.createPayload;
   const intent = capture.createIntent;
-  // Rows written before this update have no intent and no stage capability
-  // knowledge. Preserve their exact legacy request for recovery.
-  if (!intent) {
-    if (session?.endpoint?.stagePolicy === undefined && isObject(capture.createPayload)
-      && !Object.hasOwn(capture.createPayload, "stage_policy")) return capture.createPayload;
-    throw makeError("intent_missing", "The durable capture intent is missing.");
-  }
+  if (!intent) return replayOrThrow(session, "intent_missing", "The durable capture intent is missing.");
   if (intent.capability?.knowledge === "known" && intent.format_version === 1
     && intent.capability.format_version === 1 && isObject(intent.create_json)
     && intent.create_json.stage_policy?.format_version === 1
@@ -86,14 +133,22 @@ export function createPayloadForSession(session) {
     return intent.create_json;
   }
   if (intent.format_version !== "legacy" || intent.capability?.knowledge !== "absent") {
-    throw makeError("stage_policy_not_ready", "The server has not confirmed the new capture format is ready.");
+    return replayOrThrow(session, "stage_policy_not_ready", "The server has not confirmed the new capture format is ready.");
   }
   if (!isObject(intent.create_json)
     || intent.create_json.client_recording_id !== intent.client_recording_id
     || intent.create_json.capture_epoch !== intent.capture_epoch) {
-    throw makeError("invalid_create_intent", "The durable capture intent does not match its recording identity.");
+    return replayOrThrow(session, "invalid_create_intent", "The durable capture intent does not match its recording identity.");
   }
   return intent.create_json;
+}
+
+export function validateCreateResponseForSession(response, session) {
+  if (isLegacyCaptureRow(session)) return validateCreateResponse(response, { format_version: "legacy" });
+  if (session?.upload?.createAttempted === true && !session?.capture?.createIntent) {
+    return validateCreateResponse(response, replayIntentForSession(session));
+  }
+  return validateCreateResponse(response, session?.capture?.createIntent);
 }
 
 export function validateCreateResponse(response, intent) {

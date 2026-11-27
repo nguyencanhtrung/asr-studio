@@ -320,8 +320,7 @@ export function redactedBinding(binding) {
     prototype: false,
     paired: Boolean(binding.paired),
     deviceExpiresAt: binding.deviceExpiresAt || null,
-    limits: binding.limits ? { ...binding.limits } : undefined,
-    ...(binding.stagePolicy ? { stagePolicy: { ...binding.stagePolicy } } : {})
+    limits: binding.limits ? { ...binding.limits } : undefined
   };
 }
 

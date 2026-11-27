@@ -60,6 +60,38 @@ test("visible workflow installs both steps and schedules only the current meetin
   assert.ok(left.effects.some((effect) => effect.type === "cancel" && effect.key === "processing/poll"));
 });
 
+test("a skipped recipe is visible as skipped and makes no generated-output claim", () => {
+  const result = reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: {
+      body: {
+        id: "meeting-1",
+        processing: workflow({
+          state: "succeeded",
+          stage_policy: { format_version: 1, asr: false, diarization: false, notes: false },
+          current_source: {
+            generation_id: null,
+            source_version: null,
+            metadata_version: 5,
+            notes_source_version: 2,
+          },
+          steps: [
+            { id: "transcription", kind: "transcription", state: "skipped", waiting_reason: "stage_disabled", source_snapshot_id: null, recipe_version: 1 },
+            { id: "notes", kind: "notes", state: "skipped", waiting_reason: "stage_disabled", source_snapshot_id: null, recipe_version: 2 },
+          ],
+        }),
+      },
+    },
+  });
+  const view = selectProcessing(result.state);
+  assert.equal(view.steps[0].state, "skipped");
+  assert.equal(view.steps[1].state, "skipped");
+  assert.equal(view.steps[0].value.text, "Đã bỏ qua");
+  assert.match(view.message.text, /bỏ qua/);
+  assert.doesNotMatch(view.source.text, /chép lời/);
+});
+
 test("manual task, generation, and notes status/revisions retain the history status strip", () => {
   const emptyManual = { task: null, generation: null, notes: { known: true, count: 0, status: null } };
   assert.equal(shouldRenderAutomaticStatus(workflow(), { ...emptyManual, task: { status: "running" } }), false);

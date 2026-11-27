@@ -1206,23 +1206,22 @@
             <section class="stage-policy-section" aria-labelledby="processing-stage-policy-title">
               <div class="settings-title-row">
                 <h4 class="settings-group-title" id="processing-stage-policy-title">Công tắc cho bản ghi Extension mới</h4>
-                <span class="connection-state-badge" id="processing-stage-policy-version"></span>
               </div>
-              <p class="connection-help">Các lựa chọn này chỉ áp dụng cho bản ghi mới từ Extension đã cập nhật. Model, provider và ngôn ngữ vẫn lấy từ panel sở hữu tương ứng.</p>
+              <p class="connection-help">Bật các stage cho bản ghi mới từ Extension. Model, provider và ngôn ngữ vẫn lấy từ panel sở hữu.</p>
               <form id="processing-stage-policy-form">
                 <fieldset class="stage-policy-controls" aria-describedby="processing-stage-policy-help">
                   <legend class="visually-hidden">Các stage xử lý</legend>
                   <label class="stage-policy-row" for="processing-stage-policy-asr">
                     <input id="processing-stage-policy-asr" type="checkbox" />
-                    <span><strong>Chép lời (ASR)</strong><small>Giữ transcript cho bản ghi mới.</small></span>
+                    <span><strong>Chép lời (ASR)</strong><small>Tạo transcript cho bản ghi mới.</small></span>
                   </label>
                   <label class="stage-policy-row" for="processing-stage-policy-diarization">
                     <input id="processing-stage-policy-diarization" type="checkbox" />
-                    <span><strong>Tách người nói</strong><small>Nhận diện các người nói sau khi có audio.</small></span>
+                    <span><strong>Tách người nói</strong><small>Gắn nhãn người nói nếu cần; không bắt buộc cho Notes.</small></span>
                   </label>
                   <label class="stage-policy-row" for="processing-stage-policy-notes">
                     <input id="processing-stage-policy-notes" type="checkbox" />
-                    <span><strong>Tạo notes</strong><small>Tạo notes sau transcript và tách người nói.</small></span>
+                    <span><strong>Tạo notes</strong><small>Tạo Notes từ transcript; không cần tách người nói.</small></span>
                   </label>
                 </fieldset>
                 <p class="connection-help" id="processing-stage-policy-help">Tắt ASR chỉ bỏ qua các stage phụ thuộc trong lần chạy; giá trị đã lưu của chúng vẫn được giữ.</p>
@@ -1233,6 +1232,14 @@
                   <button class="primary-button" id="processing-stage-policy-save" type="submit">Lưu công tắc</button>
                   <button class="secondary-button" id="processing-stage-policy-reload" type="button">Tải lại</button>
                 </div>
+                <details class="stage-policy-advanced">
+                  <summary>Chi tiết nâng cao</summary>
+                  <dl class="stage-policy-diagnostics">
+                    <div><dt>Phiên bản preference</dt><dd id="processing-stage-policy-version"></dd></div>
+                    <div><dt>Định dạng</dt><dd id="processing-stage-policy-format"></dd></div>
+                    <div><dt>Admission</dt><dd id="processing-stage-policy-admission"></dd></div>
+                  </dl>
+                </details>
               </form>
             </section>
             <section class="automatic-preferences-section" aria-labelledby="automatic-preferences-title">

@@ -299,7 +299,11 @@ function actionSucceeded(state, action) {
     : kind === "use_current_source"
       ? state.action.intended?.generation_id
         ? t("Đã áp dụng nguồn transcript đang hiển thị. Notes sẽ dùng phiên bản đã xác nhận.")
-        : t("Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.")
+        : stageEnabled(workflow, "asr")
+          ? stageEnabled(workflow, "notes")
+            ? t("Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.")
+            : t("Đã xác nhận thông tin cuộc họp. ASR sẽ chép lời bản ghi gốc; Notes đang tắt.")
+          : t("Đã xác nhận thông tin cuộc họp. ASR và Notes đang tắt; bản ghi sẽ giữ nguyên.")
       : kind === "apply_current_settings"
         ? t("Đã áp dụng cài đặt đang hiển thị cho workflow này.")
         : t("Đã hủy xử lý tự động. Workflow đã được khóa, không tự chạy lại.");
@@ -425,13 +429,27 @@ const WAITING_REASONS = {
   interrupted_recording: t("Bản ghi bị gián đoạn. Xử lý tự động chỉ chạy khi bạn xác nhận chép lời phần đã ghi."),
   transcript_required: t("Đang chờ transcript trước khi tạo notes."),
   canceled_by_operator: t("Đã hủy bởi người dùng."),
+  stage_disabled: t("Stage này được tắt trong recipe của workflow."),
 };
+
+function stageEnabled(workflow, kind) {
+  const policy = workflow?.stage_policy;
+  if (!isObject(policy) || policy.format_version !== 1 || typeof policy.asr !== "boolean"
+    || typeof policy.diarization !== "boolean" || typeof policy.notes !== "boolean") return true;
+  if (kind === "asr") return policy.asr;
+  return policy.asr && policy[kind];
+}
+
+function stageSkipped(workflow, kind) {
+  return !stageEnabled(workflow, kind) || stepOf(workflow, kind)?.state === "skipped";
+}
 
 function stepView(step) {
   if (!step) return { state: "idle", value: t("Chưa bắt đầu"), reason: null };
   if (["accepted", "running", "stopping"].includes(step.state)) {
     return { state: "active", value: step.state === "stopping" ? t("Đang dừng") : t("Đang xử lý"), reason: null };
   }
+  if (step.state === "skipped") return { state: "skipped", value: t("Đã bỏ qua"), reason: WAITING_REASONS[step.waiting_reason] || WAITING_REASONS.stage_disabled };
   if (step.state === "succeeded") return { state: "done", value: t("Hoàn tất"), reason: null };
   if (["failed", "needs_attention"].includes(step.state)) return { state: "problem", value: t("Cần xử lý"), reason: WAITING_REASONS[step.waiting_reason] || t("Workflow cần bạn kiểm tra.") };
   if (step.state === "canceled") return { state: "warning", value: t("Đã hủy"), reason: WAITING_REASONS[step.waiting_reason] || null };
@@ -440,17 +458,37 @@ function stepView(step) {
 
 function overallText(workflow) {
   if (!workflow) return null;
-  if (workflow.state === "succeeded") return t("Transcript và notes đã hoàn tất.");
+  const asrSkipped = stageSkipped(workflow, "asr");
+  const notesSkipped = stageSkipped(workflow, "notes");
+  if (workflow.state === "succeeded") {
+    if (asrSkipped && notesSkipped) return t("Bản ghi đã lưu. Transcript và notes đã bỏ qua theo cài đặt.");
+    if (asrSkipped) return t("Bản ghi đã lưu. Transcript đã bỏ qua theo cài đặt; Notes không chạy.");
+    if (notesSkipped) return t("Transcript đã hoàn tất. Notes đã bỏ qua theo cài đặt.");
+    return t("Transcript và notes đã hoàn tất.");
+  }
   if (workflow.state === "canceled") return t("Đã hủy xử lý tự động. Workflow không tự chạy lại.");
-  if (workflow.state === "running") return t("Đang xử lý transcript và notes. Trạng thái sẽ cập nhật khi workflow tiến triển.");
+  if (workflow.state === "running") {
+    if (asrSkipped && notesSkipped) return t("Đang hoàn tất bản ghi. Transcript và notes đã tắt.");
+    if (asrSkipped) return t("Đang xử lý notes. Transcript đã bỏ qua theo cài đặt.");
+    if (notesSkipped) return t("Đang xử lý transcript. Notes đã bỏ qua theo cài đặt.");
+    return t("Đang xử lý transcript và notes. Trạng thái sẽ cập nhật khi workflow tiến triển.");
+  }
   if (workflow.state === "needs_attention") return t("Workflow cần một xác nhận trước khi tiếp tục.");
   return t("Workflow đang chờ worker, model hoặc provider đã chọn.");
 }
 
-function sourceText(source) {
+function sourceText(source, workflow = null) {
   if (!source) return null;
   if (source.generation_id === null && source.source_version === null) {
-    return t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc.", {
+    return t(stageEnabled(workflow, "asr")
+      ? "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc."
+      : "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận nguồn hiện tại.", {
+      metadata: source.metadata_version,
+    });
+  }
+  if (!stageEnabled(workflow, "asr")) {
+    return t("Nguồn đã chọn · nội dung phiên bản {source} · thông tin cuộc họp phiên bản {metadata}", {
+      source: source.source_version,
       metadata: source.metadata_version,
     });
   }
@@ -467,7 +505,9 @@ export function selectProcessing(state) {
   const notes = stepView(stepOf(workflow, "notes"));
   const action = state.action;
   const intent = action?.intended;
-  const source = sourceText(workflow.current_source);
+  const asrEnabled = stageEnabled(workflow, "asr");
+  const notesEnabled = stageEnabled(workflow, "notes");
+  const source = sourceText(workflow.current_source, workflow);
   const interruptedStart = workflow.state === "needs_attention" &&
     stepOf(workflow, "transcription")?.waiting_reason === "interrupted_recording";
   const intended = action?.kind === "apply_current_settings" && intent?.asr
@@ -480,7 +520,7 @@ export function selectProcessing(state) {
       output: intent.notes.output_language,
     })
     : action?.kind === "use_current_source" && intent && Object.hasOwn(intent, "generation_id")
-      ? sourceText(intent)
+      ? sourceText(intent, workflow)
       : action?.kind === "retry_notes" && intent?.source_snapshot_id
         ? t("Tạo lại notes từ bản transcript đã lưu · cài đặt phiên bản {recipe}.", { recipe: intent.recipe_version })
         : null;
@@ -498,11 +538,15 @@ export function selectProcessing(state) {
       useSource: workflow.actions.use_current_source === true,
     },
     message: interruptedStart
-      ? t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.")
+      ? asrEnabled
+        ? notesEnabled
+          ? t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.")
+          : t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời. Notes đang tắt.")
+        : t("Bản ghi bị gián đoạn. ASR và Notes đang tắt cho workflow này; xác nhận để giữ phần đã ghi.")
       : overallText(workflow),
     source,
     sourceActionLabel: interruptedStart
-      ? t("Chép lời phần đã ghi")
+      ? asrEnabled ? t("Chép lời phần đã ghi") : t("Xác nhận phần đã ghi")
       : workflow.current_source?.generation_id === null && workflow.current_source?.source_version === null
         ? t("Xác nhận thông tin cuộc họp")
         : t("Dùng nguồn đang hiển thị"),

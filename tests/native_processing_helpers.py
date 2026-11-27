@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import threading
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from test_chatgpt_provider import connect
 from asr_studio import extension_ingest, worker
 from asr_studio.chatgpt import ChatGPTProvider
 from asr_studio.runtime import RuntimeProfile, write_runtime_profile
+from asr_studio.storage import database_path, initialize
 
 
 def processing_settings(settings, directory, adapter):
@@ -50,6 +52,15 @@ def processing_settings(settings, directory, adapter):
     )
     provider.ensure()
     connect(provider)
+    # This is a disposable native fixture. Enable the real admission gate here
+    # so scheduler, worker, and publication assertions exercise the declared
+    # stage recipe instead of the production safety default.
+    initialize(settings.data_dir)
+    with sqlite3.connect(database_path(settings.data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_cutover_gate SET admission = 'enabled', reason = NULL WHERE id = 1"
+        )
+        connection.commit()
     return settings
 
 

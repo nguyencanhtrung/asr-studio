@@ -1041,8 +1041,8 @@ button.provider-overview-row:focus-visible {
 }
 
 .stage-policy-section {
-  margin: 0 0 22px;
-  padding: 16px;
+  margin: 0 0 16px;
+  padding: 12px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md, var(--radius-sm));
   background: var(--surface-subtle);
@@ -1053,15 +1053,15 @@ button.provider-overview-row:focus-visible {
 }
 
 .stage-policy-section .connection-help {
-  margin: 0 0 12px;
+  margin: 0 0 9px;
   color: var(--ink-2);
   font-size: var(--text-small);
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .stage-policy-controls {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -1072,9 +1072,9 @@ button.provider-overview-row:focus-visible {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
-  gap: 10px;
+  gap: 9px;
   min-width: 0;
-  padding: 10px;
+  padding: 8px 9px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -1112,7 +1112,8 @@ button.provider-overview-row:focus-visible {
 .stage-policy-row small {
   color: var(--ink-2);
   font-size: var(--text-small);
-  line-height: 1.45;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .stage-policy-row input:disabled {
@@ -1125,7 +1126,7 @@ button.provider-overview-row:focus-visible {
 }
 
 .stage-policy-status {
-  margin: 12px 0 0;
+  margin: 9px 0 0;
   color: var(--ink-2);
   font-size: var(--text-small);
   line-height: 1.5;
@@ -1146,6 +1147,7 @@ button.provider-overview-row:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  margin-top: 8px;
 }
 
 .stage-policy-section .connection-error {
@@ -1176,6 +1178,51 @@ button.provider-overview-row:focus-visible {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--hairline));
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.stage-policy-advanced {
+  margin-top: 10px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+}
+
+.stage-policy-advanced summary {
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: var(--text-small);
+  font-weight: 620;
+}
+
+.stage-policy-advanced summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.stage-policy-diagnostics {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 0;
+  color: var(--ink-2);
+  font-size: var(--text-label);
+}
+
+.stage-policy-diagnostics > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.stage-policy-diagnostics dt,
+.stage-policy-diagnostics dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.stage-policy-diagnostics dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  text-align: right;
 }
 
 .asr-models {

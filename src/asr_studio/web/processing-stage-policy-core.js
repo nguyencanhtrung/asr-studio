@@ -255,8 +255,8 @@ export function selectStagePolicy(state) {
   const dirtyState = dirty(state || {});
   const message = state?.status === "paused"
     ? state.saved?.admission.state === "draining"
-      ? t("Lựa chọn đã lưu nhưng máy chủ đang chuyển trạng thái; không giả định bản ghi đã được xử lý.")
-      : t("Lựa chọn đã lưu nhưng máy chủ chưa bật chạy các stage; không giả định bản ghi đã được xử lý.")
+      ? t("Máy chủ đang chuyển trạng thái. Stage chưa chạy.")
+      : t("Máy chủ chưa cho phép chạy stage. Bản ghi không được xem là đã xử lý.")
     : state?.status === "unsupported"
       ? t("Máy chủ chưa công bố hỗ trợ công tắc xử lý cho Extension mới.")
       : null;

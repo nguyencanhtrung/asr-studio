@@ -12,6 +12,7 @@ import {
 import {
   createCaptureIntent,
   createPayloadForSession,
+  validateCreateResponseForSession,
   validateCreateResponse,
 } from "../intent-core.js";
 
@@ -129,4 +130,13 @@ test("old rows with an unexpected stage field are not treated as legacy", () => 
     endpoint: {},
     capture: { createPayload: { ...payload, stage_policy: { format_version: 1 } } },
   }), { code: "intent_missing" });
+});
+
+test("a new row with an explicit empty intent stays fenced instead of becoming legacy", () => {
+  const row = {
+    endpoint: {},
+    capture: { createPayload: payload, createIntent: null },
+  };
+  assert.throws(() => createPayloadForSession(row), { code: "intent_missing" });
+  assert.throws(() => validateCreateResponseForSession({}, row), { code: "stage_policy_not_ready" });
 });
