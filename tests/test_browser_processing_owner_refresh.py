@@ -79,8 +79,17 @@ def test_initial_catalog_cannot_invent_owner_effort_after_other_client_save(live
     )
     assert "chatgpt" not in _processing_request(owner, "/api/notes-preferences")["models"]
     held = []
-    catalog_url, _ = _enable_local_catalog(reader, live, held.append)
-    with reader.expect_request(catalog_url):
+
+    def hold_catalog(route):
+        held.append(route)
+        reader.evaluate("console.debug('fixture:owner-catalog-held')")
+
+    catalog_url, _ = _enable_local_catalog(reader, live, hold_catalog)
+    # The request event precedes route dispatch. Wait until this fixture has
+    # actually retained the route before changing the owner in the other client.
+    with reader.expect_console_message(
+        predicate=lambda message: message.text == "fixture:owner-catalog-held"
+    ):
         _open_automatic_processing(reader)
     assert len(held) == 1
     committed = _owner_save(owner, NEW_MODEL, "high")
