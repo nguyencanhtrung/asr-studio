@@ -2241,7 +2241,10 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     )
 
 
-def test_trash_labels_do_not_leak_note_id_while_revision_metadata_is_pending(live, signed_in):
+@pytest.mark.parametrize("focus_target", ["restore", "fixed-link", "reload"])
+def test_trash_labels_do_not_leak_note_id_while_revision_metadata_is_pending(
+    live, signed_in, focus_target
+):
     _context, page = signed_in(viewport={"width": 390, "height": 900})
     page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
     data_dir = live.settings.data_dir
@@ -2268,10 +2271,23 @@ def test_trash_labels_do_not_leak_note_id_while_revision_metadata_is_pending(liv
     assert note_id not in pending_text
     assert "Loading" in pending_text
 
+    if focus_target == "restore":
+        control = row.locator("button[data-trash-restore]")
+        row.locator("a[data-trash-fixed-link]").focus()
+        page.keyboard.press("Tab")
+    elif focus_target == "fixed-link":
+        control = row.locator("a[data-trash-fixed-link]")
+        control.focus()
+    else:
+        control = page.locator("#notes-trash-reload")
+        control.focus()
+    expect(control).to_be_focused()
+
     assert held_notes
     held_notes.pop().continue_()
     expect(row).not_to_contain_text(note_id)
     expect(row).to_contain_text(re.compile(r"Version [12]"))
+    expect(control).to_be_focused()
 
 
 def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, monkeypatch):

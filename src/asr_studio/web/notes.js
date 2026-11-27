@@ -307,6 +307,32 @@ function trashTimestamp(value) {
   return value.includes(" ") ? `${value.replace(" ", "T")}Z` : value;
 }
 
+function trashActionFocus(container) {
+  const control = document.activeElement;
+  if (!container.contains(control)) return null;
+  const row = control.closest(".notes-trash-item");
+  const restore = control.matches("button[data-trash-restore]");
+  if (!row || (!restore && !control.matches("a[data-trash-fixed-link]"))) return null;
+  return {
+    noteId: row.dataset.noteId,
+    editVersion: row.dataset.editVersion,
+    restore,
+    transitionId: control.dataset.transitionId,
+    href: control.getAttribute("href"),
+  };
+}
+
+function restoreTrashActionFocus(container, previous) {
+  if (!previous || document.activeElement !== document.body) return;
+  const row = [...container.children].find((item) => item.dataset.noteId === previous.noteId
+    && item.dataset.editVersion === previous.editVersion);
+  const control = row?.querySelector(previous.restore ? "button[data-trash-restore]" : "a[data-trash-fixed-link]");
+  if (!control || control.disabled) return;
+  if (previous.restore ? control.dataset.transitionId !== previous.transitionId
+    : control.getAttribute("href") !== previous.href) return;
+  control.focus({ preventScroll: true });
+}
+
 function renderTrashItems(container, items, { restore = false, busy = false } = {}) {
   const rows = Array.isArray(items) ? items : [];
   const locale = document.documentElement.lang || "";
@@ -327,6 +353,7 @@ function renderTrashItems(container, items, { restore = false, busy = false } = 
     for (const button of container.querySelectorAll("button[data-trash-restore]")) button.disabled = busy;
     return;
   }
+  const previousFocus = trashActionFocus(container);
   container.dataset.key = key;
   container.replaceChildren(...rows.map((item) => {
     const row = document.createElement("li");
@@ -380,6 +407,7 @@ function renderTrashItems(container, items, { restore = false, busy = false } = 
     row.append(details, controls);
     return row;
   }));
+  restoreTrashActionFocus(container, previousFocus);
 }
 
 // The remembered values enter the state through the context and boot actions; writes are storage effects.

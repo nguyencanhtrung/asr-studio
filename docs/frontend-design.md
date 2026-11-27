@@ -710,7 +710,9 @@ the saved Notes details are loading. If the list is known and has no matching re
 says that the details are unavailable. Neither fallback invents an ordinal or displays the internal
 ID as primary text. The ID remains in row data, fixed links, lifecycle requests and confirmation
 identity sets. The row render key includes the derived label and document locale so metadata arrival
-and locale changes replace stale visible labels.
+and locale changes replace stale visible labels. When that replacement removes a focused row action,
+the view restores focus to the same revision, Save and fixed link or trash transition, only if that
+action remains enabled. Focus elsewhere stays unchanged.
 
 **Chủ sở hữu và vòng đời điều hướng (#275-R275-4).** `trash[meetingId]` là chủ sở hữu của từng
 lượt đọc và mutation; `readId` và `mutationId` nhận diện attempt, còn effect key có thêm
