@@ -2412,6 +2412,53 @@ def test_copy_read_settles_after_unrelated_restore_ack(live, signed_in):
     assert page.evaluate("navigator.clipboard.readText()") == "# A fixed two\n"
 
 
+@pytest.mark.parametrize("first_action", ["copy", "export"])
+def test_copy_and_export_keep_both_requested_effects(live, signed_in, first_action):
+    context, page = signed_in()
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=live.url)
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, _snapshot, _segments = _seed_saved_notes(data_dir)
+    markdown = "# Independent saved actions\n"
+    update_note(data_dir, note["id"], expected_edit_version=1, markdown=markdown)
+    update_note(data_dir, note["id"], expected_edit_version=2, markdown="# Latest three\n")
+    page.goto(f"{live.url}/meetings/{meeting_id}?notes_revision={note['id']}&notes_edit=2#notes")
+    expect(page.locator("#notes-preview")).to_contain_text("Independent saved actions")
+    page.evaluate("navigator.clipboard.writeText('clipboard sentinel')")
+
+    held_reads = []
+    page.route(
+        f"{live.url}/api/notes/{note['id']}/versions/2",
+        lambda route: held_reads.append(route),
+    )
+    second_action = "export" if first_action == "copy" else "copy"
+    for count, action in enumerate([first_action, second_action], start=1):
+        page.locator(f"#notes-{action}").click()
+        for _ in range(500):
+            if len(held_reads) >= count:
+                break
+            page.wait_for_timeout(10)
+        assert len(held_reads) == count
+        expect(page.locator(f"#notes-{action}")).to_be_focused()
+        expect(page.locator("#notes-copy-export-status")).to_have_text(
+            "Reading the saved Notes version…"
+        )
+
+    with page.expect_download(timeout=5_000) as downloaded:
+        for route in held_reads:
+            route.fulfill(response=route.fetch(timeout=5_000))
+            expect(page.locator(f"#notes-{second_action}")).to_be_focused()
+    assert Path(downloaded.value.path()).read_text(encoding="utf-8") == markdown
+    page.wait_for_function(
+        "expected => navigator.clipboard.readText().then(value => value === expected)",
+        arg=markdown,
+        timeout=5_000,
+    )
+    expect(page.locator("#notes-copy-export-status")).to_contain_text("edit 2")
+    expect(page.locator(f"#notes-{second_action}")).to_be_focused()
+    assert len(held_reads) == 2
+
+
 def test_returning_to_notes_refreshes_canceled_trash_read(live, signed_in):
     _context, page = signed_in()
     page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")

@@ -592,24 +592,33 @@ test("a lifecycle ack settles formatted copy and requires a fresh preview read",
   assert.equal(writes[0][2], active.markdown);
 });
 
-test("an older plain read cannot settle a newer plain request owner", async () => {
-  const env = setup();
-  await opened(env, { revisions: [revision()] });
-  env.dispatch("copy-clicked");
-  const oldRead = env.waiting(env.is("GET", "/api/notes/r1"))[0];
-  env.dispatch("export-clicked");
-  const newRead = env.waiting(env.is("GET", "/api/notes/r1"))[1];
-  assert.ok(oldRead);
-  assert.ok(newRead);
-  oldRead.done = true;
-  oldRead.resolve(reply(200, revision({ markdown: "# stale\n", edit_version: 9 })));
-  await tick();
-  assert.equal(env.hostCalls.filter(([name]) => name === "copy" || name === "download").length, 0);
-  assert.match(text(selectView(env.state()).actionMessage), /Đang đọc/);
+for (const first of ["copy", "export"]) {
+  for (const reverseReplies of [false, true]) {
+    test(`${first} and its other saved action both complete with ${reverseReplies ? "reversed" : "ordered"} replies`, async () => {
+      const env = setup();
+      const active = revision({ edit_version: 2, markdown: "# Same fixed version\n" });
+      env.context(meeting(), { href: fixedHref });
+      await env.answer(fixedDetail, 200, active);
+      await env.answer(meetingRead, 200, notesBody([savedEdit(4)]));
+      await env.answer(historyIndex, 200, versionIndex(4));
+      await env.answer(trashRead, 200, trashPayload([]));
 
-  await env.answer((request) => request === newRead, 200, revision({ markdown: "# Fresh\n", edit_version: 2 }));
-  assert.deepEqual(env.hostCalls.filter(([name]) => name === "download"), [["download", "Weekly.md", "# Fresh\n"]]);
-});
+      env.dispatch(`${first}-clicked`);
+      const firstRead = env.waiting(fixedDetail)[0];
+      env.dispatch(`${first === "copy" ? "export" : "copy"}-clicked`);
+      const secondRead = env.waiting(fixedDetail).find((request) => request !== firstRead);
+      assert.ok(firstRead);
+      assert.ok(secondRead);
+      const replies = reverseReplies ? [secondRead, firstRead] : [firstRead, secondRead];
+      await env.answer((request) => request === replies[0], 200, active);
+      await env.answer((request) => request === replies[1], 200, active);
+      await tick();
+
+      assert.deepEqual(env.hostCalls.filter(([name]) => name === "copy"), [["copy", active.markdown]]);
+      assert.deepEqual(env.hostCalls.filter(([name]) => name === "download"), [["download", "Weekly.md", active.markdown]]);
+    });
+  }
+}
 
 test("a lifecycle ack force-replaces a Trash read opened while a mutation is pending", async () => {
   const env = setup();

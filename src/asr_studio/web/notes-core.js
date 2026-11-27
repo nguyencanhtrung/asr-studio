@@ -3580,7 +3580,6 @@ function retireInvalidatedAuthoritativeReads(state) {
 function staleAuthoritativeRead(state, meta) {
   const owned = state.authoritativeReads?.[meta.key];
   const stale = meta.op === "authoritative" && (!owned || owned.requestId !== meta.requestId
-    || (!isPreviewAction(meta.action) && state.authoritativeMessageId !== meta.requestId)
     || meta.selectionId !== state.selectionId
     || (meta.lifecycleEpoch !== undefined && meta.lifecycleEpoch !== state.lifecycleEpoch)
     || (isPreviewAction(meta.action) && (state.activeTab !== "notes" || meta.previewContextId !== state.previewContextId)));
