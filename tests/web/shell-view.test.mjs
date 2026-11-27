@@ -14,7 +14,7 @@ const absent = (source, pattern, label) => assert.equal(source.match(pattern)?.[
 
 // Every file in src/asr_studio/web/*.js is in exactly one of these lists (docs/adr/0010-frontend-reducer-core.md).
 const VIEWS = ["shell.js", "connections.js", "antigravity.js", "notes.js", "history.js", "access.js"];
-const CORES = ["shell-core.js", "provider-core.js", "processing-preferences-core.js", "processing-core.js", "extension-devices-core.js", "notes-core.js", "history-core.js", "task-core.js", "transcript-core.js", "playback-core.js", "channel.js"];
+const CORES = ["shell-core.js", "provider-core.js", "processing-preferences-core.js", "processing-stage-policy-core.js", "processing-core.js", "extension-devices-core.js", "notes-core.js", "history-core.js", "task-core.js", "transcript-core.js", "playback-core.js", "channel.js"];
 // Not a view and not a pure core. `top` is every name the file may declare at its top level; `classic` marks the
 // scripts that load without type="module" (they run before first paint and share their binding as a page global).
 const EXCEPTIONS = {

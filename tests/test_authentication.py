@@ -339,6 +339,7 @@ async def test_protected_by_default_paths_deny_missing_and_invalid_auth(client):
         "/assets/notes-core.js",
         "/assets/notes.js",
         "/assets/provider-core.js",
+        "/assets/processing-stage-policy-core.js",
         "/assets/connections.js",
         "/assets/antigravity.js",
         "/assets/history.css",

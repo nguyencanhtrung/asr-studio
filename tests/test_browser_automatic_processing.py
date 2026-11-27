@@ -146,6 +146,91 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
     context.close()
 
 
+@pytest.mark.parametrize(
+    ("width", "theme", "language"),
+    [(1024, "light", "vi"), (390, "dark", "en")],
+    ids=["desktop-vi-light", "mobile-en-dark"],
+)
+def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
+    live, signed_in, width, theme, language
+):
+    context, page = signed_in(
+        color_scheme=theme,
+        viewport={"width": width, "height": 860},
+    )
+    try:
+        page.evaluate("(lang) => localStorage.setItem('asr-studio:lang', lang)", language)
+        page.reload(wait_until="domcontentloaded")
+        _open_automatic_processing(page, language=language)
+
+        form = page.locator("#processing-stage-policy-form")
+        expect(form).to_have_attribute("aria-busy", "false")
+        asr = page.locator("#processing-stage-policy-asr")
+        diarization = page.locator("#processing-stage-policy-diarization")
+        notes = page.locator("#processing-stage-policy-notes")
+        save = page.locator("#processing-stage-policy-save")
+        reload_button = page.locator("#processing-stage-policy-reload")
+        status = page.locator("#processing-stage-policy-status")
+        error = page.locator("#processing-stage-policy-error")
+        notice = page.locator("#processing-stage-policy-notice")
+
+        expect(asr).to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        baseline = _processing_request(page, "/api/processing-stage-policy/v1")
+
+        # The dependent values stay checked in the draft while ASR makes them
+        # ineffective. A separate real save advances the shared version so the
+        # UI's next PUT receives the backend's actual 409 conflict.
+        asr.uncheck()
+        expect(diarization).to_be_disabled()
+        expect(notes).to_be_disabled()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        _processing_request(
+            page,
+            "/api/processing-stage-policy/v1",
+            "PUT",
+            {
+                "expected_preference_version": baseline["preference_version"],
+                "format_version": 1,
+                "asr": True,
+                "diarization": True,
+                "notes": True,
+            },
+        )
+
+        save.click()
+        expect(error).to_be_visible()
+        expect(status).to_be_focused()
+        expect(status).to_contain_text(
+            "Cài đặt đã đổi ở nơi khác" if language == "vi" else "The settings changed elsewhere"
+        )
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+
+        # Conflict does not overwrite the draft. Reload is explicit, then the
+        # same draft can be reviewed and saved against the new version.
+        reload_button.click()
+        expect(form).to_have_attribute("aria-busy", "false")
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        expect(save).to_be_enabled()
+        save.click()
+        expected_notice = (
+            "Đã lưu công tắc"
+            if language == "vi"
+            else "Processing switches for new Extension recordings saved"
+        )
+        expect(notice).to_contain_text(expected_notice)
+        final = _processing_request(page, "/api/processing-stage-policy/v1")
+        assert final["policy"] == {"asr": False, "diarization": True, "notes": True}
+    finally:
+        context.close()
+
+
 @pytest.mark.parametrize("draft_before_leaving", [False, True])
 def test_switching_back_after_own_asr_default_save_uses_the_new_version(
     live, signed_in, worker, draft_before_leaving

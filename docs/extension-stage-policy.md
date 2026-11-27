@@ -1,9 +1,10 @@
-# Future Extension stage policy (#267)
+# Extension stage policy (#277)
 
-Status: maintained design and compatibility contract. This document describes the
-future Extension-only recipe and the checks that must precede its enablement. It does
-not add switches, endpoints, migrations, runtime admission, provider calls, or UI
-claims that the new recipe is already available. Those changes belong to [#277](https://github.com/nguyencanhtrung/asr-studio/issues/277).
+Status: maintained design and compatibility contract. The #277 Settings controls and
+the Extension's durable capability/create boundary now implement the format-1 client
+contract described below. Final joint runtime and native acceptance still belongs to
+the integrated backend lane; a saved choice or create receipt never claims processing
+success while admission is disabled or uncertain.
 
 The current baseline is main at PR289 (`19ee38f`, #266). The contract is refreshed
 against the current implementation of [Extension ingest](../src/asr_studio/extension_ingest.py),
@@ -30,19 +31,24 @@ checkbox, ASR model, language, Notes provider/account, or credentials.
 ## Capability negotiation and reverse compatibility
 
 The existing server advertises `resumable_upload` and `raw_receipt` in the capability
-response. `extensions/chrome/protocol.js::bindingFromCapabilities` validates the
-protocol, API version, URLs, backend identity, media, and limits but currently ignores
-the `features` map. `extension_ingest._normalized_create_payload` deliberately rejects
-unknown create fields. This lane therefore makes no client or server protocol change.
+response. `extensions/chrome/protocol.js::stagePolicyFromCapabilities` validates the
+stage-policy feature separately from endpoint identity. Only a successfully parsed
+response with no feature permits legacy admission. Malformed, transport-failed,
+unsupported, or known-disabled responses remain fenced knowledge; `draining` is a
+known fenced admission, not legacy absence. Contract and format versions must equal
+1; future values are unsupported.
 
-The future handshake must preserve the legacy create shape and pairing/token schema:
+The handshake preserves the legacy create shape and pairing/token schema:
 
 1. A valid capability response may advertise a stage-policy feature and a supported
-   format, for example `stage_policy: {format_version: 1, admission: "enabled"}`.
+   format, for example `stage_policy: {supported: true, contract_version: 1,
+   format_version: 1, admission: {format_version: 1, state: "enabled", reason: null}}`.
    A policy-aware client records the negotiated state in a durable, non-credential
    create intent **before the first create POST**. The persisted intent includes the
    immutable client recording identity, capture epoch, selected compatibility state,
-   and the exact request shape to replay. It never stores or changes pairing/token data.
+   and the exact request shape to replay. A capable request adds only
+   `stage_policy: {format_version: 1}`; the three booleans never cross the create
+   boundary. It never stores or changes pairing/token data.
 2. A new client may use the legacy shape only when a valid predecessor capability
    response is successfully parsed and is known to lack the feature. A transport
    error, timeout, malformed response, API mismatch, or capability fetch that cannot
@@ -59,11 +65,13 @@ The future handshake must preserve the legacy create shape and pairing/token sch
    not `absent`: new captures wait or show attention and cannot silently become all-on.
    The rollback gate must remain visible to reconciliation, admission, retry, and claim.
 
-Future protocol tests must cover a valid predecessor response with no feature, a valid
+Protocol tests cover a valid predecessor response with no feature, a valid
 format-known/disabled response, malformed or transport-failed capability lookup, lost
 create ACK and reconnect after capability change, exact replay identity, and the
-existing unknown-field rejection. They must prove no new field is sent to a predecessor
-server and no pairing/token schema is changed.
+existing unknown-field rejection. They prove no new field is sent to a predecessor
+server and no pairing/token schema is changed. The server response for a capable create
+must acknowledge `stage_policy: {format_version: 1, intent: {format_version: 1}}`; a
+legacy response may omit the field or return explicit format 0 with null intent.
 
 ## Recipe, precedence, and truth matrix
 
@@ -74,8 +82,9 @@ expose these values, but the existing `/api/processing-preferences` PUT/PATCH co
 remain unchanged and are not a stage-policy endpoint.
 
 `Run` below means eligible after the existing readiness, source, slot, and epoch checks;
-it does not guarantee provider or worker success. `Skip` is a proposed terminal state
-projected from a persisted terminal reason and is not implemented by this issue.
+it does not guarantee provider or worker success. `Skip` is a persisted terminal state
+projected from the captured recipe; it is distinct from a disabled/unknown admission
+fence and never claims generated output.
 
 | ASR | Diarization | Notes | ASR | Diarization | Notes |
 | --- | --- | --- | --- | --- | --- |
