@@ -2004,7 +2004,9 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     update_note(data_dir, note_id, expected_edit_version=1, markdown="# First fixed two\n")
     update_note(data_dir, note_id, expected_edit_version=2, markdown="# First latest three\n")
 
-    second_task = _accept(data_dir, meeting_id, snapshot["generation_id"], request_id=f"second-{suffix}")
+    second_task = _accept(
+        data_dir, meeting_id, snapshot["generation_id"], request_id=f"second-{suffix}"
+    )
     second_snapshot = get_notes_source(data_dir, _task_source_id(data_dir, second_task["id"]))
     other = _complete_fake_task(
         data_dir,
@@ -2018,7 +2020,12 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     assert second_snapshot["generation_id"] == snapshot["generation_id"]
 
     requests = []
-    page.on("request", lambda request: requests.append(request) if request.method == "POST" and "/notes-trash" in request.url else None)
+    page.on(
+        "request",
+        lambda request: requests.append(request)
+        if request.method == "POST" and "/notes-trash" in request.url
+        else None,
+    )
     fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
     page.goto(fixed_url)
     expect(page.locator("#notes-preview")).to_contain_text("First fixed two")
@@ -2027,14 +2034,20 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     move.click()
     confirmation = page.locator("#notes-trash-confirmation")
     expect(confirmation).to_be_visible()
-    expect(confirmation.locator("#notes-trash-confirmation-items .notes-trash-item")).to_have_count(1)
+    expect(
+        confirmation.locator("#notes-trash-confirmation-items .notes-trash-item")
+    ).to_have_count(1)
     expect(confirmation).to_contain_text(f"Notes revision {note_id}")
     expect(confirmation).to_contain_text("Save version 2")
     assert requests == []
-    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-confirm"
+    assert page.evaluate("document.activeElement && document.activeElement.id") == (
+        "notes-trash-confirm"
+    )
     page.locator("#notes-trash-cancel").click()
     expect(confirmation).to_be_hidden()
-    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-move"
+    assert page.evaluate("document.activeElement && document.activeElement.id") == (
+        "notes-trash-move"
+    )
 
     with page.expect_response(
         lambda response: response.request.method == "POST" and response.url.endswith("/notes-trash")
@@ -2042,7 +2055,9 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         move.click()
         page.locator("#notes-trash-confirm").click()
     assert moved_response.value.status == 200
-    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-status"
+    assert page.evaluate("document.activeElement && document.activeElement.id") == (
+        "notes-trash-status"
+    )
     assert page.locator("#notes-trash-status").get_attribute("tabindex") == "-1"
 
     second_move = trash_version(
@@ -2073,7 +2088,9 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         f"/meetings/{meeting_id}?notes_revision={other_id}&notes_edit=2#notes",
     }
     row_text = rows.all_text_contents()
-    assert all("First fixed two" not in text and "Second fixed two" not in text for text in row_text)
+    assert all(
+        "First fixed two" not in text and "Second fixed two" not in text for text in row_text
+    )
     assert page.evaluate(
         """() => ({
           scrollWidth: document.documentElement.scrollWidth,
@@ -2089,19 +2106,24 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         assert payload.get("content_available") is False
         assert "markdown" not in payload
 
-    page.screenshot(path=str(tmp_path / f"notes-trash-{locale}-{theme}-{width}.png"), full_page=True)
+    page.screenshot(
+        path=str(tmp_path / f"notes-trash-{locale}-{theme}-{width}.png"), full_page=True
+    )
     page.locator("#notes-trash-empty").click()
     confirmation_items = page.locator("#notes-trash-confirmation-items .notes-trash-item")
     expect(confirmation_items).to_have_count(2)
     expect(page.locator("#notes-trash-confirmation")).to_contain_text(note_id)
     expect(page.locator("#notes-trash-confirmation")).to_contain_text(other_id)
     expect(page.locator("#notes-trash-confirmation")).to_contain_text("Save version 2")
-    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-confirmation-check"
+    assert page.evaluate("document.activeElement && document.activeElement.id") == (
+        "notes-trash-confirmation-check"
+    )
     assert page.locator("#notes-trash-confirmation-check").is_visible()
     page.locator("#notes-trash-cancel").click()
 
     other_restore = page.locator(
-        f'#notes-trash-items button[data-trash-restore][data-note-id="{other_id}"][data-edit-version="2"]'
+        f'#notes-trash-items button[data-trash-restore][data-note-id="{other_id}"]'
+        '[data-edit-version="2"]'
     )
     with page.expect_response(
         lambda response: response.request.method == "POST"
@@ -2110,7 +2132,9 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         other_restore.click()
     assert restored_response.value.status == 200
     expect(page.locator("#notes-trash-items .notes-trash-item")).to_have_count(1)
-    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-status"
+    assert page.evaluate("document.activeElement && document.activeElement.id") == (
+        "notes-trash-status"
+    )
 
 
 def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, monkeypatch):
@@ -2128,7 +2152,8 @@ def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, mon
     monkeypatch.setenv("ASR_NOTES_LIFECYCLE_FENCE", "1")
     try:
         with page.expect_response(
-            lambda response: response.request.method == "POST" and response.url.endswith("/notes-trash")
+            lambda response: response.request.method == "POST"
+            and response.url.endswith("/notes-trash")
         ) as failed_response:
             page.locator("#notes-trash-confirm").click()
         assert failed_response.value.status == 503
@@ -2137,7 +2162,9 @@ def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, mon
     status = page.locator("#notes-trash-status")
     expect(status).to_be_visible()
     assert status.get_attribute("tabindex") == "-1"
-    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-status"
+    assert page.evaluate("document.activeElement && document.activeElement.id") == (
+        "notes-trash-status"
+    )
 
 
 def test_fixed_return_to_latest_keeps_the_projected_floor_after_omission(live, signed_in):
