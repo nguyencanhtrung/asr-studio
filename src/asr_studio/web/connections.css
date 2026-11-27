@@ -1106,7 +1106,7 @@ button.provider-overview-row:focus-visible {
 .stage-policy-row strong {
   color: var(--ink);
   font-size: var(--text-control);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .stage-policy-row small {
@@ -1190,7 +1190,7 @@ button.provider-overview-row:focus-visible {
   color: var(--ink-2);
   cursor: pointer;
   font-size: var(--text-small);
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .stage-policy-advanced summary:focus-visible {
