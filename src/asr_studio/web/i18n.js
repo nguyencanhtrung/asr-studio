@@ -465,6 +465,7 @@ const { t, UI_LOCALE } = (() => {
       "Không thể truy cập clipboard. Trình duyệt chưa sao chép nội dung.": "Cannot access the clipboard. The browser did not copy anything.",
       "Không thể tải transcript mới nhất.": "Could not load the latest transcript.",
       "Không thể xác nhận kết quả lưu cuộc họp.": "Cannot confirm whether the meeting was saved.",
+      "Không thể xác nhận thao tác Thùng rác. Hãy tải lại để kiểm tra rồi thử lại.": "Could not confirm the Trash action. Reload Trash to check it, then try again.",
       "Không thể xác nhận trạng thái dọn dẹp. Hãy tải lại cuộc họp để kiểm tra.": "Cannot confirm the cleanup status. Reload the meeting to check.",
       "Không thể xác nhận yêu cầu notes.": "Cannot confirm the notes request.",
       "Không thể xác nhận yêu cầu.": "Cannot confirm the request.",

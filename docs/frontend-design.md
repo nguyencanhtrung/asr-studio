@@ -703,6 +703,16 @@ response cũ không thể đưa nội dung cached ra clipboard/email. Khi thay r
 đưa focus về vùng status thật sự focusable; không dựa vào `focus()` trên phần tử không có
 `tabindex`.
 
+**Chủ sở hữu và vòng đời điều hướng (#275-R275-4).** `trash[meetingId]` là chủ sở hữu của từng
+lượt đọc và mutation; `readId` và `mutationId` nhận diện attempt, còn effect key có thêm
+`meetingId` để hủy đúng cuộc họp. Khi rời Notes hoặc đổi cuộc họp, lượt đọc đang chờ bị hủy,
+`pending` được hạ và tăng `readId`; mutation đang bay giữ nguyên `operationId` và payload nhưng
+đổi attempt fence, không tự POST lại. Khi quay lại, GET Trash chỉ cập nhật danh sách hiện tại có
+thẩm quyền và giữ mutation ở trạng thái chưa biết; không suy ra thành công lịch sử từ việc item
+có hoặc không có trong danh sách. Người dùng có thể xác minh/thử lại rõ ràng bằng đúng
+`operationId` và payload; chỉ receipt POST hợp lệ mới settle. Response cũ hoặc lỗi của A không
+được đổi state, focus, draft, confirmation hay operation identity đang hiển thị của B.
+
 **Chỉnh trực tiếp và copy có định dạng (#256).** Projection của core giữ khoảng nguồn cho từng text run. Viết hiển thị heading, đoạn văn, chữ đậm/nghiêng, code nội dòng đơn, danh sách một cấp, bảng có số cột nhất quán và link HTTP(S) có đích cố định. Người dùng sửa phần chữ ngay trong khối đã dựng. Reducer vá phần thay đổi vào khoảng nguồn, giữ delimiter, URL, khoảng trắng và dấu xuống dòng của phần còn lại. Markdown mở textarea đầy đủ để chỉnh cấu trúc, URI, hoặc cú pháp ngoài profile. Khi gặp khối hoặc inline không biểu diễn an toàn, Viết mở textarea và báo lý do. Xem giữ các span/khối chưa hỗ trợ dưới dạng chữ Markdown. Cách ghép chip theo bằng chứng đã lưu và bullet khớp tách khỏi điều kiện mở rich editor.
 
 Preview dựng từ GET đã lưu và dùng lại projection. HTML tạo bằng tag cố định và escape chữ/thuộc tính, giữ link tác giả viết đúng nguồn và không có chip. Copy dùng hai MIME `text/html` và `text/plain`; nếu HTML không dùng được thì thử ghi Markdown, nếu lần đó thất bại thì báo lỗi. Email nhận chủ đề từ heading đầu phù hợp hoặc tên meeting. Các phần có heading xác định được giữ theo thứ tự và cấp heading của bản đã lưu. Nút chép email ghi phần nội dung, chủ đề hiển thị riêng. Dialog native giữ focus và trả focus cho nút mở khi đóng. Dùng nguyên luồng copy plain và tải Markdown đã có.

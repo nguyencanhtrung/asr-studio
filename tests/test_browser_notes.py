@@ -5,7 +5,7 @@ import json
 import re
 import sqlite3
 import wave
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -2173,6 +2173,110 @@ def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, mon
     assert page.evaluate("document.activeElement && document.activeElement.id") == (
         "notes-trash-status"
     )
+
+
+def test_trash_navigation_recovers_reads_and_lost_write_without_duplicate_post(live, signed_in):
+    _context, page = signed_in(viewport={"width": 1280, "height": 900})
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, _snapshot, _segments = _seed_saved_notes(data_dir, title="Navigation A")
+    update_note(data_dir, note["id"], expected_edit_version=1, markdown="# A fixed two\n")
+    update_note(data_dir, note["id"], expected_edit_version=2, markdown="# A latest three\n")
+    other_id, other_note, _other_snapshot, _other_segments = _seed_saved_notes(
+        data_dir, title="Navigation B"
+    )
+    update_note(data_dir, other_note["id"], expected_edit_version=1, markdown="# B fixed two\n")
+    update_note(data_dir, other_note["id"], expected_edit_version=2, markdown="# B latest three\n")
+
+    trash_url = f"{live.url}/api/meetings/{meeting_id}/notes-trash"
+    held_reads = []
+    page.route(trash_url, lambda route: held_reads.append(route))
+    fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note['id']}&notes_edit=2#notes"
+    page.goto(fixed_url)
+    expect(page.locator("#notes-preview")).to_contain_text("A fixed two")
+    assert len(held_reads) == 1
+
+    page.locator("#recent-list a").filter(has_text="Navigation B").click()
+    page.wait_for_url(f"{live.url}/meetings/{other_id}")
+    expect(page.locator("#meeting-title")).to_have_text("Navigation B")
+    page.locator("#notes-mode-write").click()
+    b_draft = "# B draft kept while A settles\n"
+    page.locator("#notes-markdown").fill(b_draft)
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-markdown"
+
+    page.locator("#recent-list a").filter(has_text="Navigation A").click()
+    page.wait_for_url(f"{live.url}/meetings/{meeting_id}")
+    expect(page.locator("#meeting-title")).to_have_text("Navigation A")
+    with page.expect_request(trash_url) as fresh_read:
+        page.locator("#notes-history-open").click()
+    assert len(held_reads) == 2
+    fresh_route = next(route for route in held_reads if route.request == fresh_read.value)
+    fresh_route.fulfill(response=fresh_route.fetch(timeout=5_000))
+    page.unroute(trash_url)
+    selector = page.locator("#notes-history-selector")
+    expect(selector.locator('option[value="2"]')).to_have_count(1)
+    selector.select_option("2")
+    expect(page.locator("#notes-trash-move")).to_be_visible()
+
+    held_posts = []
+    post_url = trash_url
+
+    def hold_committed_post(route):
+        held_posts.append((route, route.fetch(timeout=5_000)))
+
+    page.route(post_url, hold_committed_post)
+    posts = []
+    page.on(
+        "request",
+        lambda request: (
+            posts.append(request)
+            if request.method == "POST" and request.url.endswith("/notes-trash")
+            else None
+        ),
+    )
+    page.locator("#notes-trash-move").click()
+    page.locator("#notes-trash-confirm").click()
+    for _ in range(500):
+        if held_posts:
+            break
+        page.wait_for_timeout(10)
+    assert len(held_posts) == 1
+    first_post_body = held_posts[0][0].request.post_data_json
+    assert any(
+        item["note_id"] == note["id"] and item["edit_version"] == 2
+        for item in list_trash(data_dir, meeting_id)["items"]
+    )
+
+    page.locator("#recent-list a").filter(has_text="Navigation B").click()
+    page.wait_for_url(f"{live.url}/meetings/{other_id}")
+    expect(page.locator("#meeting-title")).to_have_text("Navigation B")
+    page.locator("#notes-mode-write").click()
+    page.locator("#notes-markdown").fill(b_draft)
+    # The committed A response is intentionally released only after B is active.
+    with suppress(Exception):
+        # Navigation may already have aborted the browser-side response; the
+        # server commit remains observed above.
+        held_posts[0][0].fulfill(response=held_posts[0][1])
+    assert page.locator("#notes-markdown").input_value() == b_draft
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-markdown"
+
+    page.unroute(post_url)
+    page.locator("#recent-list a").filter(has_text="Navigation A").click()
+    page.wait_for_url(f"{live.url}/meetings/{meeting_id}")
+    expect(page.locator("#meeting-title")).to_have_text("Navigation A")
+    page.locator("#notes-history-open").click()
+    expect(page.locator("#notes-trash-items .notes-trash-item")).to_have_count(1)
+    status = page.locator("#notes-trash-status")
+    expect(status).to_contain_text("Could not confirm the Trash action")
+    expect(page.locator("#notes-trash-retry")).to_be_visible()
+    assert len(posts) == 1
+    with page.expect_request(
+        lambda request: request.method == "POST" and request.url == post_url
+    ) as retry_request:
+        page.locator("#notes-trash-retry").click()
+    assert retry_request.value.post_data_json == first_post_body
+    expect(status).to_contain_text("Complete")
+    assert len(posts) == 2
 
 
 def test_fixed_return_to_latest_keeps_the_projected_floor_after_omission(live, signed_in):

@@ -195,12 +195,30 @@ const trashItems = (transitionIds = ["transition-v2", "transition-v3"]) => trans
   saved_at: "2026-11-25 00:00:00",
   trashed_at: "2026-11-27 00:00:00",
 }));
-const trashPayload = (items = trashItems()) => ({
-  meeting_id: "m1",
+const trashPayload = (items = trashItems(), meetingId = "m1") => ({
+  meeting_id: meetingId,
   meeting_title: "Weekly",
   count: items.length,
   digest: "a".repeat(64),
   items,
+});
+
+const trashEntry = (meetingId, extra = {}) => ({
+  meetingId,
+  meetingTitle: "Weekly",
+  readId: 0,
+  pending: false,
+  count: 0,
+  digest: "",
+  items: [],
+  error: "",
+  status: "",
+  mutationId: 0,
+  mutation: null,
+  confirmation: null,
+  lastOutcome: null,
+  focus: 0,
+  ...extra,
 });
 
 for (const action of ["copy", "export", "rich-preview", "email-preview"]) {
@@ -322,6 +340,211 @@ test("Empty Trash stays confirmation-bound to the exact current set", async () =
     confirmation_digest: "a".repeat(64),
     items: items.map(({ note_id, edit_version, transition_id }) => ({ note_id, edit_version, transition_id })),
   });
+});
+
+test("a Trash read is canceled and reissued for the owning meeting after navigation", async () => {
+  const env = setup();
+  env.context(meeting("m1"));
+  env.dispatch("trash-read-requested");
+  const first = env.waiting(trashRead)[0];
+  assert.ok(first);
+  const oldMeta = { op: "trash-read", meetingId: "m1", readId: env.state().trash.m1.readId };
+
+  env.context(meeting("m2"));
+  assert.equal(first.signal.aborted, true);
+  assert.equal(env.state().trash.m1.pending, false);
+  const afterLeave = env.state();
+  env.dispatch("response", {
+    meta: oldMeta,
+    response: { body: trashPayload([], "m1") },
+  });
+  assert.equal(env.state(), afterLeave, "a late canceled read cannot change the other meeting");
+
+  env.context(meeting("m1"));
+  env.dispatch("trash-read-requested");
+  const fresh = env.waiting(trashRead)[0];
+  assert.ok(fresh);
+  assert.notEqual(fresh, first);
+  await env.answer(trashRead, 200, trashPayload([], "m1"));
+  assert.equal(env.state().trash.m1.pending, false);
+});
+
+test("a detached lifecycle write stays unknown after observation and retries the exact operation only explicitly", () => {
+  const mutation = {
+    kind: "trash",
+    operationId: "op-a",
+    noteId: "r1",
+    editVersion: 2,
+    transitionId: "",
+    digest: "",
+    items: [],
+    mutationId: 4,
+    phase: "pending",
+    error: "",
+    retryable: false,
+  };
+  const state = {
+    ...initialState,
+    view: "meeting",
+    activeTab: "notes",
+    meetingId: "A",
+    meeting: meeting("A"),
+    drafts: { "r-b": { value: "B draft", baselineMarkdown: "B", expectedEditVersion: 1, conflict: null } },
+    trash: {
+      A: trashEntry("A", { mutationId: 4, mutation }),
+      B: trashEntry("B", {
+        confirmation: { kind: "empty", open: true, checked: false, items: [], focus: 2 },
+      }),
+    },
+  };
+  const moved = reduce(state, {
+    type: "notes/context",
+    detail: { view: "meeting", meeting: meeting("B"), tab: "notes" },
+    stored: {},
+  }).state;
+  assert.equal(moved.trash.A.mutation.detached, true);
+  assert.equal(moved.trash.A.mutation.mutationId, 5);
+  assert.equal(moved.trash.B.confirmation.open, true);
+  assert.equal(moved.drafts["r-b"].value, "B draft");
+
+  const late = reduce(moved, {
+    type: "notes/response",
+    meta: { op: "trash-mutation", meetingId: "A", mutationId: 4, operationId: "op-a", kind: "trash" },
+    response: {
+      body: {
+        operation_id: "op-a",
+        historical_outcome: { status: "succeeded" },
+        current_state: { status: "trashed", transition_id: "transition-v2" },
+      },
+    },
+  });
+  assert.equal(late.state, moved, "a late A write reply cannot alter B state");
+
+  const returned = reduce(moved, {
+    type: "notes/context",
+    detail: { view: "meeting", meeting: meeting("A"), tab: "notes" },
+    stored: {},
+  });
+  const read = returned.effects.find((effect) => effect.meta?.op === "trash-read");
+  assert.ok(read, "returning to A observes a detached write");
+  const failedObservation = reduce(returned.state, {
+    type: "notes/response",
+    meta: read.meta,
+    response: { body: trashPayload([], "A") },
+  });
+  assert.equal(failedObservation.state.trash.A.mutation.phase, "failed");
+  assert.equal(failedObservation.state.trash.A.mutation.outcomeUnknown, true);
+  assert.equal(failedObservation.state.trash.A.mutation.retryable, true);
+  assert.equal(failedObservation.state.trash.A.lastOutcome, null);
+  assert.match(text(failedObservation.state.trash.A.mutation.error), /Không thể xác nhận thao tác Thùng rác/);
+  assert.ok(!failedObservation.effects.some((effect) => effect.type === "fetch" && effect.init.method === "POST"));
+  const retry = reduce(failedObservation.state, { type: "notes/lifecycle-retry" });
+  const post = retry.effects.find((effect) => effect.type === "fetch" && effect.init.method === "POST");
+  assert.ok(post);
+  assert.deepEqual(JSON.parse(post.init.body), {
+    operation_id: "op-a",
+    note_id: "r1",
+    edit_version: 2,
+  });
+});
+
+test("detached Restore and Empty keep unknown intent when a concurrent change matches absence", () => {
+  const allItems = trashItems();
+  const remaining = [allItems[1]];
+  const cases = [
+    {
+      name: "Restore",
+      mutation: {
+        kind: "restore",
+        operationId: "op-restore",
+        noteId: "r1",
+        editVersion: 2,
+        transitionId: "transition-v2",
+        digest: "",
+        items: [],
+        mutationId: 7,
+        phase: "pending",
+        detached: true,
+        error: "",
+        retryable: false,
+      },
+      retryBody: { operation_id: "op-restore", transition_id: "transition-v2" },
+      blockedAction: {
+        type: "notes/empty-trash-requested",
+      },
+    },
+    {
+      name: "Empty",
+      mutation: {
+        kind: "empty",
+        operationId: "op-empty",
+        noteId: "",
+        editVersion: null,
+        transitionId: "",
+        digest: "b".repeat(64),
+        items: allItems.map(({ note_id, edit_version, transition_id }) => ({ note_id, edit_version, transition_id })),
+        mutationId: 9,
+        phase: "pending",
+        detached: true,
+        error: "",
+        retryable: false,
+      },
+      retryBody: {
+        operation_id: "op-empty",
+        confirmation_digest: "b".repeat(64),
+        items: allItems.map(({ note_id, edit_version, transition_id }) => ({ note_id, edit_version, transition_id })),
+      },
+      blockedAction: {
+        type: "notes/restore-version-requested",
+        operationId: "op-other",
+        noteId: remaining[0].note_id,
+        editVersion: remaining[0].edit_version,
+        transitionId: remaining[0].transition_id,
+      },
+    },
+  ];
+
+  for (const { name, mutation, retryBody, blockedAction } of cases) {
+    const state = {
+      ...initialState,
+      view: "meeting",
+      activeTab: "notes",
+      meetingId: "A",
+      meeting: meeting("A"),
+      trash: {
+        A: trashEntry("A", {
+          count: allItems.length,
+          digest: "b".repeat(64),
+          items: allItems,
+          mutationId: mutation.mutationId,
+          mutation,
+        }),
+      },
+    };
+    const read = reduce(state, { type: "notes/trash-read-requested" });
+    const observed = reduce(read.state, {
+      type: "notes/response",
+      meta: read.effects[0].meta,
+      response: { body: trashPayload(remaining, "A") },
+    });
+    const current = observed.state.trash.A;
+    assert.equal(current.mutation.phase, "failed", name);
+    assert.equal(current.mutation.outcomeUnknown, true, name);
+    assert.equal(current.mutation.operationId, mutation.operationId, name);
+    assert.deepEqual(current.mutation.items, mutation.items, name);
+    assert.equal(current.lastOutcome, null, name);
+    assert.ok(!observed.effects.some((effect) => effect.type === "fetch" && effect.init.method === "POST"), name);
+
+    const blocked = reduce(observed.state, blockedAction);
+    assert.equal(blocked.state, observed.state, `${name} unknown outcome blocks a concurrent action`);
+    assert.ok(!(blocked.effects ?? []).some((effect) => effect.type === "fetch" && effect.init.method === "POST"), name);
+
+    const retry = reduce(observed.state, { type: "notes/lifecycle-retry" });
+    const post = retry.effects.find((effect) => effect.type === "fetch" && effect.init.method === "POST");
+    assert.ok(post, name);
+    assert.deepEqual(JSON.parse(post.init.body), retryBody, name);
+    assert.equal(retry.state.trash.A.mutation.operationId, mutation.operationId, name);
+  }
 });
 
 for (const control of ["saved-history-closed", "saved-history-picked"]) {
