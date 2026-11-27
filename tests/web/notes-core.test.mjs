@@ -316,6 +316,69 @@ test("Notes lifecycle actions bind the saved revision and its exact trash transi
   assert.deepEqual(restore.body, { operation_id: "ui-restore-v2", transition_id: "transition-v2" });
 });
 
+test("Trash labels use real revision ordinals and keep exact confirmation identities", async () => {
+  const env = setup();
+  const rows = [
+    { ...trashItems(["transition-r1"])[0], note_id: "r1", edit_version: 2 },
+    { ...trashItems(["transition-r2"])[0], note_id: "r2", edit_version: 2 },
+  ];
+  env.context(meeting(), { href: fixedHref });
+  await env.answer(fixedDetail, 200, revision({ id: "r1", edit_version: 2, origin: "operator" }));
+  await env.answer(meetingRead, 200, notesBody([
+    revision({ id: "r1", edit_version: 4, origin: "operator" }),
+    revision({ id: "r2", edit_version: 4, origin: "operator" }),
+  ]));
+  await env.answer(historyIndex, 200, versionIndex(4));
+  await env.answer(trashRead, 200, trashPayload(rows));
+
+  const view = selectView(env.state());
+  const pickerOrdinals = new Map(view.savedWork.options.map((option) => [
+    option.value,
+    text(option.text).match(/^Bản [12]/)?.[0],
+  ]));
+  assert.equal(pickerOrdinals.get("r1"), "Bản 2");
+  assert.equal(pickerOrdinals.get("r2"), "Bản 1");
+  const labels = new Map(view.trash.items.map((item) => [item.note_id, text(item.revisionLabel)]));
+  assert.deepEqual(
+    [...labels].map(([noteId, label]) => [noteId, label.match(/^Bản [12]/)?.[0]]),
+    [["r1", pickerOrdinals.get("r1")], ["r2", pickerOrdinals.get("r2")]],
+  );
+  assert.ok([...labels.values()].every((label) => label.includes("Bản Save 2")));
+  assert.ok([...labels].every(([noteId, label]) => !label.includes(noteId)));
+
+  env.dispatch("empty-trash-requested");
+  const confirmation = selectView(env.state()).trash.confirmation;
+  assert.deepEqual(
+    confirmation.items.map(({ note_id, edit_version, transition_id }) => ({ note_id, edit_version, transition_id })),
+    rows.map(({ note_id, edit_version, transition_id }) => ({ note_id, edit_version, transition_id })),
+  );
+  assert.deepEqual(
+    confirmation.items.map((item) => [
+      item.note_id,
+      text(item.revisionLabel).match(/^Bản [12]/)?.[0],
+    ]),
+    [["r1", pickerOrdinals.get("r1")], ["r2", pickerOrdinals.get("r2")]],
+  );
+  assert.ok(confirmation.items.every((item) => !text(item.revisionLabel).includes(item.note_id)));
+});
+
+test("Trash labels stay honest while revision metadata is pending or missing", async () => {
+  const env = setup();
+  const item = { ...trashItems(["transition-pending"])[0], note_id: "opaque-pending-id", edit_version: 2 };
+  env.context(meeting(), { href: fixedHref });
+  await env.answer(trashRead, 200, trashPayload([item]));
+
+  let label = text(selectView(env.state()).trash.items[0].revisionLabel);
+  assert.match(label, /Đang tải thông tin bản Notes/);
+  assert.doesNotMatch(label, /opaque-pending-id/);
+
+  await env.answer(meetingRead, 200, notesBody([]));
+  label = text(selectView(env.state()).trash.items[0].revisionLabel);
+  assert.match(label, /Không có thông tin bản Notes/);
+  assert.doesNotMatch(label, /opaque-pending-id/);
+  assert.ok(label.includes("Bản Save 2"));
+});
+
 test("Empty Trash stays confirmation-bound to the exact current set", async () => {
   const env = setup();
   env.context(meeting(), { href: fixedHref });

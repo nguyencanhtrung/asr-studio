@@ -309,7 +309,20 @@ function trashTimestamp(value) {
 
 function renderTrashItems(container, items, { restore = false, busy = false } = {}) {
   const rows = Array.isArray(items) ? items : [];
-  const key = rows.map((item) => [item.note_id, item.edit_version, item.transition_id, item.fixedHref, restore].join("\u0001")).join("\u0000");
+  const locale = document.documentElement.lang || "";
+  const key = JSON.stringify({
+    locale,
+    restore,
+    rows: rows.map((item) => [
+      item.note_id,
+      item.edit_version,
+      item.transition_id,
+      item.fixedHref,
+      item.revisionLabel,
+      item.saved_at,
+      item.trashed_at,
+    ]),
+  });
   if (container.dataset.key === key) {
     for (const button of container.querySelectorAll("button[data-trash-restore]")) button.disabled = busy;
     return;
@@ -325,10 +338,8 @@ function renderTrashItems(container, items, { restore = false, busy = false } = 
     details.className = "notes-trash-item-details";
     const heading = document.createElement("strong");
     heading.className = "notes-trash-item-heading";
-    heading.textContent = t("Notes revision {revision} · Save version {version}", {
-      revision: item.note_id,
-      version: item.edit_version,
-    });
+    const label = item.revisionLabel ? tr(item.revisionLabel) : t("Không có thông tin bản Notes");
+    heading.textContent = label;
     details.append(heading);
 
     const saved = document.createElement("time");
@@ -353,6 +364,7 @@ function renderTrashItems(container, items, { restore = false, busy = false } = 
     link.href = item.fixedHref;
     link.dataset.trashFixedLink = "true";
     link.textContent = t("Mở bản Save cố định");
+    link.setAttribute("aria-label", t("Mở {label}", { label }));
     controls.append(link);
     if (restore) {
       const button = makeTrashButton("", "text-button");
@@ -360,11 +372,8 @@ function renderTrashItems(container, items, { restore = false, busy = false } = 
       button.dataset.noteId = item.note_id;
       button.dataset.editVersion = String(item.edit_version);
       button.dataset.transitionId = item.transition_id;
-      button.textContent = t("Khôi phục Notes revision {revision}, Save version {version}", {
-        revision: item.note_id,
-        version: item.edit_version,
-      });
-      button.setAttribute("aria-label", button.textContent);
+      button.textContent = t("Khôi phục");
+      button.setAttribute("aria-label", t("Khôi phục {label}", { label }));
       button.disabled = busy;
       controls.append(button);
     }
@@ -811,6 +820,11 @@ function renderTrash(trash) {
   const versionConfirmation = confirmationKind === "trash-version";
   const open = Boolean(trash.visible);
   const busy = trash.readPending || mutation?.phase === "pending";
+  const versionConfirmationLabel = confirmation?.items?.[0]
+    ? tr(confirmation.items[0].revisionLabel)
+    : confirmation?.editVersion
+      ? t("Bản Save {version}", { version: confirmation.editVersion })
+      : t("Không có thông tin bản Notes");
   const protectedMessage = action.visible && action.lifecycleStatus === "active" && !action.canTrash
     ? t("Bản AI gốc và bản Save mới nhất của mỗi revision được bảo vệ.") : "";
   const lifecycleMessage = action.lifecycleStatus === "trashed"
@@ -852,9 +866,8 @@ function renderTrash(trash) {
     ? t("Xác nhận chuyển bản lưu vào Thùng rác") : t("Xác nhận dọn sạch Thùng rác"));
   setProp(trashEls.confirmationScope, "textContent", confirmation?.open
     ? versionConfirmation
-      ? t("Bạn sắp chuyển bản Save {version} của Notes revision {revision} vào Thùng rác. Phiên bản và quyền bảo vệ sẽ được kiểm tra lại trước khi thực hiện.", {
-        revision: confirmation.noteId,
-        version: confirmation.editVersion,
+      ? t("Bạn sắp chuyển {label} vào Thùng rác. Phiên bản và quyền bảo vệ sẽ được kiểm tra lại trước khi thực hiện.", {
+        label: versionConfirmationLabel,
       })
       : t("Bạn sắp xóa vĩnh viễn {count} bản Save lịch sử trong cuộc họp “{meeting}”. Danh sách và phiên bản sẽ được kiểm tra lại trước khi thực hiện.", {
         count: confirmation.count,

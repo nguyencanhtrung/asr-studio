@@ -703,6 +703,15 @@ response cũ không thể đưa nội dung cached ra clipboard/email. Khi thay r
 đưa focus về vùng status thật sự focusable; không dựa vào `focus()` trên phần tử không có
 `tabindex`.
 
+Trash uses the same `revisions` array and ordinal label as the saved-revision selector. The core
+matches each content-free Trash item by its exact `note_id`, then adds the human revision label,
+Save version and saved timestamp for the view. While the Notes list is pending, the view says that
+the saved Notes details are loading. If the list is known and has no matching revision, the view
+says that the details are unavailable. Neither fallback invents an ordinal or displays the internal
+ID as primary text. The ID remains in row data, fixed links, lifecycle requests and confirmation
+identity sets. The row render key includes the derived label and document locale so metadata arrival
+and locale changes replace stale visible labels.
+
 **Chủ sở hữu và vòng đời điều hướng (#275-R275-4).** `trash[meetingId]` là chủ sở hữu của từng
 lượt đọc và mutation; `readId` và `mutationId` nhận diện attempt, còn effect key có thêm
 `meetingId` để hủy đúng cuộc họp. Khi rời Notes hoặc đổi cuộc họp, lượt đọc đang chờ bị hủy,

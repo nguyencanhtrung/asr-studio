@@ -4781,8 +4781,26 @@ function sourceView(state) {
 }
 
 function trashItemView(state, item) {
+  const data = currentEntry(state);
+  const revisions = data?.revisions || [];
+  const index = revisions.findIndex((revision) => revision.id === item.note_id);
+  const unavailableLabel = data?.known
+    ? t("Không có thông tin bản Notes")
+    : t("Đang tải thông tin bản Notes…");
+  const revisionLabel = index >= 0
+    ? [
+      revisionOptionLabel(revisions[index], index, revisions.length),
+      " · ",
+      t("Bản Save {version}", { version: item.edit_version }),
+    ]
+    : [
+      unavailableLabel,
+      " · ",
+      t("Bản Save {version}", { version: item.edit_version }),
+    ];
   return {
     ...item,
+    revisionLabel,
     fixedHref: savedVersionHref(state.meetingId, item.note_id, item.edit_version),
   };
 }

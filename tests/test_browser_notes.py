@@ -2039,8 +2039,23 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     expect(confirmation.locator("#notes-trash-confirmation-items .notes-trash-item")).to_have_count(
         1
     )
-    expect(confirmation).to_contain_text(f"Notes revision {note_id}")
-    expect(confirmation).to_contain_text("Save version 2")
+    revision_prefix = "Version" if locale == "en" else "Bản"
+    save_prefix = "Save version" if locale == "en" else "Bản Save"
+    picker_options = page.locator("#notes-revision-selector option").evaluate_all(
+        "options => options.map(option => [option.value, option.textContent])"
+    )
+    picker_labels = dict(picker_options)
+    picker_ordinals = {
+        value: re.match(rf"({re.escape(revision_prefix)} [12])(?:\s|$)", label).group(1)
+        for value, label in picker_options
+        if value in {note_id, other_id}
+    }
+    assert set(picker_ordinals) == {note_id, other_id}
+    assert set(picker_ordinals.values()) == {f"{revision_prefix} 1", f"{revision_prefix} 2"}
+    confirmation_text = confirmation.inner_text()
+    assert note_id not in confirmation_text
+    assert re.findall(rf"{re.escape(revision_prefix)} [12]", confirmation_text)
+    assert f"{save_prefix} 2" in confirmation_text
     assert requests == []
     assert page.evaluate("document.activeElement && document.activeElement.id") == (
         "notes-trash-confirm"
@@ -2057,6 +2072,7 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         move.click()
         page.locator("#notes-trash-confirm").click()
     assert moved_response.value.status == 200
+    first_transition_id = moved_response.value.json()["current_state"]["transition_id"]
     assert page.evaluate("document.activeElement && document.activeElement.id") == (
         "notes-trash-status"
     )
@@ -2089,10 +2105,60 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         f"/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes",
         f"/meetings/{meeting_id}?notes_revision={other_id}&notes_edit=2#notes",
     }
+    row_data = rows.evaluate_all(
+        """items => items.map(row => {
+          const link = row.querySelector('a[data-trash-fixed-link]');
+          const restore = row.querySelector('button[data-trash-restore]');
+          const heading = row.querySelector('.notes-trash-item-heading');
+          return {
+            noteId: row.dataset.noteId,
+            editVersion: row.dataset.editVersion,
+            heading: heading?.textContent || '',
+            href: link?.getAttribute('href') || '',
+            restoreNoteId: restore?.dataset.noteId || '',
+            restoreEditVersion: restore?.dataset.editVersion || '',
+            restoreTransitionId: restore?.dataset.transitionId || '',
+          };
+        })"""
+    )
+    assert {
+        (
+            item["noteId"],
+            item["editVersion"],
+            item["heading"],
+            item["href"],
+            item["restoreNoteId"],
+            item["restoreEditVersion"],
+            item["restoreTransitionId"],
+        )
+        for item in row_data
+    } == {
+        (
+            note_id,
+            "2",
+            picker_labels[note_id] + f" · {save_prefix} 2",
+            f"/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes",
+            note_id,
+            "2",
+            first_transition_id,
+        ),
+        (
+            other_id,
+            "2",
+            picker_labels[other_id] + f" · {save_prefix} 2",
+            f"/meetings/{meeting_id}?notes_revision={other_id}&notes_edit=2#notes",
+            other_id,
+            "2",
+            second_move["current_state"]["transition_id"],
+        ),
+    }
     row_text = rows.all_text_contents()
     assert all(
         "First fixed two" not in text and "Second fixed two" not in text for text in row_text
     )
+    assert all(note_id not in text and other_id not in text for text in row_text)
+    assert all(re.search(rf"{re.escape(revision_prefix)} [12]", text) for text in row_text)
+    assert all(f"{save_prefix} 2" in text for text in row_text)
     assert (
         page.evaluate(
             """() => ({
@@ -2117,9 +2183,38 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     page.locator("#notes-trash-empty").click()
     confirmation_items = page.locator("#notes-trash-confirmation-items .notes-trash-item")
     expect(confirmation_items).to_have_count(2)
-    expect(page.locator("#notes-trash-confirmation")).to_contain_text(note_id)
-    expect(page.locator("#notes-trash-confirmation")).to_contain_text(other_id)
-    expect(page.locator("#notes-trash-confirmation")).to_contain_text("Save version 2")
+    confirmation_data = confirmation_items.evaluate_all(
+        """items => items.map(row => ({
+          noteId: row.dataset.noteId,
+          editVersion: row.dataset.editVersion,
+          heading: row.querySelector('.notes-trash-item-heading')?.textContent || '',
+          href: row.querySelector('a[data-trash-fixed-link]')?.getAttribute('href') || '',
+        }))"""
+    )
+    assert {
+        (item["noteId"], item["editVersion"], item["heading"], item["href"])
+        for item in confirmation_data
+    } == {
+        (
+            note_id,
+            "2",
+            picker_labels[note_id] + f" · {save_prefix} 2",
+            f"/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes",
+        ),
+        (
+            other_id,
+            "2",
+            picker_labels[other_id] + f" · {save_prefix} 2",
+            f"/meetings/{meeting_id}?notes_revision={other_id}&notes_edit=2#notes",
+        ),
+    }
+    empty_confirmation_text = page.locator("#notes-trash-confirmation").inner_text()
+    assert note_id not in empty_confirmation_text
+    assert other_id not in empty_confirmation_text
+    assert set(re.findall(rf"{re.escape(revision_prefix)} [12]", empty_confirmation_text)) == set(
+        picker_ordinals.values()
+    )
+    assert f"{save_prefix} 2" in empty_confirmation_text
     assert page.evaluate("document.activeElement && document.activeElement.id") == (
         "notes-trash-confirmation-check"
     )
@@ -2144,6 +2239,39 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     assert page.evaluate("document.activeElement && document.activeElement.id") == (
         "notes-trash-status"
     )
+
+
+def test_trash_labels_do_not_leak_note_id_while_revision_metadata_is_pending(live, signed_in):
+    _context, page = signed_in(viewport={"width": 390, "height": 900})
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    update_note(data_dir, note_id, expected_edit_version=1, markdown="# Fixed two\n")
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# Latest three\n")
+    trash_version(
+        data_dir,
+        meeting_id,
+        operation_id="browser-pending-label",
+        note_id=note_id,
+        edit_version=2,
+    )
+
+    held_notes = []
+    notes_url = f"{live.url}/api/meetings/{meeting_id}/notes"
+    page.route(notes_url, lambda route: held_notes.append(route))
+    page.goto(f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes")
+
+    row = page.locator("#notes-trash-items .notes-trash-item")
+    expect(row).to_have_count(1)
+    pending_text = row.inner_text()
+    assert note_id not in pending_text
+    assert "Loading" in pending_text
+
+    assert held_notes
+    held_notes.pop().continue_()
+    expect(row).not_to_contain_text(note_id)
+    expect(row).to_contain_text(re.compile(r"Version [12]"))
 
 
 def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, monkeypatch):
