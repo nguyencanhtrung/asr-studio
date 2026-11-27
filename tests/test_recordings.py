@@ -1254,6 +1254,7 @@ async def test_shell_route_and_script_are_protected_and_refresh_uses_shell(clien
         "transcript-core.js",
         "playback-core.js",
         "provider-core.js",
+        "processing-stage-policy-core.js",
         "connections.js",
         "antigravity.js",
     ):

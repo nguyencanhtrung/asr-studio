@@ -1,12 +1,13 @@
 # Extension stage policy (#267, #277)
 
-Status: maintained design and compatibility contract. The #277 backend implementation
-includes additive storage, the authenticated versioned stage-preference API, capability
-format knowledge, the persisted fail-closed admission gate, and bounded operator cutover
-commands. Runtime execution remains fenced until the compatible worker/scheduler cutover
-is complete; a disabled gate is not a runtime-readiness claim.
+Status: maintained design and compatibility contract. The #277 implementation adds
+server storage, authenticated stage preferences, immutable ready snapshots and runtime
+fences, bounded operator cutover commands, Settings controls and the Extension's durable
+capability/create boundary. Joint native acceptance is pending for this integration
+checkpoint. A saved choice or create receipt is not a processing-success claim.
 
-The current baseline is the #277 backend source checkpoint (`d8e33e9`). The contract is refreshed
+The format-1 API checkpoint is `8c1df7a`; runtime and gate remediation is `1b0e914`.
+The contract is refreshed
 against the current implementation of [Extension ingest](../src/asr_studio/extension_ingest.py),
 [processing](../src/asr_studio/processing.py), [Notes](../src/asr_studio/notes.py), and
 [transcript history/review](../src/asr_studio/transcript_edits.py). The current
@@ -56,14 +57,23 @@ and PATCH field sets remain unchanged. `extension_ingest._normalized_create_payl
 accepts the optional exact create intent `stage_policy: {format_version: 1}` while an
 omitted field retains the old request fingerprint and legacy all-on meaning.
 
-The future handshake must preserve the legacy create shape and pairing/token schema:
+`extensions/chrome/protocol.js::stagePolicyFromCapabilities` validates the feature
+separately from endpoint identity. Only a successfully parsed predecessor response
+with no feature permits legacy admission. Malformed, transport-failed, unsupported,
+and known-but-fenced responses cannot become feature absence. Contract and format
+versions must equal 1; future values are unsupported.
+
+The handshake preserves the legacy create shape and pairing/token schema:
 
 1. A valid capability response may advertise a stage-policy feature and a supported
-   format, for example `stage_policy: {format_version: 1, admission: "enabled"}`.
+   format, for example `stage_policy: {supported: true, contract_version: 1,
+   format_version: 1, admission: {format_version: 1, state: "enabled", reason: null}}`.
    A policy-aware client records the negotiated state in a durable, non-credential
    create intent **before the first create POST**. The persisted intent includes the
    immutable client recording identity, capture epoch, selected compatibility state,
-   and the exact request shape to replay. It never stores or changes pairing/token data.
+   and the exact request shape to replay. A capable request adds only
+   `stage_policy: {format_version: 1}`; the three booleans never cross the create
+   boundary. It never stores or changes pairing/token data.
 2. A new client may use the legacy shape only when a valid predecessor capability
    response is successfully parsed and is known to lack the feature. A transport
    error, timeout, malformed response, API mismatch, or capability fetch that cannot
@@ -80,11 +90,13 @@ The future handshake must preserve the legacy create shape and pairing/token sch
    not `absent`: new captures wait or show attention and cannot silently become all-on.
    The rollback gate must remain visible to reconciliation, admission, retry, and claim.
 
-Future protocol tests must cover a valid predecessor response with no feature, a valid
+Protocol tests cover a valid predecessor response with no feature, a valid
 format-known/disabled response, malformed or transport-failed capability lookup, lost
 create ACK and reconnect after capability change, exact replay identity, and the
-existing unknown-field rejection. They must prove no new field is sent to a predecessor
-server and no pairing/token schema is changed.
+existing unknown-field rejection. They prove no new field is sent to a predecessor
+server and no pairing/token schema is changed. The server response for a capable create
+must acknowledge `stage_policy: {format_version: 1, intent: {format_version: 1}}`; a
+legacy response may omit the field or return explicit format 0 with null intent.
 
 ## Operator cutover, drain, and rollback
 
@@ -111,14 +123,26 @@ worker settles it. The command never reports `drained: true` while a stage task 
 remains. Wait for `drained: true` before replacing binaries or cancel only the reported stage
 task through the existing worker/operator lifecycle.
 
-The safe ordering is: stop the old app, scheduler, and worker processes; disable the gate and
-wait for the actual drain; install/start the compatible current-source app, scheduler, and
-worker; then enable with the explicit acknowledgement flag. The acknowledgement is an operator
-assertion about process compatibility, not an automatic process probe, and enabling never patches
-or claims work for an old binary. `rollback` is the same disable-and-reconcile fence with a
-rollback reason. The compatible maintenance runtime is named
-`asr-studio-stage-policy-maintenance-v1`; a pre-migration binary that rejects schema v25 is not a
-rollback target.
+For the first upgrade from a pre-policy release, pause new captures and settle or cancel
+existing work using that release's controls, then stop its app, scheduler and workers. Back up
+the persistent data before installing the compatible source. The new app's normal startup
+performs the additive upgrade with admission disabled. Start only compatible app, scheduler and
+worker processes, inspect status, then enable with the explicit acknowledgement flag. The
+pre-policy binary has no gate command; a gate cannot stop an already running old process.
+
+For maintenance or rollback after the gate exists, pause new captures, disable the gate while
+the compatible workers are still running, and observe status until they settle requested
+cancellations. If legacy or manual work owns the slot, settle it through its existing controls
+too. Stop the app, scheduler and workers only after the reported drain, then replace them with
+a schema-compatible build and keep admission disabled during maintenance. Stopping the workers
+before they settle running tasks cannot make a drain complete.
+
+The acknowledgement is an operator assertion about process compatibility, not an automatic
+process probe. `rollback` is the same disable-and-reconcile fence with a rollback reason.
+`asr-studio-stage-policy-maintenance-v1` names this compatible source's disabled-gate mode;
+it is not a published image/tag or an older released binary. A pre-migration binary that
+rejects schema v25 is not a rollback target. Enabling never patches an old process or establishes
+model/provider readiness.
 
 An invalid preference format captured by a capable format-1 session is a durable policy
 quarantine, not a legacy all-on workflow and not a valid all-off recipe. Gate toggles, retries,
@@ -136,8 +160,8 @@ remain unchanged and are not a stage-policy endpoint.
 
 `Run` below means eligible after the existing readiness, source, slot, and epoch checks;
 it does not guarantee provider or worker success. `Skip` is projected from the
-persisted terminal reason in the processing-state response; execution remains fenced
-when the admission gate is disabled.
+persisted terminal reason and captured recipe. It is distinct from a disabled or
+unknown admission fence and never claims generated output.
 
 | ASR | Diarization | Notes | Result |
 | --- | --- | --- | --- |

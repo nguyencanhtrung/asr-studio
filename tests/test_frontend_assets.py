@@ -15,6 +15,7 @@ pytestmark = pytest.mark.anyio
     [
         ("processing-core.js", "export function reduce"),
         ("processing-preferences-core.js", "export function reduce"),
+        ("processing-stage-policy-core.js", "export function reduce"),
     ],
 )
 async def test_processing_core_assets_are_served_from_authenticated_asset_allowlist(

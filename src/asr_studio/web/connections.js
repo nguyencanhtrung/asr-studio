@@ -7,6 +7,7 @@ import { createRunner, createStore } from "./store.js";
 import { setAttr, setProp, tr } from "./shell.js";
 import { ANTIGRAVITY, CHATGPT, SETTINGS_SECTION_KEY, SETTINGS_SECTIONS, SETTINGS_TOP_LEVELS, initialState, reduce, selectAsr, selectLauncher, selectProviderOverview, selectView, settingsParent } from "./provider-core.js";
 import { selectPreferences } from "./processing-preferences-core.js";
+import { selectStagePolicy } from "./processing-stage-policy-core.js";
 
 const launcherElements = {
   chatgpt: document.querySelector("#launcher-chatgpt"),
@@ -69,6 +70,22 @@ const processingPreferenceEls = {
   notice: document.querySelector("#automatic-preferences-notice"),
   error: document.querySelector("#automatic-preferences-error"),
   save: document.querySelector("#automatic-preferences-save"),
+};
+
+const processingStagePolicyEls = {
+  title: document.querySelector("#processing-stage-policy-title"),
+  form: document.querySelector("#processing-stage-policy-form"),
+  version: document.querySelector("#processing-stage-policy-version"),
+  format: document.querySelector("#processing-stage-policy-format"),
+  admission: document.querySelector("#processing-stage-policy-admission"),
+  asr: document.querySelector("#processing-stage-policy-asr"),
+  diarization: document.querySelector("#processing-stage-policy-diarization"),
+  notes: document.querySelector("#processing-stage-policy-notes"),
+  status: document.querySelector("#processing-stage-policy-status"),
+  notice: document.querySelector("#processing-stage-policy-notice"),
+  error: document.querySelector("#processing-stage-policy-error"),
+  save: document.querySelector("#processing-stage-policy-save"),
+  reload: document.querySelector("#processing-stage-policy-reload"),
 };
 
 const els = {
@@ -718,6 +735,55 @@ function renderProcessingPreferences(state, rootState) {
   }
 }
 
+function stagePolicyStatusText(view) {
+  if (view.status === "loading") return t("Đang tải công tắc xử lý…");
+  if (view.status === "saving") return t("Đang lưu công tắc xử lý…");
+  if (view.status === "ready") return t("Đã tải công tắc xử lý từ máy chủ.");
+  if (view.status === "paused") {
+    if (view.admission?.state === "draining") {
+      return t("Máy chủ đang chuyển trạng thái. Stage chưa chạy.");
+    }
+    return t("Máy chủ chưa cho phép chạy stage. Bản ghi không được xem là đã xử lý.");
+  }
+  if (view.status === "unsupported") return t("Máy chủ chưa hỗ trợ công tắc xử lý cho Extension mới.");
+  if (view.status === "conflict") return t("Cài đặt đã đổi ở nơi khác. Hãy tải lại trước khi lưu.");
+  if (view.status === "error") return t("Không xác minh được công tắc xử lý.");
+  return "";
+}
+
+function renderProcessingStagePolicy(state) {
+  const view = selectStagePolicy(state);
+  const elements = processingStagePolicyEls;
+  const draft = view.draft;
+  setProp(elements.version, "textContent", view.version ? `v${view.version}` : "");
+  setProp(elements.format, "textContent", view.formatVersion ? `v${view.formatVersion}` : "");
+  setProp(elements.admission, "textContent", view.admission
+    ? `${view.admission.state}${view.admission.reason ? ` · ${view.admission.reason}` : ""}`
+    : "");
+  setAttr(elements.version, "data-state", view.status);
+  setAttr(elements.status, "data-state", view.status);
+  setProp(elements.status, "textContent", stagePolicyStatusText(view));
+  // Only an acknowledged response may populate the success notice. Admission
+  // is a separate server gate and must not make a draft look saved.
+  setProp(elements.notice, "textContent", view.notice ? tr(view.notice) : "");
+  setProp(elements.error, "hidden", !view.error);
+  setProp(elements.error, "textContent", view.error ? tr(view.error.text) : "");
+  setAttr(elements.form, "aria-busy", view.loading || view.saving ? "true" : "false");
+  for (const [name, control] of Object.entries({ asr: elements.asr, diarization: elements.diarization, notes: elements.notes })) {
+    setProp(control, "checked", Boolean(draft?.[name]));
+    setProp(control, "disabled", draft ? view.controls[name] : true);
+  }
+  setProp(elements.save, "disabled", !view.canSave);
+  setProp(elements.save, "textContent", view.saving ? t("Đang lưu công tắc…") : t("Lưu công tắc"));
+  setProp(elements.reload, "disabled", view.loading || view.saving);
+  // Keep focus on a useful live region after a save failure without stealing focus
+  // from a user who has moved elsewhere in the dialog.
+  if (view.error && elements.form.dataset.focusMutation === String(state.mutation)) {
+    delete elements.form.dataset.focusMutation;
+    elements.status.focus({ preventScroll: true });
+  }
+}
+
 // The focus went with the button that was replaced (Cài đặt model, Hủy, Thử lại). It goes to the button that
 // took its place as soon as one can take it, unless the user has moved on by then.
 // The row id waits in the list's own dataset: a view keeps no module state (ADR 0010).
@@ -883,6 +949,7 @@ function render(state) {
   renderAsr(state.asr);
   renderDevices(state.devices);
   renderProcessingPreferences(state.processingPreferences, state);
+  renderProcessingStagePolicy(state.processingStagePolicy);
   const s = state.chatgpt;
   const view = renderSection(els, CHATGPT, s);
   setProp(els.verificationSection, "hidden", view.modelSectionHidden);
@@ -1092,6 +1159,15 @@ processingPreferenceEls.form.addEventListener("submit", (event) => {
 processingPreferenceEls.asrLanguage.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "asr_language", value: processingPreferenceEls.asrLanguage.value }));
 processingPreferenceEls.provider.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_provider", value: processingPreferenceEls.provider.value || null }));
 processingPreferenceEls.outputLanguage.addEventListener("change", () => dispatch({ type: "provider/processing-preference-edited", field: "notes_output_language", value: processingPreferenceEls.outputLanguage.value }));
+processingStagePolicyEls.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  processingStagePolicyEls.form.dataset.focusMutation = String(store.getState().processingStagePolicy.mutation + 1);
+  dispatch({ type: "provider/processing-stage-policy-save-requested" });
+});
+for (const [field, control] of Object.entries({ asr: processingStagePolicyEls.asr, diarization: processingStagePolicyEls.diarization, notes: processingStagePolicyEls.notes })) {
+  control.addEventListener("change", () => dispatch({ type: "provider/processing-stage-policy-edited", field, value: control.checked }));
+}
+processingStagePolicyEls.reload.addEventListener("click", () => dispatch({ type: "provider/processing-stage-policy-reload-requested" }));
 deviceEls.form.addEventListener("submit", (event) => {
   event.preventDefault();
   dispatch({ type: "extension/devices-code-requested" });

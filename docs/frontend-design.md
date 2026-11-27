@@ -1186,7 +1186,10 @@ hoặc cũ không được phép đổi trạng thái record hợp lệ.
 Core sở hữu lát `processing` trong store history; runner thực hiện fetch, timer và
 `meeting.refresh`. State giữ `meetingId`, `loadId`, workflow, `visible`/`hidden`,
 `readId`/`readPending`, `pollId`/`pollPending`, một `action`, lỗi và thông báo.
-Workflow có trạng thái riêng từ server; core không tự suy ra đã lưu transcript/notes.
+Workflow có trạng thái riêng từ server; core không tự suy ra đã lưu transcript/notes. Core giữ
+`skipped` là trạng thái riêng, lấy từ recipe và step durable. Khi stage bị tắt, copy không được
+khẳng định output tương ứng đã được tạo.
+Với recipe tắt stage, dải trạng thái hiện **Đã bỏ qua**, không hiện **Đang chờ**, **Cần xử lý** hoặc **Đã hủy**. Nếu ASR tắt, nội dung và nút xác nhận chỉ giữ phần đã ghi; UI không hứa tạo transcript hoặc Notes. Nếu Notes tắt, transcript vẫn có thể hoàn tất và UI nêu rõ Notes không chạy.
 
 | Sự kiện | Chuyển trạng thái | Hiệu ứng |
 | --- | --- | --- |

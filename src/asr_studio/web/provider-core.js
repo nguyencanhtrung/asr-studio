@@ -15,6 +15,7 @@ import { asrDisplayName, asrModelText, bytes, errorMessageForCode, isAsrModelId,
 import { ASR_MODEL_GUIDANCE } from "./task-core.js";
 import { initialState as extensionDevicesInitialState, reduce as reduceExtensionDevices } from "./extension-devices-core.js";
 import { initialState as processingPreferencesInitialState, reduce as reduceProcessingPreferences } from "./processing-preferences-core.js";
+import { initialState as processingStagePolicyInitialState, reduce as reduceProcessingStagePolicy } from "./processing-stage-policy-core.js";
 
 const t = (text, params) => (params ? { text, params } : { text });
 const fill = (message, params) => ({ ...message, params });
@@ -375,7 +376,7 @@ function initial(d) {
   };
 }
 
-export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null, installer: { available: false, models_writable: false }, open: false, notice: null }, devices: extensionDevicesInitialState, processingPreferences: processingPreferencesInitialState };
+export const initialState = { chatgpt: initial(CHATGPT), antigravity: initial(ANTIGRAVITY), launcher: { section: "ai" }, asr: { status: "idle", models: [], request: 0, copy: null, installer: { available: false, models_writable: false }, open: false, notice: null }, devices: extensionDevicesInitialState, processingPreferences: processingPreferencesInitialState, processingStagePolicy: processingStagePolicyInitialState };
 
 const done = (state, effects = []) => ({ state, effects });
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1537,6 +1538,7 @@ export const reduce = combine({
   asr: reduceAsr,
   devices: reduceExtensionDevices,
   processingPreferences: reduceProcessingPreferences,
+  processingStagePolicy: reduceProcessingStagePolicy,
 });
 
 // ---- selectors ----

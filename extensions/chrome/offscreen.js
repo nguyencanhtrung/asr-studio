@@ -16,6 +16,7 @@ import {
   isUnexpectedTrackEnd
 } from "./capture-core.js";
 import { MIME_TYPE, makeError } from "./protocol.js";
+import { createCaptureIntent } from "./intent-core.js";
 
 export { MEDIA_RECORDER_TIMESLICE_MS };
 
@@ -376,10 +377,17 @@ async function startCapture(message) {
       title: session.title,
       metadata
     };
+    const createIntent = createCaptureIntent({
+      clientRecordingId: session.clientRecordingId,
+      captureEpoch: session.capture.captureEpoch,
+      stagePolicy: session.endpoint.stagePolicy || { knowledge: "unknown", admission: "unknown", reason: "capability_unavailable" },
+      createJson: createPayload,
+    });
     const initialized = await patchSession(sessionId, "capture", {
       status: CAPTURE_STATES.RECORDING,
       metadata,
       createPayload,
+      createIntent,
       maxLocalBytes: effectiveLocalBytes,
       gates: { tab: true, microphone: true },
       tabMonitor: true

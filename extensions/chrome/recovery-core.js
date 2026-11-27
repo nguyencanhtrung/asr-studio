@@ -26,6 +26,9 @@ export function pairingGuard(pending, normalizedServerUrl, binding = null) {
 }
 
 export function uploadStateForError(error, retryable) {
+  if (error?.code === "stage_policy_not_ready" || error?.code === "intent_missing" || error?.code === "invalid_create_intent") {
+    return "needs_attention";
+  }
   if (error?.code === "pair_required" || error?.code === "binding_locked" || error?.code === "not_found" || error?.status === 404) {
     return "needs_reconnect";
   }
