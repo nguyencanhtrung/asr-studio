@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from itertools import product
 import uuid
+from itertools import product
 
 import pytest
 from notes_helpers import seed_cited_notes
@@ -191,7 +191,9 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
         expect(page.locator("#processing-stage-policy-version")).to_have_text("v1")
         expect(page.locator("#processing-stage-policy-format")).to_have_text("v1")
         expect(page.locator("#processing-stage-policy-admission")).to_contain_text("disabled")
-        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
         baseline = _processing_request(page, "/api/processing-stage-policy/v1")
 
         # The dependent values stay checked in the draft while ASR makes them
@@ -242,7 +244,9 @@ def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
             else "Processing switches for new Extension recordings saved"
         )
         expect(notice).to_contain_text(expected_notice)
-        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
         final = _processing_request(page, "/api/processing-stage-policy/v1")
         assert final["policy"] == {"asr": False, "diarization": True, "notes": True}
     finally:

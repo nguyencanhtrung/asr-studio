@@ -9,8 +9,6 @@ from __future__ import annotations
 import base64
 import ctypes
 import hashlib
-from contextlib import nullcontext
-from itertools import product
 import json
 import math
 import os
@@ -20,8 +18,10 @@ import subprocess
 import sys
 import threading
 import time
-import wave
 import uuid
+import wave
+from contextlib import nullcontext
+from itertools import product
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -163,7 +163,9 @@ def capture_server(tmp_path, request):
         extension_max_staging_bytes=quota,
     )
     adapter = FakeChatGPTAdapter()
-    if request.node.name.startswith(("test_native_capture_runs_transcript_and_notes", "test_native_stage_matrix")):
+    if request.node.name.startswith(
+        ("test_native_capture_runs_transcript_and_notes", "test_native_stage_matrix")
+    ):
         settings = processing_settings(settings, tmp_path, adapter)
     app = create_app(settings, chatgpt_adapter=adapter)
     requests = RequestLog()
@@ -464,7 +466,9 @@ def _inject_offscreen_intent_write_failure(context, worker, tab):
             const originalPut = IDBObjectStore.prototype.put;
             IDBObjectStore.prototype.put = function(value, ...args) {
                 if (value?.capture?.createIntent && value?.capture?.createPayload) {
-                    throw new DOMException('Injected durable intent write failure', 'QuotaExceededError');
+                    throw new DOMException(
+                        'Injected durable intent write failure', 'QuotaExceededError'
+                    );
                 }
                 return originalPut.call(this, value, ...args);
             };
@@ -1078,7 +1082,10 @@ def test_native_stage_old_unposted_row_survives_refresh_as_legacy(
     assert len(requests.create_bodies) >= 2
     assert "stage_policy" in requests.create_bodies[0]
     assert "stage_policy" not in requests.create_bodies[-1]
-    assert requests.create_bodies[0]["client_recording_id"] == requests.create_bodies[-1]["client_recording_id"]
+    assert (
+        requests.create_bodies[0]["client_recording_id"]
+        == requests.create_bodies[-1]["client_recording_id"]
+    )
     assert requests.create_bodies[0]["capture_epoch"] == requests.create_bodies[-1]["capture_epoch"]
     assert saved["upload"]["receipt"]["recording_id"]
     with sqlite3.connect(database_path(settings.data_dir)) as db:
@@ -2176,7 +2183,9 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
                     "WHERE sessions.id = ?",
                     (session_id,),
                 ).fetchone()
-                workflow_count = db.execute("SELECT count(*) FROM processing_workflows").fetchone()[0]
+                workflow_count = db.execute(
+                    "SELECT count(*) FROM processing_workflows"
+                ).fetchone()[0]
             if ready and ready[0] == "ready" and ready[2] and workflow_count == 1:
                 break
             operator.wait_for_timeout(150)
@@ -2308,7 +2317,10 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
                     if skipped[kind]:
                         assert item["state"] == "skipped", item
                         assert "Đã bỏ qua" in item["text"] or "Skipped" in item["text"], item
-                        assert "Complete" not in item["text"] and "Hoàn tất" not in item["text"], item
+                        assert (
+                            "Complete" not in item["text"]
+                            and "Hoàn tất" not in item["text"]
+                        ), item
             finally:
                 meeting_page.close()
 
