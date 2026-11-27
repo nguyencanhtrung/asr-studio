@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -16,8 +17,13 @@ from asr_studio.diarization_runner import (
     DIARIZATION_ERROR_MESSAGES,
     DiarizationConfigurationError,
 )
+from asr_studio.processing import (
+    ProcessingError,
+    processing_stage_policy_status,
+    set_processing_stage_gate,
+)
 from asr_studio.runtime import RuntimeProfile
-from asr_studio.storage import SCHEMA_VERSION
+from asr_studio.storage import SCHEMA_VERSION, database_path, initialize
 from asr_studio.tasks import TASK_ERROR_MESSAGES
 
 
@@ -30,6 +36,96 @@ def test_version_json_reports_application_version_and_supported_schema(capsys):
         "supported_schema_version": SCHEMA_VERSION,
     }
     assert captured.err == ""
+
+
+def test_stage_policy_cli_requires_acknowledgement_and_reports_cutover_state(
+    tmp_path, monkeypatch, capsys
+):
+    data_dir = tmp_path / "data"
+    initialize(data_dir)
+    monkeypatch.setenv("ASR_DATA_DIR", str(data_dir))
+
+    assert main(["stage-policy", "status", "--json"]) == 0
+    initial = json.loads(capsys.readouterr().out)
+    assert initial["admission"]["state"] == "disabled"
+    assert initial["drained"] is True
+
+    assert main(["stage-policy", "enable", "--json"]) == 2
+    assert "acknowledge-compatible-processes-stopped" in capsys.readouterr().err
+
+    assert (
+        main(
+            [
+                "stage-policy",
+                "enable",
+                "--acknowledge-compatible-processes-stopped",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    enabled = json.loads(capsys.readouterr().out)
+    assert enabled["admission"]["state"] == "enabled"
+    assert enabled["drained"] is True
+
+    assert (
+        main(
+            [
+                "stage-policy",
+                "rollback",
+                "--reason",
+                "binary-replacement",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    rolled_back = json.loads(capsys.readouterr().out)
+    assert rolled_back["admission"] == {
+        "state": "disabled",
+        "reason": "binary-replacement",
+        "format_version": 1,
+    }
+    assert rolled_back["drained"] is True
+
+
+@pytest.mark.parametrize("persisted_admission", ["future", "draining"])
+def test_stage_policy_gate_rejects_draining_and_unknown_persisted_state(
+    tmp_path, persisted_admission
+):
+    data_dir = tmp_path / "data"
+    initialize(data_dir)
+
+    with pytest.raises(ProcessingError) as draining_error:
+        set_processing_stage_gate(data_dir, admission="draining")
+    assert draining_error.value.code == "invalid_stage_policy_admission"
+
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            "UPDATE processing_cutover_gate SET admission = ?, reason = 'unknown' WHERE id = 1",
+            (persisted_admission,),
+        )
+        connection.commit()
+
+    status = processing_stage_policy_status(data_dir)
+    assert status["admission"] == {
+        "state": "disabled",
+        "reason": "unknown_admission_state",
+        "format_version": 1,
+    }
+    with pytest.raises(ProcessingError) as unknown_error:
+        set_processing_stage_gate(data_dir, admission="enabled")
+    assert unknown_error.value.code == "unknown_stage_policy_gate"
+
+
+def test_stage_policy_status_does_not_initialize_missing_storage(tmp_path, monkeypatch, capsys):
+    data_dir = tmp_path / "missing-data"
+    monkeypatch.setenv("ASR_DATA_DIR", str(data_dir))
+
+    assert main(["stage-policy", "status", "--json"]) == 1
+    assert "stage_policy_unavailable" in capsys.readouterr().err
+    assert not data_dir.exists()
 
 
 def test_version_json_checks_expected_version_and_schema(capsys):

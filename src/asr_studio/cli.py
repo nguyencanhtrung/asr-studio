@@ -31,6 +31,12 @@ from asr_studio.diarization_runner import (
 from asr_studio.model_install import InstallError
 from asr_studio.model_installer import download_model, install_model
 from asr_studio.notes_service import is_healthy as notes_service_is_healthy
+from asr_studio.processing import (
+    ProcessingError,
+    processing_stage_policy_status,
+    reconcile_stage_policy_gate,
+    set_processing_stage_gate,
+)
 from asr_studio.runner import (
     ModelConfigurationError,
     prepared_engine_directory,
@@ -328,6 +334,58 @@ def diagnose_task(settings: Settings, task_id: str) -> int:
     return 0
 
 
+def _print_stage_policy_status(status: dict[str, object], *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(status, separators=(",", ":"), sort_keys=True))
+        return
+    admission = status["admission"]
+    active = status["active"]
+    slot = status["slot"]
+    print(f"Stage-policy runtime: {status['runtime_mode']}")
+    print(f"Admission: {admission['state']}")
+    print(f"Reason: {admission['reason'] or '-'}")
+    print(
+        "Active stage work: "
+        f"accepted={active['accepted']} running={active['running']} stopping={active['stopping']}"
+    )
+    print(
+        f"Own slot: {'yes' if slot['owned_by_stage_policy'] else 'no'} "
+        f"(active_task_id={slot['active_task_id'] or '-'})"
+    )
+    print(f"Drained: {'yes' if status['drained'] else 'no'}")
+
+
+def stage_policy_command(settings: Settings, arguments: argparse.Namespace) -> int:
+    try:
+        if arguments.stage_policy_command == "status":
+            status = processing_stage_policy_status(settings.data_dir)
+        else:
+            if arguments.stage_policy_command == "enable" and not arguments.acknowledge:
+                print(
+                    "Refusing enable: pass --acknowledge-compatible-processes-stopped after "
+                    "stopping old app/scheduler/worker processes.",
+                    file=sys.stderr,
+                )
+                return 2
+            admission = "enabled" if arguments.stage_policy_command == "enable" else "disabled"
+            status = set_processing_stage_gate(
+                settings.data_dir,
+                admission=admission,
+                reason=(None if arguments.stage_policy_command == "enable" else arguments.reason),
+            )
+            reconcile_stage_policy_gate(settings.data_dir)
+            status = processing_stage_policy_status(settings.data_dir)
+    except (ProcessingError, OSError, RuntimeError, sqlite3.Error) as error:
+        if isinstance(error, ProcessingError):
+            message = f"{error.code}: {error.message}"
+        else:
+            message = "stage_policy_unavailable: the local gate state could not be read or updated"
+        print(message, file=sys.stderr)
+        return 1
+    _print_stage_policy_status(status, json_output=arguments.json)
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="asr-studio")
     parser.add_argument("--version", action="version", version=f"asr-studio {__version__}")
@@ -375,6 +433,34 @@ def _parser() -> argparse.ArgumentParser:
     task_commands = task_parser.add_subparsers(dest="task_command", required=True)
     diagnose_parser = task_commands.add_parser("diagnose", help="show safe task diagnostics")
     diagnose_parser.add_argument("task_id")
+    stage_policy_parser = commands.add_parser(
+        "stage-policy", help="inspect or operate the local automatic-stage admission gate"
+    )
+    stage_policy_commands = stage_policy_parser.add_subparsers(
+        dest="stage_policy_command", required=True
+    )
+    status_parser = stage_policy_commands.add_parser("status", help="show gate and drain state")
+    status_parser.add_argument("--json", action="store_true", help="print a JSON status report")
+    enable_parser = stage_policy_commands.add_parser(
+        "enable", help="enable admission after compatible processes have been stopped"
+    )
+    enable_parser.add_argument(
+        "--acknowledge-compatible-processes-stopped",
+        dest="acknowledge",
+        action="store_true",
+        help="acknowledge the required compatible app/scheduler/worker cutover",
+    )
+    enable_parser.add_argument("--json", action="store_true", help="print a JSON status report")
+    disable_parser = stage_policy_commands.add_parser(
+        "disable", help="disable new admission and reconcile active stage work"
+    )
+    disable_parser.add_argument("--reason", default="operator_disabled")
+    disable_parser.add_argument("--json", action="store_true", help="print a JSON status report")
+    rollback_parser = stage_policy_commands.add_parser(
+        "rollback", help="disable admission for a compatible rollback or binary replacement"
+    )
+    rollback_parser.add_argument("--reason", default="operator_rollback")
+    rollback_parser.add_argument("--json", action="store_true", help="print a JSON status report")
     return parser
 
 
@@ -419,6 +505,8 @@ def main(argv: list[str] | None = None) -> int:
         return check_installation(settings)
     if arguments.command == "task":
         return diagnose_task(settings, arguments.task_id)
+    if arguments.command == "stage-policy":
+        return stage_policy_command(settings, arguments)
 
     if arguments.command == "access":
         selected_origin = settings.public_url

@@ -640,9 +640,34 @@ def claim_next_task(
                     (task_id,),
                 )
                 return None
-        if task["diarization_mode"] == DIARIZATION_MODE_OFF and (
-            diarization_rollback_fence_enabled()
+        if (
+            task["diarization_mode"] == DIARIZATION_MODE_OFF
+            and diarization_rollback_fence_enabled()
         ):
+            if task["processing_workflow_id"] is None:
+                # Preserve the legacy/manual #261 fence semantics.  It has no
+                # automatic attempt to settle or rearm.
+                return None
+            from asr_studio.processing import (
+                DIARIZATION_ROLLBACK_FENCE_MESSAGE,
+                DIARIZATION_ROLLBACK_FENCE_REASON,
+                automatic_task_rollback_fenced_tx,
+            )
+
+            canceled = connection.execute(
+                "UPDATE tasks SET status = 'canceled', stage = 'canceled', "
+                "cancel_requested_at = CURRENT_TIMESTAMP, error_code = ?, error_message = ?, "
+                "completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND status = 'accepted'",
+                (DIARIZATION_ROLLBACK_FENCE_REASON, DIARIZATION_ROLLBACK_FENCE_MESSAGE, task_id),
+            )
+            if canceled.rowcount == 1:
+                connection.execute(
+                    "UPDATE processing_slot SET active_task_id = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE slot_id = 1 AND active_task_id = ?",
+                    (task_id,),
+                )
+                automatic_task_rollback_fenced_tx(connection, task)
             return None
         cursor = connection.execute(
             "UPDATE tasks SET status = 'running', stage = 'starting', owner_id = ?, "

@@ -968,6 +968,10 @@ def _migrate_v25(connection: sqlite3.Connection) -> None:
     }
     for column, definition in (
         ("stage_policy_format", "INTEGER NOT NULL DEFAULT 0 CHECK(stage_policy_format >= 0)"),
+        (
+            "stage_policy_quarantine_format",
+            "INTEGER CHECK(stage_policy_quarantine_format IS NULL OR stage_policy_quarantine_format >= 0)",
+        ),
         ("stage_asr_enabled", "INTEGER NOT NULL DEFAULT 1 CHECK(stage_asr_enabled IN (0, 1))"),
         (
             "stage_diarization_enabled",
@@ -994,7 +998,7 @@ def _migrate_v25(connection: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS processing_cutover_gate ("
         "id INTEGER PRIMARY KEY CHECK(id = 1), "
         "format_version INTEGER NOT NULL CHECK(format_version >= 1), "
-        "admission TEXT NOT NULL CHECK(admission IN ('enabled', 'draining', 'disabled')), "
+        "admission TEXT NOT NULL CHECK(admission IN ('enabled', 'disabled')), "
         "reason TEXT, "
         "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
         ")"

@@ -44,6 +44,16 @@ recording-session POST. An omitted intent retains the legacy create fingerprint 
 legacy all-on semantics; malformed or unsupported intent is rejected rather than
 downgraded.
 
+The local operator cutover is separate from the extension preference API. Use the current-source
+commands `python -m asr_studio.cli stage-policy status --json`, `disable --reason ...`, and
+`enable --acknowledge-compatible-processes-stopped`; `rollback --reason ...` is the disable path
+for binary replacement. Stop the old app, scheduler, and worker first, disable and wait for the
+reported `drained: true`, then start the compatible current-source processes and enable with the
+explicit acknowledgement. Status reports accepted/running/stopping stage work and the actual
+processing-slot owner. There is no persisted `draining` mode, and an unknown gate remains
+fail-closed. Worker/model/provider readiness is a separate waiting condition after admission;
+the gate command does not claim inference readiness or silently choose a fallback.
+
 ## Meeting status
 
 The meeting page shows a compact automatic-processing panel with separate Transcript and Notes steps. It translates durable waiting and failure reasons such as worker offline, unavailable model, busy slot, unconfigured provider, unavailable provider, changed recipe, and source confirmation required.

@@ -1,13 +1,12 @@
 # Extension stage policy (#267, #277)
 
-Status: maintained design and compatibility contract. The #277 backend contract
-checkpoint adds additive storage, the authenticated versioned stage-preference API,
-capability format knowledge, and the persisted fail-closed admission gate. Runtime
-execution remains fenced until the compatible worker/scheduler cutover is complete;
-this document does not claim that a disabled gate is runtime readiness.
+Status: maintained design and compatibility contract. The #277 backend implementation
+includes additive storage, the authenticated versioned stage-preference API, capability
+format knowledge, the persisted fail-closed admission gate, and bounded operator cutover
+commands. Runtime execution remains fenced until the compatible worker/scheduler cutover
+is complete; a disabled gate is not a runtime-readiness claim.
 
-The current baseline is the #277 contract checkpoint (`8c1df7a`, backend author
-worktree). The contract is refreshed
+The current baseline is the #277 backend source checkpoint (`d8e33e9`). The contract is refreshed
 against the current implementation of [Extension ingest](../src/asr_studio/extension_ingest.py),
 [processing](../src/asr_studio/processing.py), [Notes](../src/asr_studio/notes.py), and
 [transcript history/review](../src/asr_studio/transcript_edits.py). The current
@@ -86,6 +85,46 @@ format-known/disabled response, malformed or transport-failed capability lookup,
 create ACK and reconnect after capability change, exact replay identity, and the
 existing unknown-field rejection. They must prove no new field is sent to a predecessor
 server and no pairing/token schema is changed.
+
+## Operator cutover, drain, and rollback
+
+The persisted admission states are only `enabled` and `disabled`. `draining` is not a
+supported persisted mode: drain is the observed combination of active stage tasks and the
+processing slot, so an operator cannot accidentally leave a claimable half-draining gate.
+Unknown persisted formats or admission values remain disabled and cannot be enabled by the
+operator command.
+
+The commands use the current source's `ASR_DATA_DIR` and do not initialize a missing database:
+
+```text
+python -m asr_studio.cli stage-policy status --json
+python -m asr_studio.cli stage-policy disable --reason binary-replacement --json
+python -m asr_studio.cli stage-policy enable --acknowledge-compatible-processes-stopped --json
+python -m asr_studio.cli stage-policy rollback --reason incompatible-rollback --json
+```
+
+`status` reports `accepted`, `running`, and `stopping` stage tasks, the task occupying the
+processing slot and whether that slot belongs to stage-policy work, plus `drained`. `disable`
+persists the fence before reconciling accepted/running work: accepted work is canceled and its
+own slot is released; running work is asked to stop and remains visible as `stopping` until the
+worker settles it. The command never reports `drained: true` while a stage task or occupied slot
+remains. Wait for `drained: true` before replacing binaries or cancel only the reported stage
+task through the existing worker/operator lifecycle.
+
+The safe ordering is: stop the old app, scheduler, and worker processes; disable the gate and
+wait for the actual drain; install/start the compatible current-source app, scheduler, and
+worker; then enable with the explicit acknowledgement flag. The acknowledgement is an operator
+assertion about process compatibility, not an automatic process probe, and enabling never patches
+or claims work for an old binary. `rollback` is the same disable-and-reconcile fence with a
+rollback reason. The compatible maintenance runtime is named
+`asr-studio-stage-policy-maintenance-v1`; a pre-migration binary that rejects schema v25 is not a
+rollback target.
+
+An invalid preference format captured by a capable format-1 session is a durable policy
+quarantine, not a legacy all-on workflow and not a valid all-off recipe. Gate toggles, retries,
+source/settings adoption, task claim, publication, scheduler admission, and worker recovery
+preserve that quarantine. Explicit legacy sessions with create format 0 retain their all-on
+compatibility semantics.
 
 ## Recipe, precedence, and truth matrix
 

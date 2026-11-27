@@ -32,6 +32,7 @@ from asr_studio.notes_document import PROMPT_VERSION, SCHEMA_VERSION
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.service_runtime import acquire_service_lock, write_service_heartbeat
 from asr_studio.stage_policy import (
+    STAGE_ADMISSION_STATES,
     STAGE_POLICY_CONTRACT_VERSION,
     STAGE_POLICY_FORMAT_VERSION,
     StagePolicyValidationError,
@@ -54,6 +55,13 @@ RETRY_BASE_SECONDS = 1.0
 _ACTIVE = ("accepted", "running", "stopping")
 # Waiting reasons that hold a step until the operator confirms its source.
 ATTENTION_REASONS = frozenset({"source_confirmation_required", "interrupted_recording"})
+GATE_ATTENTION_REASONS = frozenset(
+    {
+        "stage_policy_admission_disabled",
+        "unknown_stage_policy_gate",
+    }
+)
+POLICY_QUARANTINE_REASONS = frozenset({"unknown_stage_policy", "unknown_stage_policy_format"})
 _ASR_WAITING = {"worker_offline", "model_unavailable", "diarization_model_unavailable", "slot_busy"}
 _NOTES_WAITING = {
     "provider_unconfigured",
@@ -61,6 +69,10 @@ _NOTES_WAITING = {
     "account_changed",
     "recipe_changed",
 }
+DIARIZATION_ROLLBACK_FENCE_REASON = "diarization_rollback_fence"
+DIARIZATION_ROLLBACK_FENCE_MESSAGE = (
+    "Automatic diarization-off admission is paused while the rollback fence is active."
+)
 
 
 def _same_epoch(left: object, right: object) -> bool:
@@ -68,6 +80,12 @@ def _same_epoch(left: object, right: object) -> bool:
         return int(left) == int(right)
     except (TypeError, ValueError):
         return False
+
+
+def _diarization_rollback_fence_enabled() -> bool:
+    from asr_studio.tasks import diarization_rollback_fence_enabled
+
+    return diarization_rollback_fence_enabled()
 
 
 def _notes_effort_matches(
@@ -93,6 +111,21 @@ class ProcessingError(RuntimeError):
 @contextmanager
 def _connect(data_dir: Path) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(database_path(data_dir), timeout=5)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+@contextmanager
+def _connect_read_only(data_dir: Path) -> Iterator[sqlite3.Connection]:
+    path = database_path(data_dir)
+    if path.is_symlink() or not path.is_file():
+        raise FileNotFoundError(path)
+    connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", timeout=5, uri=True)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
@@ -190,6 +223,131 @@ def processing_stage_capabilities(data_dir: Path) -> dict[str, object]:
     with _connect(data_dir) as connection:
         gate = _stage_policy_gate(connection)
     return stage_policy_capabilities(admission=admission_from_row(gate))
+
+
+STAGE_POLICY_MAINTENANCE_RUNTIME = "asr-studio-stage-policy-maintenance-v1"
+
+
+def _stage_policy_status(connection: sqlite3.Connection) -> dict[str, object]:
+    gate = _stage_policy_gate(connection)
+    admission = admission_from_row(gate)
+    active_tasks = connection.execute(
+        "SELECT id, kind, status, processing_workflow_id, processing_step_id "
+        "FROM tasks WHERE processing_workflow_id IS NOT NULL "
+        "AND status IN ('accepted', 'running', 'stopping') "
+        "ORDER BY accepted_at, id"
+    ).fetchall()
+    active_by_status = {
+        status: sum(1 for task in active_tasks if task["status"] == status)
+        for status in ("accepted", "running", "stopping")
+    }
+    slot = connection.execute(
+        "SELECT active_task_id FROM processing_slot WHERE slot_id = 1"
+    ).fetchone()
+    active_task_id = slot["active_task_id"] if slot is not None else None
+    slot_task = (
+        connection.execute(
+            "SELECT processing_workflow_id FROM tasks WHERE id = ?", (active_task_id,)
+        ).fetchone()
+        if active_task_id is not None
+        else None
+    )
+    slot_is_free = active_task_id is None
+    slot_owned_by_stage_policy = bool(
+        slot_task is not None and slot_task["processing_workflow_id"] is not None
+    )
+    return {
+        "runtime_mode": STAGE_POLICY_MAINTENANCE_RUNTIME,
+        "format_version": admission["format_version"],
+        "admission": admission,
+        "persisted_gate": {
+            "format_version": gate["format_version"],
+            "admission": gate["admission"],
+            "reason": gate["reason"],
+        },
+        "active": {
+            **active_by_status,
+            "tasks": [
+                {
+                    "id": task["id"],
+                    "kind": task["kind"],
+                    "status": task["status"],
+                    "workflow_id": task["processing_workflow_id"],
+                    "step_id": task["processing_step_id"],
+                }
+                for task in active_tasks
+            ],
+        },
+        "slot": {
+            "active_task_id": active_task_id,
+            "free": slot_is_free,
+            "owned_by_stage_policy": slot_owned_by_stage_policy,
+        },
+        "drained": not active_tasks and slot_is_free,
+    }
+
+
+def processing_stage_policy_status(data_dir: Path) -> dict[str, object]:
+    """Read the persisted gate and its actual drain state without initializing storage."""
+    with _connect_read_only(data_dir) as connection:
+        return _stage_policy_status(connection)
+
+
+def _operator_gate_reason(value: object, *, default: str | None = None) -> str | None:
+    if value is None:
+        value = default
+    if not isinstance(value, str):
+        raise ProcessingError(400, "invalid_stage_policy_reason", "The gate reason is invalid.")
+    normalized = value.strip()
+    if not normalized or len(normalized) > 200 or any(ord(char) < 0x20 for char in normalized):
+        raise ProcessingError(400, "invalid_stage_policy_reason", "The gate reason is invalid.")
+    return normalized
+
+
+def set_processing_stage_gate(
+    data_dir: Path, *, admission: object, reason: object = None
+) -> dict[str, object]:
+    """Persist one of the two supported gate states with strict operator input."""
+    if not isinstance(admission, str) or admission not in STAGE_ADMISSION_STATES:
+        raise ProcessingError(
+            400,
+            "invalid_stage_policy_admission",
+            "Stage-policy admission must be enabled or disabled; draining is not supported.",
+        )
+    if admission == "enabled":
+        if reason is not None:
+            raise ProcessingError(
+                400,
+                "invalid_stage_policy_reason",
+                "An enabled stage-policy gate cannot carry a reason.",
+            )
+        normalized_reason = None
+    else:
+        normalized_reason = _operator_gate_reason(reason, default="operator_disabled")
+
+    path = database_path(data_dir)
+    if path.is_symlink() or not path.is_file():
+        raise FileNotFoundError(path)
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        gate = _stage_policy_gate(connection)
+        if (
+            gate["format_version"] != STAGE_POLICY_FORMAT_VERSION
+            or gate["admission"] not in STAGE_ADMISSION_STATES
+        ):
+            raise ProcessingError(
+                409,
+                "unknown_stage_policy_gate",
+                "The persisted stage-policy gate is unknown and remains fail-closed.",
+            )
+        updated = connection.execute(
+            "UPDATE processing_cutover_gate SET admission = ?, reason = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+            (admission, normalized_reason),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("processing cutover gate is not initialized")
+        return _stage_policy_status(connection)
 
 
 def save_processing_stage_policy(
@@ -469,11 +627,24 @@ def _insert_attempt(
 
 
 def _workflow_stage_policy(workflow: sqlite3.Row) -> dict[str, object] | None:
+    if workflow["stage_policy_quarantine_format"] is not None:
+        return None
     return workflow_policy(
         format_version=workflow["stage_policy_format"],
         asr=workflow["stage_asr_enabled"],
         diarization=workflow["stage_diarization_enabled"],
         notes=workflow["stage_notes_enabled"],
+    )
+
+
+def _workflow_policy_attention_reason(workflow: sqlite3.Row) -> str | None:
+    quarantine_format = workflow["stage_policy_quarantine_format"]
+    if quarantine_format is None:
+        return None
+    return (
+        "unknown_stage_policy"
+        if quarantine_format == STAGE_POLICY_FORMAT_VERSION
+        else "unknown_stage_policy_format"
     )
 
 
@@ -490,13 +661,14 @@ def _stage_policy_admission_reason(
 ) -> str | None:
     policy = _workflow_stage_policy(workflow)
     if policy is None:
-        return "unknown_stage_policy"
-    if not bool(policy["asr"]):
-        return None
+        return _workflow_policy_attention_reason(workflow) or "unknown_stage_policy"
     if int(policy["format_version"]) == 0:
         return None
     gate = _stage_policy_gate(connection)
-    if gate["format_version"] != STAGE_POLICY_FORMAT_VERSION:
+    if (
+        gate["format_version"] != STAGE_POLICY_FORMAT_VERSION
+        or gate["admission"] not in STAGE_ADMISSION_STATES
+    ):
         return "unknown_stage_policy_gate"
     if gate["admission"] != "enabled":
         return "stage_policy_admission_disabled"
@@ -573,6 +745,8 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
         prefs["asr_language"] if row["language_hint_omitted"] else row["session_language"]
     )
     session_format = int(row["stage_policy_format"])
+    policy_reason = None
+    quarantine_format = None
     if session_format == 0:
         policy = workflow_policy(format_version=0, asr=True, diarization=True, notes=True)
     elif session_format == STAGE_POLICY_FORMAT_VERSION:
@@ -581,19 +755,30 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
             validate_intent(intent)
         except (TypeError, ValueError, StagePolicyValidationError):
             policy = None
+            policy_reason = "unknown_stage_policy"
+            quarantine_format = session_format
         else:
-            policy = workflow_policy(
-                format_version=prefs["stage_policy_format"],
-                asr=prefs["stage_asr_enabled"],
-                diarization=prefs["stage_diarization_enabled"],
-                notes=prefs["stage_notes_enabled"],
-            )
+            if prefs["stage_policy_format"] != STAGE_POLICY_FORMAT_VERSION:
+                policy = None
+                policy_reason = "unknown_stage_policy_format"
+                quarantine_format = prefs["stage_policy_format"]
+            else:
+                policy = workflow_policy(
+                    format_version=STAGE_POLICY_FORMAT_VERSION,
+                    asr=prefs["stage_asr_enabled"],
+                    diarization=prefs["stage_diarization_enabled"],
+                    notes=prefs["stage_notes_enabled"],
+                )
+                if policy is None:
+                    policy_reason = "unknown_stage_policy"
+                    quarantine_format = session_format
     else:
         policy = None
-    policy_reason = None
-    if policy is None:
         policy_reason = "unknown_stage_policy"
-    elif bool(policy["asr"]) and int(policy["format_version"]) != 0:
+        quarantine_format = session_format
+    if policy is None:
+        policy_reason = policy_reason or "unknown_stage_policy"
+    elif int(policy["format_version"]) != 0:
         gate = _stage_policy_gate(connection)
         if gate["format_version"] != STAGE_POLICY_FORMAT_VERSION:
             policy_reason = "unknown_stage_policy_gate"
@@ -631,9 +816,9 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
     connection.execute(
         "INSERT INTO processing_workflows(id, meeting_id, recording_id, extension_session_id, state, ready_sequence, "
         "asr_choice, asr_language, notes_provider, notes_model, notes_reasoning_effort, notes_output_language, "
-        "preferences_version, stage_policy_format, stage_asr_enabled, stage_diarization_enabled, "
-        "stage_notes_enabled) "
-        "VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(ready_sequence), 0) + 1 FROM processing_workflows), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "preferences_version, stage_policy_format, stage_policy_quarantine_format, "
+        "stage_asr_enabled, stage_diarization_enabled, stage_notes_enabled) "
+        "VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(ready_sequence), 0) + 1 FROM processing_workflows), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             workflow_id,
             row["meeting_id"],
@@ -648,6 +833,7 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
             prefs["notes_output_language"],
             prefs["version"],
             stored_policy["format_version"],
+            quarantine_format,
             int(stored_policy["asr"]),
             int(stored_policy["diarization"]),
             int(stored_policy["notes"]),
@@ -689,6 +875,7 @@ def ready_handoff_tx(connection: sqlite3.Connection, session_id: str) -> str | N
             "source_confirmation_required": "The current transcript or meeting details changed. Confirm the displayed source.",
             "stage_policy_admission_disabled": "Automatic stage admission is disabled until a compatible runtime is enabled.",
             "unknown_stage_policy": "The stage policy format is unknown and has been quarantined.",
+            "unknown_stage_policy_format": "The saved stage-policy format is unknown and has been quarantined.",
             "unknown_stage_policy_gate": "The stage-policy admission gate is unknown and has been quarantined.",
         }.get(attention_reason, "Processing requires operator attention.")
         connection.execute(
@@ -761,6 +948,24 @@ def processing_state(data_dir: Path, meeting_id: str) -> dict[str, object] | Non
             (meeting_id,),
         ).fetchone()
     stage_policy = _workflow_stage_policy(workflow)
+    stage_policy_view = (
+        {
+            "format_version": stage_policy["format_version"],
+            "asr": stage_policy["asr"],
+            "diarization": stage_policy["diarization"],
+            "notes": stage_policy["notes"],
+        }
+        if stage_policy is not None
+        else {
+            "format_version": workflow["stage_policy_format"],
+            "known": False,
+            **(
+                {"quarantined_format": workflow["stage_policy_quarantine_format"]}
+                if workflow["stage_policy_quarantine_format"] is not None
+                else {}
+            ),
+        }
+    )
     return {
         "id": workflow["id"],
         "meeting_id": meeting_id,
@@ -768,16 +973,7 @@ def processing_state(data_dir: Path, meeting_id: str) -> dict[str, object] | Non
         "epoch": workflow["epoch"],
         "execution_epoch": workflow["epoch"],
         "ready_sequence": workflow["ready_sequence"],
-        "stage_policy": (
-            {
-                "format_version": stage_policy["format_version"],
-                "asr": stage_policy["asr"],
-                "diarization": stage_policy["diarization"],
-                "notes": stage_policy["notes"],
-            }
-            if stage_policy is not None
-            else {"format_version": workflow["stage_policy_format"], "known": False}
-        ),
+        "stage_policy": stage_policy_view,
         "pinned": {
             "asr_choice": workflow["asr_choice"],
             "asr_language": workflow["asr_language"],
@@ -919,26 +1115,40 @@ def _mark_stage_policy_attention(
         if reason == "stage_policy_admission_disabled"
         else "The stage-policy admission gate is unknown and has been quarantined."
         if reason == "unknown_stage_policy_gate"
+        else "The saved stage-policy format is unknown and has been quarantined."
+        if reason == "unknown_stage_policy_format"
         else "The persisted stage policy disabled this automatic stage."
         if reason == "stage_disabled"
         else "The persisted stage policy is unknown and has been quarantined."
     )
-    connection.execute(
-        "UPDATE processing_workflows SET state = 'needs_attention', last_error_code = ?, "
-        "last_error_message = ?, updated_at = CURRENT_TIMESTAMP "
-        "WHERE id = ? AND state NOT IN ('canceled', 'deleted', 'succeeded')",
-        (reason, message, workflow_id),
-    )
     workflow = connection.execute(
         "SELECT * FROM processing_workflows WHERE id = ?", (workflow_id,)
     ).fetchone()
-    policy = _workflow_stage_policy(workflow) if workflow is not None else None
+    if workflow is None:
+        return
+    workflow_has_non_gate_hold = (
+        workflow["state"] == "needs_attention"
+        and workflow["last_error_code"] not in GATE_ATTENTION_REASONS
+    )
+    if not workflow_has_non_gate_hold:
+        connection.execute(
+            "UPDATE processing_workflows SET state = 'needs_attention', last_error_code = ?, "
+            "last_error_message = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND state NOT IN ('canceled', 'deleted', 'succeeded')",
+            (reason, message, workflow_id),
+        )
+    policy = _workflow_stage_policy(workflow)
     steps = connection.execute(
-        "SELECT id, kind FROM processing_steps WHERE workflow_id = ? "
-        "AND state IN ('waiting', 'accepted', 'running', 'failed')",
+        "SELECT * FROM processing_steps WHERE workflow_id = ? "
+        "AND state IN ('waiting', 'accepted', 'running', 'failed', 'needs_attention')",
         (workflow_id,),
     ).fetchall()
     for step in steps:
+        step_reason = step["waiting_reason"] or step["last_error_code"]
+        if step["state"] == "needs_attention" and step_reason not in GATE_ATTENTION_REASONS:
+            continue
+        if step["state"] in {"waiting", "failed"} and step_reason is not None:
+            continue
         if policy is not None and not _stage_is_enabled(policy, step["kind"]):
             _skip_stage(
                 connection,
@@ -1004,7 +1214,7 @@ def _automatic_task_common(
     if policy is None:
         raise ProcessingError(
             409,
-            "unknown_stage_policy",
+            _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
             "The stage policy format is unknown and has been quarantined.",
         )
     if not _stage_is_enabled(policy, kind):
@@ -1109,6 +1319,14 @@ def admit_automatic_transcription(
         return None
     policy = _workflow_stage_policy(workflow)
     assert policy is not None
+    if not bool(policy["diarization"]) and _diarization_rollback_fence_enabled():
+        _mark_waiting(
+            connection,
+            step["id"],
+            DIARIZATION_ROLLBACK_FENCE_REASON,
+            message=DIARIZATION_ROLLBACK_FENCE_MESSAGE,
+        )
+        return None
     diarization_mode = "community-1" if bool(policy["diarization"]) else "off"
     resolved_diarization_path = str(diarization_model_path) if diarization_mode != "off" else ""
     recording = connection.execute(
@@ -1364,7 +1582,7 @@ def transcript_published_tx(
     if policy is None:
         raise ProcessingError(
             409,
-            "unknown_stage_policy",
+            _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
             "The stage policy format is unknown and has been quarantined.",
         )
     transcription = connection.execute(
@@ -1446,7 +1664,11 @@ def publication_allowed_tx(connection: sqlite3.Connection, task: sqlite3.Row) ->
         return False
     policy = _workflow_stage_policy(workflow)
     if policy is None:
-        _mark_stage_policy_attention(connection, workflow_id, "unknown_stage_policy")
+        _mark_stage_policy_attention(
+            connection,
+            workflow_id,
+            _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
+        )
         return False
     if task["kind"] not in {"transcription", "notes"} or not _stage_is_enabled(
         policy, task["kind"]
@@ -1479,7 +1701,7 @@ def publication_blocked_tx(connection: sqlite3.Connection, task: sqlite3.Row) ->
         return
     policy = _workflow_stage_policy(workflow)
     policy_reason = (
-        "unknown_stage_policy"
+        _workflow_policy_attention_reason(workflow) or "unknown_stage_policy"
         if policy is None
         else (
             "stage_disabled"
@@ -1575,6 +1797,64 @@ def notes_published_tx(connection: sqlite3.Connection, task: sqlite3.Row, revisi
     )
 
 
+def automatic_task_rollback_fenced_tx(connection: sqlite3.Connection, task: sqlite3.Row) -> None:
+    """Return an admitted automatic Off task to a fresh waiting attempt."""
+    workflow_id = task["processing_workflow_id"]
+    if workflow_id is None:
+        return
+    workflow = connection.execute(
+        "SELECT * FROM processing_workflows WHERE id = ?", (workflow_id,)
+    ).fetchone()
+    step = connection.execute(
+        "SELECT * FROM processing_steps WHERE id = ?", (task["processing_step_id"],)
+    ).fetchone()
+    if workflow is None or step is None:
+        return
+    connection.execute(
+        "UPDATE processing_attempts SET state = 'canceled', error_code = ?, "
+        "error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (
+            DIARIZATION_ROLLBACK_FENCE_REASON,
+            DIARIZATION_ROLLBACK_FENCE_MESSAGE,
+            task["processing_attempt_id"],
+        ),
+    )
+    connection.execute(
+        "UPDATE processing_steps SET state = 'waiting', waiting_reason = ?, task_id = NULL, "
+        "last_error_code = ?, last_error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (
+            DIARIZATION_ROLLBACK_FENCE_REASON,
+            DIARIZATION_ROLLBACK_FENCE_REASON,
+            DIARIZATION_ROLLBACK_FENCE_MESSAGE,
+            step["id"],
+        ),
+    )
+    connection.execute(
+        "UPDATE processing_workflows SET state = 'waiting', last_error_code = NULL, "
+        "last_error_message = NULL, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ? AND state NOT IN ('canceled', 'deleted')",
+        (workflow_id,),
+    )
+    refreshed_step = connection.execute(
+        "SELECT * FROM processing_steps WHERE id = ?", (step["id"],)
+    ).fetchone()
+    assert refreshed_step is not None
+    next_attempt_number = (refreshed_step["attempt_number"] or 0) + 1
+    _insert_attempt(
+        connection,
+        step=refreshed_step,
+        workflow_epoch=workflow["epoch"],
+        attempt_number=next_attempt_number,
+        request_id=_automatic_request_id(workflow_id, task["kind"], next_attempt_number),
+        request_hash=_hash(
+            workflow_id,
+            task["kind"],
+            workflow["epoch"],
+            "rollback-fence",
+        ),
+    )
+
+
 def automatic_task_started_tx(
     connection: sqlite3.Connection,
     task_id: str,
@@ -1634,7 +1914,7 @@ def automatic_task_terminal_tx(
     ).fetchone()
     policy = _workflow_stage_policy(workflow) if workflow is not None else None
     stage_fence_reason = (
-        "unknown_stage_policy"
+        _workflow_policy_attention_reason(workflow) or "unknown_stage_policy"
         if policy is None
         else _stage_policy_admission_reason(connection, workflow)
     )
@@ -1778,7 +2058,7 @@ def retry_notes(
         if policy is None:
             raise ProcessingError(
                 409,
-                "unknown_stage_policy",
+                _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
                 "The stage policy format is unknown and has been quarantined.",
             )
         if not _stage_is_enabled(policy, "notes"):
@@ -1883,7 +2163,7 @@ def apply_current_settings(
         if policy is None:
             raise ProcessingError(
                 409,
-                "unknown_stage_policy",
+                _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
                 "The stage policy format is unknown and has been quarantined.",
             )
         admission_reason = _stage_policy_admission_reason(connection, workflow)
@@ -2036,7 +2316,7 @@ def use_current_source(
         if policy is None:
             raise ProcessingError(
                 409,
-                "unknown_stage_policy",
+                _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
                 "The stage policy format is unknown and has been quarantined.",
             )
         admission_reason = _stage_policy_admission_reason(connection, workflow)
@@ -2266,7 +2546,11 @@ def reconcile_stage_policy_gate(data_dir: Path) -> int:
         for workflow in workflows:
             policy = _workflow_stage_policy(workflow)
             if policy is None:
-                _mark_stage_policy_attention(connection, workflow["id"], "unknown_stage_policy")
+                _mark_stage_policy_attention(
+                    connection,
+                    workflow["id"],
+                    _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
+                )
                 changed += 1
                 continue
             admission_enabled = (
@@ -2312,11 +2596,6 @@ def reconcile_stage_policy_gate(data_dir: Path) -> int:
                 )
                 changed += 1
                 continue
-            if workflow["state"] != "needs_attention" or workflow["last_error_code"] not in {
-                "stage_policy_admission_disabled",
-                "unknown_stage_policy_gate",
-            }:
-                continue
             active = connection.execute(
                 "SELECT 1 FROM tasks WHERE processing_workflow_id = ? "
                 "AND status IN ('accepted', 'running', 'stopping')",
@@ -2324,15 +2603,19 @@ def reconcile_stage_policy_gate(data_dir: Path) -> int:
             ).fetchone()
             if active is not None:
                 continue
-            connection.execute(
-                "UPDATE processing_workflows SET state = 'waiting', last_error_code = NULL, "
-                "last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (workflow["id"],),
-            )
             steps = connection.execute(
                 "SELECT * FROM processing_steps WHERE workflow_id = ?", (workflow["id"],)
             ).fetchall()
-            for step in steps:
+            gate_attention_steps = [
+                step
+                for step in steps
+                if step["state"] == "needs_attention"
+                and step["waiting_reason"] in GATE_ATTENTION_REASONS
+            ]
+            workflow_has_gate_hold = workflow["last_error_code"] in GATE_ATTENTION_REASONS
+            if not gate_attention_steps and not workflow_has_gate_hold:
+                continue
+            for step in gate_attention_steps:
                 if not _stage_is_enabled(policy, step["kind"]):
                     _skip_stage(
                         connection,
@@ -2373,6 +2656,47 @@ def reconcile_stage_policy_gate(data_dir: Path) -> int:
                         request_hash=_hash(
                             workflow["id"], step["kind"], workflow["epoch"], "gate-reopen"
                         ),
+                    )
+            refreshed_workflow = connection.execute(
+                "SELECT * FROM processing_workflows WHERE id = ?", (workflow["id"],)
+            ).fetchone()
+            if refreshed_workflow is None:
+                continue
+            remaining_attention = connection.execute(
+                "SELECT * FROM processing_steps WHERE workflow_id = ? "
+                "AND state = 'needs_attention'",
+                (workflow["id"],),
+            ).fetchall()
+            non_gate_attention = next(
+                (
+                    step
+                    for step in remaining_attention
+                    if step["waiting_reason"] not in GATE_ATTENTION_REASONS
+                ),
+                None,
+            )
+            if refreshed_workflow["last_error_code"] in GATE_ATTENTION_REASONS:
+                if non_gate_attention is not None:
+                    reason = (
+                        non_gate_attention["waiting_reason"]
+                        or non_gate_attention["last_error_code"]
+                        or "processing_attention"
+                    )
+                    message = non_gate_attention["last_error_message"] or (
+                        "Processing requires operator attention."
+                    )
+                    connection.execute(
+                        "UPDATE processing_workflows SET state = 'needs_attention', "
+                        "last_error_code = ?, last_error_message = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (reason, message, workflow["id"]),
+                    )
+                else:
+                    next_state = "succeeded" if not bool(policy["asr"]) else "waiting"
+                    connection.execute(
+                        "UPDATE processing_workflows SET state = ?, last_error_code = NULL, "
+                        "last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (next_state, workflow["id"]),
                     )
             changed += 1
     return changed
@@ -2509,7 +2833,20 @@ class AutomaticProcessingScheduler:
                 continue
             policy = _workflow_stage_policy(row)
             if policy is None:
-                self._set_reason(row["step_id"], "unknown_stage_policy")
+                with (
+                    _connect(self.settings.data_dir) as quarantine_connection,
+                    quarantine_connection,
+                ):
+                    quarantine_connection.execute("BEGIN IMMEDIATE")
+                    workflow = quarantine_connection.execute(
+                        "SELECT * FROM processing_workflows WHERE id = ?", (row["id"],)
+                    ).fetchone()
+                    if workflow is not None:
+                        _mark_stage_policy_attention(
+                            quarantine_connection,
+                            row["id"],
+                            _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
+                        )
                 continue
             if int(policy["format_version"]) != 0:
                 with _connect(self.settings.data_dir) as gate_connection:
@@ -2520,6 +2857,13 @@ class AutomaticProcessingScheduler:
                 ):
                     self._set_reason(row["step_id"], "stage_policy_admission_disabled")
                     continue
+            if not bool(policy["diarization"]) and _diarization_rollback_fence_enabled():
+                self._set_reason(
+                    row["step_id"],
+                    DIARIZATION_ROLLBACK_FENCE_REASON,
+                    DIARIZATION_ROLLBACK_FENCE_MESSAGE,
+                )
+                continue
             try:
                 from asr_studio.runtime import read_runtime_profile
                 from asr_studio.worker import is_healthy as worker_is_healthy
@@ -2653,7 +2997,9 @@ class AutomaticProcessingScheduler:
                 policy = _workflow_stage_policy(workflow) if workflow is not None else None
                 if policy is None:
                     _mark_stage_policy_attention(
-                        connection, step["workflow_id"], "unknown_stage_policy"
+                        connection,
+                        step["workflow_id"],
+                        _workflow_policy_attention_reason(workflow) or "unknown_stage_policy",
                     )
                     continue
                 if not _stage_is_enabled(policy, step["kind"]):

@@ -398,10 +398,8 @@ def test_schema_v24_failure_rolls_back_lifecycle_install_and_retries(tmp_path, m
         ).fetchone() == (2,)
 
 
-def test_schema_v24_disposable_upgrade_keeps_maintenance_format_knowledge_and_refuses_old_source(
-    tmp_path, monkeypatch
-):
-    """A real v24-shaped disposable copy upgrades additively and stays fenced."""
+def test_schema_v24_fixture_keeps_format_knowledge_and_refuses_old_source(tmp_path, monkeypatch):
+    """A reconstructed v24-shaped disposable copy upgrades additively and stays fenced."""
     data_dir = tmp_path / "v24-stage-policy-data"
     initialize(data_dir)
     database = database_path(data_dir)
@@ -412,6 +410,7 @@ def test_schema_v24_disposable_upgrade_keeps_maintenance_format_knowledge_and_re
             ("processing_preferences", "stage_diarization_enabled"),
             ("processing_preferences", "stage_notes_enabled"),
             ("processing_workflows", "stage_policy_format"),
+            ("processing_workflows", "stage_policy_quarantine_format"),
             ("processing_workflows", "stage_asr_enabled"),
             ("processing_workflows", "stage_diarization_enabled"),
             ("processing_workflows", "stage_notes_enabled"),

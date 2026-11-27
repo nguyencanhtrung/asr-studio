@@ -14,7 +14,10 @@ STAGE_POLICY_FORMAT_VERSION = 1
 LEGACY_STAGE_POLICY_FORMAT = 0
 STAGE_POLICY_FORMATS = frozenset({STAGE_POLICY_FORMAT_VERSION})
 KNOWN_WORKFLOW_POLICY_FORMATS = frozenset({LEGACY_STAGE_POLICY_FORMAT, STAGE_POLICY_FORMAT_VERSION})
-STAGE_ADMISSION_STATES = frozenset({"enabled", "draining", "disabled"})
+# ``draining`` was never a safe persisted runtime mode: it could be mistaken for
+# an admission state while workers were still claiming work.  Drain is represented
+# by the active-task/slot status reported by the operator command instead.
+STAGE_ADMISSION_STATES = frozenset({"enabled", "disabled"})
 STAGE_POLICY_KEYS = frozenset({"asr", "diarization", "notes"})
 
 
