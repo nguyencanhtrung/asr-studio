@@ -1074,7 +1074,13 @@ def get_note_version(data_dir: Path, note_id: str, edit_version: int) -> dict[st
             "markdown": saved["markdown"],
             "edit_version": saved["edit_version"],
             "updated_at": saved["saved_at"],
-            "citations_json": saved["citations_json"],
+            # Legacy rows predate per-Save capture. Retain the revision's known
+            # source map without inventing missing Saves or changing stored history.
+            "citations_json": (
+                revision["citations_json"]
+                if saved["origin"] == "legacy" and saved["citations_json"] is None
+                else saved["citations_json"]
+            ),
         }
         payload = _revision_payload(
             connection,

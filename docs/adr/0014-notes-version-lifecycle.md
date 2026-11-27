@@ -54,3 +54,9 @@ The browser has a small content-free lifecycle state in `notes-core.js` and rend
 in `notes.js`. Rows can be restored independently across revisions without loading Markdown.
 The server owns eligibility, protection, scope, conflict, replay and fault atomicity. Retained
 legacy snapshots remain honestly labelled and do not acquire invented history.
+
+Active legacy fixed views retain the revision's already-known citation map when no per-Save
+map was captured. This is a read fallback, not a history backfill: origin and actor stay legacy,
+missing versions remain missing, and an absent revision map stays empty. Citation rendering
+still requires matching saved text. Trashed and purged views remain content-free and never
+reach this fallback. New AI/operator Saves continue to use their own captured map.
