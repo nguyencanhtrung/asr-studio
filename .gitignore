@@ -16,6 +16,7 @@ build/
 prototype/
 .impeccable/
 reports/
+docs/evidence/
 
 # Generated Transcript evidence stays in external artifact storage.
 /docs/assets/frontend/issue-283/*
