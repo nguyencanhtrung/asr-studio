@@ -2022,9 +2022,11 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     requests = []
     page.on(
         "request",
-        lambda request: requests.append(request)
-        if request.method == "POST" and "/notes-trash" in request.url
-        else None,
+        lambda request: (
+            requests.append(request)
+            if request.method == "POST" and "/notes-trash" in request.url
+            else None
+        ),
     )
     fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
     page.goto(fixed_url)
@@ -2034,9 +2036,9 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     move.click()
     confirmation = page.locator("#notes-trash-confirmation")
     expect(confirmation).to_be_visible()
-    expect(
-        confirmation.locator("#notes-trash-confirmation-items .notes-trash-item")
-    ).to_have_count(1)
+    expect(confirmation.locator("#notes-trash-confirmation-items .notes-trash-item")).to_have_count(
+        1
+    )
     expect(confirmation).to_contain_text(f"Notes revision {note_id}")
     expect(confirmation).to_contain_text("Save version 2")
     assert requests == []
@@ -2091,12 +2093,15 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
     assert all(
         "First fixed two" not in text and "Second fixed two" not in text for text in row_text
     )
-    assert page.evaluate(
-        """() => ({
+    assert (
+        page.evaluate(
+            """() => ({
           scrollWidth: document.documentElement.scrollWidth,
           clientWidth: document.documentElement.clientWidth,
         })"""
-    )["scrollWidth"] <= page.evaluate("document.documentElement.clientWidth") + 1
+        )["scrollWidth"]
+        <= page.evaluate("document.documentElement.clientWidth") + 1
+    )
     for row in rows.all():
         detail = page.request.get(
             f"{live.url}/api/notes/{row.get_attribute('data-note-id')}/versions/2"
@@ -2126,8 +2131,10 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         '[data-edit-version="2"]'
     )
     with page.expect_response(
-        lambda response: response.request.method == "POST"
-        and response.url.endswith(f"/notes-trash/{other_id}/2/restore")
+        lambda response: (
+            response.request.method == "POST"
+            and response.url.endswith(f"/notes-trash/{other_id}/2/restore")
+        )
     ) as restored_response:
         other_restore.click()
     assert restored_response.value.status == 200
@@ -2152,8 +2159,9 @@ def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, mon
     monkeypatch.setenv("ASR_NOTES_LIFECYCLE_FENCE", "1")
     try:
         with page.expect_response(
-            lambda response: response.request.method == "POST"
-            and response.url.endswith("/notes-trash")
+            lambda response: (
+                response.request.method == "POST" and response.url.endswith("/notes-trash")
+            )
         ) as failed_response:
             page.locator("#notes-trash-confirm").click()
         assert failed_response.value.status == 503
