@@ -2124,6 +2124,8 @@ def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set
         "notes-trash-confirmation-check"
     )
     assert page.locator("#notes-trash-confirmation-check").is_visible()
+    for restore in page.locator("#notes-trash-items button[data-trash-restore]").all():
+        expect(restore).to_be_disabled()
     page.locator("#notes-trash-cancel").click()
 
     other_restore = page.locator(
@@ -2173,6 +2175,35 @@ def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, mon
     assert page.evaluate("document.activeElement && document.activeElement.id") == (
         "notes-trash-status"
     )
+
+
+def test_returning_to_notes_refreshes_canceled_trash_read(live, signed_in):
+    _context, page = signed_in()
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, _snapshot, _segments = _seed_saved_notes(data_dir)
+    for version in range(2, 5):
+        update_note(
+            data_dir, note["id"], expected_edit_version=version - 1, markdown=f"# Save {version}\n"
+        )
+    trash_version(
+        data_dir, meeting_id, operation_id="tab-return-trash", note_id=note["id"], edit_version=3
+    )
+    trash_url = f"{live.url}/api/meetings/{meeting_id}/notes-trash"
+    reads = []
+    page.route(trash_url, lambda route: reads.append(route))
+    page.goto(f"{live.url}/meetings/{meeting_id}?notes_revision={note['id']}&notes_edit=2#notes")
+    expect(page.locator("#notes-preview")).to_contain_text("Save 2")
+    assert len(reads) == 1
+    page.locator("#meeting-tab-transcript").click()
+    with page.expect_request(trash_url, timeout=2_000) as fresh:
+        page.locator("#meeting-tab-notes").click()
+    route = next(route for route in reads if route.request == fresh.value)
+    route.fulfill(response=route.fetch(timeout=5_000))
+    page.unroute(trash_url)
+    expect(page.locator("#notes-trash-items .notes-trash-item")).to_have_count(1)
+    expect(page.locator("#notes-trash-items")).to_contain_text("Save version 3")
+    expect(page.locator("#notes-trash-reload")).to_be_enabled()
 
 
 def test_trash_navigation_recovers_reads_and_lost_write_without_duplicate_post(live, signed_in):
@@ -2269,6 +2300,7 @@ def test_trash_navigation_recovers_reads_and_lost_write_without_duplicate_post(l
     status = page.locator("#notes-trash-status")
     expect(status).to_contain_text("Could not confirm the Trash action")
     expect(page.locator("#notes-trash-retry")).to_be_visible()
+    expect(page.locator("#notes-trash-items button[data-trash-restore]")).to_be_disabled()
     assert len(posts) == 1
     with page.expect_request(
         lambda request: request.method == "POST" and request.url == post_url

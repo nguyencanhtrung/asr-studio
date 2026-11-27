@@ -31,11 +31,22 @@ are outside logical-purge guarantees.
 
 ## Compatibility and rollback
 
-The migration is fixture-only additive and keeps foreign keys. A pre-v24 binary refuses a
+The migration is additive and keeps foreign keys; verification uses disposable database
+copies. A pre-v24 binary refuses a
 schema-v24 database. The named compatible rollback build retains the lifecycle-aware read
 paths, hidden/purged responses, normal Save/publication journaling and lifecycle tables, while
 fencing lifecycle mutations. Re-enabling the feature requires a current schema and an explicit
 operator decision; a UI hide flag is not a rollback.
+
+Set `ASR_NOTES_LIFECYCLE_FENCE=1` on every app process in the schema-compatible
+fallback runtime before admitting lifecycle changes. The server rejects new lifecycle
+mutations; reads, ordinary Save and Notes publication retain their version journal.
+Keep schema v24, saved versions, markers, receipts and lifecycle-aware fixed reads/exports.
+Do not lower the schema marker or run an unmodified older binary against this database.
+A binary rollback needs these compatibility changes backported and verified in that build;
+the fence on the current reviewed build is a maintenance fallback, not proof that an older
+release is compatible. Roll forward to a verified compatible build before explicitly
+removing the fence. Permanently purged bodies are not restored by either operation.
 
 ## Consequences
 

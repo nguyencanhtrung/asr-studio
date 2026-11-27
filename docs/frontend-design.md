@@ -712,6 +712,9 @@ thẩm quyền và giữ mutation ở trạng thái chưa biết; không suy ra 
 có hoặc không có trong danh sách. Người dùng có thể xác minh/thử lại rõ ràng bằng đúng
 `operationId` và payload; chỉ receipt POST hợp lệ mới settle. Response cũ hoặc lỗi của A không
 được đổi state, focus, draft, confirmation hay operation identity đang hiển thị của B.
+Quay lại tab Notes khi lịch sử vẫn mở phải đọc lại Trash, kể cả khi không có mutation.
+Các nút restore trong danh sách cũng bị tắt khi kết quả chưa rõ hoặc đang xác nhận purge;
+nút tải lại và retry vẫn phản ánh riêng trạng thái đọc và request có thể xác minh.
 
 **Chỉnh trực tiếp và copy có định dạng (#256).** Projection của core giữ khoảng nguồn cho từng text run. Viết hiển thị heading, đoạn văn, chữ đậm/nghiêng, code nội dòng đơn, danh sách một cấp, bảng có số cột nhất quán và link HTTP(S) có đích cố định. Người dùng sửa phần chữ ngay trong khối đã dựng. Reducer vá phần thay đổi vào khoảng nguồn, giữ delimiter, URL, khoảng trắng và dấu xuống dòng của phần còn lại. Markdown mở textarea đầy đủ để chỉnh cấu trúc, URI, hoặc cú pháp ngoài profile. Khi gặp khối hoặc inline không biểu diễn an toàn, Viết mở textarea và báo lý do. Xem giữ các span/khối chưa hỗ trợ dưới dạng chữ Markdown. Cách ghép chip theo bằng chứng đã lưu và bullet khớp tách khỏi điều kiện mở rich editor.
 

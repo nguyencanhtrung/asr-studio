@@ -833,7 +833,9 @@ function renderTrash(trash) {
   setProp(trashEls.versionStatus, "hidden", !lifecycleMessage);
   setProp(trashEls.itemsTitle, "textContent", t("Các bản Save trong Thùng rác"));
   setProp(trashEls.itemsTitle, "hidden", trash.items.length === 0);
-  renderTrashItems(trashEls.items, trash.items, { restore: true, busy });
+  renderTrashItems(trashEls.items, trash.items, {
+    restore: true, busy: busy || Boolean(mutation?.outcomeUnknown) || Boolean(confirmation?.open),
+  });
   setProp(trashEls.move, "textContent", t("Chuyển bản lưu này vào Thùng rác"));
   setProp(trashEls.restore, "textContent", t("Khôi phục bản lưu này"));
   setProp(trashEls.move, "hidden", !action.visible || !action.canTrash);

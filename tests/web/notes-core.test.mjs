@@ -369,6 +369,23 @@ test("a Trash read is canceled and reissued for the owning meeting after navigat
   assert.equal(env.state().trash.m1.pending, false);
 });
 
+test("Notes tab return refreshes a canceled Trash read without reopening history", async () => {
+  const env = setup();
+  const current = meeting();
+  env.context(current, { href: fixedHref });
+  const first = env.waiting(trashRead)[0];
+  assert.ok(first);
+  env.context(current, {
+    detail: { view: "meeting", meeting: current, tab: "transcript" },
+    href: fixedHref.replace("#notes", "#transcript"),
+  });
+  assert.equal(first.signal.aborted, true);
+  env.context(current, { href: fixedHref });
+  assert.equal(env.waiting(trashRead).length, 1, "returning to the open history must read current Trash");
+  await env.answer(trashRead, 200, trashPayload([]));
+  assert.equal(selectView(env.state()).trash.readPending, false);
+});
+
 test("a detached lifecycle write stays unknown after observation and retries the exact operation only explicitly", () => {
   const mutation = {
     kind: "trash",

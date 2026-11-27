@@ -41,7 +41,8 @@ confirmation, so a version trashed or purged while a preview is open cannot use 
 The UI lists the exact purge set, restores individual rows, keeps keyboard focus on the
 confirmation/status control, and remains readable at narrow widths in both locales/themes.
 
-Migration is fixture-only additive and retains foreign keys. A schema-23 binary refuses a
+The migration is additive and retains foreign keys; upgrade and rollback verification use
+disposable database copies. A schema-23 binary refuses a
 schema-24 database. The compatible rollback build keeps lifecycle-aware hidden/purged reads,
 ordinary Save/publication journaling and the lifecycle tables, but fences lifecycle mutations;
 it does not claim to erase downloaded copies, backups or WAL data. Whole-meeting deletion

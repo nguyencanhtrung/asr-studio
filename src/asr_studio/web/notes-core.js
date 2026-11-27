@@ -3909,7 +3909,8 @@ function meetingContext(state, action) {
   // authoritative context; repeated paints still update local state and lock effects.
   if (changed || previousMeeting !== meeting) result = then(result, (s) => readNotes(s, meetingId));
   if (changed || !result.state.choice.loaded) result = then(result, (s) => loadChoice(s, meetingId));
-  if ((changed || enteringNotes) && trashOf(result.state, meetingId).mutation?.detached) {
+  if ((changed || enteringNotes) && (trashOf(result.state, meetingId).mutation?.detached
+    || (enteringNotes && result.state.savedHistory.open))) {
     result = then(result, (s) => readTrash(s, meetingId));
   }
   // Tab clicks push through History without a popstate event.
@@ -4830,6 +4831,7 @@ function trashView(state) {
       phase: mutation.phase,
       error: mutation.error || "",
       retryable: Boolean(mutation.retryable),
+      outcomeUnknown: Boolean(mutation.outcomeUnknown),
     } : null,
     emptyDisabled: trash.pending || lifecycleMutationBusy(mutation) || trash.count === 0,
     confirmation: trash.confirmation ? {
