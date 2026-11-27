@@ -91,6 +91,44 @@ The CI-equivalent full suite is
 `ASR_RUN_BROWSER_TESTS=1 ASR_REQUIRE_MEDIA_TOOLS=1 .venv/bin/python -m pytest -q`;
 read-only review runs add `PYTHONDONTWRITEBYTECODE=1` and `-p no:cacheprovider`.
 
+## Notes browser checks
+
+When changing Notes sharing, saved-history navigation or meeting-list loading,
+run the existing browser scenarios for those paths before starting the full suite.
+Use the candidate worktree and run the environment preflight first.
+
+```sh
+PYTHONPATH="$PWD/src" ASR_RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest -q \
+  tests/test_browser_notes.py::test_fixed_share_survives_the_delayed_meeting_list \
+  tests/test_browser_notes.py::test_fixed_history_reconciles_latest_on_navigation
+```
+
+## Frozen full pytest run
+
+Prepare the candidate environment with the locked dependencies. Run the full
+pytest lane from its clean worktree, passing the full commit SHA and a fresh
+output directory under an existing external directory.
+
+```sh
+run_dir=$(mktemp -d /tmp/asr-frozen.XXXXXX)
+.venv/bin/python scripts/run-frozen-full-pytest.py "$(git rev-parse HEAD)" \
+  "$run_dir/candidate"
+```
+
+The runner verifies the candidate import and clean checkout, runs preflight,
+and verifies the checkout again after pytest returns. It writes logs and
+atomically publishes `result.json`. Only `status: pass` with `pytest_exit: 0`
+and `after_state_verified: true` confirms a passing run. Keep the checkout
+unchanged during the run. If the result is absent, inspect the run and its logs
+before deciding whether to retry.
+
+## Generated evidence
+
+The quality workflow checks additions and modifications under `docs/evidence/`
+on PRs and pushes to main. Put generated logs, screenshots and rehearsal
+artifacts outside Git. Keep maintained fixtures and test baselines in their
+dedicated source directories. Deleting old evidence remains allowed.
+
 ## Delegated checks
 
 - A Codex worker runs pytest and browser tests with escalation from the start, under a
