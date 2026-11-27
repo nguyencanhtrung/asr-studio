@@ -245,7 +245,9 @@ def test_schema_v24_preserves_populated_v22_notes_pins_and_transcript(tmp_path):
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         after = _migration_fixture_snapshot(connection)
-        assert after["versions"] == before["versions"] + [(23,), (24,)]
+        assert after["versions"] == before["versions"] + [
+            (version,) for version in range(23, SCHEMA_VERSION + 1)
+        ]
         assert after["meeting"] == before["meeting"]
         assert after["generation"] == before["generation"]
         assert after["segment"] == before["segment"]
@@ -348,7 +350,9 @@ def test_schema_v23_failure_rolls_back_new_schema_and_allows_clean_retry(tmp_pat
     initialize(data_dir)
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (24,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (
+            SCHEMA_VERSION,
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("SELECT COUNT(*) FROM transcript_edit_events").fetchone() == (0,)
         assert connection.execute("SELECT COUNT(*) FROM transcript_segment_reviews").fetchone() == (
@@ -383,7 +387,9 @@ def test_schema_v24_failure_rolls_back_lifecycle_install_and_retries(tmp_path, m
     monkeypatch.setattr(storage_module, "_install_notes_lifecycle", real_install)
     initialize(data_dir)
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (24,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (
+            SCHEMA_VERSION,
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
             "SELECT COUNT(*) FROM notes_saved_versions WHERE note_id = 'migration-note'"
@@ -440,6 +446,7 @@ def test_sqlite_persists_across_reopen_with_current_domain_schema(tmp_path):
         "processing_steps",
         "processing_attempts",
         "processing_outbox",
+        "processing_cutover_gate",
     }
     assert sorted(versions) == list(range(1, SCHEMA_VERSION + 1))
     with sqlite3.connect(database) as connection:

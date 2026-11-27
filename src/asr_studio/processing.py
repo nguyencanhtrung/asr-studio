@@ -31,6 +31,15 @@ from asr_studio.diarization_runner import (
 from asr_studio.notes_document import PROMPT_VERSION, SCHEMA_VERSION
 from asr_studio.runner import ModelConfigurationError, prepared_engine_directory
 from asr_studio.service_runtime import acquire_service_lock, write_service_heartbeat
+from asr_studio.stage_policy import (
+    STAGE_POLICY_CONTRACT_VERSION,
+    STAGE_POLICY_FORMAT_VERSION,
+    StagePolicyValidationError,
+    admission_from_row,
+    policy_from_row,
+    validate_policy_values,
+)
+from asr_studio.stage_policy import capabilities as stage_policy_capabilities
 from asr_studio.storage import database_path
 from asr_studio.updates import admit_work
 
@@ -142,6 +151,86 @@ def _preferences_payload(row: sqlite3.Row) -> dict[str, object]:
 def processing_preferences(data_dir: Path) -> dict[str, object]:
     with _connect(data_dir) as connection:
         return _preferences_payload(_prefs_row(connection))
+
+
+def _stage_policy_payload(preferences: sqlite3.Row, gate: sqlite3.Row) -> dict[str, object]:
+    format_version = int(preferences["stage_policy_format"])
+    admission = admission_from_row(gate)
+    if format_version != STAGE_POLICY_FORMAT_VERSION:
+        admission = {
+            "state": "disabled",
+            "reason": "unknown_stage_policy_format",
+            "format_version": format_version,
+        }
+    return {
+        "contract_version": STAGE_POLICY_CONTRACT_VERSION,
+        "format_version": format_version,
+        "preference_version": int(preferences["version"]),
+        "policy": policy_from_row(preferences),
+        "admission": admission,
+        "updated_at": preferences["updated_at"],
+    }
+
+
+def _stage_policy_gate(connection: sqlite3.Connection) -> sqlite3.Row:
+    row = connection.execute("SELECT * FROM processing_cutover_gate WHERE id = 1").fetchone()
+    if row is None:
+        raise RuntimeError("processing cutover gate is not initialized")
+    return row
+
+
+def processing_stage_policy(data_dir: Path) -> dict[str, object]:
+    with _connect(data_dir) as connection:
+        return _stage_policy_payload(_prefs_row(connection), _stage_policy_gate(connection))
+
+
+def processing_stage_capabilities(data_dir: Path) -> dict[str, object]:
+    with _connect(data_dir) as connection:
+        gate = _stage_policy_gate(connection)
+    return stage_policy_capabilities(admission=admission_from_row(gate))
+
+
+def save_processing_stage_policy(
+    data_dir: Path,
+    *,
+    expected_preference_version: object,
+    format_version: object,
+    asr: object,
+    diarization: object,
+    notes: object,
+) -> dict[str, object]:
+    expected = _validate_preferences_version(expected_preference_version)
+    try:
+        policy = validate_policy_values(
+            format_version=format_version,
+            asr=asr,
+            diarization=diarization,
+            notes=notes,
+        )
+    except StagePolicyValidationError as error:
+        raise ProcessingError(400, error.code, error.message) from None
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        updated = connection.execute(
+            "UPDATE processing_preferences SET stage_policy_format = ?, "
+            "stage_asr_enabled = ?, stage_diarization_enabled = ?, stage_notes_enabled = ?, "
+            "version = version + 1, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = 1 AND version = ?",
+            (
+                policy["format_version"],
+                int(policy["asr"]),
+                int(policy["diarization"]),
+                int(policy["notes"]),
+                expected,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise ProcessingError(
+                409,
+                "stage_policy_changed",
+                "Stage policy changed; reload and try again.",
+            )
+        return _stage_policy_payload(_prefs_row(connection), _stage_policy_gate(connection))
 
 
 def validate_processing_preferences(

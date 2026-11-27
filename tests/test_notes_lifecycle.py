@@ -28,7 +28,7 @@ from asr_studio.notes_lifecycle import (
     restore_version,
     trash_version,
 )
-from asr_studio.storage import database_path, initialize
+from asr_studio.storage import SCHEMA_VERSION, database_path, initialize
 from asr_studio.tasks import TaskError
 
 
@@ -458,7 +458,9 @@ def test_schema_v24_reopen_and_old_binary_refusal(tmp_path, monkeypatch):
     initialize(data_dir)
     initialize(data_dir)
     with sqlite3.connect(database_path(data_dir)) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (24,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (
+            SCHEMA_VERSION,
+        )
     monkeypatch.setattr(storage_module, "SCHEMA_VERSION", 23)
     with pytest.raises(RuntimeError, match="schema is newer"):
         initialize(data_dir)

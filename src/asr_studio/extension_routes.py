@@ -41,6 +41,7 @@ from asr_studio.extension_ingest import (
     get_recording_session,
     record_recording_interruption,
 )
+from asr_studio.processing import processing_stage_capabilities
 
 _JSON_BODY_BYTES = 4 * 1024
 _CREATE_BODY_BYTES = 64 * 1024
@@ -241,6 +242,7 @@ def install_extension_routes(
             return _error(error)
         except Exception:
             return _internal_error()
+        stage_policy = await run_in_threadpool(processing_stage_capabilities, settings.data_dir)
         return {
             "protocol": EXTENSION_PROTOCOL,
             "api_version": EXTENSION_API_VERSION,
@@ -251,7 +253,11 @@ def install_extension_routes(
             "server_urls": list(settings.extension_server_urls),
             "web_url": settings.public_url,
             "endpoint": "/api/extension/v1",
-            "features": {"resumable_upload": True, "raw_receipt": True},
+            "features": {
+                "resumable_upload": True,
+                "raw_receipt": True,
+                "stage_policy": stage_policy,
+            },
             "limits": {
                 "pairing_code_seconds": 600,
                 "session_seconds": 900,
