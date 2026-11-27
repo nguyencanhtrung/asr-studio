@@ -622,9 +622,11 @@ Callback remote là một effect nhập liệu có giới hạn, không phải m
 
 Core `notes-core.js` (`initialState`, `reduce`, `selectView`, `hasUnsavedDraft` và các hàm thuần: nhãn, thông báo lỗi, chuẩn hóa request, `sourceReference`, `sourceFromHref`), view `notes.js` (store riêng; render, handler chỉ dispatch). `notes.js` là `<script type="module">` đứng sau `history.js` và trước `connections.js`; nó import `meetingHistory` của `history.js` (nên `history.js` chạy trước và đã báo context đầu tiên) và đăng ký hai store của `channel.js` (11.12). Văn bản trong core là `{text, params}`; view dịch bằng `t()`; chuỗi trần là lời của máy chủ.
 
-**State** (`state`): `mode` (`view`/`rich`/`write`), `hidden` (trang ở nền), `origin`, `view`, `meetingId`, `meeting` (object của `history.js`), `transcribing`, `speakerNames` (tên người nói mặc định, đi cùng context), `choice` (lựa chọn provider: `loaded`, `loadedFor`, `loading`, `loadId`, `load` {pha tải}, `localProvider`, `preferences`, `status`, `catalogs`, `catalogErrors`, `saving`, `saveId`, `message`, `open`), `notes[meetingId]` (`revisions`, `task`, `sourceLocked`, `sourceLockKnown`, `known`, `selectedNoteId`, `starting`, `cancelingTaskId`, `saving[revisionId]`, `readError`, `runError`, `runErrorUncertain`, `regenerateCorrection`, `actionMessage`), `drafts[revisionId]` (`value`, `baselineMarkdown`, `expectedEditVersion`, `conflict`), `outputLanguages`, `pending[meetingId]` (request chờ trả lời), `taskSteps[taskId]`, `snapshots`, `readId`, `selectionId`, `activeTab`, `previewContextId`, `previewLoading`, `copyPreview`, `poll` {`token`, `scheduled`}, `source` {`id`, `key`, `current`, `visible`, `status`, `focus`}.
+**State** (`state`): `mode` (`view`/`rich`/`write`), `hidden` (trang ở nền), `origin`, `view`, `meetingId`, `meeting` (object của `history.js`), `transcribing`, `speakerNames` (tên người nói mặc định, đi cùng context), `choice` (lựa chọn provider: `loaded`, `loadedFor`, `loading`, `loadId`, `load` {pha tải}, `localProvider`, `preferences`, `status`, `catalogs`, `catalogErrors`, `saving`, `saveId`, `message`, `open`), `notes[meetingId]` (`revisions`, `task`, `sourceLocked`, `sourceLockKnown`, `known`, `selectedNoteId`, `starting`, `cancelingTaskId`, `saving[revisionId]`, `readError`, `runError`, `runErrorUncertain`, `regenerateCorrection`, `actionMessage`), `trash[meetingId]` (content-free `items`, `digest`, `pending`, `mutation`, `confirmation` and last status), `drafts[revisionId]` (`value`, `baselineMarkdown`, `expectedEditVersion`, `conflict`), `outputLanguages`, `pending[meetingId]` (request chờ trả lời), `taskSteps[taskId]`, `snapshots`, `readId`, `selectionId`, `activeTab`, `previewContextId`, `previewLoading`, `copyPreview`, `poll` {`token`, `scheduled`}, `source` {`id`, `key`, `current`, `visible`, `status`, `focus`}.
 
 **Id chống response cũ.** `readId` và `poll.token` bảo vệ lượt đọc danh sách. `choice.loadId`, `choice.saveId` và `source.id` bảo vệ luồng lựa chọn và mở nguồn tương ứng. Mỗi lần đổi meeting hoặc revision (kể cả đổi đi rồi quay lại) tăng `selectionId` và hủy các request `notes/authoritative/copy`, `notes/authoritative/export` và `notes/authoritative/preview`. History gửi tab đang chọn qua context hiện có. Rời Notes tăng `previewContextId`, đóng dialog và chỉ hủy lượt đọc preview. Reducer kiểm tra id trước khi dùng kết quả hoặc lỗi, kể cả lỗi hết phiên. Hai action copy plain và export Markdown có key riêng.
+
+Mỗi lượt đọc authoritative còn có chủ sở hữu theo `effect key`, `requestId` và `lifecycleEpoch`; ACK của Restore/Trash làm nghỉ lượt đọc đã lỗi thời và hủy effect của nó, không tự dùng lại câu trả lời cũ hoặc tự copy. Cờ `previewLoading`, `copyPreview.copying` và dòng trạng thái copy/xuất được settle về lỗi có thể thử lại; chỉ một action Copy mới tạo `requestId` và GET mới. Copy plain và Export vẫn hoàn tất độc lập nếu cùng lựa chọn và lifecycle còn hợp lệ; chủ sở hữu dòng trạng thái không được loại bỏ effect của action khác. Khi ACK cần làm mới snapshot Trash đang chờ, lượt đọc mới thay thế lượt cũ (kể cả khi `pending` đã tồn tại), để producer không giữ lại snapshot trước mutation.
 
 **Vào trang và đọc notes**:
 
@@ -686,8 +688,46 @@ Core `notes-core.js` (`initialState`, `reduce`, `selectView`, `hasUnsavedDraft` 
 | sạch, tab Notes còn hiệu lực | đọc preview thành công | giữ note ID, edit version, Markdown và các khối đã dựng | mở dialog |
 | preview đang mở | `preview-copy-clicked` | giữ preview đã chốt trong khi chép | `call copyFormatted` với HTML và Markdown |
 | preview đang mở | rời tab Notes hoặc đổi revision/meeting | đóng và bỏ preview | hủy lượt đọc tương ứng |
+| fixed Save đang active và đủ điều kiện | `trash-version-requested` | mở xác nhận đúng note/version; chưa có POST | focus nút xác nhận |
+| xác nhận move còn đúng và active | `trash-version-confirmed` | `mutation = pending` với note/version đã chốt | `POST /api/meetings/{id}/notes-trash` |
+| Trash có item | `empty-trash-requested` | mở xác nhận chứa đúng danh sách content-free | focus checkbox; thay đổi digest hủy xác nhận |
+| xác nhận empty đã check và digest/set còn đúng | `empty-trash-confirmed` | `mutation = pending` với exact identity set | `POST /api/meetings/{id}/notes-trash/empty` |
+| mutation lifecycle thành công hoặc lỗi | response/failure | xóa pending; đọc lại Trash; status nhận focus (`tabindex=-1`) | restore row giữ transition ID; lỗi cho phép retry |
 | bất kỳ | `mode-chosen` | `mode` | `storage` ghi localStorage |
 | bất kỳ | `revision-picked` | `selectedNoteId`, xóa thông báo | |
+
+**Notes lifecycle và Trash (#275).** `trash[meetingId]` chỉ giữ identity, provenance tối thiểu,
+timestamp, fixed href và transition ID; không chứa Markdown/citations. `items` là toàn bộ các
+version đủ điều kiện trong meeting, không chỉ revision đang chọn. View dựng row có link cố định
+và nút restore chính xác; confirmation empty dựng lại cùng tập row để người dùng kiểm tra trước
+purge. `copyPreview` vẫn buộc đọc lại exact version khi bấm xác nhận, nên lifecycle epoch và
+response cũ không thể đưa nội dung cached ra clipboard/email. Khi thay row làm mất focus, render
+đưa focus về vùng status thật sự focusable; không dựa vào `focus()` trên phần tử không có
+`tabindex`.
+
+Trash uses the same `revisions` array and ordinal label as the saved-revision selector. The core
+matches each content-free Trash item by its exact `note_id`, then adds the human revision label,
+Save version and saved timestamp for the view. While the Notes list is pending, the view says that
+the saved Notes details are loading. If the list is known and has no matching revision, the view
+says that the details are unavailable. Neither fallback invents an ordinal or displays the internal
+ID as primary text. The ID remains in row data, fixed links, lifecycle requests and confirmation
+identity sets. The row render key includes the derived label and document locale so metadata arrival
+and locale changes replace stale visible labels. When that replacement removes a focused row action,
+the view restores focus to the same revision, Save and fixed link or trash transition, only if that
+action remains enabled. Focus elsewhere stays unchanged.
+
+**Chủ sở hữu và vòng đời điều hướng (#275-R275-4).** `trash[meetingId]` là chủ sở hữu của từng
+lượt đọc và mutation; `readId` và `mutationId` nhận diện attempt, còn effect key có thêm
+`meetingId` để hủy đúng cuộc họp. Khi rời Notes hoặc đổi cuộc họp, lượt đọc đang chờ bị hủy,
+`pending` được hạ và tăng `readId`; mutation đang bay giữ nguyên `operationId` và payload nhưng
+đổi attempt fence, không tự POST lại. Khi quay lại, GET Trash chỉ cập nhật danh sách hiện tại có
+thẩm quyền và giữ mutation ở trạng thái chưa biết; không suy ra thành công lịch sử từ việc item
+có hoặc không có trong danh sách. Người dùng có thể xác minh/thử lại rõ ràng bằng đúng
+`operationId` và payload; chỉ receipt POST hợp lệ mới settle. Response cũ hoặc lỗi của A không
+được đổi state, focus, draft, confirmation hay operation identity đang hiển thị của B.
+Quay lại tab Notes khi lịch sử vẫn mở phải đọc lại Trash, kể cả khi không có mutation.
+Các nút restore trong danh sách cũng bị tắt khi kết quả chưa rõ hoặc đang xác nhận purge;
+nút tải lại và retry vẫn phản ánh riêng trạng thái đọc và request có thể xác minh.
 
 **Chỉnh trực tiếp và copy có định dạng (#256).** Projection của core giữ khoảng nguồn cho từng text run. Viết hiển thị heading, đoạn văn, chữ đậm/nghiêng, code nội dòng đơn, danh sách một cấp, bảng có số cột nhất quán và link HTTP(S) có đích cố định. Người dùng sửa phần chữ ngay trong khối đã dựng. Reducer vá phần thay đổi vào khoảng nguồn, giữ delimiter, URL, khoảng trắng và dấu xuống dòng của phần còn lại. Markdown mở textarea đầy đủ để chỉnh cấu trúc, URI, hoặc cú pháp ngoài profile. Khi gặp khối hoặc inline không biểu diễn an toàn, Viết mở textarea và báo lý do. Xem giữ các span/khối chưa hỗ trợ dưới dạng chữ Markdown. Cách ghép chip theo bằng chứng đã lưu và bullet khớp tách khỏi điều kiện mở rich editor.
 

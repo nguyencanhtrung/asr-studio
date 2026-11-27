@@ -932,3 +932,29 @@ def test_group_projection_switches_with_notes_revision(live, signed_in):
     page.locator("#meeting-tab-notes").click()
     page.locator("#notes-revision-selector").select_option(second["id"])
     expect(page.locator(CHIP).filter(has_text="2 đoạn")).to_have_count(0)
+
+
+def test_legacy_fixed_view_retains_known_citation_chips_after_upgrade(live, signed_in):
+    from test_notes_history import _legacy_schema
+
+    from asr_studio.notes import get_note, update_note
+    from asr_studio.storage import initialize
+
+    meeting_id, revision, _source, _segments = seed_cited_notes(live.settings.data_dir)
+    original = get_note(live.settings.data_dir, revision["id"])
+    assert original["display_citations"]
+    update_note(
+        live.settings.data_dir,
+        revision["id"],
+        expected_edit_version=1,
+        markdown=original["markdown"] + "\n\nOperator footnote.\n",
+    )
+    _legacy_schema(live.settings.data_dir)
+    initialize(live.settings.data_dir)
+    _context, page = signed_in(viewport=NARROW)
+    open_notes(live, page, meeting_id, f"?notes_revision={revision['id']}&notes_edit=2#notes")
+    expected_chips = sum(len(item["sources"]) for item in original["display_citations"])
+    expect(page.locator(CHIP)).to_have_count(expected_chips)
+    for chip in page.locator(CHIP).all():
+        assert "notes_source=" in chip.get_attribute("href")
+    assert page.evaluate(OVERFLOW) <= 1

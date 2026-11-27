@@ -7,7 +7,12 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
-from notes_helpers import StubNotesProvider, rerun_transcript, seed_completed_transcript
+from notes_helpers import (
+    StubNotesProvider,
+    rerun_transcript,
+    seed_cited_notes,
+    seed_completed_transcript,
+)
 from test_transcription_api import _authorize
 
 from asr_studio import notes
@@ -396,3 +401,50 @@ async def test_original_detail_and_export_keep_the_saved_markdown_and_citations(
     assert saved["citations"] == (citations or [])
     assert saved["display_citations"] == display_citations
     assert saved["warnings"] == warnings
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("with_citations", [True, False], ids=["known-citations", "uncited"])
+async def test_legacy_fixed_links_keep_known_citations_without_inventing_history(
+    client, settings, with_citations
+):
+    data_dir = settings.data_dir
+    headers = await _authorize(client, settings)
+    _meeting, revision, _source, _segments = seed_cited_notes(
+        data_dir, with_citations=with_citations
+    )
+    original = get_note(data_dir, revision["id"])
+    assert bool(original["citations"]) is with_citations
+    markdown = original["markdown"] + "\n\nOperator footnote.\n"
+    update_note(data_dir, revision["id"], expected_edit_version=1, markdown=markdown)
+    _legacy_schema(data_dir)
+    initialize(data_dir)
+    root = f"/api/notes/{revision['id']}"
+
+    async def assert_retained_version():
+        response = await client.get(f"{root}/versions/2")
+        assert response.status_code == 200
+        saved = response.json()
+        assert saved["origin"] == saved["actor_role"] == "legacy"
+        assert saved["markdown"] == markdown
+        assert saved["source_snapshot_id"] == revision["source_snapshot_id"]
+        assert saved["citations"] == original["citations"]
+        assert saved["display_citations"] == original["display_citations"]
+        assert (await client.get(f"{root}/versions/2/export")).text == markdown
+        assert (await client.get(f"{root}/versions/1")).status_code == 404
+
+    await assert_retained_version()
+    versions = (await client.get(f"{root}/versions")).json()["versions"]
+    assert [(row["edit_version"], row["origin"]) for row in versions] == [(2, "legacy")]
+    saved = await client.patch(
+        root,
+        headers=headers,
+        json={"expected_edit_version": 2, "markdown": markdown + "Later Save.\n"},
+    )
+    assert saved.status_code == 200
+    await assert_retained_version()
+    versions = (await client.get(f"{root}/versions")).json()["versions"]
+    assert [(row["edit_version"], row["origin"]) for row in versions] == [
+        (2, "legacy"),
+        (3, "operator"),
+    ]

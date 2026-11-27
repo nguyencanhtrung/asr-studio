@@ -11,7 +11,14 @@ from pathlib import Path
 from asr_studio.notes_history import install_notes_history
 from asr_studio.transcript_history import install_transcript_history
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
+
+
+def _install_notes_lifecycle(connection: sqlite3.Connection) -> None:
+    """Load the v24 installer lazily to keep storage's migration imports acyclic."""
+    from asr_studio.notes_lifecycle import install_notes_lifecycle
+
+    install_notes_lifecycle(connection)
 
 
 def _migrate_v2(connection: sqlite3.Connection) -> None:
@@ -1103,6 +1110,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 23:
             install_transcript_history(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (23)")
+        if current_version < 24:
+            _install_notes_lifecycle(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (24)")
         connection.commit()
     finally:
         connection.close()

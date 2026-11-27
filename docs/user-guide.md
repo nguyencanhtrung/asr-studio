@@ -972,6 +972,26 @@ version and keeps the old versions.
 - If edited Markdown has a source link that does not match the snapshot, the app saves it
   unchanged and returns `warnings`. **View** shows the link as text with a warning.
 
+### Notes Trash
+
+Open **Save history** on a fixed saved version to see the **Notes Trash** for the whole meeting.
+The list includes eligible older Saves from every Notes revision. Each row shows the revision,
+Save version, saved/trash time, its fixed link and an exact **Restore** action; Markdown and
+citations are hidden while a version is in Trash. The AI original and newest Save of each
+revision are protected and do not appear as eligible Trash rows.
+
+Moving a Save to Trash opens a confirmation for that exact revision and version. **Empty trash**
+opens a confirmation listing the exact versions that will be permanently removed. The server
+checks the meeting, lifecycle transition and current Trash set again before changing anything;
+if another tab changed the set, reload and confirm again. Restore returns the same saved
+Markdown, citations, actor/time metadata and fixed link. A fixed link remains content-free
+after permanent purge.
+
+Copy, formatted copy, email preview and Markdown download re-read a fixed version at the moment
+of the action. If it was trashed or purged after a preview opened, no cached content is copied
+or exported. Empty Trash never removes recordings, transcript sources or media. Retained
+database backups, downloaded files and SQLite WAL data are outside logical purge guarantees.
+
 ### Citations
 
 Each notes revision stores citations in `notes_revisions.citations_json` (schema v10). For each
