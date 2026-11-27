@@ -480,11 +480,13 @@ function overallText(workflow) {
 function sourceText(source, workflow = null) {
   if (!source) return null;
   if (source.generation_id === null && source.source_version === null) {
-    return t(stageEnabled(workflow, "asr")
-      ? "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc."
-      : "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận nguồn hiện tại.", {
-      metadata: source.metadata_version,
-    });
+    return stageEnabled(workflow, "asr")
+      ? t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc.", {
+        metadata: source.metadata_version,
+      })
+      : t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận nguồn hiện tại.", {
+        metadata: source.metadata_version,
+      });
   }
   if (!stageEnabled(workflow, "asr")) {
     return t("Nguồn đã chọn · nội dung phiên bản {source} · thông tin cuộc họp phiên bản {metadata}", {

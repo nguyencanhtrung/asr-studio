@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
 import {
   initialState,
@@ -7,6 +9,29 @@ import {
   selectProcessing,
   shouldRenderAutomaticStatus,
 } from "../../src/asr_studio/web/processing-core.js";
+
+const i18nScript = readFileSync(new URL("../../src/asr_studio/web/i18n.js", import.meta.url), "utf8");
+
+function storage(entries = {}) {
+  const values = new Map(Object.entries(entries));
+  return {
+    get length() { return values.size; },
+    key: (index) => [...values.keys()][index] ?? null,
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+}
+
+function englishTranslator() {
+  const context = vm.createContext({
+    window: { localStorage: storage({ "asr-studio:lang": "en" }), sessionStorage: storage() },
+    document: { documentElement: {}, addEventListener() {} },
+  });
+  vm.runInContext(`${i18nScript}\nglobalThis.__translator = { t, UI_LOCALE };`, context);
+  assert.equal(context.__translator.UI_LOCALE, "en-US");
+  return context.__translator;
+}
 
 const workflow = (overrides = {}) => ({
   id: "workflow-1",
@@ -306,6 +331,33 @@ test("metadata-only source adoption posts paired null generation and source vers
     response: { body: workflow({ epoch: 4, current_source: metadataOnly.current_source }) },
   });
   assert.equal(changed.state.notice, null);
+});
+
+test("metadata-only source text translates both ASR branches with the actual English translator", () => {
+  const translator = englishTranslator();
+  const expected = [
+    [true, "Meeting details only · revision 7. Confirm to transcribe the original recording."],
+    [false, "Meeting details only · revision 7. Confirm the current source."],
+  ];
+  const actual = [];
+  for (const [asr] of expected) {
+    const state = reduce(initialState, {
+      type: "history/meeting-loaded",
+      meta: { loadId: 1 },
+      response: {
+        body: {
+          id: "meeting-1",
+          processing: workflow({
+            stage_policy: { format_version: 1, asr, diarization: false, notes: false },
+            current_source: { generation_id: null, source_version: null, metadata_version: 7, notes_source_version: 1 },
+          }),
+        },
+      },
+    }).state;
+    const source = selectProcessing(state).source;
+    actual.push(translator.t(source.text, source.params));
+  }
+  assert.deepEqual(actual, expected.map(([, text]) => text));
 });
 
 test("source adoption rejects a mixed null generation/source pair before posting", () => {

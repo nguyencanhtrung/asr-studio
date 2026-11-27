@@ -1390,6 +1390,8 @@ const { t, UI_LOCALE } = (() => {
       "Đã áp dụng cài đặt đang hiển thị cho workflow này.": "The displayed settings were applied to this workflow.",
       "Đã áp dụng nguồn transcript đang hiển thị. Notes sẽ dùng phiên bản đã xác nhận.": "The displayed transcript source was applied. Notes will use the confirmed version.",
       "Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.": "Meeting details confirmed. Automatic ASR will transcribe the original recording.",
+      "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc.": "Meeting details only · revision {metadata}. Confirm to transcribe the original recording.",
+      "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận nguồn hiện tại.": "Meeting details only · revision {metadata}. Confirm the current source.",
       "Xác nhận thông tin cuộc họp": "Confirm meeting details",
       "Cuộc họp đang chờ xóa; không thể đổi workflow lúc này.": "The meeting is pending deletion; its workflow cannot be changed now.",
       "Cài đặt xử lý đã thay đổi. Hãy tải lại rồi xác nhận lại.": "The processing settings changed. Reload and confirm them again.",
