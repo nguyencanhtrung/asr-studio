@@ -1,11 +1,13 @@
-# Future Extension stage policy (#267)
+# Extension stage policy (#267, #277)
 
-Status: maintained design and compatibility contract. This document describes the
-future Extension-only recipe and the checks that must precede its enablement. It does
-not add switches, endpoints, migrations, runtime admission, provider calls, or UI
-claims that the new recipe is already available. Those changes belong to [#277](https://github.com/nguyencanhtrung/asr-studio/issues/277).
+Status: maintained design and compatibility contract. The #277 backend contract
+checkpoint adds additive storage, the authenticated versioned stage-preference API,
+capability format knowledge, and the persisted fail-closed admission gate. Runtime
+execution remains fenced until the compatible worker/scheduler cutover is complete;
+this document does not claim that a disabled gate is runtime readiness.
 
-The current baseline is main at PR289 (`19ee38f`, #266). The contract is refreshed
+The current baseline is the #277 contract checkpoint (`8c1df7a`, backend author
+worktree). The contract is refreshed
 against the current implementation of [Extension ingest](../src/asr_studio/extension_ingest.py),
 [processing](../src/asr_studio/processing.py), [Notes](../src/asr_studio/notes.py), and
 [transcript history/review](../src/asr_studio/transcript_edits.py). The current
@@ -20,7 +22,7 @@ manual diarization capability is the #261 rerun contract in
 | File import, auto-ASR unchecked | Media is saved and manual Start remains available. | Unchanged, even when a future Extension ASR choice is on. |
 | Browser choice and meeting options | `asr-studio:auto-transcribe`, the selected ASR model, and meeting language remain the import inputs. | Preserve the key, saved choice, model, and language exactly. |
 | Existing Extension sessions, old clients, and existing workflows | Existing all-on stages, pinned recipes, attempts, epochs, source fences, and waiting states remain in force. | Decode absent policy fields as legacy all-on; never rewrite a running snapshot from current preferences. |
-| New capable Extension recording | Current server has no stage-policy admission. | Choose and persist a recipe only for a future recording, at the ready handoff described below. |
+| New capable Extension recording | A capable create may persist only `stage_policy: {format_version: 1}`; stage booleans are not client input. | Choose and persist the current preference recipe only at the ready handoff described below. The v1 gate currently reports `disabled / execution_not_ready`. |
 
 The future default recipe is `{asr: true, diarization: true, notes: true}`. It is
 captured once for a new capable Extension recording; preference edits never silently
@@ -30,10 +32,30 @@ checkbox, ASR model, language, Notes provider/account, or credentials.
 ## Capability negotiation and reverse compatibility
 
 The existing server advertises `resumable_upload` and `raw_receipt` in the capability
-response. `extensions/chrome/protocol.js::bindingFromCapabilities` validates the
-protocol, API version, URLs, backend identity, media, and limits but currently ignores
-the `features` map. `extension_ingest._normalized_create_payload` deliberately rejects
-unknown create fields. This lane therefore makes no client or server protocol change.
+response. The backend now adds `features.stage_policy` with separate format knowledge
+and admission:
+
+```json
+{
+  "contract_version": 1,
+  "format_version": 1,
+  "supported": true,
+  "admission": {
+    "state": "disabled",
+    "reason": "execution_not_ready",
+    "format_version": 1
+  }
+}
+```
+
+The authenticated operator endpoint is `GET`/`PUT
+/api/processing-stage-policy/v1`. Its PUT object is strictly exactly
+`expected_preference_version`, `format_version`, `asr`, `diarization`, and `notes`.
+The response keeps `format_version`, `preference_version`, `execution_epoch` (on a
+workflow), and admission as separate concepts. Existing processing Preferences PUT
+and PATCH field sets remain unchanged. `extension_ingest._normalized_create_payload`
+accepts the optional exact create intent `stage_policy: {format_version: 1}` while an
+omitted field retains the old request fingerprint and legacy all-on meaning.
 
 The future handshake must preserve the legacy create shape and pairing/token schema:
 
@@ -74,19 +96,20 @@ expose these values, but the existing `/api/processing-preferences` PUT/PATCH co
 remain unchanged and are not a stage-policy endpoint.
 
 `Run` below means eligible after the existing readiness, source, slot, and epoch checks;
-it does not guarantee provider or worker success. `Skip` is a proposed terminal state
-projected from a persisted terminal reason and is not implemented by this issue.
+it does not guarantee provider or worker success. `Skip` is projected from the
+persisted terminal reason in the processing-state response; execution remains fenced
+when the admission gate is disabled.
 
-| ASR | Diarization | Notes | ASR | Diarization | Notes |
-| --- | --- | --- | --- | --- | --- |
-| off | off | off | Skip: `disabled_by_recipe` | Skip: `dependency_asr_disabled` | Skip: `dependency_asr_disabled` |
-| off | off | on | Skip: `disabled_by_recipe` | Skip: `dependency_asr_disabled` | Skip: `dependency_asr_disabled` |
-| off | on | off | Skip: `disabled_by_recipe` | Skip: `dependency_asr_disabled` | Skip: `dependency_asr_disabled` |
-| off | on | on | Skip: `disabled_by_recipe` | Skip: `dependency_asr_disabled` | Skip: `dependency_asr_disabled` |
-| on | off | off | Run no-speaker transcript* | Skip: `disabled_by_recipe` | Skip: `disabled_by_recipe` |
-| on | off | on | Run no-speaker transcript* | Skip: `disabled_by_recipe` | Run from that immutable transcript* |
-| on | on | off | Run speaker transcript | Run Community-1 | Skip: `disabled_by_recipe` |
-| on | on | on | Existing full workflow | Run Community-1 | Run from immutable transcript |
+| ASR | Diarization | Notes | Result |
+| --- | --- | --- | --- |
+| off | off | off | ASR and Notes are skipped; media only |
+| off | off | on | ASR and Notes are skipped; media only |
+| off | on | off | ASR and Notes are skipped; media only |
+| off | on | on | ASR and Notes are skipped; media only |
+| on | off | off | ASR-only no-speaker transcript |
+| on | off | on | ASR-only transcript, then Notes |
+| on | on | off | ASR plus Community-1 transcript |
+| on | on | on | Existing full workflow |
 
 ASR-off is media-only: no automatic ASR or Notes task is created, and a later manual
 transcript does not implicitly start Notes. An incomplete capture still requires explicit
@@ -95,7 +118,9 @@ captured ASR mode, not cancellation of ASR. Notes depends on the transcript, not
 labels. A future automatic ASR-on/diarization-off path needs its own capability and
 selected-model readiness; #261's manual `off.ready` does not establish it.
 
-`Skip` must be distinguished from waiting, failure, cancellation, and capability rejection:
+The API projects disabled terminal step reasons as `skipped`; the durable step row
+retains its terminal state and explicit `skipped_*` reason. `Skip` must be
+distinguished from waiting, failure, cancellation, and capability rejection:
 
 | State | Meaning | Required behavior |
 | --- | --- | --- |
@@ -157,11 +182,14 @@ edit. They must assert the correct source/review versions and immutable citation
 
 ## Additive migration and rollback
 
-This issue makes no schema change. #277 may add canonical policy JSON, policy format and
-revision to preferences, plus immutable policy data and terminal reasons to workflows or
-steps. Preserve existing ASR/Notes recipe fields and preference revisions. Existing rows
-with absent policy fields decode as legacy all-on; malformed or unknown policy versions
-fence execution and require attention rather than defaulting to all-on.
+Migration v25 is additive. `processing_preferences` stores the policy format and three
+booleans; `processing_cutover_gate` stores the format-aware admission state; workflows
+and extension sessions store the immutable format marker, and capable sessions retain
+the exact validated create-intent JSON. Preserve existing ASR/Notes recipe fields and
+preference revisions. Existing rows with absent policy fields decode as legacy all-on;
+malformed or unknown policy versions fence execution and require attention rather than
+defaulting to all-on. The current persisted gate is `disabled` with reason
+`execution_not_ready`.
 
 Rollback is a scheduling contract, not an attention label. Before replacing binaries,
 disable new non-all-on writes and ready admission, stop scheduler/requeue/source-adoption
@@ -170,6 +198,12 @@ on both app and worker. Drain or cancel accepted/running work with epoch/attempt
 release only its slot. A compatible rollback build keeps the additive schema, snapshots,
 terminal reasons, format knowledge, and persisted gate, and schedules known all-on work
 only. A pre-migration binary that rejects the newer schema is not a rollback target.
+
+The disposable migration evidence names the current-source compatible maintenance runtime
+`asr-studio-stage-policy-maintenance-v1`: it opens a v24-shaped copy, upgrades it to v25,
+retains v1 format knowledge, and leaves admission `disabled / execution_not_ready`. This
+name is not an old released binary and does not claim that one can open the newer schema;
+the old-source refusal is tested separately after the upgrade.
 
 ## Compatibility fixtures and evidence limits
 
@@ -185,7 +219,7 @@ The maintained compatibility baseline is disposable and synthetic:
   browser choice, model and language handoff. These tests do not exercise Extension stage
   switches or create Extension workflows.
 
-#277 must add disposable fixtures for all eight recipes, policy persistence and stale writes,
+#277 backend evidence now includes disposable fixtures for all eight recipes, policy persistence and stale writes,
 old/new client capability negotiation, receipt pause versus derivative readiness, replay and
 lost tabs, interrupted source confirmation, provider-unset/disconnected/no-fallback behavior,
 worker/model outage, source/review fences, and rollback drain/cancel/claim gates. Browser

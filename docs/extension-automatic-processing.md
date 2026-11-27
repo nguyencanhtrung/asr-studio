@@ -28,6 +28,22 @@ that pair in the workflow defaults without changing provider stores or existing 
 A stale version returns an explicit conflict. The response version is retained and is used when a
 meeting adopts current settings.
 
+Stage policy is a separate, versioned contract. The authenticated operator reads
+`GET /api/processing-stage-policy/v1` and writes exactly
+`expected_preference_version`, `format_version`, `asr`, `diarization`, and `notes` with
+`PUT /api/processing-stage-policy/v1`. The response exposes policy format,
+`preference_version`, and admission separately. The current backend gate is
+`disabled` with reason `execution_not_ready`; this is intentionally not a runtime
+readiness claim. Existing six-field Preferences PUT and four-field Preferences PATCH
+remain unchanged.
+
+The extension capability response exposes the same format knowledge under
+`features.stage_policy`, but does not expose Settings booleans. A capable extension
+pins only the exact create intent `stage_policy: {format_version: 1}` before its first
+recording-session POST. An omitted intent retains the legacy create fingerprint and
+legacy all-on semantics; malformed or unsupported intent is rejected rather than
+downgraded.
+
 ## Meeting status
 
 The meeting page shows a compact automatic-processing panel with separate Transcript and Notes steps. It translates durable waiting and failure reasons such as worker offline, unavailable model, busy slot, unconfigured provider, unavailable provider, changed recipe, and source confirmation required.

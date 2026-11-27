@@ -11,7 +11,9 @@ from typing import Any
 
 STAGE_POLICY_CONTRACT_VERSION = 1
 STAGE_POLICY_FORMAT_VERSION = 1
+LEGACY_STAGE_POLICY_FORMAT = 0
 STAGE_POLICY_FORMATS = frozenset({STAGE_POLICY_FORMAT_VERSION})
+KNOWN_WORKFLOW_POLICY_FORMATS = frozenset({LEGACY_STAGE_POLICY_FORMAT, STAGE_POLICY_FORMAT_VERSION})
 STAGE_ADMISSION_STATES = frozenset({"enabled", "draining", "disabled"})
 STAGE_POLICY_KEYS = frozenset({"asr", "diarization", "notes"})
 
@@ -60,17 +62,54 @@ def validate_intent(value: object) -> int:
     return validate_format_version(value["format_version"])
 
 
+def workflow_policy(
+    *, format_version: object, asr: object, diarization: object, notes: object
+) -> dict[str, object] | None:
+    """Decode a persisted workflow policy, returning ``None`` to quarantine it."""
+    if isinstance(format_version, bool) or not isinstance(format_version, int):
+        return None
+    if format_version == LEGACY_STAGE_POLICY_FORMAT:
+        return {
+            "format_version": LEGACY_STAGE_POLICY_FORMAT,
+            "asr": True,
+            "diarization": True,
+            "notes": True,
+        }
+    if format_version != STAGE_POLICY_FORMAT_VERSION:
+        return None
+    values = (asr, diarization, notes)
+    if any(
+        not (type(value) is bool or (type(value) is int and value in {0, 1})) for value in values
+    ):
+        return None
+    return {
+        "format_version": format_version,
+        "asr": bool(asr),
+        "diarization": bool(diarization),
+        "notes": bool(notes),
+    }
+
+
 def policy_from_row(row: Any) -> dict[str, bool]:
     return {
-        "asr": bool(row["stage_asr_enabled"]),
-        "diarization": bool(row["stage_diarization_enabled"]),
-        "notes": bool(row["stage_notes_enabled"]),
+        "asr": row["stage_asr_enabled"] == 1,
+        "diarization": row["stage_diarization_enabled"] == 1,
+        "notes": row["stage_notes_enabled"] == 1,
     }
 
 
 def admission_from_row(row: Any) -> dict[str, object]:
     state = row["admission"]
-    if state not in STAGE_ADMISSION_STATES:
+    format_version = row["format_version"]
+    response_format_version = format_version if type(format_version) is int else 0
+    if (
+        isinstance(format_version, bool)
+        or not isinstance(format_version, int)
+        or format_version != STAGE_POLICY_FORMAT_VERSION
+    ):
+        state = "disabled"
+        reason = "unknown_admission_format"
+    elif state not in STAGE_ADMISSION_STATES:
         # Unknown persisted gates are fail-closed and never decoded as enabled.
         state = "disabled"
         reason = "unknown_admission_state"
@@ -79,7 +118,7 @@ def admission_from_row(row: Any) -> dict[str, object]:
     return {
         "state": state,
         "reason": reason,
-        "format_version": int(row["format_version"]),
+        "format_version": response_format_version,
     }
 
 
