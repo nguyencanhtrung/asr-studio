@@ -2467,19 +2467,70 @@ function beginLifecycleMutation(state, meetingId, mutation) {
   })]);
 }
 
-function trashVersionRequested(state, action) {
+function trashVersionRequested(state) {
   const meetingId = state.meetingId;
-  const history = state.savedHistory;
+  const savedHistory = state.savedHistory;
   const current = trashOf(state, meetingId);
-  if (!meetingId || current.pending || current.mutation?.phase === "pending" || !versionSelected(state) || !history.detail) return out(state);
-  const item = history.list.find((entry) => entry.edit_version === history.editVersion);
-  if (!canTrashHistoryItem(item, history.latestEditVersion) || lifecycleOf(history.detail) !== "active") return out(state);
+  if (!meetingId || current.pending || current.mutation?.phase === "pending" || !versionSelected(state) || !savedHistory.detail) return out(state);
+  const item = savedHistory.list.find((entry) => entry.edit_version === savedHistory.editVersion);
+  if (!canTrashHistoryItem(item, savedHistory.latestEditVersion) || lifecycleOf(savedHistory.detail) !== "active") return out(state);
+  const target = {
+    note_id: savedHistory.noteId,
+    edit_version: savedHistory.editVersion,
+    transition_id: "",
+    source_id: savedHistory.detail.source_snapshot_id,
+    origin: item.origin,
+    ...(typeof savedHistory.detail.actor_role === "string" ? { actor_role: savedHistory.detail.actor_role } : {}),
+    ...(typeof savedHistory.detail.saved_at === "string" ? { saved_at: savedHistory.detail.saved_at } : {}),
+  };
+  return out(patchTrash(state, meetingId, {
+    confirmation: {
+      kind: "trash-version",
+      open: true,
+      meetingTitle: current.meetingTitle || state.meeting?.title || "",
+      count: 1,
+      digest: "",
+      items: [{ note_id: target.note_id, edit_version: target.edit_version, transition_id: target.transition_id }],
+      target,
+      checked: true,
+      error: "",
+      focus: current.focus + 1,
+    },
+    status: "",
+    error: "",
+  }));
+}
+
+function trashVersionConfirmed(state, action) {
+  const meetingId = state.meetingId;
+  const current = trashOf(state, meetingId);
+  const confirmation = current.confirmation;
+  const savedHistory = state.savedHistory;
+  if (!meetingId || !confirmation?.open || confirmation.kind !== "trash-version"
+    || current.mutation?.phase === "pending") return out(state);
+  const target = confirmation.target;
+  const item = savedHistory.list.find((entry) => entry.edit_version === savedHistory.editVersion);
+  const validTarget = target
+    && savedHistory.noteId === target.note_id
+    && savedHistory.editVersion === target.edit_version
+    && savedHistory.detail
+    && savedHistory.detail.id === target.note_id
+    && savedHistory.detail.edit_version === target.edit_version
+    && lifecycleOf(savedHistory.detail) === "active"
+    && canTrashHistoryItem(item, savedHistory.latestEditVersion);
+  if (!validTarget) {
+    return out(patchTrash(state, meetingId, {
+      confirmation: null,
+      status: t("Dữ liệu đã thay đổi. Hãy tải lại rồi thử lại."),
+      focus: current.focus + 1,
+    }));
+  }
   if (typeof action.operationId !== "string" || !action.operationId) return out(state);
-  return beginLifecycleMutation(state, meetingId, {
+  return beginLifecycleMutation(patchTrash(state, meetingId, { confirmation: null }), meetingId, {
     kind: "trash",
     operationId: action.operationId,
-    noteId: history.noteId,
-    editVersion: history.editVersion,
+    noteId: target.note_id,
+    editVersion: target.edit_version,
     transitionId: "",
     digest: "",
     items: [],
@@ -2518,11 +2569,13 @@ function emptyTrashRequested(state) {
   }));
   return out(patchTrash(state, meetingId, {
     confirmation: {
+      kind: "empty",
       open: true,
       meetingTitle: current.meetingTitle || state.meeting?.title || "",
       count: current.count,
       digest: current.digest,
       items,
+      target: null,
       checked: false,
       error: "",
       focus: current.focus + 1,
@@ -2544,7 +2597,8 @@ function emptyTrashConfirmed(state, action) {
   const meetingId = state.meetingId;
   const current = trashOf(state, meetingId);
   const confirmation = current.confirmation;
-  if (!meetingId || !confirmation?.open || !confirmation.checked || current.mutation?.phase === "pending") return out(state);
+  if (!meetingId || !confirmation?.open || confirmation.kind !== "empty" || !confirmation.checked
+    || current.mutation?.phase === "pending") return out(state);
   if (confirmation.digest !== current.digest || !sameTrashSnapshot(confirmation.items, current.items)) {
     return out(patchTrash(state, meetingId, {
       confirmation: null,
@@ -4137,7 +4191,9 @@ function transition(state, action) {
     case "notes/trash-read-requested":
       return state.meetingId ? readTrash(state, state.meetingId) : out(state);
     case "notes/trash-version-requested":
-      return trashVersionRequested(state, action);
+      return trashVersionRequested(state);
+    case "notes/trash-version-confirmed":
+      return trashVersionConfirmed(state, action);
     case "notes/restore-version-requested":
       return restoreVersionRequested(state, action);
     case "notes/empty-trash-requested":
@@ -4145,6 +4201,7 @@ function transition(state, action) {
     case "notes/empty-trash-checked":
       return emptyTrashChecked(state, action.checked);
     case "notes/empty-trash-cancelled":
+    case "notes/trash-confirmation-cancelled":
       return state.meetingId && trashOf(state).confirmation
         ? out(patchTrash(state, state.meetingId, { confirmation: null }))
         : out(state);
@@ -4641,6 +4698,27 @@ function sourceView(state) {
   };
 }
 
+function trashItemView(state, item) {
+  return {
+    ...item,
+    fixedHref: savedVersionHref(state.meetingId, item.note_id, item.edit_version),
+  };
+}
+
+function trashConfirmationItems(state, trash, confirmation) {
+  if (!confirmation?.open || !Array.isArray(confirmation.items)) return [];
+  const current = new Map(trash.items.map((item) => [trashIdentity(item), item]));
+  return confirmation.items.map((identity) => {
+    const existing = current.get(trashIdentity(identity));
+    if (existing) return trashItemView(state, existing);
+    if (confirmation.kind === "trash-version" && confirmation.target
+      && trashIdentity(confirmation.target) === trashIdentity(identity)) {
+      return trashItemView(state, confirmation.target);
+    }
+    return null;
+  }).filter(Boolean);
+}
+
 function trashView(state) {
   const trash = trashOf(state);
   const history = state.savedHistory;
@@ -4650,6 +4728,8 @@ function trashView(state) {
     && lifecycleOf(detail) === "active";
   const selectedCanRestore = Boolean(detail?.can_restore && detail.transition_id);
   const mutation = trash.mutation;
+  const items = trash.items.map((item) => trashItemView(state, item));
+  const confirmationItems = trashConfirmationItems(state, trash, trash.confirmation);
   return {
     visible: Boolean(history.open),
     meetingId: state.meetingId || "",
@@ -4657,7 +4737,7 @@ function trashView(state) {
     count: trash.count,
     digest: trash.digest,
     readPending: trash.pending,
-    items: trash.items,
+    items,
     error: trash.error,
     status: trash.status,
     mutation: mutation ? {
@@ -4672,12 +4752,16 @@ function trashView(state) {
     } : null,
     emptyDisabled: trash.pending || Boolean(mutation && mutation.phase === "pending") || trash.count === 0,
     confirmation: trash.confirmation ? {
+      kind: trash.confirmation.kind || "empty",
       open: trash.confirmation.open,
       meetingTitle: trash.confirmation.meetingTitle,
       count: trash.confirmation.count,
       checked: trash.confirmation.checked,
       error: trash.confirmation.error,
       focus: trash.confirmation.focus,
+      noteId: trash.confirmation.target?.note_id || "",
+      editVersion: trash.confirmation.target?.edit_version || null,
+      items: confirmationItems,
     } : null,
     versionAction: {
       visible: Boolean(history.open && history.editVersion !== null && history.detail),

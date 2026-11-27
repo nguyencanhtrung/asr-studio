@@ -31,6 +31,7 @@ from asr_studio.notes import (
 )
 from asr_studio.notes_document import render_markdown
 from asr_studio.notes_history import install_notes_history
+from asr_studio.notes_lifecycle import empty_trash, list_trash, trash_version
 from asr_studio.storage import database_path
 from asr_studio.tasks import claim_next_task, finish_canceled_task, transcription_state
 
@@ -1861,8 +1862,7 @@ def test_fixed_share_survives_the_delayed_meeting_list(live, signed_in, kind):
 
     share_reads = []
     detail_endpoint = f"**/api/notes/{note_id}/versions/2"
-    if kind != "email":
-        page.route(detail_endpoint, lambda route: share_reads.append(route))
+    page.route(detail_endpoint, lambda route: share_reads.append(route))
     trigger_id = f"notes-copy-{kind}" if kind in ("rich", "email") else f"notes-{kind}"
     trigger = page.locator(f"#{trigger_id}")
     with page.expect_request(detail_endpoint):
@@ -1870,6 +1870,8 @@ def test_fixed_share_survives_the_delayed_meeting_list(live, signed_in, kind):
     dialog = page.locator("#notes-copy-dialog")
     confirm = dialog.locator("#notes-copy-confirm")
     if kind == "email":
+        assert len(share_reads) == 1
+        share_reads.pop().continue_()
         expect(dialog).to_be_visible()
         confirm.focus()
 
@@ -1893,14 +1895,22 @@ def test_fixed_share_survives_the_delayed_meeting_list(live, signed_in, kind):
         assert page.evaluate("navigator.clipboard.readText()") == fixed
         expect(trigger).to_be_focused()
     else:
+        # The preview read and the confirmation read are deliberately separate. The
+        # production revalidation must remain in place so a version purged while the
+        # dialog is open cannot be copied from cached preview bytes.
         if kind == "rich":
+            assert len(share_reads) == 1
             share_reads.pop().continue_()
         expect(dialog).to_be_visible()
         expect(dialog.locator("#notes-copy-pin")).to_contain_text("edit 2")
         expect(dialog.locator("#notes-copy-document")).to_contain_text("Fixed two")
         if kind == "email":
             expect(confirm).to_be_focused()
-        confirm.click()
+        with page.expect_request(detail_endpoint) as revalidation:
+            confirm.click()
+        assert revalidation.value.url.endswith("/api/notes/" + note_id + "/versions/2")
+        assert len(share_reads) == 1
+        share_reads.pop().continue_()
         expect(dialog.locator("#notes-copy-result")).to_have_text("Formatted content copied.")
         assert page.evaluate("navigator.clipboard.readText()") == fixed
         html = page.evaluate(
@@ -1915,6 +1925,219 @@ def test_fixed_share_survives_the_delayed_meeting_list(live, signed_in, kind):
         page.keyboard.press("Escape")
         expect(dialog).to_be_hidden()
         expect(trigger).to_be_focused()
+
+
+@pytest.mark.parametrize(("kind", "lifecycle"), [("rich", "trashed"), ("email", "purged")])
+def test_fixed_formatted_share_revalidates_after_trash_or_purge(live, signed_in, kind, lifecycle):
+    context, page = signed_in()
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=live.url)
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+
+    data_dir = live.settings.data_dir
+    meeting_id, note, _snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    fixed = "# Fixed two\n\nKeep **these bytes**.\n"
+    update_note(data_dir, note_id, expected_edit_version=1, markdown=fixed)
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# New three\n")
+    fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
+    page.goto(fixed_url)
+    expect(page.locator("#notes-preview")).to_contain_text("Fixed two")
+    page.evaluate("navigator.clipboard.writeText('clipboard sentinel')")
+
+    trigger = page.locator("#notes-copy-rich" if kind == "rich" else "#notes-copy-email")
+    trigger.click()
+    dialog = page.locator("#notes-copy-dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog.locator("#notes-copy-document")).to_contain_text("Fixed two")
+
+    moved = trash_version(
+        data_dir,
+        meeting_id,
+        operation_id=f"browser-share-{kind}-trash",
+        note_id=note_id,
+        edit_version=2,
+    )
+    assert moved["historical_outcome"]["status"] == "succeeded"
+    if lifecycle == "purged":
+        current = list_trash(data_dir, meeting_id)
+        purged = empty_trash(
+            data_dir,
+            meeting_id,
+            operation_id=f"browser-share-{kind}-empty",
+            confirmation_digest=current["digest"],
+            items=[
+                {
+                    "note_id": item["note_id"],
+                    "edit_version": item["edit_version"],
+                    "transition_id": item["transition_id"],
+                }
+                for item in current["items"]
+            ],
+        )
+        assert purged["historical_outcome"]["status"] == "succeeded"
+
+    detail_url = f"**/api/notes/{note_id}/versions/2"
+    with page.expect_response(detail_url) as revalidation:
+        dialog.locator("#notes-copy-confirm").click()
+    assert revalidation.value.ok
+    expect(dialog).to_be_visible()
+    expect(page.locator("#notes-copy-export-status")).to_contain_text(
+        "requested saved Notes version could not be read"
+    )
+    assert page.evaluate("navigator.clipboard.readText()") == "clipboard sentinel"
+
+
+@pytest.mark.parametrize(
+    ("width", "theme", "locale"),
+    [(1440, "light", "en"), (1440, "dark", "vi"), (390, "light", "vi"), (390, "dark", "en")],
+)
+def test_trash_lists_each_revision_with_exact_links_restore_and_confirmation_set(
+    live, signed_in, tmp_path, width, theme, locale
+):
+    context, page = signed_in(viewport={"width": width, "height": 900}, color_scheme=theme)
+    page.add_init_script(f"localStorage.setItem('asr-studio:lang', {json.dumps(locale)})")
+
+    data_dir = live.settings.data_dir
+    meeting_id, note, snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    suffix = meeting_id[:8]
+    update_note(data_dir, note_id, expected_edit_version=1, markdown="# First fixed two\n")
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# First latest three\n")
+
+    second_task = _accept(data_dir, meeting_id, snapshot["generation_id"], request_id=f"second-{suffix}")
+    second_snapshot = get_notes_source(data_dir, _task_source_id(data_dir, second_task["id"]))
+    other = _complete_fake_task(
+        data_dir,
+        second_task["id"],
+        f"second-publish-{suffix}",
+        "# Second revision fixed one\n",
+    )
+    other_id = other["id"]
+    update_note(data_dir, other_id, expected_edit_version=1, markdown="# Second fixed two\n")
+    update_note(data_dir, other_id, expected_edit_version=2, markdown="# Second latest three\n")
+    assert second_snapshot["generation_id"] == snapshot["generation_id"]
+
+    requests = []
+    page.on("request", lambda request: requests.append(request) if request.method == "POST" and "/notes-trash" in request.url else None)
+    fixed_url = f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes"
+    page.goto(fixed_url)
+    expect(page.locator("#notes-preview")).to_contain_text("First fixed two")
+    move = page.locator("#notes-trash-move")
+    expect(move).to_be_visible()
+    move.click()
+    confirmation = page.locator("#notes-trash-confirmation")
+    expect(confirmation).to_be_visible()
+    expect(confirmation.locator("#notes-trash-confirmation-items .notes-trash-item")).to_have_count(1)
+    expect(confirmation).to_contain_text(f"Notes revision {note_id}")
+    expect(confirmation).to_contain_text("Save version 2")
+    assert requests == []
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-confirm"
+    page.locator("#notes-trash-cancel").click()
+    expect(confirmation).to_be_hidden()
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-move"
+
+    with page.expect_response(
+        lambda response: response.request.method == "POST" and response.url.endswith("/notes-trash")
+    ) as moved_response:
+        move.click()
+        page.locator("#notes-trash-confirm").click()
+    assert moved_response.value.status == 200
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-status"
+    assert page.locator("#notes-trash-status").get_attribute("tabindex") == "-1"
+
+    second_move = trash_version(
+        data_dir,
+        meeting_id,
+        operation_id=f"browser-rows-{suffix}",
+        note_id=other_id,
+        edit_version=2,
+    )
+    assert second_move["historical_outcome"]["status"] == "succeeded"
+    page.goto(fixed_url)
+    with page.expect_response(
+        lambda response: response.request.method == "GET" and response.url.endswith("/notes-trash")
+    ) as refreshed_trash:
+        page.locator("#notes-trash-reload").click()
+    assert refreshed_trash.value.status == 200
+    rows = page.locator("#notes-trash-items .notes-trash-item")
+    expect(rows).to_have_count(2)
+    identities = rows.evaluate_all(
+        "items => items.map(item => [item.dataset.noteId, item.dataset.editVersion])"
+    )
+    assert {tuple(identity) for identity in identities} == {(note_id, "2"), (other_id, "2")}
+    hrefs = page.locator("#notes-trash-items a[data-trash-fixed-link]").evaluate_all(
+        "links => links.map(link => link.getAttribute('href'))"
+    )
+    assert set(hrefs) == {
+        f"/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes",
+        f"/meetings/{meeting_id}?notes_revision={other_id}&notes_edit=2#notes",
+    }
+    row_text = rows.all_text_contents()
+    assert all("First fixed two" not in text and "Second fixed two" not in text for text in row_text)
+    assert page.evaluate(
+        """() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        })"""
+    )["scrollWidth"] <= page.evaluate("document.documentElement.clientWidth") + 1
+    for row in rows.all():
+        detail = page.request.get(
+            f"{live.url}/api/notes/{row.get_attribute('data-note-id')}/versions/2"
+        )
+        assert detail.ok
+        payload = detail.json()
+        assert payload.get("content_available") is False
+        assert "markdown" not in payload
+
+    page.screenshot(path=str(tmp_path / f"notes-trash-{locale}-{theme}-{width}.png"), full_page=True)
+    page.locator("#notes-trash-empty").click()
+    confirmation_items = page.locator("#notes-trash-confirmation-items .notes-trash-item")
+    expect(confirmation_items).to_have_count(2)
+    expect(page.locator("#notes-trash-confirmation")).to_contain_text(note_id)
+    expect(page.locator("#notes-trash-confirmation")).to_contain_text(other_id)
+    expect(page.locator("#notes-trash-confirmation")).to_contain_text("Save version 2")
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-confirmation-check"
+    assert page.locator("#notes-trash-confirmation-check").is_visible()
+    page.locator("#notes-trash-cancel").click()
+
+    other_restore = page.locator(
+        f'#notes-trash-items button[data-trash-restore][data-note-id="{other_id}"][data-edit-version="2"]'
+    )
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url.endswith(f"/notes-trash/{other_id}/2/restore")
+    ) as restored_response:
+        other_restore.click()
+    assert restored_response.value.status == 200
+    expect(page.locator("#notes-trash-items .notes-trash-item")).to_have_count(1)
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-status"
+
+
+def test_trash_lifecycle_failure_focuses_real_status_region(live, signed_in, monkeypatch):
+    _context, page = signed_in(viewport={"width": 390, "height": 900}, color_scheme="dark")
+    page.add_init_script("localStorage.setItem('asr-studio:lang', 'en')")
+    data_dir = live.settings.data_dir
+    meeting_id, note, _snapshot, _segments = _seed_saved_notes(data_dir)
+    note_id = note["id"]
+    update_note(data_dir, note_id, expected_edit_version=1, markdown="# Failure fixed two\n")
+    update_note(data_dir, note_id, expected_edit_version=2, markdown="# Failure latest three\n")
+    page.goto(f"{live.url}/meetings/{meeting_id}?notes_revision={note_id}&notes_edit=2#notes")
+    move = page.locator("#notes-trash-move")
+    move.click()
+    expect(page.locator("#notes-trash-confirm")).to_be_focused()
+    monkeypatch.setenv("ASR_NOTES_LIFECYCLE_FENCE", "1")
+    try:
+        with page.expect_response(
+            lambda response: response.request.method == "POST" and response.url.endswith("/notes-trash")
+        ) as failed_response:
+            page.locator("#notes-trash-confirm").click()
+        assert failed_response.value.status == 503
+    finally:
+        monkeypatch.delenv("ASR_NOTES_LIFECYCLE_FENCE", raising=False)
+    status = page.locator("#notes-trash-status")
+    expect(status).to_be_visible()
+    assert status.get_attribute("tabindex") == "-1"
+    assert page.evaluate("document.activeElement && document.activeElement.id") == "notes-trash-status"
 
 
 def test_fixed_return_to_latest_keeps_the_projected_floor_after_omission(live, signed_in):

@@ -261,7 +261,12 @@ test("Notes lifecycle actions bind the saved revision and its exact trash transi
   await env.answer(historyIndex, 200, versionIndex(4));
   await env.answer(trashRead, 200, trashPayload([]));
 
-  env.dispatch("trash-version-requested", { operationId: "ui-trash-v2" });
+  env.dispatch("trash-version-requested");
+  assert.equal(selectView(env.state()).trash.confirmation.kind, "trash-version");
+  assert.equal(selectView(env.state()).trash.confirmation.items[0].fixedHref,
+    "/meetings/m1?notes_revision=r1&notes_edit=2#notes");
+  assert.equal(env.waiting((request) => request.method === "POST").length, 0);
+  env.dispatch("trash-version-confirmed", { operationId: "ui-trash-v2" });
   const move = env.waiting((request) => request.method === "POST" && request.url.endsWith("/notes-trash"))[0];
   assert.deepEqual(move.body, { operation_id: "ui-trash-v2", note_id: "r1", edit_version: 2 });
   await env.answer((request) => request === move, 200, {
@@ -305,7 +310,9 @@ test("Empty Trash stays confirmation-bound to the exact current set", async () =
   env.dispatch("empty-trash-requested");
   let trash = selectView(env.state()).trash;
   assert.equal(trash.confirmation.open, true);
+  assert.equal(trash.confirmation.kind, "empty");
   assert.equal(trash.confirmation.count, 2);
+  assert.equal(trash.confirmation.items.length, 2);
   assert.equal(env.waiting((request) => request.method === "POST").length, 0);
   env.dispatch("empty-trash-checked", { checked: true });
   env.dispatch("empty-trash-confirmed", { operationId: "ui-empty-v2-v3" });

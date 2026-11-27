@@ -22,6 +22,33 @@ with the original component styling. External before/after captures accompany
 [issue #266](https://github.com/nguyencanhtrung/asr-studio/issues/266) and PR #289.
 Tag: design, accessibility. Backend history, source pins and Undo contracts are unchanged.
 
+## #275 / PR #291 — Notes saved-version lifecycle and meeting-scoped Trash
+
+Notes history keeps the immutable saved body and its source provenance in the existing
+revision tables. Schema v24 adds an additive lifecycle marker and content-free operation
+receipts: an eligible operator Save can be `trashed`, restored by its exact transition, or
+`purged` while its fixed identity remains as a tombstone. The AI original and latest Save
+of every Notes revision are protected. Lifecycle endpoints validate the owning meeting,
+revision and saved version before looking up a receipt; replay of a purged operation uses
+the durable revision/marker identity and never restores deleted Markdown into a receipt.
+
+The Trash read is scoped to one meeting but includes every eligible Notes revision in that
+meeting. The Notes UI renders only revision ID, Save version, timestamps, fixed-link target
+and the exact restore transition; content and citations stay hidden until restore. Moving one
+Save requires an exact-version confirmation. Empty Trash confirms the current digest and
+identity set, then rechecks it atomically. Copy and email preview re-read the fixed version at
+confirmation, so a version trashed or purged while a preview is open cannot use cached bytes.
+The UI lists the exact purge set, restores individual rows, keeps keyboard focus on the
+confirmation/status control, and remains readable at narrow widths in both locales/themes.
+
+Migration is fixture-only additive and retains foreign keys. A schema-23 binary refuses a
+schema-24 database. The compatible rollback build keeps lifecycle-aware hidden/purged reads,
+ordinary Save/publication journaling and the lifecycle tables, but fences lifecycle mutations;
+it does not claim to erase downloaded copies, backups or WAL data. Whole-meeting deletion
+explicitly removes lifecycle and receipt children while preserving the existing media,
+source and transcript cleanup contract. See [ADR 0014](adr/0014-notes-version-lifecycle.md),
+the [user guide](user-guide.md#saved-notes), and [frontend transitions](frontend-design.md#117-notes-tab-meeting-notes).
+
 ## #258 — Separate Auto Processing workflow settings from owner defaults
 
 **Problem.** Auto Processing exposed three owner mirrors beside its workflow controls. Those mirrors could lag the committed ASR and provider settings, and saving an owner value with the dialog open could advance the workflow-preferences revision. The Chromium fixture verifies exactly three rendered comboboxes by accessible role and name—`Ngôn ngữ transcript`, `Provider notes`, and `Ngôn ngữ đầu ra notes`—and verifies the owner links are visible. The Node fixture verifies that the workflow PATCH sends exactly four fields.

@@ -167,6 +167,16 @@ function mountTrashControls() {
   versionStatus.setAttribute("role", "status");
   root.append(versionStatus);
 
+  const itemsTitle = document.createElement("h5");
+  itemsTitle.id = "notes-trash-items-title";
+  itemsTitle.className = "notes-trash-subtitle";
+  root.append(itemsTitle);
+  const items = document.createElement("ul");
+  items.id = "notes-trash-items";
+  items.className = "notes-trash-items";
+  items.setAttribute("aria-labelledby", "notes-trash-items-title");
+  root.append(items);
+
   const versionActions = document.createElement("div");
   versionActions.className = "notes-trash-actions";
   const move = makeTrashButton("notes-trash-move", "secondary-button");
@@ -190,6 +200,15 @@ function mountTrashControls() {
   const confirmationScope = document.createElement("p");
   confirmationScope.id = "notes-trash-confirmation-scope";
   confirmation.append(confirmationScope);
+  const confirmationItemsTitle = document.createElement("p");
+  confirmationItemsTitle.id = "notes-trash-confirmation-items-title";
+  confirmationItemsTitle.className = "notes-trash-confirmation-items-title";
+  confirmation.append(confirmationItemsTitle);
+  const confirmationItems = document.createElement("ul");
+  confirmationItems.id = "notes-trash-confirmation-items";
+  confirmationItems.className = "notes-trash-items notes-trash-confirmation-items";
+  confirmationItems.setAttribute("aria-labelledby", "notes-trash-confirmation-items-title");
+  confirmation.append(confirmationItems);
   const confirmationLabel = document.createElement("label");
   const checkbox = document.createElement("input");
   checkbox.id = "notes-trash-confirmation-check";
@@ -215,6 +234,7 @@ function mountTrashControls() {
   status.className = "notes-trash-status";
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
+  status.tabIndex = -1;
   root.append(status);
 
   els.history.append(root);
@@ -224,6 +244,8 @@ function mountTrashControls() {
     title,
     scope,
     versionStatus,
+    itemsTitle,
+    items,
     move,
     restore,
     retry,
@@ -232,6 +254,9 @@ function mountTrashControls() {
     confirmation,
     confirmationTitle,
     confirmationScope,
+    confirmationItemsTitle,
+    confirmationItems,
+    confirmationLabel,
     confirmationLabelText,
     checkbox,
     confirm,
@@ -240,7 +265,7 @@ function mountTrashControls() {
     status,
   };
 
-  move.addEventListener("click", () => dispatch({ type: "notes/trash-version-requested", operationId: newRequestId() }));
+  move.addEventListener("click", () => dispatch({ type: "notes/trash-version-requested" }));
   restore.addEventListener("click", () => {
     const action = selectView(store.getState()).trash.versionAction;
     dispatch({
@@ -251,16 +276,104 @@ function mountTrashControls() {
       transitionId: action.transitionId,
     });
   });
+  items.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-trash-restore]");
+    if (!button || !items.contains(button)) return;
+    dispatch({
+      type: "notes/restore-version-requested",
+      operationId: newRequestId(),
+      noteId: button.dataset.noteId,
+      editVersion: Number(button.dataset.editVersion),
+      transitionId: button.dataset.transitionId,
+    });
+  });
   retry.addEventListener("click", () => dispatch({ type: "notes/lifecycle-retry" }));
   reload.addEventListener("click", () => dispatch({ type: "notes/trash-read-requested" }));
   empty.addEventListener("click", () => dispatch({ type: "notes/empty-trash-requested" }));
   checkbox.addEventListener("change", (event) => dispatch({ type: "notes/empty-trash-checked", checked: event.currentTarget.checked }));
-  confirm.addEventListener("click", () => dispatch({ type: "notes/empty-trash-confirmed", operationId: newRequestId() }));
-  cancel.addEventListener("click", () => dispatch({ type: "notes/empty-trash-cancelled" }));
+  confirm.addEventListener("click", () => {
+    const current = selectView(store.getState()).trash.confirmation;
+    dispatch({
+      type: current?.kind === "trash-version" ? "notes/trash-version-confirmed" : "notes/empty-trash-confirmed",
+      operationId: newRequestId(),
+    });
+  });
+  cancel.addEventListener("click", () => dispatch({ type: "notes/trash-confirmation-cancelled" }));
 }
 
 function setData(element, name, value) {
   if (element.dataset[name] !== value) element.dataset[name] = value;
+}
+
+function trashTimestamp(value) {
+  if (typeof value !== "string" || !value) return "";
+  return value.includes(" ") ? `${value.replace(" ", "T")}Z` : value;
+}
+
+function renderTrashItems(container, items, { restore = false, busy = false } = {}) {
+  const rows = Array.isArray(items) ? items : [];
+  const key = rows.map((item) => [item.note_id, item.edit_version, item.transition_id, item.fixedHref, restore].join("\u0001")).join("\u0000");
+  if (container.dataset.key === key) {
+    for (const button of container.querySelectorAll("button[data-trash-restore]")) button.disabled = busy;
+    return;
+  }
+  container.dataset.key = key;
+  container.replaceChildren(...rows.map((item) => {
+    const row = document.createElement("li");
+    row.className = "notes-trash-item";
+    row.dataset.noteId = item.note_id;
+    row.dataset.editVersion = String(item.edit_version);
+
+    const details = document.createElement("div");
+    details.className = "notes-trash-item-details";
+    const heading = document.createElement("strong");
+    heading.className = "notes-trash-item-heading";
+    heading.textContent = t("Notes revision {revision} · Save version {version}", {
+      revision: item.note_id,
+      version: item.edit_version,
+    });
+    details.append(heading);
+
+    const saved = document.createElement("time");
+    saved.className = "notes-trash-item-time";
+    const savedAt = trashTimestamp(item.saved_at);
+    saved.dateTime = savedAt;
+    saved.textContent = `${t("Đã lưu:")} ${savedAt ? tr({ fmt: "timestamp", value: savedAt }) : "—"}`;
+    details.append(saved);
+    if (item.trashed_at) {
+      const trashed = document.createElement("time");
+      trashed.className = "notes-trash-item-time";
+      const trashedAt = trashTimestamp(item.trashed_at);
+      trashed.dateTime = trashedAt;
+      trashed.textContent = `${t("Đã chuyển vào Thùng rác:")} ${tr({ fmt: "timestamp", value: trashedAt })}`;
+      details.append(trashed);
+    }
+
+    const controls = document.createElement("div");
+    controls.className = "notes-trash-item-controls";
+    const link = document.createElement("a");
+    link.className = "notes-trash-item-link";
+    link.href = item.fixedHref;
+    link.dataset.trashFixedLink = "true";
+    link.textContent = t("Mở bản Save cố định");
+    controls.append(link);
+    if (restore) {
+      const button = makeTrashButton("", "text-button");
+      button.dataset.trashRestore = "true";
+      button.dataset.noteId = item.note_id;
+      button.dataset.editVersion = String(item.edit_version);
+      button.dataset.transitionId = item.transition_id;
+      button.textContent = t("Khôi phục Notes revision {revision}, Save version {version}", {
+        revision: item.note_id,
+        version: item.edit_version,
+      });
+      button.setAttribute("aria-label", button.textContent);
+      button.disabled = busy;
+      controls.append(button);
+    }
+    row.append(details, controls);
+    return row;
+  }));
 }
 
 // The remembered values enter the state through the context and boot actions; writes are storage effects.
@@ -687,11 +800,18 @@ function renderLifecycleNotice(work) {
 function renderTrash(trash) {
   if (!trashEls) return;
   const focused = document.activeElement;
+  // A row replacement can make the browser report <body> before the response
+  // paint reaches this render. It is still the lifecycle action's own focus
+  // transition, so the status region must receive the one-shot focus.
+  const focusInTrash = trashEls.root.contains(focused) || focused === document.body;
   const previousConfirmation = trashEls.root.dataset.confirmationOpen === "true";
+  const previousConfirmationKind = trashEls.root.dataset.confirmationKind || "";
   const previousMutation = trashEls.root.dataset.mutationPhase || "";
   const confirmation = trash.confirmation;
   const mutation = trash.mutation;
   const action = trash.versionAction;
+  const confirmationKind = confirmation?.kind || "";
+  const versionConfirmation = confirmationKind === "trash-version";
   const open = Boolean(trash.visible);
   const busy = trash.readPending || mutation?.phase === "pending";
   const protectedMessage = action.visible && action.lifecycleStatus === "active" && !action.canTrash
@@ -711,6 +831,9 @@ function renderTrash(trash) {
   setProp(trashEls.scope, "textContent", scopeMessage);
   setProp(trashEls.versionStatus, "textContent", lifecycleMessage);
   setProp(trashEls.versionStatus, "hidden", !lifecycleMessage);
+  setProp(trashEls.itemsTitle, "textContent", t("Các bản Save trong Thùng rác"));
+  setProp(trashEls.itemsTitle, "hidden", trash.items.length === 0);
+  renderTrashItems(trashEls.items, trash.items, { restore: true, busy });
   setProp(trashEls.move, "textContent", t("Chuyển bản lưu này vào Thùng rác"));
   setProp(trashEls.restore, "textContent", t("Khôi phục bản lưu này"));
   setProp(trashEls.move, "hidden", !action.visible || !action.canTrash);
@@ -726,18 +849,29 @@ function renderTrash(trash) {
   setProp(trashEls.empty, "disabled", trash.emptyDisabled || Boolean(confirmation?.open));
 
   setProp(trashEls.confirmation, "hidden", !confirmation?.open);
-  setProp(trashEls.confirmationTitle, "textContent", t("Xác nhận dọn sạch Thùng rác"));
+  setProp(trashEls.confirmationTitle, "textContent", versionConfirmation
+    ? t("Xác nhận chuyển bản lưu vào Thùng rác") : t("Xác nhận dọn sạch Thùng rác"));
   setProp(trashEls.confirmationScope, "textContent", confirmation?.open
-    ? t("Bạn sắp xóa vĩnh viễn {count} bản Save lịch sử trong cuộc họp “{meeting}”. Danh sách và phiên bản sẽ được kiểm tra lại trước khi thực hiện.", {
-      count: confirmation.count,
-      meeting: confirmation.meetingTitle || meetingTitle,
-    }) : "");
-  setProp(trashEls.confirmationLabelText, "textContent", confirmation?.open
+    ? versionConfirmation
+      ? t("Bạn sắp chuyển bản Save {version} của Notes revision {revision} vào Thùng rác. Phiên bản và quyền bảo vệ sẽ được kiểm tra lại trước khi thực hiện.", {
+        revision: confirmation.noteId,
+        version: confirmation.editVersion,
+      })
+      : t("Bạn sắp xóa vĩnh viễn {count} bản Save lịch sử trong cuộc họp “{meeting}”. Danh sách và phiên bản sẽ được kiểm tra lại trước khi thực hiện.", {
+        count: confirmation.count,
+        meeting: confirmation.meetingTitle || meetingTitle,
+      }) : "");
+  setProp(trashEls.confirmationItemsTitle, "textContent", confirmation?.open
+    ? versionConfirmation ? t("Bản Save chính xác sẽ được chuyển vào Thùng rác") : t("Các bản Save chính xác sẽ bị xóa vĩnh viễn") : "");
+  setProp(trashEls.confirmationItemsTitle, "hidden", !confirmation?.open);
+  renderTrashItems(trashEls.confirmationItems, confirmation?.items || [], { restore: false });
+  setProp(trashEls.confirmationLabel, "hidden", versionConfirmation || !confirmation?.open);
+  setProp(trashEls.confirmationLabelText, "textContent", confirmation?.open && !versionConfirmation
     ? t("Tôi xác nhận đúng cuộc họp và đúng {count} bản Save này.", { count: confirmation.count }) : "");
   setProp(trashEls.checkbox, "checked", Boolean(confirmation?.checked));
-  setProp(trashEls.checkbox, "disabled", busy);
-  setProp(trashEls.confirm, "textContent", t("Xác nhận dọn sạch"));
-  setProp(trashEls.confirm, "disabled", !confirmation?.checked || busy);
+  setProp(trashEls.checkbox, "disabled", busy || versionConfirmation);
+  setProp(trashEls.confirm, "textContent", versionConfirmation ? t("Chuyển vào Thùng rác") : t("Xác nhận dọn sạch"));
+  setProp(trashEls.confirm, "disabled", !confirmation?.open || (!versionConfirmation && !confirmation.checked) || busy);
   setProp(trashEls.cancel, "textContent", t("Hủy"));
   setProp(trashEls.cancel, "disabled", busy);
   setProp(trashEls.confirmationError, "textContent", tr(confirmation?.error));
@@ -753,17 +887,20 @@ function renderTrash(trash) {
   setProp(trashEls.status, "textContent", tr(status));
   setProp(trashEls.status, "hidden", !status);
   setData(trashEls.root, "confirmationOpen", String(Boolean(confirmation?.open)));
+  setData(trashEls.root, "confirmationKind", confirmationKind);
   setData(trashEls.root, "mutationPhase", mutation?.phase || "");
 
   if (!open) return;
   if (confirmation?.open && !previousConfirmation) {
-    trashEls.checkbox.focus({ preventScroll: true });
+    (versionConfirmation ? trashEls.confirm : trashEls.checkbox).focus({ preventScroll: true });
   } else if (!confirmation?.open && previousConfirmation
     && [trashEls.checkbox, trashEls.confirm, trashEls.cancel].includes(focused)) {
-    trashEls.empty.focus({ preventScroll: true });
-  } else if (previousMutation === "pending" && mutation?.phase === "failed" && trashEls.root.contains(focused)) {
+    if (mutation?.phase === "pending") trashEls.status.focus({ preventScroll: true });
+    else if (previousConfirmationKind === "trash-version") trashEls.move.focus({ preventScroll: true });
+    else trashEls.empty.focus({ preventScroll: true });
+  } else if (previousMutation === "pending" && mutation?.phase === "failed" && focusInTrash) {
     trashEls.status.focus({ preventScroll: true });
-  } else if (previousMutation === "pending" && !mutation && trashEls.root.contains(focused)) {
+  } else if (previousMutation === "pending" && !mutation && focusInTrash) {
     trashEls.status.focus({ preventScroll: true });
   }
 }

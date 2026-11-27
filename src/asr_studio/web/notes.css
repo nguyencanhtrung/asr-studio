@@ -447,6 +447,79 @@
   color: var(--warning);
 }
 
+.notes-trash-subtitle,
+.notes-trash-confirmation-items-title {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: var(--text-small);
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.notes-trash-items {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notes-trash-item {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px 12px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.notes-trash-item-details,
+.notes-trash-item-controls {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.notes-trash-item-heading,
+.notes-trash-item-time,
+.notes-trash-item-link,
+.notes-trash-item-controls button {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notes-trash-item-heading {
+  color: var(--ink);
+  font-size: var(--text-small);
+  line-height: 1.45;
+}
+
+.notes-trash-item-time {
+  color: var(--ink-2);
+  font-size: var(--text-micro);
+  line-height: 1.4;
+}
+
+.notes-trash-item-controls {
+  justify-items: end;
+}
+
+.notes-trash-item-link {
+  color: var(--accent);
+  font-size: var(--text-micro);
+  line-height: 1.4;
+}
+
+.notes-trash-item-controls button {
+  max-width: 100%;
+  text-align: right;
+  white-space: normal;
+}
+
 .notes-trash-status {
   color: var(--ink-2);
 }
@@ -489,6 +562,19 @@
   color: var(--ink);
   font-size: var(--text-small);
   line-height: 1.5;
+}
+
+.notes-trash-confirmation-items {
+  gap: 5px;
+}
+
+.notes-trash-confirmation-items .notes-trash-item {
+  padding: 7px 8px;
+  background: var(--surface);
+}
+
+.notes-trash-confirmation-items .notes-trash-item-controls {
+  justify-items: start;
 }
 
 .notes-trash-confirmation input {
@@ -903,6 +989,20 @@ a.notes-citation-chip:focus-visible {
   .notes-trash-confirmation-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .notes-trash-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notes-trash-item-controls {
+    justify-items: start;
+  }
+
+  .notes-trash-item-controls > a,
+  .notes-trash-item-controls > button {
+    width: 100%;
+    text-align: left;
   }
 
   /* Keep the two compact, icon-only actions together after the long labelled actions. */
