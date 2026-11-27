@@ -984,9 +984,7 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
     assert not any(path.endswith("/finalize") for _method, path in requests)
 
 
-def test_native_stage_intent_write_failure_keeps_create_at_zero(
-    capture_server, paired_capture
-):
+def test_native_stage_intent_write_failure_keeps_create_at_zero(capture_server, paired_capture):
     settings, _url, requests, _tls = capture_server
     context, worker, _operator, control, tab = paired_capture
     _inject_offscreen_intent_write_failure(context, worker, tab)
@@ -1015,9 +1013,7 @@ def test_native_stage_intent_write_failure_keeps_create_at_zero(
         assert db.execute("SELECT count(*) FROM recordings").fetchone() == (0,)
 
 
-def test_native_stage_old_unposted_row_survives_refresh_as_legacy(
-    capture_server, paired_capture
-):
+def test_native_stage_old_unposted_row_survives_refresh_as_legacy(capture_server, paired_capture):
     settings, _url, requests, _tls = capture_server
     context, _worker, _operator, control, tab = paired_capture
     requests.reject_recording_requests = True
@@ -2125,9 +2121,7 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
     }
 
     worker_scope = (
-        synthetic_processing_worker(settings, tmp_path, monkeypatch)
-        if asr
-        else nullcontext()
+        synthetic_processing_worker(settings, tmp_path, monkeypatch) if asr else nullcontext()
     )
     with worker_scope:
         with hold_derivative_normalization(monkeypatch) as normalizing:
@@ -2183,9 +2177,9 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
                     "WHERE sessions.id = ?",
                     (session_id,),
                 ).fetchone()
-                workflow_count = db.execute(
-                    "SELECT count(*) FROM processing_workflows"
-                ).fetchone()[0]
+                workflow_count = db.execute("SELECT count(*) FROM processing_workflows").fetchone()[
+                    0
+                ]
             if ready and ready[0] == "ready" and ready[2] and workflow_count == 1:
                 break
             operator.wait_for_timeout(150)
@@ -2197,8 +2191,10 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
         state = _wait_native_processing(
             operator,
             meeting_id,
-            lambda value: value["state"] == "succeeded"
-            and all(step["state"] in {"succeeded", "skipped"} for step in value["steps"]),
+            lambda value: (
+                value["state"] == "succeeded"
+                and all(step["state"] in {"succeeded", "skipped"} for step in value["steps"])
+            ),
         )
         assert state["stage_policy"] == {"format_version": 1, **saved_policy["policy"]}
         assert state["pinned"] == expected_pinned
@@ -2213,9 +2209,9 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
             expected_kinds = []
 
         with sqlite3.connect(db_path) as db:
-            assert db.execute(
-                "SELECT kind FROM tasks ORDER BY kind"
-            ).fetchall() == [(kind,) for kind in expected_kinds]
+            assert db.execute("SELECT kind FROM tasks ORDER BY kind").fetchall() == [
+                (kind,) for kind in expected_kinds
+            ]
             generations = db.execute(
                 "SELECT id, diarization_mode, diarization_model_name, regular_turn_count, "
                 "exclusive_turn_count, alignment_policy FROM transcript_generations"
@@ -2317,10 +2313,9 @@ def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, m
                     if skipped[kind]:
                         assert item["state"] == "skipped", item
                         assert "Đã bỏ qua" in item["text"] or "Skipped" in item["text"], item
-                        assert (
-                            "Complete" not in item["text"]
-                            and "Hoàn tất" not in item["text"]
-                        ), item
+                        assert "Complete" not in item["text"] and "Hoàn tất" not in item["text"], (
+                            item
+                        )
             finally:
                 meeting_page.close()
 
