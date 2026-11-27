@@ -213,6 +213,12 @@ def test_pipeline_gates_pull_requests_main_and_version_tags():
     assert "scripts/check-release.py" in release_check["run"]
     assert "container" in pipeline["jobs"]
     names = [step["name"] for step in quality["steps"]]
+    evidence_step = quality["steps"][names.index("Check generated evidence stays outside Git")]
+    assert evidence_step["if"] == (
+        "github.event_name == 'pull_request' || github.ref == 'refs/heads/main'"
+    )
+    assert './scripts/check-generated-evidence.sh "$BASE_SHA" "$GITHUB_SHA"' in evidence_step["run"]
+    assert names.index(evidence_step["name"]) < names.index("Install media tools")
     media_step = quality["steps"][names.index("Install media tools")]
     assert "apt-get install" in media_step["run"]
     for tool in ("ffmpeg", "ffprobe"):
