@@ -144,3 +144,82 @@ test("an opaque server error never becomes a saved success", () => {
   assert.equal(failed.state.notice, null);
   assert.equal(failed.state.draft.notes, false);
 });
+
+test("another form's version refresh reads stage truth and preserves only touched draft fields", () => {
+  let state = reduce(loadState(), { type: "provider/processing-stage-policy-edited", field: "asr", value: false }).state;
+  let result = reduce(state, { type: "provider/processing-preferences-saved", response: { body: { version: 8 } } });
+  assert.equal(result.state.status, "loading");
+  assert.equal(result.state.saved.preferenceVersion, 7);
+  assert.equal(result.effects[0].url, "/api/processing-stage-policy/v1");
+  assert.equal(result.effects[0].meta.reconcile, true);
+  result = reduce(result.state, { type: "provider/processing-stage-policy-loaded", meta: result.effects[0].meta,
+    response: { body: policyResponse({ preference_version: 8, policy: { asr: true, diarization: true, notes: true } }) } });
+  assert.deepEqual(result.state.draft, { asr: false, diarization: true, notes: true });
+  result = reduce(result.state, { type: "provider/processing-stage-policy-save-requested" });
+  assert.equal(JSON.parse(result.effects[0].init.body).expected_preference_version, 8);
+  assert.equal(JSON.parse(result.effects[0].init.body).diarization, true);
+});
+
+test("a workflow response during a stage read queues one newer read without retrying a write", () => {
+  let result = reduce(initialState, { type: "provider/dialog-opened" });
+  const first = result.effects[0].meta;
+  result = reduce(result.state, { type: "provider/processing-preferences-loaded", response: { body: { version: 9 } } });
+  assert.deepEqual(result.effects, []);
+  result = reduce(result.state, { type: "provider/processing-preferences-loaded", response: { body: { version: 8 } } });
+  assert.equal(result.state.refreshVersion, 9);
+  result = reduce(result.state, { type: "provider/processing-stage-policy-loaded", meta: first,
+    response: { body: policyResponse({ preference_version: 8 }) } });
+  assert.equal(result.effects.length, 1);
+  assert.equal(result.effects[0].init.method, "GET");
+  assert.equal(result.state.refreshVersion, 0);
+  result = reduce(result.state, { type: "provider/processing-stage-policy-loaded", meta: result.effects[0].meta,
+    response: { body: policyResponse({ preference_version: 9 }) } });
+  assert.equal(result.state.saved.preferenceVersion, 9);
+  assert.deepEqual(result.effects, []);
+});
+
+test("a workflow save during a stage mutation is reconciled only after the mutation settles", () => {
+  let state = reduce(loadState(), { type: "provider/processing-stage-policy-edited", field: "asr", value: false }).state;
+  let result = reduce(state, { type: "provider/processing-stage-policy-save-requested" });
+  const mutation = result.effects[0].meta;
+  result = reduce(result.state, { type: "provider/processing-preferences-saved", response: { body: { version: 9 } } });
+  assert.equal(result.state.status, "saving");
+  assert.deepEqual(result.effects, []);
+  result = reduce(result.state, { type: "provider/processing-stage-policy-saved", meta: mutation,
+    response: { body: policyResponse({ preference_version: 8, policy: { asr: false, diarization: false, notes: true } }) } });
+  assert.deepEqual(result.effects.map(effect => effect.type), ["call", "fetch"]);
+  assert.equal(result.effects[1].init.method, "GET");
+  assert.equal(result.effects[1].meta.reconcile, true);
+});
+
+test("other form observations cannot clear a real conflict or trigger automatic resubmission", () => {
+  let state = reduce(loadState(), { type: "provider/processing-stage-policy-edited", field: "asr", value: false }).state;
+  let result = reduce(state, { type: "provider/processing-stage-policy-save-requested" });
+  result = reduce(result.state, { type: "provider/processing-stage-policy-save-failed", meta: result.effects[0].meta,
+    error: { status: 409 } });
+  const error = result.state.error;
+  result = reduce(result.state, { type: "provider/processing-preferences-loaded", response: { body: { version: 8 } } });
+  assert.equal(result.state.status, "conflict");
+  assert.equal(result.state.error, error);
+  assert.equal(result.state.draft.asr, false);
+  assert.deepEqual(result.effects, []);
+  result = reduce(result.state, { type: "provider/processing-stage-policy-reload-requested" });
+  assert.equal(result.effects[0].init.method, "GET");
+  assert.equal(result.effects[0].meta.reconcile, true);
+});
+
+test("only a validated stage save notifies the other Settings form", () => {
+  let state = reduce(loadState(), { type: "provider/processing-stage-policy-edited", field: "asr", value: false }).state;
+  const saving = reduce(state, { type: "provider/processing-stage-policy-save-requested" });
+  const meta = saving.effects[0].meta;
+  const invalid = reduce(saving.state, { type: "provider/processing-stage-policy-saved", meta,
+    response: { body: policyResponse({ preference_version: 9 }) } });
+  assert.deepEqual(invalid.effects, []);
+  const valid = reduce(saving.state, { type: "provider/processing-stage-policy-saved", meta,
+    response: { body: policyResponse({ preference_version: 8, policy: { asr: false, diarization: false, notes: true } }) } });
+  assert.deepEqual(valid.effects, [{ type: "call", key: "provider/processing-stage-policy-changed",
+    name: "processing.stage-policy-changed", args: [] }]);
+  const stale = reduce(valid.state, { type: "provider/processing-preferences-loaded", response: { body: { version: 7 } } });
+  assert.equal(stale.state, valid.state);
+  assert.deepEqual(stale.effects, []);
+});

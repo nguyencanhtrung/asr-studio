@@ -17,7 +17,9 @@ clients retain their original request. The server pins the configured stage reci
 existing model/provider/language/source defaults in the derivative-ready transaction; the raw
 archive receipt remains a separate durable boundary. Disabled dependencies are represented
 as skipped, with no fabricated transcript or Notes output. Later preferences and manual
-transcription cannot silently enable a previously disabled automatic stage.
+transcription cannot silently enable a previously disabled automatic stage. The two Settings
+forms reconcile their shared preference version through server reads while keeping independent
+drafts; a response from the workflow form never directly advances a stale stage CAS baseline.
 
 **Cutover.** A persisted admission fence protects compatible runtime activation and
 cancel-and-wait rollback. Source confirmation and interrupted-capture holds are independent

@@ -150,6 +150,12 @@ it is not a published image/tag or an older released binary. A pre-migration bin
 rejects schema v25 is not a rollback target. Enabling never patches an old process or establishes
 model/provider readiness.
 
+Keep the updated Extension bundle while local policy-aware captures are pending. A pre-policy
+bundle cannot reconstruct their persisted format-1 create requests and is not a compatible
+client rollback target. Finish a durable receipt or explicitly resolve the recording using the
+compatible client before replacing it; never erase an attempt marker to force a legacy request.
+Existing pre-intent local rows still retain their original legacy request.
+
 An invalid preference format captured by a capable format-1 session is a durable policy
 quarantine, not a legacy all-on workflow and not a valid all-off recipe. Gate toggles, retries,
 source/settings adoption, task claim, publication, scheduler admission, and worker recovery

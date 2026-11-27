@@ -15,12 +15,17 @@ const GET = {
 };
 const cancelRead = { type: "cancel", key: "provider/processing-stage-policy" };
 const cancelSave = { type: "cancel", key: "provider/processing-stage-policy-save" };
+const POLICY_CHANGED = {
+  type: "call", key: "provider/processing-stage-policy-changed",
+  name: "processing.stage-policy-changed", args: [],
+};
 
 export const initialState = {
   open: false,
   status: "idle", // idle | loading | ready | saving | paused | unsupported | error | conflict
   request: 0,
   mutation: 0,
+  refreshVersion: 0,
   saved: null,
   draft: null,
   error: null,
@@ -155,7 +160,19 @@ function acknowledgesSave(saved, meta) {
 function startRead(state, reconcile = false) {
   if (!state.open) return done(state);
   const request = state.request + 1;
-  return done({ ...state, status: "loading", request, error: null, notice: null }, [readEffect(request, reconcile)]);
+  return done({ ...state, status: "loading", request, refreshVersion: 0, error: null, notice: null }, [readEffect(request, reconcile)]);
+}
+
+// The workflow form shares the server's preference version, but not these
+// booleans. Its response is only a reason to read server truth, never permission
+// to advance our CAS baseline without reconciling the actual stage policy.
+function observeWorkflowVersion(state, action) {
+  const version = action.response?.body?.version;
+  if (!state.open || !validVersion(version)
+    || (state.saved && version <= state.saved.preferenceVersion)) return done(state);
+  const next = { ...state, refreshVersion: Math.max(state.refreshVersion || 0, version) };
+  if (["loading", "saving", "error", "conflict", "unsupported"].includes(state.status)) return done(next);
+  return startRead(next, true);
 }
 
 function invalidResponse(state, source = "read") {
@@ -175,12 +192,15 @@ export function reduce(state, action) {
   switch (action.type) {
     case "provider/dialog-opened": {
       const request = state.request + 1;
-      return done({ ...state, open: true, status: "loading", request, saved: null, draft: null, error: null, notice: null }, [readEffect(request)]);
+      return done({ ...state, open: true, status: "loading", request, refreshVersion: 0, saved: null, draft: null, error: null, notice: null }, [readEffect(request)]);
     }
     case "provider/dialog-closed":
       return done({ ...initialState, request: state.request + 1, mutation: state.mutation + 1 }, [cancelRead, cancelSave]);
     case "provider/processing-stage-policy-reload-requested":
       return startRead(state, true);
+    case "provider/processing-preferences-loaded":
+    case "provider/processing-preferences-saved":
+      return observeWorkflowVersion(state, action);
     case "provider/processing-stage-policy-loaded": {
       if (!state.open || action.meta?.request !== state.request) return done(state);
       const saved = normalizeStagePolicy(action.response?.body);
@@ -193,14 +213,19 @@ export function reduce(state, action) {
       const draft = action.meta?.reconcile === true
         ? reconciledDraft(saved, state.draft, state.saved)
         : cloneDraft(saved.policy);
-      return done({
+      const confirmed = {
         ...state,
         status: statusFor(saved),
         saved,
         draft,
+        refreshVersion: 0,
         error: null,
         notice: null,
-      });
+      };
+      // A workflow response may arrive while this older read is in flight.
+      // Consume that observation once; never poll or retry a failed save.
+      return state.refreshVersion > saved.preferenceVersion
+        ? startRead(confirmed, true) : done(confirmed);
     }
     case "provider/processing-stage-policy-failed": {
       if (!state.open || action.meta?.request !== state.request) return done(state);
@@ -226,7 +251,9 @@ export function reduce(state, action) {
         return invalidResponse({ ...state, status: "error" }, "mutation");
       }
       if (!acknowledgesSave(saved, action.meta)) return invalidResponse({ ...state, status: "error" }, "mutation");
-      return done({ ...state, status: statusFor(saved), saved, draft: cloneDraft(saved.policy), error: null, notice: t("Đã lưu công tắc xử lý cho bản ghi Extension mới.") });
+      const confirmed = { ...state, status: statusFor(saved), saved, draft: cloneDraft(saved.policy), refreshVersion: 0, error: null, notice: t("Đã lưu công tắc xử lý cho bản ghi Extension mới.") };
+      const next = state.refreshVersion > saved.preferenceVersion ? startRead(confirmed, true) : done(confirmed);
+      return done(next.state, [POLICY_CHANGED, ...next.effects]);
     }
     case "provider/processing-stage-policy-save-failed": {
       if (!state.open || action.meta?.mutation !== state.mutation) return done(state);

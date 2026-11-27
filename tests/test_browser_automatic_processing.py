@@ -549,3 +549,42 @@ def test_preference_save_failure_then_success_preserves_focus_and_status(
     finally:
         context.close()
         os.close(lock)
+
+
+@pytest.mark.parametrize("first_form", ["stage", "workflow"])
+def test_stage_and_workflow_saves_refresh_shared_version_without_losing_drafts(
+    live, signed_in, worker, first_form
+):
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    try:
+        _open_automatic_processing(page)
+        stage_asr = page.locator("#processing-stage-policy-asr")
+        language = page.locator("#automatic-preferences-asr-language")
+        expect(page.locator("#processing-stage-policy-form")).to_have_attribute(
+            "aria-busy", "false"
+        )
+        stage_asr.uncheck()
+        language.select_option("en")
+        forms = [first_form, "workflow" if first_form == "stage" else "stage"]
+        for form in forms:
+            if form == "stage":
+                expect(stage_asr).not_to_be_checked()
+                page.locator("#processing-stage-policy-save").click()
+                expect(page.locator("#processing-stage-policy-notice")).to_contain_text(
+                    "Đã lưu công tắc"
+                )
+                expect(page.locator("#processing-stage-policy-error")).to_be_hidden()
+                expect(page.locator("#processing-stage-policy-status")).to_be_focused()
+            else:
+                expect(language).to_have_value("en")
+                page.locator("#automatic-preferences-save").click()
+                expect(page.locator("#automatic-preferences-notice")).to_contain_text(
+                    "Đã lưu cài đặt xử lý tự động"
+                )
+                expect(page.locator("#automatic-preferences-error")).to_be_hidden()
+        actual_stage = _processing_request(page, "/api/processing-stage-policy/v1")
+        actual_workflow = _processing_request(page, "/api/processing-preferences")
+        assert actual_stage["policy"] == {"asr": False, "diarization": True, "notes": True}
+        assert actual_workflow["asr"]["language"] == "en"
+    finally:
+        context.close()

@@ -992,6 +992,7 @@ const base = createRunner({
       providerChoice.dispatch({ type: "channel/provider-choice-changed" });
       dispatch({ type: "provider/notes-owner-changed", source });
     },
+    "processing.stage-policy-changed": () => dispatch({ type: "provider/processing-stage-policy-changed" }),
     "asr.settings-changed": (source) => {
       asrSettings.dispatch({ type: "channel/asr-settings-changed" });
       dispatch({ type: "provider/asr-settings-changed", source });

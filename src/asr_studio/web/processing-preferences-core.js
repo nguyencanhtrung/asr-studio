@@ -371,6 +371,8 @@ export function reduce(state, action) {
       return action.section === "processing" && action.previousSection !== "processing"
         ? withOwnerRead(queueReconcile(state, { retryInitial: true }))
         : done(state);
+    case "provider/processing-stage-policy-changed":
+      return queueReconcile(state);
     case "provider/asr-settings-changed":
       // The successful Automation PATCH broadcasts its own source-tagged event.
       // It must keep the success notice and must not issue a redundant GET.

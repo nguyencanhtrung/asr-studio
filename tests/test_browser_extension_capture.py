@@ -57,6 +57,7 @@ class RequestLog(list):
     def __init__(self):
         super().__init__()
         self.create_bodies = []
+        self.create_capability_reads = []
         self.hidden_stage_policy_reads = 0
 
 
@@ -184,6 +185,7 @@ def capture_server(tmp_path, request):
         requests.append((request.method, request.url.path))
         if request.method == "POST" and request.url.path == "/api/extension/v1/recording-sessions":
             requests.create_bodies.append(json.loads((await request.body()).decode("utf-8")))
+            requests.create_capability_reads.append(requests.hidden_stage_policy_reads)
         if request.url.path == "/api/extension/v1/session":
             activation_requests += 1
             if activation_status and activation_requests > activation_after:
@@ -941,7 +943,6 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
         )
         assert offscreen, targets
         cdp.send("Target.closeTarget", {"targetId": offscreen["targetId"]})
-        requests.fail_create_responses = False
         targets = cdp.send("Target.getTargets")["targetInfos"]
         service_worker = next(
             (item for item in targets if item["type"] == "service_worker"),
@@ -969,6 +970,7 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
         ).fetchall() == [(session["id"], "receiving")]
     assert not any(path.endswith("/cancel") for _method, path in requests)
 
+    requests.fail_create_responses = False
     control.once("dialog", lambda dialog: dialog.accept())
     control.locator('[data-action="cancel-remote"]').click()
     deadline = time.monotonic() + 30
@@ -1011,6 +1013,7 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
     assert len(requests.create_bodies) >= 2
     assert all(body == requests.create_bodies[0] for body in requests.create_bodies)
     assert requests.hidden_stage_policy_reads > 0
+    assert any(reads > 0 for reads in requests.create_capability_reads)
     assert any(path.endswith("/cancel") for _method, path in requests)
     assert not any(path.endswith("/finalize") for _method, path in requests)
 
