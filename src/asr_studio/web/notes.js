@@ -601,6 +601,9 @@ function placeRunControls(inToolbar, urgent) {
     host.append(els.run);
     if (focused) focused.focus({ preventScroll: true });
   }
+  // Routine saved-state copy belongs with provenance below the document. Active or
+  // failed processing keeps its status next to the generation controls.
+  if (els.status.parentElement !== host) host.append(els.status);
   els.start.classList.toggle("primary-button", !inToolbar);
   els.start.classList.toggle("secondary-button", inToolbar);
 }
@@ -951,10 +954,11 @@ function renderSavedWork(work) {
   setProp(els.savedWork, "hidden", work.hidden);
   setProp(els.historyOpen, "hidden", !work.selected || !work.options.length);
   setProp(els.modeControls, "hidden", work.pinned);
-  setProp(els.save, "hidden", work.pinned);
-  setProp(els.editCancel, "hidden", work.pinned);
   const write = work.mode === "write";
   const rich = work.mode === "rich";
+  const editing = write || rich;
+  setProp(els.save, "hidden", work.pinned || !editing);
+  setProp(els.editCancel, "hidden", work.pinned || !editing);
   setAttr(els.modeView, "aria-pressed", String(!write && !rich));
   setAttr(els.modeWrite, "aria-pressed", String(write));
   setAttr(els.modeRich, "aria-pressed", String(rich));

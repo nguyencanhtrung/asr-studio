@@ -1950,21 +1950,24 @@ def test_the_pinned_player_and_its_clearance_belong_to_the_transcript_tab(live, 
     _context, page = signed_in(viewport=DESKTOP)
     meeting_id, *_ = seed_completed_transcript(live.settings.data_dir)
     open_meeting(page, live, meeting_id)
-    padding = "getComputedStyle(document.documentElement).scrollPaddingTop"
+    padding = "parseFloat(getComputedStyle(document.documentElement).scrollPaddingBottom) || 0"
     expect_tab(page, "transcript")
-    expect(page.locator(".player-bar")).to_be_visible()
-    assert page.evaluate(padding) == "72px"
-    assert page.locator(".player-bar").evaluate("e => getComputedStyle(e).position") == "sticky"
+    bar = page.locator(".player-bar")
+    expect(bar).to_be_visible()
+    assert bar.evaluate("e => getComputedStyle(e).position") == "fixed"
+    bounds = bar.bounding_box()
+    height = page.evaluate("innerHeight")
+    assert bounds and 0 < bounds["y"] < bounds["y"] + bounds["height"] <= height
+    reserved = page.evaluate(padding)
+    assert reserved >= height - bounds["y"]
     page.locator(NOTES_TAB).click()
     expect_tab(page, "notes")
-    expect(page.locator(".player-bar")).to_be_hidden()
-    assert page.evaluate(padding) not in {
-        "64px",
-        "72px",
-    }  # no player is pinned, so nothing is reserved
+    expect(bar).to_be_hidden()
+    assert page.evaluate(padding) < reserved  # no invisible dock reserves document space
     open_calendar(page)
     expect(page.locator("#calendar-view")).to_be_visible()
-    assert page.evaluate(padding) not in {"64px", "72px"}
+    expect(bar).to_be_hidden()
+    assert page.evaluate(padding) < reserved
 
 
 def test_changing_tab_is_a_view_change_and_makes_no_request(live, signed_in):

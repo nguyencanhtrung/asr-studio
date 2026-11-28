@@ -26,7 +26,7 @@ pytestmark = pytest.mark.browser
 
 SEGMENT_COUNT = 40
 SEGMENT_SECONDS = 2
-MAX_BAR_HEIGHT = 72
+MAX_BAR_HEIGHT = 132
 QUIET_MS = 2000
 LIST_TOP = 150  # px below the viewport's top edge: the transcript list is on screen
 DESKTOP = {"width": 1280, "height": 800}
@@ -260,9 +260,9 @@ def put_list(page, where, *, inside):
     items = page.locator("#transcript-segments")
     margin = 5 if inside else -5
     if where == "below":
-        place(items, page.evaluate("window.innerHeight") - margin)
+        place(items, rect(page.locator(".player-bar"))["top"] - margin)
     else:
-        place(items, rect(page.locator(".player-bar"))["height"] + margin, edge="bottom")
+        place(items, margin, edge="bottom")
 
 
 def play_at(page, index, *, into=0.5, paused=False, ended=False):
@@ -288,33 +288,33 @@ def clearance(locator):
 def assert_pinned(page, viewport):
     bar = page.locator(".player-bar")
     box = rect(bar)
-    assert abs(box["top"]) <= 1, box
+    height = page.evaluate("innerHeight")
+    assert 0 < box["top"] < box["bottom"] <= height, box
     assert box["height"] <= MAX_BAR_HEIGHT, box
-    assert box["left"] >= 0 and box["right"] <= viewport["width"], box
-    # The heading and the hint are not part of the sticky bar: they scrolled away.
+    assert box["left"] >= 0 and box["right"] <= page.evaluate("innerWidth"), box
+    if page.evaluate("innerWidth") <= 680:
+        footer = rect(page.locator(".sidebar-footer"))
+        assert box["bottom"] <= footer["top"] - 8, (box, footer)
     assert rect(page.locator("#audio-heading"))["bottom"] <= 0
     assert rect(page.locator(".audio-hint"))["bottom"] <= 0
-    # The player is still usable: nothing covers it.
-    topmost = page.evaluate(
-        """() => {
-          const box = document.querySelector("#meeting-audio").getBoundingClientRect();
-          return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2).id;
-        }"""
-    )
-    assert topmost == "meeting-audio"
+    button = page.locator("#audio-play-toggle")
+    assert button.evaluate("""element => {
+      const box = element.getBoundingClientRect();
+      const target = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return element.contains(target);
+    }""")
 
 
-# ---- AC: the player sticks to the top of the content and only the player sticks ----
+# ---- AC: only the player stays pinned, above the footer ----
 
 
 @BOTH_VIEWPORTS
 def test_player_bar_sticks_while_the_heading_and_hint_scroll_away(live, signed_in, viewport):
     page = open_meeting(live, signed_in, viewport=viewport)
     bar = page.locator(".player-bar")
-    assert bar.evaluate("element => getComputedStyle(element).position") == "sticky"
-    assert bar.evaluate("element => [...element.children].map(child => child.id)") == [
-        "meeting-audio"
-    ]
+    assert bar.evaluate("element => getComputedStyle(element).position") == "fixed"
+    expect(page.locator("#audio-transport")).to_be_visible()
+    expect(page.locator("#audio-native-options > summary")).to_be_visible()
     assert rect(bar)["height"] <= MAX_BAR_HEIGHT
 
     list_top = page.evaluate(
@@ -331,7 +331,7 @@ def test_player_bar_sticks_while_the_heading_and_hint_scroll_away(live, signed_i
 
 def test_player_bar_stays_above_positioned_content_scrolling_under_it(live, signed_in):
     page = open_meeting(live, signed_in)
-    # Positioned boxes later in the page would paint over a sticky bar that has no z-index.
+    # Positioned boxes later in the page would paint over a fixed dock that has no z-index.
     page.evaluate(
         """document.querySelectorAll(".transcript-segment, .transcript-segment *")
           .forEach((element) => { element.style.position = "relative"; })"""
@@ -340,7 +340,7 @@ def test_player_bar_stays_above_positioned_content_scrolling_under_it(live, sign
     assert_pinned(page, DESKTOP)
 
 
-# ---- AC: scrolled-to targets are never hidden behind the sticky player ----
+# ---- AC: scrolled-to targets are never hidden behind the bottom player ----
 
 
 @BOTH_VIEWPORTS
@@ -351,9 +351,10 @@ def test_scroll_targets_stay_clear_of_the_player_bar(live, signed_in, viewport):
     # The notes source heading is no target here: it is in the Notes tab, which pins no player.
     targets = [segment(page, 3), segment(page, 17), segment(page, 31)]
     for target in targets:
-        assert clearance(target) > bar["height"]  # the bar's height plus a gap
+        assert clearance(target) >= 0
         target.evaluate("element => element.scrollIntoView({ block: 'start' })")
-        assert rect(target)["top"] >= bar["bottom"] - 0.5
+        assert rect(target)["top"] >= 0
+        assert rect(target)["bottom"] <= bar["top"] - 1
 
 
 @BOTH_VIEWPORTS
@@ -362,13 +363,14 @@ def test_keyboard_focus_is_not_left_under_the_player_bar(live, signed_in, viewpo
     segment(page, 5).locator(".segment-edit-button").click()
     editor = segment(page, 5).locator(".segment-text-editor")
     editor.fill("Short.")  # a browser reveals only the caret's line: keep it the first line
-    place(editor, 20)  # the editor sits under the bar, the next control just below it
+    place(editor, rect(page.locator(".player-bar"))["top"] + 10)
     bar = rect(page.locator(".player-bar"))
-    assert rect(editor)["top"] < bar["bottom"]
+    assert rect(editor)["top"] > bar["top"]
     segment(page, 5).locator("button[type=submit]").focus()
     page.keyboard.press("Shift+Tab")
     assert page.evaluate("document.activeElement.className") == "segment-text-editor"
-    assert rect(editor)["top"] >= bar["bottom"]
+    assert rect(editor)["top"] >= 0
+    assert rect(editor)["bottom"] <= bar["top"]
 
 
 CARET_LINE_TOP = """element => {
@@ -385,13 +387,13 @@ def test_keyboard_focus_keeps_the_caret_line_of_a_wrapped_value_below_the_bar(li
     segment(page, 5).locator(".segment-edit-button").click()
     editor = segment(page, 5).locator(".segment-text-editor")
     editor.fill("\n".join(f"Line {number}." for number in range(1, 9)))  # the caret ends on line 8
-    place(editor, 20)  # the editor's top sits under the bar, the next control just below it
+    place(editor, rect(page.locator(".player-bar"))["top"] + 10)
     bar = rect(page.locator(".player-bar"))
-    assert rect(editor)["top"] < bar["bottom"]
+    assert rect(editor)["top"] > bar["top"]
     segment(page, 5).locator("button[type=submit]").focus()
     page.keyboard.press("Shift+Tab")
     assert page.evaluate("document.activeElement.className") == "segment-text-editor"
-    assert editor.evaluate(CARET_LINE_TOP) >= bar["bottom"]
+    assert 0 <= editor.evaluate(CARET_LINE_TOP) <= bar["top"] - 20
 
 
 # ---- AC: a changed active segment is scrolled into view while playing ----
@@ -411,14 +413,18 @@ def test_active_segment_change_while_playing_scrolls_it_into_view_nearest(
     # Below the viewport: its bottom edge lands on the bottom edge of the viewport.
     play_at(page, 10)
     expect(segment(page, 10)).to_have_attribute("aria-current", "true")
-    assert abs(rect(segment(page, 10))["bottom"] - viewport["height"]) <= 1
+    assert (
+        abs(rect(segment(page, 10))["bottom"] - (rect(page.locator(".player-bar"))["top"] - 12))
+        <= 1
+    )
 
     # Above the viewport: its top edge lands just under the player bar.
     scroll_segment_to(page, 30, 100)
     settle(page)
     play_at(page, 5)
     assert abs(rect(segment(page, 5))["top"] - margin) <= 1
-    assert rect(segment(page, 5))["top"] >= rect(page.locator(".player-bar"))["bottom"]
+    assert rect(segment(page, 5))["top"] >= 0
+    assert rect(segment(page, 5))["bottom"] < rect(page.locator(".player-bar"))["top"]
 
     # Already fully in view: the page stays where it is.
     scroll_segment_to(page, 20, 250)
@@ -460,8 +466,9 @@ def test_following_continues_across_consecutive_smooth_scrolls(live, signed_in):
               const padding = getComputedStyle(document.documentElement).scrollPaddingTop;
               const clearance = parseFloat(padding)
                 + parseFloat(getComputedStyle(item).scrollMarginTop);
+              const floor = document.querySelector(".player-bar").getBoundingClientRect().top - 12;
               return edge === "bottom"
-                ? Math.abs(box.bottom - window.innerHeight) <= 1
+                ? Math.abs(box.bottom - floor) <= 1
                 : Math.abs(box.top - clearance) <= 1;
             }""",
             [index, edge],
@@ -623,8 +630,21 @@ def test_no_following_while_the_transcript_list_is_off_screen(live, signed_in, v
     freeze_clock(page)
     if where == "above":
         page.evaluate(ROOM_AFTER_LIST)
+    else:
+        # The compact workspace can fit the start of the list above the dock even at
+        # scrollY=0. Add real preceding content so this boundary can be exercised.
+        page.evaluate("""() => {
+          const before = document.createElement('div');
+          before.style.height = '1000px';
+          document.querySelector('#transcript-segments').before(before);
+        }""")
     play_at(page, 0, paused=True)
     put_list(page, where, inside=False)
+    bounds = rect(page.locator("#transcript-segments"))
+    if where == "below":
+        assert bounds["top"] > rect(page.locator(".player-bar"))["top"]
+    else:
+        assert bounds["bottom"] < 0
     settle(page)
     before = scroll_y(page)
     # Playing on moves the highlight, not the page: the list is not what the reader is looking at.
@@ -720,7 +740,8 @@ def test_opening_a_notes_source_while_playing_follows_when_the_list_is_in_view(l
     assert seek_notes_source(page, 60.5) is True
     expect(segment(page, 30)).to_have_attribute("aria-current", "true")
     box = rect(segment(page, 30))
-    assert rect(page.locator(".player-bar"))["bottom"] <= box["top"]
+    assert box["top"] >= 0
+    assert box["bottom"] < rect(page.locator(".player-bar"))["top"]
     assert box["bottom"] <= page.evaluate("window.innerHeight") + 1
 
 
@@ -757,8 +778,8 @@ def test_real_playback_scrolls_the_next_segment_into_view(live, signed_in, tmp_p
     )
     page.clock.install(time=FIXED_NOW)
     # Segment 2 sits at the foot of the viewport, so segment 3 is below the fold.
-    place(segment(page, 2), 500, edge="bottom")
-    assert rect(segment(page, 3))["top"] >= 500
+    place(segment(page, 2), rect(page.locator(".player-bar"))["top"] - 12, edge="bottom")
+    assert rect(segment(page, 3))["top"] >= rect(page.locator(".player-bar"))["top"] - 12
     settle(page)
 
     segment(page, 2).locator(".segment-timestamp").click()
@@ -767,7 +788,8 @@ def test_real_playback_scrolls_the_next_segment_into_view(live, signed_in, tmp_p
     page.evaluate("document.querySelector('#meeting-audio').currentTime = 5.8")
     expect(segment(page, 3)).to_have_attribute("aria-current", "true", timeout=5_000)
     box = rect(segment(page, 3))
-    assert rect(page.locator(".player-bar"))["bottom"] <= box["top"]
+    assert box["top"] >= 0
+    assert box["bottom"] < rect(page.locator(".player-bar"))["top"]
     assert box["bottom"] <= 500 + 1
 
 
@@ -822,14 +844,14 @@ def test_player_bar_fits_narrow_screens_and_is_an_opaque_themed_surface(
             border: bar.borderTopColor,
             borderWidth: bar.borderTopWidth,
             surface: resolve("--surface"),
-            hairline: resolve("--hairline"),
+            hairline: resolve("--line-strong"),
           };
         }"""
     )
     assert colors["background"] == colors["surface"]
     assert colors["border"] == colors["hairline"]
     assert colors["borderWidth"] == "1px"
-    audio = rect(page.locator("#meeting-audio"))
+    audio = rect(page.locator("#audio-transport"))
     bar = rect(page.locator(".player-bar"))
     assert bar["left"] <= audio["left"] and audio["right"] <= bar["right"]
 
@@ -841,7 +863,7 @@ def test_player_shows_a_keyboard_focus_ring(live, signed_in, scheme):
     page.keyboard.press("Tab")
     assert page.evaluate("document.activeElement.id") == "meeting-tab-transcript"
     page.keyboard.press("Tab")
-    assert page.evaluate("document.activeElement.id") == "meeting-audio"
+    assert page.evaluate("document.activeElement.id") == "audio-play-toggle"
     scroll_to(page, 1500)  # the focus stays on the player while it is stuck at the top edge
     bar = rect(page.locator(".player-bar"))
     clip = {
@@ -855,7 +877,7 @@ def test_player_shows_a_keyboard_focus_ring(live, signed_in, scheme):
         return page.screenshot(clip=clip, animations="disabled", caret="hide")
 
     focused = strip()
-    ring = page.locator("#meeting-audio").evaluate(
+    ring = page.locator("#audio-play-toggle").evaluate(
         """element => {
           const style = getComputedStyle(element);
           const probe = document.createElement("span");

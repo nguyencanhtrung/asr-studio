@@ -256,6 +256,25 @@ def test_internal_extension_artifact_requires_native_capture_gate():
     assert "'extensions/chrome/tests/*.test.mjs'" in checks
 
 
+def test_workspace_evidence_is_external_and_gated_by_real_browser_checks():
+    steps = load_yaml(PIPELINE_PATH)["jobs"]["quality"]["steps"]
+    names = [step["name"] for step in steps]
+    check = steps[names.index("Run repository checks")]
+    assert check["env"]["ASR_RUN_BROWSER_TESTS"] == "1"
+    output = "${{ runner.temp }}/asr-studio-workspace"
+    assert check["env"]["ASR_VISUAL_EVIDENCE_DIR"] == output
+    assert check["env"]["ASR_TRANSCRIPT_SCREENSHOT_DIR"] == output
+    capture = steps[names.index("Capture handoff workspace evidence")]
+    upload = steps[names.index("Upload handoff workspace evidence")]
+    assert "tests/visual/capture_workspace.py" in capture["run"]
+    assert "${RUNNER_TEMP}/asr-studio-workspace" in capture["run"]
+    assert names.index(check["name"]) < names.index(capture["name"]) < names.index(upload["name"])
+    assert all("if" not in step for step in (check, capture, upload))
+    assert upload["with"]["name"] == "asr-studio-workspace-${{ github.sha }}"
+    assert upload["with"]["path"] == output + "/"
+    assert upload["with"]["if-no-files-found"] == "error"
+
+
 def test_media_gate_skips_locally_but_fails_when_ci_requires_tools(monkeypatch):
     monkeypatch.setenv("PATH", "")
     monkeypatch.delenv("ASR_REQUIRE_MEDIA_TOOLS", raising=False)

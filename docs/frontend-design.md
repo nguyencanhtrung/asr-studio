@@ -1255,3 +1255,17 @@ vẫn giữ version và hợp nhất các trường người dùng đã sửa.
 | PATCH workflow hợp lệ xác nhận cặp Notes khác với owner đang hiển thị, hoặc owner đang có lần đọc cũ chưa xong | Giữ thông báo lưu, focus, version và recipe đã xác nhận. Ẩn lời mời đồng bộ dựa trên owner cũ trong lúc đọc | Đồng bộ lại owner Notes theo cùng khóa đọc. Cặp đã khớp giữ trạng thái sẵn sàng |
 | Vào tab Xử lý tự động để đọc ASR | Dùng lần đọc catalog đang tải ở lượt vào đầu tiên. Lượt quay lại phát sinh số thứ tự mới. Trong lúc đang lưu ASR, dùng lần đọc tiếp theo của chính thao tác lưu | GET `/api/asr-models` theo khóa hiện có. Phản hồi lỗi hiện trạng thái lỗi ở tóm tắt. Luồng cài model, poll và form ASR dùng trạng thái hiện có |
 | Đóng dialog | Xóa trạng thái đọc của phiên dialog và tăng số thứ tự lần đọc Notes | Hủy đọc Notes. Phản hồi từ phiên cũ không đổi cài đặt đang hiển thị |
+
+
+### Handoff composition and audio transport (#295)
+
+The workspace view now separates document controls, reading content and processing
+detail. Existing feature stores own drafts, revisions, source pins, calendar
+selection and Settings sections; the layout does not introduce another copy of
+those states. The compact audio transport reads and controls the existing media
+element. Native controls remain available through Details on that same element.
+A pending play result is applied only while its captured meeting and audio key
+still match. Pause/source-change AbortError is not a playback failure. Raising a
+muted volume unmutes it. Follow scrolling uses the visible area above the bottom
+dock, retains the manual-scroll quiet interval and does not follow an offscreen
+list or interrupt a transcript field. The phone dock clears the original footer.

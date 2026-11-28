@@ -3235,3 +3235,52 @@ binary compatibility. No live database, provider, model or deployment state is c
 **Follow-ups.** [Issue #266](https://github.com/nguyencanhtrung/asr-studio/issues/266).
 Tag: architecture, design, data-retention. Target: `docs/adr/0006-transcript-generations.md`,
 `docs/frontend-design.md`, `src/asr_studio/transcript_history.py` and transcript history tests.
+
+## Handoff workspace composition — #295
+
+**Problem and cause.** The previous preview retained a form-heavy composition.
+Notes reading competed with editing actions and repeated provenance; Transcript
+and Settings preserved controls without the handoff's hierarchy. Functional and
+width checks alone did not establish visual acceptance.
+
+**Change.** The workspace has a compact sidebar/header, real metadata/status and
+stable tabs. Notes has one toolbar outside the reading paper; active drafts own
+Save/Cancel, while copy/email/export/history remain available in reading mode.
+Routine provenance follows the document. Direct calendar month/year selection
+moves into a disclosure with the existing state and keyboard handlers.
+
+Transcript has a reading column and responsive segment/speaker context. The same
+media element drives a bottom transport and an accessible native-controls
+Details disclosure. Follow scrolling clears the dock. Asynchronous play results
+belong to their captured meeting/audio key; a user abort is not a media failure,
+and raising a muted volume unmutes it. Source pins, drafts, review, safe Undo and
+generation ownership retain their existing contracts.
+
+Settings stays a native modal with full provider-specific forms and independent
+section scrolling. Calendar keeps event chips, day details, history and undated
+meetings. Import keeps its actual limits, validation, model/language/auto-ASR
+options and cancel/retry. Keep the owner's original centered Settings/GitHub and
+build Version footer; phone provider launchers remain reachable above reserved
+content space. The player clears that footer.
+
+**Before and after evidence.** Existing browser checks cover reading/editing,
+conflicts, revision/source navigation, calendar keyboard access and playback
+follow/focus. Real synthetic recording checks exercise transport/native controls;
+removing play error guards makes stale-source and user-abort checks fail. CI
+collects Notes/Transcript plus calendar/import/Settings captures outside Git,
+with an actual source/asset manifest. Connected Settings fixtures are explicitly
+synthetic display evidence, not real provider authentication. No performance or
+live inference claim is made; current-candidate results belong in the issue/PR.
+
+**Trade-offs and rejected options.** Compact secondary actions keep accessible
+names. Keep native controls rather than replacing the media element and losing
+its download/mute options. Keep the modal and original footer even though the
+prototype illustrates another placement. Real model/account readiness and API
+state override prototype examples. The UI is isolated on existing main behavior;
+new Extension stage controls remain separate in #277. No backend, schema,
+credential, model default, Extension endpoint or deployment changes are included.
+
+**Follow-up and target.** [#295](https://github.com/nguyencanhtrung/asr-studio/issues/295)
+requires independent functional/visual acceptance, latest-main integration and
+exact-head CI before merge, followed by cleanup. Tag: design/accessibility.
+Targets: `DESIGN.md` and `docs/frontend-design.md`.

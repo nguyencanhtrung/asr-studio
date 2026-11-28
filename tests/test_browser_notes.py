@@ -699,7 +699,12 @@ def test_saved_source_stays_frozen_and_seeks_same_audio_after_live_edit(
     expect(page.locator("#notes-saved-work")).to_be_visible(timeout=10_000)
     audio = page.locator("#meeting-audio")
     page.locator("#meeting-tab-transcript").click()  # the player is in the transcript tab
+    expect(page.locator("#audio-transport")).to_be_visible()
+    page.locator("#audio-native-options > summary").click()
     expect(audio).to_be_visible()
+    assert audio.evaluate("element => element.controls && !element.autoplay && element.paused")
+    page.locator("#audio-native-options > summary").click()
+    expect(page.locator("#audio-transport")).to_be_visible()
     assert audio.get_attribute("src") == f"/api/meetings/{meeting_id}/audio"
     expect(page.locator("#notes-preview a[data-notes-source-link]")).to_have_count(0)
 
@@ -3015,6 +3020,7 @@ def test_unsaved_changes_mark_the_write_button_and_the_view(live, signed_in):
     expect(page.locator("#notes-preview")).to_contain_text("Not saved yet.")
     expect(dot).to_be_visible()
 
+    page.locator("#notes-mode-write").click()
     page.locator("#notes-save").click()
     expect(page.locator("#notes-copy-export-status")).to_contain_text(
         "Markdown đã được lưu", timeout=10_000
@@ -3029,38 +3035,22 @@ def test_one_toolbar_serves_both_modes_and_keeps_the_enable_rules(live, signed_i
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
     _open_saved_notes(live, page, meeting_id)
     toolbar = page.locator("#notes-toolbar")
-    controls = ["#notes-revision-selector", "#notes-save", "#notes-copy", "#notes-export"]
-    layout = """controls => {
-      const toolbar = document.querySelector("#notes-toolbar").getBoundingClientRect();
-      return controls.map(selector => {
-        const box = document.querySelector(selector).getBoundingClientRect();
-        return [box.x - toolbar.x, box.y - toolbar.y, box.width, box.height].map(Math.round);
-      });
-    }"""
     save, copy, export = (page.locator(f"#notes-{name}") for name in ("save", "copy", "export"))
 
-    layouts = []
     for mode in ("view", "write"):
         page.locator(f"#notes-mode-{mode}").click()
-        for selector in controls:
+        for selector in ("#notes-revision-selector", "#notes-copy", "#notes-export"):
             expect(toolbar.locator(selector)).to_be_visible()
-        layouts.append(page.evaluate(layout, controls))
-        expect(save).to_be_disabled()
+        if mode == "view":
+            expect(save).to_be_hidden()
+            expect(page.locator("#notes-edit-cancel")).to_be_hidden()
+        else:
+            expect(save).to_be_visible()
+            expect(save).to_be_disabled()
+            expect(page.locator("#notes-edit-cancel")).to_be_visible()
         expect(copy).to_be_enabled()
         expect(export).to_be_enabled()
-    assert layouts[0] == layouts[1]
-    # Empty action feedback uses no space; populated live regions sit by their controls.
     expect(page.locator("#notes-copy-export-status")).to_be_hidden()
-    assert page.evaluate(
-        """() => {
-          const toolbar = document.querySelector("#notes-toolbar").getBoundingClientRect();
-          const frame = document.querySelector(".notes-frame").getBoundingClientRect();
-          return ["#notes-draft-status"].map(selector => {
-            const box = document.querySelector(selector).getBoundingClientRect();
-            return box.top >= toolbar.bottom && box.bottom <= frame.top;
-          });
-        }"""
-    ) == [True]
     expect(save).to_have_accessible_name("Lưu bản nháp")
     expect(copy).to_have_accessible_name("Sao chép bản đã lưu")
     expect(export).to_have_accessible_name("Tải Markdown đã lưu")
@@ -3075,9 +3065,14 @@ def test_one_toolbar_serves_both_modes_and_keeps_the_enable_rules(live, signed_i
     page.locator("#notes-markdown").fill("# Another draft")
     for mode in ("write", "view"):
         page.locator(f"#notes-mode-{mode}").click()
-        expect(save).to_be_enabled()
+        if mode == "view":
+            expect(save).to_be_hidden()
+        else:
+            expect(save).to_be_enabled()
         expect(copy).to_be_disabled()
         expect(export).to_be_disabled()
+    page.locator("#notes-mode-write").click()
+    expect(save).to_be_enabled()
 
 
 def test_conflict_block_and_its_two_actions_show_in_both_modes(live, signed_in):
@@ -3290,8 +3285,9 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     for name, (foreground, background) in pairs.items():
         assert _contrast(foreground, background) >= 4.5, (name, foreground, background)
 
-    # The document tools precede the mode switch; generation follows the document.
-    page.locator("#notes-edit-cancel").focus()
+    # The mode controls follow the revision selector in the reading toolbar.
+    # Save/Cancel are available only while editing, so use the visible selector.
+    page.locator("#notes-revision-selector").focus()
     for button in ("view", "rich", "write"):
         page.keyboard.press("Tab")
         focused = page.locator(f"#notes-mode-{button}")

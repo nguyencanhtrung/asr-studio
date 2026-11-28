@@ -1440,7 +1440,13 @@ const { t, UI_LOCALE } = (() => {
       "Đang gửi…": "Sending…",
       "Đang đọc trạng thái nhà cung cấp và danh sách model. Hãy đợi rồi thử lại.": "Reading provider status and model list. Wait, then try again.",
       "Đang đọc trạng thái nhà cung cấp và danh sách model…": "Reading provider status and model list…",
-      "“Không hết hạn” chỉ dành cho máy đáng tin cậy mà bạn kiểm soát.": "“Never expires” is only for trusted machines you control."
+      "“Không hết hạn” chỉ dành cho máy đáng tin cậy mà bạn kiểm soát.": "“Never expires” is only for trusted machines you control.",
+      "Phát bản ghi": "Play recording",
+      "Tạm dừng bản ghi": "Pause recording",
+      "Tốc độ phát": "Playback speed",
+      "Âm lượng": "Volume",
+      "Tua tới mốc bản ghi": "Seek in recording",
+      "Không phát được bản ghi này.": "This recording cannot be played."
     };
   }
 })();
