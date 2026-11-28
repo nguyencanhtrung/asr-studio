@@ -486,6 +486,14 @@ function isMutationBlocked(workflow, kind) {
   return MUTATING_ACTIONS.has(kind) && Boolean(actionBlockedReason(workflow));
 }
 
+function hasAvailableMutationAction(workflow) {
+  return Boolean(workflow)
+    && !actionBlockedReason(workflow)
+    && (workflow.actions.retry_notes === true
+      || workflow.actions.apply_current_settings === true
+      || workflow.actions.use_current_source === true);
+}
+
 function holdText(reason) {
   return WAITING_REASONS[reason] || t("Workflow đang được giữ lại để kiểm tra cấu hình xử lý.");
 }
@@ -532,7 +540,11 @@ function overallText(workflow, holdReason = displayHoldReason(workflow)) {
     if (notesSkipped) return t("Đang xử lý transcript. Notes đã bỏ qua theo cài đặt.");
     return t("Đang xử lý transcript và notes. Trạng thái sẽ cập nhật khi workflow tiến triển.");
   }
-  if (workflow.state === "needs_attention") return t("Workflow cần một xác nhận trước khi tiếp tục.");
+  if (workflow.state === "needs_attention") {
+    return hasAvailableMutationAction(workflow)
+      ? t("Workflow cần một xác nhận trước khi tiếp tục.")
+      : t("Workflow đang chờ worker, model hoặc provider đã chọn.");
+  }
   return t("Workflow đang chờ worker, model hoặc provider đã chọn.");
 }
 

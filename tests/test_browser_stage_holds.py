@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 import threading
 import uuid
@@ -27,7 +28,7 @@ from asr_studio.extension_ingest import (
 from asr_studio.storage import database_path, initialize
 
 pytestmark = pytest.mark.browser
-RUN_RENDERED = Path("/tmp/asr-visual-correction/issue-277-r4-ui/rendered")
+RUN_RENDERED = Path(os.environ.get("ASR_STAGE_HOLDS_RENDERED", "/tmp/asr-stage-holds-rendered"))
 
 
 def _manifest(content: bytes) -> dict[str, object]:
@@ -158,6 +159,12 @@ def test_default_disabled_format1_hold_has_guidance_and_only_cancel_is_keyboard_
                 "and reload the status; "
                 "the app will not retry automatically."
             )
+        )
+        expect(page.locator("#automatic-processing-state")).to_contain_text(
+            "Cần xử lý" if language == "vi" else "Needs attention"
+        )
+        expect(page.locator("#automatic-processing-state")).not_to_contain_text(
+            "Cần xác nhận" if language == "vi" else "Confirmation needed"
         )
         expect(page.locator("#automatic-processing-message")).not_to_contain_text("Confirm")
         expect(page.locator("#automatic-processing-source")).to_contain_text(
