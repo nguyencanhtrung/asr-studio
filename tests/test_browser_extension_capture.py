@@ -1241,6 +1241,35 @@ def test_native_source_end_then_save_creates_labeled_meeting(
         "async id => (await (await fetch('/api/meetings/' + id)).json())", meetings[0]["id"]
     )
     assert detail["recording"]["interrupted"] == {"code": session["capture"]["interruptionCode"]}
+    # The new-format gate starts disabled. Saving raw audio still succeeds, but
+    # source confirmation must agree with the server's admission guard.
+    assert detail["processing"]["action_blocked_reason"] == "stage_policy_admission_disabled"
+    assert detail["processing"]["actions"]["use_current_source"] is False
+    enabled = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "asr_studio.cli",
+            "stage-policy",
+            "enable",
+            "--acknowledge-compatible-processes-stopped",
+            "--json",
+        ],
+        env={
+            **os.environ,
+            "ASR_DATA_DIR": str(settings.data_dir),
+            "ASR_AUTH_DIR": str(settings.auth_dir),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert json.loads(enabled.stdout)["admission"]["state"] == "enabled"
+    detail = operator.evaluate(
+        "async id => (await (await fetch('/api/meetings/' + id)).json())", meetings[0]["id"]
+    )
+    assert detail["processing"]["action_blocked_reason"] is None
     assert detail["processing"]["actions"]["use_current_source"] is True
     finalize = [path for method, path in requests if path.endswith("/finalize")]
     assert len(finalize) == 1
