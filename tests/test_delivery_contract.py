@@ -257,7 +257,17 @@ def test_internal_extension_artifact_requires_native_capture_gate():
 
 
 def test_workspace_evidence_is_external_and_gated_by_real_browser_checks():
-    steps = load_yaml(PIPELINE_PATH)["jobs"]["quality"]["steps"]
+    jobs = load_yaml(PIPELINE_PATH)["jobs"].values()
+    capture_jobs = [
+        job
+        for job in jobs
+        if any(
+            step.get("name") == "Capture handoff workspace evidence"
+            for step in job.get("steps", [])
+        )
+    ]
+    assert len(capture_jobs) == 1
+    steps = capture_jobs[0]["steps"]
     names = [step["name"] for step in steps]
     check = steps[names.index("Run repository checks")]
     assert check["env"]["ASR_RUN_BROWSER_TESTS"] == "1"

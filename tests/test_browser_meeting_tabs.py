@@ -1540,6 +1540,8 @@ def test_the_seek_button_moves_the_player_that_sits_in_the_same_tab(live, signed
     expect_tab(page, "transcript")  # the card and the player it moves are in the same tab
     expect(page.locator("#notes-source-status")).to_contain_text("Đã tua bản ghi", timeout=10_000)
     audio = page.locator("#meeting-audio")
+    expect(page.locator("#audio-transport")).to_be_visible()
+    page.locator("#audio-native-options > summary").click()
     expect(audio).to_be_visible()
     page.evaluate("document.querySelector('#meeting-audio').pause()")
     page.evaluate("document.querySelector('#meeting-audio').currentTime = 20")

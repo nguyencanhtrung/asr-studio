@@ -1706,6 +1706,9 @@ def test_fixed_link_returns_to_the_linked_notes_latest_while_detail_is_unavailab
         expect(history).to_be_visible()
     expect(work_selector).to_have_value(linked_id)
     expect(page.locator("#notes-preview")).to_contain_text("Latest of the linked Notes revision")
+    expect(page.locator("#notes-save")).to_be_hidden()
+    expect(page.locator("#notes-mode-view")).to_have_attribute("aria-pressed", "true")
+    page.locator("#notes-mode-write").click()
     expect(page.locator("#notes-save")).to_be_visible()
     assert not urlsplit(page.url).query
 
@@ -2660,6 +2663,9 @@ def test_fixed_return_to_latest_keeps_the_projected_floor_after_omission(live, s
     expect(chooser).to_be_focused()
     expect(chooser).to_have_value("")
     expect(preview).to_contain_text("Latest five")
+    expect(page.locator("#notes-save")).to_be_hidden()
+    expect(page.locator("#notes-mode-view")).to_have_attribute("aria-pressed", "true")
+    page.locator("#notes-mode-write").click()
     expect(page.locator("#notes-save")).to_be_visible()
     assert not urlsplit(page.url).query
 
