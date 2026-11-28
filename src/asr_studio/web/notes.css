@@ -1495,23 +1495,6 @@ a.notes-citation-chip:focus-visible {
   font-size: var(--text-control);
 }
 
-/* Viết is the clear edit entry point in view mode, while Xem/Markdown remain reachable. */
-.notes-mode-button#notes-mode-rich {
-  border-radius: calc(var(--radius-sm) - 1px);
-  background: var(--accent);
-  color: var(--accent-contrast);
-}
-
-.notes-mode-button#notes-mode-rich:hover,
-.notes-mode-button#notes-mode-rich[aria-pressed="true"] {
-  background: var(--accent-hover);
-  color: var(--accent-contrast);
-}
-
-.notes-mode-button#notes-mode-rich:focus-visible {
-  outline-color: var(--accent-contrast);
-}
-
 .notes-meta-row {
   margin-top: 8px;
 }
