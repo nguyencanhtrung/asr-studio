@@ -4,6 +4,11 @@
 
 Tài liệu này là chuẩn thiết kế frontend v1 để triển khai. [Đặc tả sản phẩm](specification.md) quy định hành vi, dữ liệu, xác thực và phạm vi nghiệm thu; tài liệu này cụ thể hóa cách trình bày và tương tác. Việc duyệt thiết kế không có nghĩa backend, model, lưu trữ hoặc xác thực đã được triển khai.
 
+Đợt UX v2 giữ các nghiệp vụ dưới đây và cập nhật cách trình bày theo handoff. Xem
+[phạm vi đã giao và giới hạn backend](ux-v2-delivery.md) để đối chiếu code, hợp đồng,
+issue/PR và khác biệt có chủ đích với prototype. Ảnh prototype không xác nhận backend đã hỗ trợ
+một khả năng; Settings vẫn là modal và footer Settings/GitHub/Version giữ bố cục gốc.
+
 ## 1. Bản thiết kế được chọn
 
 - Ứng dụng web dùng trên trình duyệt laptop/desktop; v1 truy cập qua localhost bằng token.
@@ -1186,7 +1191,10 @@ hoặc cũ không được phép đổi trạng thái record hợp lệ.
 Core sở hữu lát `processing` trong store history; runner thực hiện fetch, timer và
 `meeting.refresh`. State giữ `meetingId`, `loadId`, workflow, `visible`/`hidden`,
 `readId`/`readPending`, `pollId`/`pollPending`, một `action`, lỗi và thông báo.
-Workflow có trạng thái riêng từ server; core không tự suy ra đã lưu transcript/notes.
+Workflow có trạng thái riêng từ server; core không tự suy ra đã lưu transcript/notes. Core giữ
+`skipped` là trạng thái riêng, lấy từ recipe và step durable. Khi stage bị tắt, copy không được
+khẳng định output tương ứng đã được tạo.
+Với recipe tắt stage, dải trạng thái hiện **Đã bỏ qua**, không hiện **Đang chờ**, **Cần xử lý** hoặc **Đã hủy**. Nếu ASR tắt, nội dung và nút xác nhận chỉ giữ phần đã ghi; UI không hứa tạo transcript hoặc Notes. Nếu Notes tắt, transcript vẫn có thể hoàn tất và UI nêu rõ Notes không chạy.
 
 | Sự kiện | Chuyển trạng thái | Hiệu ứng |
 | --- | --- | --- |

@@ -117,6 +117,7 @@ export async function createCaptureSession({ clientRecordingId, endpoint, title,
       maxChunks: limits.max_chunks,
       metadata: { ...metadata },
       createPayload: null,
+      createIntent: null,
       gates: { tab: true, microphone: true },
       tabMonitor: true,
       levels: { tab: 0, microphone: 0 }

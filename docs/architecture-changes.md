@@ -4,6 +4,69 @@
 
 **Mục đích.** Tổng kết các tối ưu và thay đổi kiến trúc/thiết kế kể từ đợt nghiệm thu #16 (image build từ revision `151f3e4`, xem báo cáo nghiệm thu (đã lưu ngoài Git)). Tài liệu sống theo giai đoạn phát triển; các mục đã được tách theo tag vào hồ sơ `docs/release/` cho #17. Số `#NN` là issue hoặc PR của repo trên GitHub.
 
+## #277 — Separate future Extension stages from import and saved run recipes
+
+**Problem.** The existing Extension workflow uses its full processing chain. Putting new
+stage switches into the browser import form or rewriting an existing workflow from current
+preferences would change an unrelated flow or an already accepted run.
+
+**Design.** A separate authenticated, version-checked stage preference contract owns the
+Extension choices. The updated client persists only negotiated format knowledge and its
+exact create intent before creating a server session. Existing local recordings and legacy
+clients retain their original request. The server pins the configured stage recipe with the
+existing model/provider/language/source defaults in the derivative-ready transaction; the raw
+archive receipt remains a separate durable boundary. Disabled dependencies are represented
+as skipped, with no fabricated transcript or Notes output. Later preferences and manual
+transcription cannot silently enable a previously disabled automatic stage. The two Settings
+forms reconcile their shared preference version through server reads while keeping independent
+drafts; a response from the workflow form never directly advances a stale stage CAS baseline.
+
+**Cutover.** A persisted admission fence protects compatible runtime activation and
+cancel-and-wait rollback. Source confirmation and interrupted-capture holds are independent
+of that fence; reopening it must not grant consent, rerun a completed stage or change a
+pinned recipe. Actual supported operator commands and process ordering belong in
+[Extension stage policy](extension-stage-policy.md). An already running old binary must be
+stopped/upgraded; the fence cannot patch it. Fixtures exercise additive upgrade and old-source
+refusal on disposable copies. No live data, credentials or deployment volume is changed by
+these tests.
+
+**Evidence and trade-offs.** Maintained stage contract/runtime tests, client reducer/upload
+checks and rendered/native scenarios verify separate boundaries. Final measured commands and
+candidate/CI references belong in the PR verification summary; generated screenshots, logs and
+SQLite copies stay outside Git. No throughput or inference-quality benchmark is claimed.
+Explicit activation keeps mixed-version deployment fail-closed at the cost of an operator
+cutover step. Silently treating unknown capability as a legacy request, sampling defaults at
+create time, and changing import defaults were rejected because they break recovery or parity.
+
+**Meeting action availability.** The read projection evaluates the existing live admission
+and quarantine guard before advertising the three guarded mutations. Its additive nullable
+`action_blocked_reason` explains a server hold without changing persisted workflow, source or
+revision state. Legacy workflows keep their prior availability. Meeting guidance distinguishes
+server holds from operator source consent, keeps terminal/skipped outcomes intact, and treats
+stage-local diarization fencing separately from valid Notes/source recovery. Maintained
+backend/core/browser regressions exercise these distinctions; the delivery PR records actual
+commands and generated evidence. No schema, credential or deployment change is introduced.
+
+**CI isolation.** Repository/browser checks and native Extension capture run on independent
+runners. A browser failure therefore retains the opportunity to collect native evidence.
+The existing required `Quality and browser tests` check waits for both lanes and runs even
+after either fails; its executable gate accepts only two actual successful lane results.
+The public release and recovery paths keep that required check name and dependency.
+A focused transcript-navigation precheck gives early feedback in the CI browser before the
+complete repository run. Its diagnostic fixture records only Escape event metadata, focus
+and meeting-read ordering; the original assertions and production behavior remain unchanged.
+The single historical CI-only Escape failure remains unclassified unless further evidence
+identifies it. Local green retries are not reported as a product correction.
+Native environment setup stays locked and preflighted, both native selections retain their
+existing deadlines, and the internal bundle waits for both selections. A diagnostic internal
+artifact does not authorize publication. Maintained delivery tests exercise successful,
+failed, canceled, skipped and absent lane results; the PR records actual execution evidence.
+
+Issue [#277](https://github.com/nguyencanhtrung/asr-studio/issues/277).
+Tag: architecture, reliability, frontend design. Targets: `docs/extension-stage-policy.md`,
+`docs/extension-automatic-processing.md`, `docs/frontend-design.md` and the Extension guide.
+
+
 ## #266 — Keep transcript history actions readable in the context panel
 
 **Problem.** Visual inspection of the new transcript history found that revision metadata

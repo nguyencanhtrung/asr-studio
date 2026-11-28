@@ -773,6 +773,14 @@ textarea:focus-visible {
   background: var(--danger);
 }
 
+.meeting-status-item[data-state="skipped"] {
+  color: var(--ink-2);
+}
+
+.meeting-status-item[data-state="skipped"] > span:first-child {
+  background: var(--ink-3);
+}
+
 .automatic-processing-panel {
   margin: -4px 0 20px;
   padding: 15px 16px 16px;
@@ -855,6 +863,10 @@ textarea:focus-visible {
 
 .automatic-processing-step[data-state="warning"] .automatic-processing-step-state {
   color: var(--warning);
+}
+
+.automatic-processing-step[data-state="skipped"] .automatic-processing-step-state {
+  color: var(--ink-3);
 }
 
 .automatic-processing-step-reason {

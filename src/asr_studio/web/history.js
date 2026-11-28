@@ -982,10 +982,13 @@ function renderRecordingStatus(meeting, state = nav()) {
 }
 
 // The header strip: one short line per stage. The words carry the state; the dot only repeats it.
-function automaticProcessingStateLabel(workflow) {
+function automaticProcessingStateLabel(workflow, view) {
   if (workflow.state === "succeeded") return t("Hoàn tất");
   if (workflow.state === "canceled") return t("Đã hủy");
-  if (workflow.state === "needs_attention") return t("Cần xác nhận");
+  if (workflow.state === "needs_attention") {
+    const hasAction = view.actions.retryNotes || view.actions.applySettings || view.actions.useSource;
+    return hasAction ? t("Cần xác nhận") : t("Cần xử lý");
+  }
   if (workflow.state === "running") return t("Đang chạy");
   return t("Đang chờ");
 }
@@ -998,7 +1001,7 @@ function renderAutomaticProcessing(processing) {
   if (!view.visible) return;
   const workflow = view.workflow;
   setAttr($("#automatic-processing-state"), "data-state", workflow.state === "succeeded" ? "done" : workflow.state === "canceled" ? "warning" : workflow.state === "needs_attention" ? "problem" : workflow.state === "running" ? "active" : "idle");
-  setProp($("#automatic-processing-state"), "textContent", tr(automaticProcessingStateLabel(workflow)));
+  setProp($("#automatic-processing-state"), "textContent", tr(automaticProcessingStateLabel(workflow, view)));
   setProp($("#automatic-processing-message"), "textContent", tr(view.message));
   setProp($("#automatic-processing-source"), "textContent", tr(view.source));
   setProp($("#automatic-processing-intent"), "textContent", tr(view.intended));

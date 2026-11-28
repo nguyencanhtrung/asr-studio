@@ -594,9 +594,85 @@ def claim_next_task(
         ).fetchone()
         if task is None:
             return None
-        if task["diarization_mode"] == DIARIZATION_MODE_OFF and (
-            diarization_rollback_fence_enabled()
+        if task["processing_workflow_id"] is not None:
+            from asr_studio.processing import (
+                _mark_stage_policy_attention,
+                _stage_is_enabled,
+                _stage_policy_admission_reason,
+                _workflow_policy_attention_reason,
+                _workflow_stage_policy,
+            )
+
+            workflow = connection.execute(
+                "SELECT * FROM processing_workflows WHERE id = ?",
+                (task["processing_workflow_id"],),
+            ).fetchone()
+            policy = _workflow_stage_policy(workflow) if workflow is not None else None
+            if policy is None:
+                admission_reason = (
+                    _workflow_policy_attention_reason(workflow) or "unknown_stage_policy"
+                    if workflow is not None
+                    else "unknown_stage_policy"
+                )
+            elif not _stage_is_enabled(policy, task["kind"]):
+                admission_reason = "stage_disabled"
+            else:
+                admission_reason = _stage_policy_admission_reason(connection, workflow)
+            if admission_reason is not None:
+                _mark_stage_policy_attention(
+                    connection, task["processing_workflow_id"], admission_reason
+                )
+                connection.execute(
+                    "UPDATE tasks SET status = 'canceled', stage = 'canceled', error_code = ?, "
+                    "error_message = ?, completed_at = CURRENT_TIMESTAMP, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = 'accepted'",
+                    (
+                        admission_reason,
+                        "Automatic stage admission is fenced by the persisted stage-policy gate.",
+                        task_id,
+                    ),
+                )
+                connection.execute(
+                    "UPDATE processing_attempts SET state = 'canceled', error_code = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (admission_reason, task["processing_attempt_id"]),
+                )
+                connection.execute(
+                    "UPDATE processing_slot SET active_task_id = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE slot_id = 1 AND active_task_id = ?",
+                    (task_id,),
+                )
+                return None
+        if (
+            task["diarization_mode"] == DIARIZATION_MODE_OFF
+            and diarization_rollback_fence_enabled()
         ):
+            if task["processing_workflow_id"] is None:
+                # Preserve the legacy/manual #261 fence semantics.  It has no
+                # automatic attempt to settle or rearm.
+                return None
+            from asr_studio.processing import (
+                DIARIZATION_ROLLBACK_FENCE_MESSAGE,
+                DIARIZATION_ROLLBACK_FENCE_REASON,
+                automatic_task_rollback_fenced_tx,
+            )
+
+            canceled = connection.execute(
+                "UPDATE tasks SET status = 'canceled', stage = 'canceled', "
+                "cancel_requested_at = CURRENT_TIMESTAMP, error_code = ?, error_message = ?, "
+                "completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND status = 'accepted'",
+                (DIARIZATION_ROLLBACK_FENCE_REASON, DIARIZATION_ROLLBACK_FENCE_MESSAGE, task_id),
+            )
+            if canceled.rowcount == 1:
+                connection.execute(
+                    "UPDATE processing_slot SET active_task_id = NULL, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE slot_id = 1 AND active_task_id = ?",
+                    (task_id,),
+                )
+                automatic_task_rollback_fenced_tx(connection, task)
             return None
         cursor = connection.execute(
             "UPDATE tasks SET status = 'running', stage = 'starting', owner_id = ?, "

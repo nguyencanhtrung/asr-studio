@@ -974,20 +974,48 @@ def test_worker_publishes_starting_before_recovery_and_idle_after(tmp_path, monk
     assert not is_healthy(data_dir)
 
 
-def test_worker_startup_refuses_empty_community_weight_before_claiming(tmp_path, monkeypatch):
+def test_transcription_worker_does_not_require_community_weight_before_claiming(
+    tmp_path, monkeypatch
+):
     data_dir, model_dir, _, settings, lock_fd = _worker_task_store(tmp_path)
     os.close(lock_fd)
     (settings.diarization_model_path / "embedding/pytorch_model.bin").write_bytes(b"")
     profile = RuntimeProfile("cpu", "int8", model_dir)
     monkeypatch.setattr(worker, "select_runtime", lambda _: profile)
 
-    def refuse_claim(*args, **kwargs):
-        pytest.fail("Worker reached the claim loop with an empty Community-1 weight")
+    monkeypatch.setattr(
+        worker,
+        "prepared_diarization_directory",
+        lambda _path: pytest.fail("ASR-only startup probed the Community-1 model"),
+    )
+    observed_roles = []
 
-    monkeypatch.setattr(worker, "claim_next_task", refuse_claim)
+    def inspect_loop(_settings, _lock_fd, _stop_event, **kwargs):
+        observed_roles.append(kwargs["role"])
+
+    monkeypatch.setattr(worker, "_worker_loop", inspect_loop)
+    worker.run_worker(settings, role="transcription")
+
+    assert observed_roles == ["transcription"]
+    assert not is_healthy(data_dir, role="transcription")
+
+
+def test_legacy_worker_still_requires_community_weight_before_claiming(tmp_path, monkeypatch):
+    data_dir, model_dir, _, settings, lock_fd = _worker_task_store(tmp_path)
+    os.close(lock_fd)
+    (settings.diarization_model_path / "embedding/pytorch_model.bin").write_bytes(b"")
+    profile = RuntimeProfile("cpu", "int8", model_dir)
+    monkeypatch.setattr(worker, "select_runtime", lambda _: profile)
+    monkeypatch.setattr(
+        worker,
+        "_worker_loop",
+        lambda *_args, **_kwargs: pytest.fail(
+            "legacy worker started with an empty Community-1 model"
+        ),
+    )
+
     with pytest.raises(RuntimeConfigurationError, match="embedding/pytorch_model.bin is empty"):
-        worker.run_worker(settings, role="transcription")
-
+        worker.run_worker(settings, role="legacy")
     assert not is_healthy(data_dir)
 
 

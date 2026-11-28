@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import uuid
+from itertools import product
 
 import pytest
 from notes_helpers import seed_cited_notes
@@ -47,6 +49,23 @@ def _open_automatic_processing(page, language="vi"):
         page.locator("#settings-tab-ai").click()
         page.locator("[data-settings-overview='processing'] .provider-overview-row").click()
     expect(page.locator("#automatic-preferences-form")).to_have_attribute("aria-busy", "false")
+
+
+def _hold_stage_policy_read(monkeypatch, *, fail=False):
+    from asr_studio import processing_routes
+
+    entered, release = threading.Event(), threading.Event()
+    read_policy = processing_routes.processing_stage_policy
+
+    def delayed_read(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=15), "test did not release the real stage-policy GET"
+        if fail:
+            raise RuntimeError("held stage-policy read failed")
+        return read_policy(*args, **kwargs)
+
+    monkeypatch.setattr(processing_routes, "processing_stage_policy", delayed_read)
+    return entered, release
 
 
 def _seed_ready_processing_meeting(
@@ -144,6 +163,286 @@ def test_settings_show_explicit_recipe_and_waiting_reason_in_vi_then_en_dark(liv
     expect(page.locator("#automatic-preferences-provider-help")).to_contain_text("The transcript")
     expect(page.locator("#automatic-preferences-save")).to_be_disabled()
     context.close()
+
+
+@pytest.mark.parametrize(
+    ("width", "theme", "language"),
+    list(product((1440, 390), ("light", "dark"), ("vi", "en"))),
+    ids=[
+        f"{'desktop' if width == 1440 else 'mobile'}-{language}-{theme}"
+        for width, theme, language in product((1440, 390), ("light", "dark"), ("vi", "en"))
+    ],
+)
+def test_stage_policy_preserves_dependent_draft_and_focuses_after_conflict(
+    live, signed_in, width, theme, language
+):
+    context, page = signed_in(
+        color_scheme=theme,
+        viewport={"width": width, "height": 860},
+    )
+    try:
+        page.evaluate("(lang) => localStorage.setItem('asr-studio:lang', lang)", language)
+        page.reload(wait_until="domcontentloaded")
+        _open_automatic_processing(page, language=language)
+
+        form = page.locator("#processing-stage-policy-form")
+        expect(form).to_have_attribute("aria-busy", "false")
+        asr = page.locator("#processing-stage-policy-asr")
+        diarization = page.locator("#processing-stage-policy-diarization")
+        notes = page.locator("#processing-stage-policy-notes")
+        save = page.locator("#processing-stage-policy-save")
+        reload_button = page.locator("#processing-stage-policy-reload")
+        status = page.locator("#processing-stage-policy-status")
+        error = page.locator("#processing-stage-policy-error")
+        notice = page.locator("#processing-stage-policy-notice")
+
+        expect(asr).to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        expect(status).to_contain_text(
+            "Máy chủ chưa cho phép chạy stage. Bản ghi không được xem là đã xử lý."
+            if language == "vi"
+            else "The server does not allow stages to run. Do not treat the recording as processed."
+        )
+        advanced = page.locator(".stage-policy-advanced")
+        advanced.locator("summary").click()
+        expect(page.locator("#processing-stage-policy-version")).to_have_text("v1")
+        expect(page.locator("#processing-stage-policy-format")).to_have_text("v1")
+        expect(page.locator("#processing-stage-policy-admission")).to_contain_text("disabled")
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
+        baseline = _processing_request(page, "/api/processing-stage-policy/v1")
+
+        # The dependent values stay checked in the draft while ASR makes them
+        # ineffective. A separate real save advances the shared version so the
+        # UI's next PUT receives the backend's actual 409 conflict.
+        asr.uncheck()
+        expect(diarization).to_be_disabled()
+        expect(notes).to_be_disabled()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        expect(notice).to_be_hidden()
+        _processing_request(
+            page,
+            "/api/processing-stage-policy/v1",
+            "PUT",
+            {
+                "expected_preference_version": baseline["preference_version"],
+                "format_version": 1,
+                "asr": True,
+                "diarization": True,
+                "notes": True,
+            },
+        )
+
+        save.click()
+        expect(error).to_be_visible()
+        expect(notice).to_be_hidden()
+        expect(status).to_be_focused()
+        expect(status).to_contain_text(
+            "Cài đặt đã đổi ở nơi khác" if language == "vi" else "The settings changed elsewhere"
+        )
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+
+        # Conflict does not overwrite the draft. Reload is explicit, then the
+        # same draft can be reviewed and saved against the new version.
+        reload_button.focus()
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "GET"
+                and response.url.endswith("/api/processing-stage-policy/v1")
+            )
+        ) as reloaded:
+            page.keyboard.press("Enter")
+        assert reloaded.value.status == 200
+        expect(form).to_have_attribute("aria-busy", "false")
+        assert page.evaluate("document.activeElement?.id") in {
+            "processing-stage-policy-reload",
+            "processing-stage-policy-status",
+        }
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        expect(save).to_be_enabled()
+        save.click()
+        expected_notice = (
+            "Đã lưu công tắc"
+            if language == "vi"
+            else "Processing switches for new Extension recordings saved"
+        )
+        expect(notice).to_contain_text(expected_notice)
+        expect(status).to_be_focused()
+        expect(error).to_be_hidden()
+        expect(status).to_contain_text(
+            "Máy chủ chưa cho phép chạy stage"
+            if language == "vi"
+            else "The server does not allow stages to run"
+        )
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
+        final = _processing_request(page, "/api/processing-stage-policy/v1")
+        assert final["policy"] == {"asr": False, "diarization": True, "notes": True}
+    finally:
+        context.close()
+
+
+def test_stage_policy_reload_failure_preserves_draft_and_actionable_focus(
+    live, signed_in, monkeypatch
+):
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    release = None
+    try:
+        _open_automatic_processing(page)
+        form = page.locator("#processing-stage-policy-form")
+        expect(form).to_have_attribute("aria-busy", "false")
+        entered, release = _hold_stage_policy_read(monkeypatch, fail=True)
+        asr = page.locator("#processing-stage-policy-asr")
+        diarization = page.locator("#processing-stage-policy-diarization")
+        notes = page.locator("#processing-stage-policy-notes")
+        reload_button = page.locator("#processing-stage-policy-reload")
+        error = page.locator("#processing-stage-policy-error")
+        status = page.locator("#processing-stage-policy-status")
+
+        asr.uncheck()
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        reload_button.focus()
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "GET"
+                and response.url.endswith("/api/processing-stage-policy/v1")
+            )
+        ) as reloaded:
+            page.keyboard.press("Enter")
+            assert entered.wait(timeout=5), "the real stage-policy GET did not start"
+            expect(form).to_have_attribute("aria-busy", "true")
+            release.set()
+        assert reloaded.value.status == 500
+        expect(form).to_have_attribute("aria-busy", "false")
+        expect(error).to_be_visible()
+        expect(error).not_to_have_text("")
+        expect(status).not_to_have_text("")
+        expect(asr).not_to_be_checked()
+        expect(diarization).to_be_checked()
+        expect(notes).to_be_checked()
+        assert page.evaluate("document.activeElement?.id") in {
+            "processing-stage-policy-reload",
+            "processing-stage-policy-status",
+        }
+    finally:
+        if release:
+            release.set()
+        context.close()
+
+
+@pytest.mark.parametrize(
+    "movement",
+    ["advanced", "other-control", "leave-section", "close-modal"],
+    ids=["advanced", "other-control", "leave-section", "close-modal"],
+)
+def test_stage_policy_reload_does_not_steal_focus_after_user_movement(
+    live, signed_in, monkeypatch, movement
+):
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    release = None
+    try:
+        _open_automatic_processing(page)
+        form = page.locator("#processing-stage-policy-form")
+        expect(form).to_have_attribute("aria-busy", "false")
+        entered, release = _hold_stage_policy_read(monkeypatch)
+        reload_button = page.locator("#processing-stage-policy-reload")
+        reload_button.focus()
+
+        if movement == "close-modal":
+            with page.expect_request(
+                lambda request: (
+                    request.method == "GET"
+                    and request.url.endswith("/api/processing-stage-policy/v1")
+                )
+            ) as reloading:
+                page.keyboard.press("Enter")
+            request = reloading.value
+            assert entered.wait(timeout=5), "the real stage-policy GET did not start"
+            expect(form).to_have_attribute("aria-busy", "true")
+            page.locator("#connections-close").click()
+            expect(page.locator("#connections-dialog")).to_be_hidden()
+            expect(form).to_have_attribute("aria-busy", "false")
+            release.set()
+            # Closing cancels this read; it need not produce an HTTP response.
+            response = request.response()
+            if response is None:
+                assert request.failure and "ERR_ABORTED" in request.failure
+            else:
+                assert response.status == 200
+            expect(page.locator("#settings-open")).to_be_focused()
+            return
+
+        target = {
+            "advanced": page.locator(".stage-policy-advanced summary"),
+            "other-control": page.locator("#automatic-preferences-asr-language"),
+            "leave-section": page.locator("#settings-tab-asr"),
+        }[movement]
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "GET"
+                and response.url.endswith("/api/processing-stage-policy/v1")
+            )
+        ) as reloaded:
+            page.keyboard.press("Enter")
+            assert entered.wait(timeout=5), "the real stage-policy GET did not start"
+            if movement == "leave-section":
+                target.click()
+            else:
+                target.focus()
+            expect(target).to_be_focused()
+            release.set()
+        assert reloaded.value.status == 200
+        expect(form).to_have_attribute("aria-busy", "false")
+        expect(target).to_be_focused()
+    finally:
+        if release:
+            release.set()
+        context.close()
+
+
+def test_stage_policy_save_keeps_focus_when_user_moves_during_request(live, signed_in, monkeypatch):
+    from asr_studio import processing_routes
+
+    entered, release = threading.Event(), threading.Event()
+    save_policy = processing_routes.save_processing_stage_policy
+
+    def delayed_save(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=15), "test did not release the real stage-policy save"
+        return save_policy(*args, **kwargs)
+
+    monkeypatch.setattr(processing_routes, "save_processing_stage_policy", delayed_save)
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    try:
+        _open_automatic_processing(page)
+        page.locator("#processing-stage-policy-asr").uncheck()
+        page.locator("#processing-stage-policy-save").click()
+        assert entered.wait(timeout=5)
+        summary = page.locator(".stage-policy-advanced summary")
+        summary.focus()
+        summary.press("Enter")
+        expect(summary).to_be_focused()
+        release.set()
+        expect(page.locator("#processing-stage-policy-notice")).to_contain_text("Đã lưu công tắc")
+        expect(summary).to_be_focused()
+        expect(page.locator("#processing-stage-policy-status")).to_contain_text(
+            "Máy chủ chưa cho phép"
+        )
+        actual = _processing_request(page, "/api/processing-stage-policy/v1")
+        assert actual["policy"]["asr"] is False
+    finally:
+        release.set()
+        context.close()
 
 
 @pytest.mark.parametrize("draft_before_leaving", [False, True])
@@ -399,3 +698,42 @@ def test_preference_save_failure_then_success_preserves_focus_and_status(
     finally:
         context.close()
         os.close(lock)
+
+
+@pytest.mark.parametrize("first_form", ["stage", "workflow"])
+def test_stage_and_workflow_saves_refresh_shared_version_without_losing_drafts(
+    live, signed_in, worker, first_form
+):
+    context, page = signed_in(viewport={"width": 1440, "height": 900})
+    try:
+        _open_automatic_processing(page)
+        stage_asr = page.locator("#processing-stage-policy-asr")
+        language = page.locator("#automatic-preferences-asr-language")
+        expect(page.locator("#processing-stage-policy-form")).to_have_attribute(
+            "aria-busy", "false"
+        )
+        stage_asr.uncheck()
+        language.select_option("en")
+        forms = [first_form, "workflow" if first_form == "stage" else "stage"]
+        for form in forms:
+            if form == "stage":
+                expect(stage_asr).not_to_be_checked()
+                page.locator("#processing-stage-policy-save").click()
+                expect(page.locator("#processing-stage-policy-notice")).to_contain_text(
+                    "Đã lưu công tắc"
+                )
+                expect(page.locator("#processing-stage-policy-error")).to_be_hidden()
+                expect(page.locator("#processing-stage-policy-status")).to_be_focused()
+            else:
+                expect(language).to_have_value("en")
+                page.locator("#automatic-preferences-save").click()
+                expect(page.locator("#automatic-preferences-notice")).to_contain_text(
+                    "Đã lưu cài đặt xử lý tự động"
+                )
+                expect(page.locator("#automatic-preferences-error")).to_be_hidden()
+        actual_stage = _processing_request(page, "/api/processing-stage-policy/v1")
+        actual_workflow = _processing_request(page, "/api/processing-preferences")
+        assert actual_stage["policy"] == {"asr": False, "diarization": True, "notes": True}
+        assert actual_workflow["asr"]["language"] == "en"
+    finally:
+        context.close()

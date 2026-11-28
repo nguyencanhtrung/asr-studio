@@ -18,7 +18,10 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import wave
+from contextlib import nullcontext
+from itertools import product
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -49,6 +52,13 @@ class RequestLog(list):
     fail_create_responses = False
     cancel_not_found = False
     reject_recording_requests = False
+    hide_stage_policy = False
+
+    def __init__(self):
+        super().__init__()
+        self.create_bodies = []
+        self.create_capability_reads = []
+        self.hidden_stage_policy_reads = 0
 
 
 def _approve_host_permission(page, server_url: str) -> None:
@@ -156,7 +166,9 @@ def capture_server(tmp_path, request):
         extension_max_staging_bytes=quota,
     )
     adapter = FakeChatGPTAdapter()
-    if request.node.name.startswith("test_native_capture_runs_transcript_and_notes"):
+    if request.node.name.startswith(
+        ("test_native_capture_runs_transcript_and_notes", "test_native_stage_matrix")
+    ):
         settings = processing_settings(settings, tmp_path, adapter)
     app = create_app(settings, chatgpt_adapter=adapter)
     requests = RequestLog()
@@ -171,6 +183,9 @@ def capture_server(tmp_path, request):
     async def record_requests(request, call_next):
         nonlocal transient_remaining, activation_requests
         requests.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/api/extension/v1/recording-sessions":
+            requests.create_bodies.append(json.loads((await request.body()).decode("utf-8")))
+            requests.create_capability_reads.append(requests.hidden_stage_policy_reads)
         if request.url.path == "/api/extension/v1/session":
             activation_requests += 1
             if activation_status and activation_requests > activation_after:
@@ -191,6 +206,13 @@ def capture_server(tmp_path, request):
             # The server hides a session from another device's owner behind this 404.
             return JSONResponse({"error": {"code": "recording_not_found"}}, status_code=404)
         response = await call_next(request)
+        if requests.hide_stage_policy and request.url.path == "/api/extension/v1/capabilities":
+            # Emulate changed advertised format knowledge only. The real session
+            # and replay handlers still own the persisted first request/ACK.
+            payload = json.loads(b"".join([part async for part in response.body_iterator]))
+            payload["features"].pop("stage_policy")
+            requests.hidden_stage_policy_reads += 1
+            return JSONResponse(payload, status_code=response.status_code)
         if (
             requests.fail_create_responses
             and request.method == "POST"
@@ -246,6 +268,89 @@ def _status(page):
     return page.evaluate(
         "async () => (await chrome.runtime.sendMessage({target:'worker',type:'GET_STATUS'})).status"
     )
+
+
+def _local_capture_row(page, recording_id):
+    return page.evaluate(
+        """async id => {
+        const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('asr-extension-production-v1');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        return await new Promise((resolve, reject) => {
+            const request = db.transaction('sessions').objectStore('sessions').get(id);
+            request.onsuccess = () => { db.close(); resolve(request.result); };
+            request.onerror = () => { db.close(); reject(request.error); };
+        });
+    }""",
+        recording_id,
+    )
+
+
+def _native_processing(page, meeting_id):
+    return page.evaluate(
+        """async id => {
+            const response = await fetch(`/api/meetings/${id}/processing`);
+            if (response.status === 404) return null;
+            if (!response.ok) throw new Error(await response.text());
+            return await response.json();
+        }""",
+        meeting_id,
+    )
+
+
+def _configure_native_recipe(operator, recipe):
+    asr, diarization, notes = recipe
+    operator.evaluate(
+        """async ({asr, diarization, notes}) => {
+            const preferences = await fetch('/api/processing-preferences', {
+                method: 'PUT', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    asr_choice: 'auto', asr_language: 'vi', notes_provider: 'chatgpt',
+                    notes_model: 'gpt-6.1-sol', notes_reasoning_effort: 'high',
+                    notes_output_language: 'en'
+                })
+            });
+            if (!preferences.ok) throw new Error(await preferences.text());
+            return true;
+        }""",
+        {"asr": asr, "diarization": diarization, "notes": notes},
+    )
+    return _set_native_stage_policy(operator, recipe)
+
+
+def _set_native_stage_policy(operator, recipe):
+    asr, diarization, notes = recipe
+    return operator.evaluate(
+        """async ({asr, diarization, notes}) => {
+            const current = await fetch('/api/processing-stage-policy/v1');
+            if (!current.ok) throw new Error(await current.text());
+            const saved = await current.json();
+            const stage = await fetch('/api/processing-stage-policy/v1', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    expected_preference_version: saved.preference_version,
+                    format_version: 1, asr, diarization, notes
+                })
+            });
+            if (!stage.ok) throw new Error(await stage.text());
+            return await stage.json();
+        }""",
+        {"asr": asr, "diarization": diarization, "notes": notes},
+    )
+
+
+def _wait_native_processing(operator, meeting_id, predicate, timeout=90):
+    deadline = time.monotonic() + timeout
+    state = None
+    while time.monotonic() < deadline:
+        state = _native_processing(operator, meeting_id)
+        if state is not None and predicate(state):
+            return state
+        operator.wait_for_timeout(150)
+    raise AssertionError(f"processing did not reach the expected state: {state}")
 
 
 def _pair_again_code(operator, record_id):
@@ -353,6 +458,75 @@ class NativePopup:
     def close(self):
         self.cdp.send("Target.closeTarget", {"targetId": self.target_id})
         self.cdp.detach()
+
+
+def _inject_offscreen_intent_write_failure(context, worker, tab):
+    worker.evaluate(
+        """async () => {
+            if (!await chrome.offscreen.hasDocument()) {
+                await chrome.offscreen.createDocument({
+                    url: 'offscreen.html', reasons: ['USER_MEDIA'],
+                    justification: 'Test the durable capture-intent write boundary.'
+                });
+            }
+            return true;
+        }"""
+    )
+    cdp = context.browser.new_browser_cdp_session()
+    try:
+        deadline = time.monotonic() + 10
+        target = None
+        while time.monotonic() < deadline and target is None:
+            target = next(
+                (
+                    item
+                    for item in cdp.send("Target.getTargets")["targetInfos"]
+                    if item["url"] == f"chrome-extension://{EXTENSION_ID}/offscreen.html"
+                ),
+                None,
+            )
+            if target is None:
+                tab.wait_for_timeout(50)
+        assert target is not None, cdp.send("Target.getTargets")
+        session_id = cdp.send(
+            "Target.attachToTarget", {"targetId": target["targetId"], "flatten": False}
+        )["sessionId"]
+        expression = """(() => {
+            const originalPut = IDBObjectStore.prototype.put;
+            IDBObjectStore.prototype.put = function(value, ...args) {
+                if (value?.capture?.createIntent && value?.capture?.createPayload) {
+                    throw new DOMException(
+                        'Injected durable intent write failure', 'QuotaExceededError'
+                    );
+                }
+                return originalPut.call(this, value, ...args);
+            };
+            return true;
+        })()"""
+        response = {}
+
+        def receive(event):
+            if event["sessionId"] == session_id:
+                message = json.loads(event["message"])
+                if message.get("id") == 1:
+                    response.update(message)
+
+        cdp.on("Target.receivedMessageFromTarget", receive)
+        cdp.send(
+            "Target.sendMessageToTarget",
+            {
+                "sessionId": session_id,
+                "message": json.dumps(
+                    {"id": 1, "method": "Runtime.evaluate", "params": {"expression": expression}}
+                ),
+            },
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not response:
+            tab.wait_for_timeout(50)
+        assert response.get("result", {}).get("result", {}).get("value") is True, response
+    finally:
+        cdp.detach()
 
 
 @pytest.fixture
@@ -753,6 +927,9 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
         for method, path in requests
     )
 
+    assert _local_capture_row(control, session["id"])["upload"]["createAttempted"]
+    assert requests.create_bodies[0]["stage_policy"] == {"format_version": 1}
+    requests.hide_stage_policy = True
     cdp = context.browser.new_browser_cdp_session()
     try:
         targets = cdp.send("Target.getTargets")["targetInfos"]
@@ -766,7 +943,6 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
         )
         assert offscreen, targets
         cdp.send("Target.closeTarget", {"targetId": offscreen["targetId"]})
-        requests.fail_create_responses = False
         targets = cdp.send("Target.getTargets")["targetInfos"]
         service_worker = next(
             (item for item in targets if item["type"] == "service_worker"),
@@ -794,6 +970,7 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
         ).fetchall() == [(session["id"], "receiving")]
     assert not any(path.endswith("/cancel") for _method, path in requests)
 
+    requests.fail_create_responses = False
     control.once("dialog", lambda dialog: dialog.accept())
     control.locator('[data-action="cancel-remote"]').click()
     deadline = time.monotonic() + 30
@@ -833,8 +1010,124 @@ def test_native_uncertain_create_waits_for_choice_then_cancel_reconciles(
         )
         >= 2
     )
+    assert len(requests.create_bodies) >= 2
+    assert all(body == requests.create_bodies[0] for body in requests.create_bodies)
+    assert requests.hidden_stage_policy_reads > 0
+    assert any(reads > 0 for reads in requests.create_capability_reads)
     assert any(path.endswith("/cancel") for _method, path in requests)
     assert not any(path.endswith("/finalize") for _method, path in requests)
+
+
+def test_native_stage_intent_write_failure_keeps_create_at_zero(capture_server, paired_capture):
+    settings, _url, requests, _tls = capture_server
+    context, worker, _operator, control, tab = paired_capture
+    _inject_offscreen_intent_write_failure(context, worker, tab)
+
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    tab.wait_for_timeout(1500)
+    popup.close()
+
+    session = None
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        sessions = _status(control)["sessions"]
+        session = sessions[0] if sessions else None
+        if session and session["capture"]["interrupted"]:
+            break
+        control.wait_for_timeout(100)
+    assert session and session["capture"]["interrupted"], session
+    assert session["capture"]["error"]
+    assert not any(
+        method == "POST" and path == "/api/extension/v1/recording-sessions"
+        for method, path in requests
+    )
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT count(*) FROM extension_recording_sessions").fetchone() == (0,)
+        assert db.execute("SELECT count(*) FROM recordings").fetchone() == (0,)
+
+
+def test_native_stage_old_unposted_row_survives_refresh_as_legacy(
+    capture_server, paired_capture, monkeypatch
+):
+    from asr_studio import extension_routes
+
+    settings, _url, requests, _tls = capture_server
+    context, _worker, _operator, control, tab = paired_capture
+    version = extension_routes.EXTENSION_API_VERSION
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version + 1)
+    popup = NativePopup(context, tab)
+    popup.click("#start-button")
+    popup.wait_text("#capture-state", "Recording")
+    popup.close()
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        session = _status(control)["sessions"][0]
+        if session["capture"]["chunkCount"] > 0:
+            break
+        control.wait_for_timeout(100)
+    assert session["capture"]["chunkCount"] > 0, session
+    control.locator("#stop-button").click()
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        session = _status(control)["sessions"][0]
+        if session["capture"]["captureComplete"]:
+            break
+        control.wait_for_timeout(100)
+    assert session["capture"]["captureComplete"]
+    local = _local_capture_row(control, session["id"])
+    assert local["upload"]["createAttempted"] is False
+    assert local["upload"]["serverSessionId"] is None
+    assert requests.create_bodies == []
+
+    # The incompatible preflight let the production recorder retain real local
+    # chunks without a create attempt. Seed only the pre-intent row shape; never
+    # reset an attempt marker or rewrite an already attempted request.
+    legacy_body = control.evaluate("""async () => {
+        const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('asr-extension-production-v1');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        return await new Promise((resolve, reject) => {
+            const transaction = db.transaction('sessions', 'readwrite');
+            const store = transaction.objectStore('sessions');
+            const request = store.getAll();
+            let payload;
+            request.onsuccess = () => {
+                const [row] = request.result;
+                if (row.upload.createAttempted) throw new Error('unexpected create attempt');
+                const endpoint = {...row.endpoint};
+                delete endpoint.stagePolicy;
+                const capture = {...row.capture};
+                delete capture.createIntent;
+                payload = capture.createPayload;
+                store.put({...row, endpoint, capture});
+            };
+            transaction.oncomplete = () => { db.close(); resolve(payload); };
+            transaction.onerror = () => { db.close(); reject(transaction.error); };
+        });
+    }""")
+    monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version)
+    control.reload()
+    expect(control.locator("#global-error")).to_have_text("", timeout=20000)
+    deadline = time.monotonic() + 60
+    saved = None
+    while time.monotonic() < deadline:
+        saved = _status(control)["sessions"][0]
+        if saved["upload"]["cleaned"]:
+            break
+        control.wait_for_timeout(150)
+    assert saved and saved["upload"]["cleaned"], saved
+    assert requests.create_bodies == [legacy_body]
+    assert "stage_policy" not in legacy_body
+    assert legacy_body["client_recording_id"] == session["id"] == saved["id"]
+    assert saved["upload"]["receipt"]["recording_id"]
+    with sqlite3.connect(database_path(settings.data_dir)) as db:
+        assert db.execute("SELECT count(*) FROM recordings").fetchone() == (1,)
+        assert db.execute(
+            "SELECT stage_policy_format, stage_policy_intent_json FROM extension_recording_sessions"
+        ).fetchall() == [(0, None)]
 
 
 def _record_then_close_source_tab(settings, context, control, tab):
@@ -948,6 +1241,35 @@ def test_native_source_end_then_save_creates_labeled_meeting(
         "async id => (await (await fetch('/api/meetings/' + id)).json())", meetings[0]["id"]
     )
     assert detail["recording"]["interrupted"] == {"code": session["capture"]["interruptionCode"]}
+    # The new-format gate starts disabled. Saving raw audio still succeeds, but
+    # source confirmation must agree with the server's admission guard.
+    assert detail["processing"]["action_blocked_reason"] == "stage_policy_admission_disabled"
+    assert detail["processing"]["actions"]["use_current_source"] is False
+    enabled = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "asr_studio.cli",
+            "stage-policy",
+            "enable",
+            "--acknowledge-compatible-processes-stopped",
+            "--json",
+        ],
+        env={
+            **os.environ,
+            "ASR_DATA_DIR": str(settings.data_dir),
+            "ASR_AUTH_DIR": str(settings.auth_dir),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert json.loads(enabled.stdout)["admission"]["state"] == "enabled"
+    detail = operator.evaluate(
+        "async id => (await (await fetch('/api/meetings/' + id)).json())", meetings[0]["id"]
+    )
+    assert detail["processing"]["action_blocked_reason"] is None
     assert detail["processing"]["actions"]["use_current_source"] is True
     finalize = [path for method, path in requests if path.endswith("/finalize")]
     assert len(finalize) == 1
@@ -1339,7 +1661,8 @@ def test_paired_extension_retains_and_retries_audio_after_server_api_change(
     popup = NativePopup(context, tab)
     popup.click("#start-button")
     popup.wait_text("#capture-state", "Recording")
-    # Pairing already minted a token, so the rejected request must trigger a fresh probe.
+    # The fresh preflight rejects the incompatible API before any create POST,
+    # even though pairing had already minted a cached session token.
     warning = "Incompatible API. Check the extension and server versions."
     popup.wait_text("#error-copy", warning)
     assert popup.evaluate("!document.querySelector('#error-copy').parentElement.hidden")
@@ -1361,7 +1684,10 @@ def test_paired_extension_retains_and_retries_audio_after_server_api_change(
     assert session["upload"]["error"]["code"] == "api_version_mismatch"
     assert not session["upload"]["cleaned"] and not session["upload"]["receipt"]
     assert sum(path.endswith("/capabilities") for _method, path in requests) >= 2
-    assert ("POST", "/api/extension/v1/recording-sessions") in requests
+    assert not any(
+        method == "POST" and path == "/api/extension/v1/recording-sessions"
+        for method, path in requests
+    )
     assert not any(path.endswith("/finalize") for _method, path in requests)
 
     monkeypatch.setattr(extension_routes, "EXTENSION_API_VERSION", version)
@@ -1839,3 +2165,289 @@ def test_capture_survives_release_permission_denial_and_failed_daily_check(paire
         control.wait_for_timeout(100)
     assert worker.evaluate("self.failedReleaseChecks") == 2
     assert worker.evaluate("name => chrome.alarms.get(name)", alarm)["periodInMinutes"] == 1440
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    list(product((False, True), repeat=3)),
+    ids=lambda value: "native" + "".join("1" if item else "0" for item in value),
+)
+def test_native_stage_matrix(recipe, capture_server, paired_capture, tmp_path, monkeypatch):
+    asr, diarization, notes = recipe
+    settings, url, requests, _tls = capture_server
+    context, _worker, operator, control, tab = paired_capture
+    db_path = database_path(settings.data_dir)
+    saved_policy = _configure_native_recipe(operator, recipe)
+    assert saved_policy["policy"] == {
+        "asr": asr,
+        "diarization": diarization,
+        "notes": notes,
+    }
+    expected_pinned = {
+        "asr_choice": "auto",
+        "asr_language": "vi",
+        "notes_provider": "chatgpt",
+        "notes_model": "gpt-6.1-sol",
+        "notes_reasoning_effort": "high",
+        "notes_output_language": "en",
+    }
+
+    hidden_models = []
+    unavailable = []
+    if not asr:
+        unavailable.append(settings.asr_model_path)
+    if not asr or not diarization:
+        unavailable.append(settings.diarization_model_path)
+    for path in unavailable:
+        assert path.is_relative_to(tmp_path) and path.is_dir()
+        hidden = path.with_name(path.name + "-fixture-hidden")
+        path.rename(hidden)
+        hidden_models.append((path, hidden))
+        assert not path.exists()
+
+    worker_scope = (
+        synthetic_processing_worker(settings, tmp_path, monkeypatch) if asr else nullcontext()
+    )
+    with worker_scope:
+        if not asr:
+            catalog = operator.evaluate("async () => (await fetch('/api/asr-models')).json()")
+            assert catalog["asr_models"] and all(
+                not model["ready"] for model in catalog["asr_models"]
+            )
+        if not asr or not diarization:
+            capability = operator.evaluate(
+                "async () => (await fetch('/api/diarization-capability')).json()"
+            )
+            assert capability["community_1"]["operator_prepared"] is False
+            assert capability["community_1"]["reason"] == "model_unavailable"
+            if asr:
+                assert capability["off"]["ready"] is True
+        with hold_derivative_normalization(monkeypatch) as normalizing:
+            popup = NativePopup(context, tab)
+            popup.click("#start-button")
+            popup.wait_text("#capture-state", "Recording")
+            popup.close()
+            deadline = time.monotonic() + 20
+            session = None
+            while time.monotonic() < deadline:
+                sessions = _status(control)["sessions"]
+                session = sessions[0] if sessions else None
+                if session and session["capture"]["chunkCount"] > 0:
+                    break
+                control.wait_for_timeout(100)
+            assert session and session["capture"]["chunkCount"] > 0, session
+            control.locator("#stop-button").click()
+            assert normalizing.wait(timeout=30), "derivative normalization never started"
+            expect(control.locator(".session-title")).to_have_text(
+                "Server saved the raw audio", timeout=20000
+            )
+            [session] = _status(control)["sessions"]
+            receipt = session["upload"]["receipt"]
+            assert session["capture"]["captureComplete"]
+            assert session["upload"]["cleaned"]
+            assert receipt and receipt["chunk_count"] == session["capture"]["chunkCount"]
+            session_id = receipt["recording_id"]
+            with sqlite3.connect(db_path) as db:
+                raw = db.execute(
+                    "SELECT sessions.state, sessions.receipt_at, sessions.raw_key, "
+                    "recordings.meeting_id, recordings.storage_key "
+                    "FROM extension_recording_sessions AS sessions "
+                    "JOIN recordings ON recordings.extension_session_id = sessions.id "
+                    "WHERE sessions.id = ?",
+                    (session_id,),
+                ).fetchone()
+                assert db.execute("SELECT count(*) FROM processing_workflows").fetchone() == (0,)
+                assert db.execute("SELECT count(*) FROM tasks").fetchone() == (0,)
+            assert raw and raw[0] in {"archived", "finalizing"} and raw[1] and raw[2]
+            assert raw[4] is None
+            raw_audio = settings.data_dir / raw[2]
+            assert raw_audio.is_file() and raw_audio.stat().st_size == receipt["total_bytes"]
+            meeting_id = raw[3]
+
+        deadline = time.monotonic() + 60
+        ready = None
+        while time.monotonic() < deadline:
+            with sqlite3.connect(db_path) as db:
+                ready = db.execute(
+                    "SELECT sessions.state, sessions.raw_key, recordings.storage_key "
+                    "FROM extension_recording_sessions AS sessions "
+                    "JOIN recordings ON recordings.extension_session_id = sessions.id "
+                    "WHERE sessions.id = ?",
+                    (session_id,),
+                ).fetchone()
+                workflow_count = db.execute("SELECT count(*) FROM processing_workflows").fetchone()[
+                    0
+                ]
+            if ready and ready[0] == "ready" and ready[2] and workflow_count == 1:
+                break
+            operator.wait_for_timeout(150)
+        assert ready and ready[0] == "ready" and ready[2] and workflow_count == 1, ready
+        assert ready[1] != ready[2]
+        assert (settings.data_dir / ready[1]).is_file()
+        assert (settings.data_dir / ready[2]).is_file()
+
+        state = _wait_native_processing(
+            operator,
+            meeting_id,
+            lambda value: (
+                value["state"] == "succeeded"
+                and all(step["state"] in {"succeeded", "skipped"} for step in value["steps"])
+            ),
+        )
+        assert state["stage_policy"] == {"format_version": 1, **saved_policy["policy"]}
+        assert state["pinned"] == expected_pinned
+        steps = {step["kind"]: step for step in state["steps"]}
+        if asr:
+            assert steps["transcription"]["state"] == "succeeded"
+            assert steps["notes"]["state"] == ("succeeded" if notes else "skipped")
+            expected_kinds = ["notes", "transcription"] if notes else ["transcription"]
+        else:
+            assert steps["transcription"]["state"] == "skipped"
+            assert steps["notes"]["state"] == "skipped"
+            expected_kinds = []
+
+        with sqlite3.connect(db_path) as db:
+            assert db.execute("SELECT kind FROM tasks ORDER BY kind").fetchall() == [
+                (kind,) for kind in expected_kinds
+            ]
+            generations = db.execute(
+                "SELECT id, diarization_mode, diarization_model_name, regular_turn_count, "
+                "exclusive_turn_count, alignment_policy FROM transcript_generations"
+            ).fetchall()
+            notes_rows = db.execute(
+                "SELECT revisions.source_snapshot_id, sources.generation_id "
+                "FROM notes_revisions AS revisions "
+                "JOIN notes_sources AS sources ON sources.id = revisions.source_snapshot_id"
+            ).fetchall()
+            assert db.execute("SELECT count(*) FROM processing_workflows").fetchone() == (1,)
+            if asr:
+                assert len(generations) == 1
+                generation = generations[0]
+                assert generation[1:] == (
+                    "community-1" if diarization else "off",
+                    "Community-1" if diarization else None,
+                    1 if diarization else 0,
+                    1 if diarization else 0,
+                    "community-1-exclusive-max-overlap-v1" if diarization else None,
+                )
+                segment = db.execute(
+                    "SELECT start_seconds, end_seconds, text, original_speaker_id, speaker_id "
+                    "FROM transcript_segments WHERE generation_id = ?",
+                    (generation[0],),
+                ).fetchone()
+                assert segment[:3] == (1.1, 1.5, "Synthetic meeting transcript.")
+                if diarization:
+                    assert segment[3:] == ("SPEAKER_00", "SPEAKER_00")
+                else:
+                    assert segment[3:] == (None, None)
+            else:
+                assert generations == []
+            if asr and notes:
+                assert len(notes_rows) == 1
+                assert steps["notes"]["source_snapshot_id"] == notes_rows[0][0]
+                assert steps["notes"]["source_generation_id"] == notes_rows[0][1]
+                source_row = db.execute(
+                    "SELECT generation_id, source_version, snapshot_json "
+                    "FROM notes_sources WHERE id = ?",
+                    (notes_rows[0][0],),
+                ).fetchone()
+                assert source_row[:2] == (generation[0], 1)
+                source = json.loads(source_row[2])
+                assert source["generation_id"] == generation[0] and source["source_version"] == 1
+                segment_id = db.execute(
+                    "SELECT id FROM transcript_segments WHERE generation_id = ?", (generation[0],)
+                ).fetchone()[0]
+                expected_speaker = "SPEAKER_00" if diarization else None
+                assert source["segments"] == [
+                    {
+                        "id": segment_id,
+                        "sequence": 0,
+                        "start_seconds": 1.1,
+                        "end_seconds": 1.5,
+                        "text": "Synthetic meeting transcript.",
+                        "original_speaker_id": expected_speaker,
+                        "speaker_id": expected_speaker,
+                        "speaker_name": "Speaker 1" if diarization else None,
+                    }
+                ]
+            else:
+                assert notes_rows == []
+
+        # Matrix 001 proves that a later manual transcript does not auto-create
+        # Notes even though the pinned Notes switch was on.
+        if recipe == (False, False, True):
+            for path, hidden in hidden_models:
+                hidden.rename(path)
+            with synthetic_processing_worker(settings, tmp_path, monkeypatch):
+                accepted = operator.evaluate(
+                    """async ({meetingId, requestId}) => {
+                        const response = await fetch('/api/tasks', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({meeting_id: meetingId, request_id: requestId,
+                                language_hint: 'vi', asr_model: 'auto'})
+                        });
+                        if (response.status !== 202) throw new Error(await response.text());
+                        return await response.json();
+                    }""",
+                    {"meetingId": meeting_id, "requestId": f"manual-native-{uuid.uuid4().hex}"},
+                )
+                assert accepted["status"] == "accepted"
+                task_id = accepted["id"]
+                deadline = time.monotonic() + 45
+                task_status = None
+                while time.monotonic() < deadline:
+                    with sqlite3.connect(db_path) as db:
+                        task_status = db.execute(
+                            "SELECT status FROM tasks WHERE id = ?", (task_id,)
+                        ).fetchone()
+                    if task_status == ("succeeded",):
+                        break
+                    operator.wait_for_timeout(150)
+                assert task_status == ("succeeded",)
+            state = _native_processing(operator, meeting_id)
+            assert {step["kind"]: step for step in state["steps"]}["notes"]["state"] == "skipped"
+            with sqlite3.connect(db_path) as db:
+                assert db.execute("SELECT kind FROM tasks ORDER BY kind").fetchall() == [
+                    ("transcription",)
+                ]
+                assert db.execute("SELECT count(*) FROM notes_revisions").fetchone() == (0,)
+
+        # Rendered stage guards use the actual meeting page and never promote a
+        # skipped stage to generated-output-complete.
+        skipped = {
+            "transcription": not asr,
+            "notes": not asr or not notes,
+        }
+        if any(skipped.values()):
+            meeting_page = context.new_page()
+            try:
+                meeting_page.goto(f"{url}/meetings/{meeting_id}")
+                expect(meeting_page.locator("#automatic-processing-panel")).to_be_visible(
+                    timeout=20000
+                )
+                rendered = meeting_page.locator(".automatic-processing-step").evaluate_all(
+                    """elements => elements.map(element => ({
+                        kind: element.dataset.kind,
+                        state: element.dataset.state,
+                        text: element.innerText
+                    }))"""
+                )
+                for index, item in enumerate(rendered):
+                    kind = ("transcription", "notes")[index]
+                    if skipped[kind]:
+                        assert item["state"] == "skipped", item
+                        assert "Đã bỏ qua" in item["text"] or "Skipped" in item["text"], item
+                        assert "Complete" not in item["text"] and "Hoàn tất" not in item["text"], (
+                            item
+                        )
+            finally:
+                meeting_page.close()
+
+        before_default_change = _native_processing(operator, meeting_id)
+        _set_native_stage_policy(operator, tuple(not value for value in recipe))
+        after_default_change = _native_processing(operator, meeting_id)
+        assert after_default_change["stage_policy"] == before_default_change["stage_policy"]
+        assert after_default_change["pinned"] == before_default_change["pinned"] == expected_pinned
+        assert after_default_change["current_source"] == before_default_change["current_source"]
+        with sqlite3.connect(db_path) as db:
+            assert db.execute("SELECT count(*) FROM processing_workflows").fetchone() == (1,)

@@ -11,7 +11,7 @@ from pathlib import Path
 from asr_studio.notes_history import install_notes_history
 from asr_studio.transcript_history import install_transcript_history
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 def _install_notes_lifecycle(connection: sqlite3.Connection) -> None:
@@ -938,6 +938,77 @@ def _migrate_v21(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_v25(connection: sqlite3.Connection) -> None:
+    """Persist stage policy snapshots and the fail-closed admission gate.
+
+    Existing processing preferences remain all-on, while workflows and
+    extension sessions use format zero to identify the legacy shape.  The
+    distinction lets a maintenance build retain format knowledge without
+    treating a legacy row as a capable stage-policy snapshot.
+    """
+    preference_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(processing_preferences)")
+    }
+    for column, definition in (
+        ("stage_policy_format", "INTEGER NOT NULL DEFAULT 1 CHECK(stage_policy_format >= 0)"),
+        ("stage_asr_enabled", "INTEGER NOT NULL DEFAULT 1 CHECK(stage_asr_enabled IN (0, 1))"),
+        (
+            "stage_diarization_enabled",
+            "INTEGER NOT NULL DEFAULT 1 CHECK(stage_diarization_enabled IN (0, 1))",
+        ),
+        ("stage_notes_enabled", "INTEGER NOT NULL DEFAULT 1 CHECK(stage_notes_enabled IN (0, 1))"),
+    ):
+        if column not in preference_columns:
+            connection.execute(
+                f"ALTER TABLE processing_preferences ADD COLUMN {column} {definition}"
+            )
+
+    workflow_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(processing_workflows)")
+    }
+    for column, definition in (
+        ("stage_policy_format", "INTEGER NOT NULL DEFAULT 0 CHECK(stage_policy_format >= 0)"),
+        (
+            "stage_policy_quarantine_format",
+            "INTEGER CHECK(stage_policy_quarantine_format IS NULL OR stage_policy_quarantine_format >= 0)",
+        ),
+        ("stage_asr_enabled", "INTEGER NOT NULL DEFAULT 1 CHECK(stage_asr_enabled IN (0, 1))"),
+        (
+            "stage_diarization_enabled",
+            "INTEGER NOT NULL DEFAULT 1 CHECK(stage_diarization_enabled IN (0, 1))",
+        ),
+        ("stage_notes_enabled", "INTEGER NOT NULL DEFAULT 1 CHECK(stage_notes_enabled IN (0, 1))"),
+    ):
+        if column not in workflow_columns:
+            connection.execute(f"ALTER TABLE processing_workflows ADD COLUMN {column} {definition}")
+
+    session_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(extension_recording_sessions)")
+    }
+    for column, definition in (
+        ("stage_policy_format", "INTEGER NOT NULL DEFAULT 0 CHECK(stage_policy_format >= 0)"),
+        ("stage_policy_intent_json", "TEXT"),
+    ):
+        if column not in session_columns:
+            connection.execute(
+                f"ALTER TABLE extension_recording_sessions ADD COLUMN {column} {definition}"
+            )
+
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS processing_cutover_gate ("
+        "id INTEGER PRIMARY KEY CHECK(id = 1), "
+        "format_version INTEGER NOT NULL CHECK(format_version >= 1), "
+        "admission TEXT NOT NULL CHECK(admission IN ('enabled', 'disabled')), "
+        "reason TEXT, "
+        "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    )
+    connection.execute(
+        "INSERT OR IGNORE INTO processing_cutover_gate"
+        "(id, format_version, admission, reason) VALUES (1, 1, 'disabled', 'execution_not_ready')"
+    )
+
+
 def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "app.sqlite3"
 
@@ -1113,6 +1184,9 @@ def initialize(data_dir: Path) -> Path:
         if current_version < 24:
             _install_notes_lifecycle(connection)
             connection.execute("INSERT INTO schema_migrations(version) VALUES (24)")
+        if current_version < 25:
+            _migrate_v25(connection)
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (25)")
         connection.commit()
     finally:
         connection.close()

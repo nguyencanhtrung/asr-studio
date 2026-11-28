@@ -14,6 +14,77 @@ export const DEFAULT_LIMITS = Object.freeze({
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const SAFE_SEGMENT = /^[A-Za-z0-9._~-]+$/;
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+const STAGE_POLICY_CONTRACT_VERSION = 1;
+const STAGE_POLICY_FORMAT_VERSION = 1;
+
+function isObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function validVersion(value) {
+  return Number.isSafeInteger(value) && value >= 1;
+}
+
+function stagePolicyState({ knowledge, admission, contractVersion = null, formatVersion = null, reason = null }) {
+  return Object.freeze({ knowledge, admission, contractVersion, formatVersion, reason });
+}
+
+export function unknownStagePolicy(reason = "unknown") {
+  return stagePolicyState({ knowledge: "unknown", admission: "unknown", reason });
+}
+
+// Capability format knowledge is intentionally separate from endpoint identity.
+// In particular, only a successfully parsed response with no stage_policy member
+// is allowed to mean "legacy". Every other uncertain result fails closed.
+export function stagePolicyFromCapabilities(capabilities) {
+  if (!isObject(capabilities)
+    || capabilities.protocol !== PROTOCOL
+    || capabilities.api_version !== API_VERSION
+    || capabilities.prototype !== PROTOTYPE) {
+    return stagePolicyState({ knowledge: "unknown", admission: "unknown", reason: "malformed_capabilities" });
+  }
+  if (!Object.hasOwn(capabilities, "features")) {
+    return stagePolicyState({ knowledge: "absent", admission: "legacy", reason: "feature_absent" });
+  }
+  if (!isObject(capabilities.features)) {
+    return stagePolicyState({ knowledge: "unknown", admission: "unknown", reason: "malformed_features" });
+  }
+  if (!Object.hasOwn(capabilities.features, "stage_policy")) {
+    return stagePolicyState({ knowledge: "absent", admission: "legacy", reason: "feature_absent" });
+  }
+  const feature = capabilities.features.stage_policy;
+  if (!isObject(feature)) {
+    return stagePolicyState({ knowledge: "unknown", admission: "unknown", reason: "malformed_stage_policy" });
+  }
+  if (feature.supported === false) {
+    return stagePolicyState({ knowledge: "unsupported", admission: "unknown", reason: "unsupported_feature" });
+  }
+  if (feature.supported !== true || !validVersion(feature.contract_version) || !validVersion(feature.format_version)) {
+    return stagePolicyState({ knowledge: "unknown", admission: "unknown", reason: "malformed_stage_policy" });
+  }
+  if (feature.contract_version !== STAGE_POLICY_CONTRACT_VERSION || feature.format_version !== STAGE_POLICY_FORMAT_VERSION) {
+    return stagePolicyState({
+      knowledge: "unsupported",
+      admission: "unknown",
+      contractVersion: feature.contract_version,
+      formatVersion: feature.format_version,
+      reason: "unsupported_format"
+    });
+  }
+  const admission = feature.admission;
+  if (!isObject(admission) || !["enabled", "draining", "disabled"].includes(admission.state)
+    || admission.format_version !== feature.format_version
+    || admission.reason !== null && typeof admission.reason !== "string") {
+    return stagePolicyState({ knowledge: "unknown", admission: "unknown", reason: "malformed_admission" });
+  }
+  return stagePolicyState({
+    knowledge: "known",
+    admission: admission.state,
+    contractVersion: feature.contract_version,
+    formatVersion: feature.format_version,
+    reason: admission.reason
+  });
+}
 
 export function isValidDeviceExpiresAt(value) {
   if (value === null) return true;
@@ -218,6 +289,7 @@ export function bindingFromCapabilities(serverUrl, capabilities) {
   limits.max_local_bytes = Math.min(limits.max_local_bytes, DEFAULT_LIMITS.max_local_bytes);
   limits.max_chunks = Math.min(limits.max_chunks, DEFAULT_LIMITS.max_chunks);
   limits.max_duration_seconds = Math.min(limits.max_duration_seconds, DEFAULT_LIMITS.max_duration_seconds);
+  const stagePolicy = stagePolicyFromCapabilities(capabilities);
   return Object.freeze({
     serverUrl: base,
     webUrl,
@@ -227,7 +299,8 @@ export function bindingFromCapabilities(serverUrl, capabilities) {
     protocol: PROTOCOL,
     prototype: PROTOTYPE,
     limits,
-    mimeTypes: [MIME_TYPE]
+    mimeTypes: [MIME_TYPE],
+    stagePolicy
   });
 }
 

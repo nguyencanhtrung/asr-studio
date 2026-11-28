@@ -23,6 +23,8 @@ import {
   runLockedUploadPass,
   runReconcileCreateThenCancel
 } from "../upload-runner.js";
+import { createCaptureIntent, createPayloadForSession, validateCreateResponseForSession } from "../intent-core.js";
+import { validateSessionResponse } from "../protocol.js";
 
 const NOW = 10_000;
 
@@ -410,6 +412,132 @@ test("reconcile persists the create marker before POST, then cancels without upl
   assert.equal(result.upload.cancelSettled, true);
   assert.equal(events.includes("upload"), false);
   assert.equal(events.includes("finalize"), false);
+});
+
+test("the create and persist runner retains an old local row after a legacy ACK", async () => {
+  const payload = {
+    client_recording_id: "legacy-client-1",
+    capture_epoch: "legacy-epoch-1",
+    mime_type: "audio/webm;codecs=opus",
+    title: "Legacy recording",
+  };
+  const original = {
+    clientRecordingId: payload.client_recording_id,
+    endpoint: {
+      serverUrl: "https://asr.example.test",
+      webUrl: "https://asr.example.test",
+      backendId: "backend-a",
+    },
+    capture: { createPayload: payload },
+    upload: { createAttempted: false, serverSessionId: null, serverEpoch: null },
+  };
+  const sent = [];
+  const result = await runCreateWithAttempt({
+    session: original,
+    persistAttempt: async (current) => ({
+      ...current,
+      upload: { ...current.upload, createAttempted: true },
+    }),
+    postCreate: async (current) => {
+      const body = createPayloadForSession(current);
+      sent.push(body);
+      return {
+        body: {
+          backend_id: "backend-a",
+          id: "server-legacy-1",
+          epoch: 4,
+          next_sequence: 0,
+          next_offset: 0,
+        },
+      };
+    },
+    persistResult: async (current, response) => {
+      const remote = validateSessionResponse(response.body, current.endpoint);
+      validateCreateResponseForSession(response.body, current);
+      return {
+        ...current,
+        upload: {
+          ...current.upload,
+          serverSessionId: remote.id,
+          serverEpoch: remote.epoch,
+        },
+      };
+    },
+  });
+  assert.deepEqual(sent, [payload]);
+  assert.equal(result.upload.serverSessionId, "server-legacy-1");
+  assert.equal(result.upload.serverEpoch, 4);
+  assert.equal(result.capture.createPayload.stage_policy, undefined);
+});
+
+test("an attempted new row replays the exact durable first body", () => {
+  const payload = {
+    client_recording_id: "new-client-1",
+    capture_epoch: "new-epoch-1",
+    mime_type: "audio/webm;codecs=opus",
+    title: "New recording",
+    metadata: { language: "vi" },
+  };
+  const row = {
+    clientRecordingId: payload.client_recording_id,
+    endpoint: { backendId: "backend-a", stagePolicy: { knowledge: "known", admission: "enabled", formatVersion: 1 } },
+    capture: {
+      captureEpoch: payload.capture_epoch,
+      createPayload: payload,
+      createIntent: createCaptureIntent({
+        clientRecordingId: payload.client_recording_id,
+        captureEpoch: payload.capture_epoch,
+        stagePolicy: { knowledge: "known", admission: "enabled", formatVersion: 1, contractVersion: 1 },
+        createJson: payload,
+      }),
+    },
+    upload: { createAttempted: true },
+  };
+  assert.deepEqual(createPayloadForSession(row), {
+    ...payload,
+    stage_policy: { format_version: 1 },
+  });
+  assert.deepEqual(validateCreateResponseForSession({ stage_policy: {
+    format_version: 1,
+    intent: { format_version: 1 },
+  } }, row), { format_version: 1, intent: { format_version: 1 } });
+});
+
+test("an attempted new row with a missing intent cannot downgrade to legacy", () => {
+  const payload = {
+    client_recording_id: "new-client-2",
+    capture_epoch: "new-epoch-2",
+    mime_type: "audio/webm;codecs=opus",
+  };
+  const row = {
+    clientRecordingId: payload.client_recording_id,
+    endpoint: { backendId: "backend-a", stagePolicy: { knowledge: "unknown", admission: "unknown" } },
+    capture: { captureEpoch: payload.capture_epoch, createPayload: payload, createIntent: null },
+    upload: { createAttempted: true },
+  };
+  assert.throws(() => createPayloadForSession(row), { code: "intent_missing" });
+  assert.throws(() => validateCreateResponseForSession({}, row), { code: "stage_policy_not_ready" });
+});
+
+test("a self-consistent intent for another recording cannot cross the session identity fence", () => {
+  const intent = createCaptureIntent({
+    clientRecordingId: "recording-a",
+    captureEpoch: "epoch-a",
+    stagePolicy: { knowledge: "known", admission: "enabled", formatVersion: 1, contractVersion: 1 },
+    createJson: {
+      client_recording_id: "recording-a",
+      capture_epoch: "epoch-a",
+      mime_type: "audio/webm;codecs=opus",
+    },
+  });
+  const row = {
+    clientRecordingId: "recording-b",
+    endpoint: { backendId: "backend-a", stagePolicy: { knowledge: "known", admission: "enabled", formatVersion: 1 } },
+    capture: { captureEpoch: "epoch-b", createPayload: intent.create_json, createIntent: intent },
+    upload: { createAttempted: true },
+  };
+  assert.throws(() => createPayloadForSession(row), { code: "invalid_create_intent" });
+  assert.throws(() => validateCreateResponseForSession({}, row), { code: "invalid_create_intent" });
 });
 
 test("discard releases local deletion when authorization stalls and fences the late cancel", async () => {

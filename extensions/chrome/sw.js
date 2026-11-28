@@ -13,11 +13,17 @@ import {
   redactedBinding,
   resolveMeetingUrl,
   sameBinding,
+  unknownStagePolicy,
   validateBackendIdentity,
   validateChunkAck,
   validateReceipt,
   validateSessionResponse
 } from "./protocol.js";
+import {
+  createCaptureIntentForSession,
+  createPayloadForSession,
+  validateCreateResponseForSession
+} from "./intent-core.js";
 import {
   cleanupReceipt,
   commitRecoveryChoice,
@@ -231,6 +237,22 @@ async function getCurrentContext() {
   return context && context.binding ? context : null;
 }
 
+// Stage capability knowledge may change without changing endpoint identity. Keep
+// it in the trusted context so the next capture records it, while old session rows
+// retain their own endpoint and durable intent snapshots.
+async function refreshStoredBinding(context, binding) {
+  const key = contextKey(binding);
+  const stored = await storageGet(TRUSTED_CONTEXTS);
+  const contexts = { ...(stored[TRUSTED_CONTEXTS] || {}) };
+  const current = contexts[key] || context;
+  if (!current?.binding || !sameBinding(current.binding, binding)) return context;
+  const next = { ...current, binding };
+  contexts[key] = next;
+  context.binding = binding;
+  await storageSet({ [TRUSTED_CONTEXTS]: contexts });
+  return next;
+}
+
 async function getConfiguredServerUrl() {
   const current = await getCurrentContext();
   if (current?.binding?.serverUrl) return current.binding.serverUrl;
@@ -435,9 +457,14 @@ async function checkPairedApi(context, timeoutMs) {
     const mismatch = storedApiError(binding);
     if (mismatch) throw mismatch;
     const response = await fetchJson(binding.serverUrl, "api/extension/v1/capabilities", { cache: "no-store" }, timeoutMs);
-    bindingFromCapabilities(binding.serverUrl, response.body);
+    const refreshed = bindingFromCapabilities(binding.serverUrl, response.body);
+    await refreshStoredBinding(context, refreshed);
     if (incompatibleBindings.delete(key)) void broadcastStatus().catch(() => {});
   } catch (error) {
+    await refreshStoredBinding(context, Object.freeze({
+      ...binding,
+      stagePolicy: unknownStagePolicy(error?.code || "capability_unavailable")
+    })).catch(() => {});
     if (error.code === "api_version_mismatch") {
       sessionTokens.delete(key);
       if (!incompatibleBindings.has(key)) {
@@ -738,6 +765,10 @@ async function startFromTab(tabId, source = "action") {
         error: { code: "setup_required", message: "Hoàn tất thiết lập microphone và server trước khi ghi." }
       };
     }
+    // Refresh format knowledge before the capture's durable intent is written.
+    // A failed or malformed probe is unknown; local recording may continue, but
+    // prepareCreateSession must re-negotiate before any create POST.
+    await checkPairedApi(current, 15000).catch(() => {});
     await reconcileCaptureOwner({ duringStart: true }).catch(() => {});
     const existing = await getActiveCapture();
     if (existing) throw makeError("capture_busy", "Đã có một bản ghi đang chạy.");
@@ -824,6 +855,31 @@ function isRetryable(error) {
   return ["network_error", "timeout", "backend_unavailable", "backend_storage", "byte_limit", "api_version_mismatch"].includes(error?.code) || error?.status >= 500;
 }
 
+function canNegotiateCreateIntent(stagePolicy) {
+  return stagePolicy?.knowledge === "known" && stagePolicy.formatVersion === 1
+    || stagePolicy?.knowledge === "absent" && stagePolicy.admission === "legacy";
+}
+
+async function prepareCreateSession(session, context, timeoutMs, deadlineAt) {
+  try {
+    createPayloadForSession(session);
+    return session;
+  } catch (error) {
+    // A fresh capability failure can leave a new row with an unknown intent.
+    // Re-negotiate only before the durable create marker. Once the marker is
+    // set, createPayloadForSession replays the stored first body unchanged.
+    if (session.upload?.createAttempted || !["intent_missing", "invalid_create_intent", "stage_policy_not_ready"].includes(error?.code)) {
+      throw error;
+    }
+    await checkPairedApi(context, remainingTimeout(deadlineAt, timeoutMs));
+    if (!canNegotiateCreateIntent(context.binding?.stagePolicy)) {
+      throw makeError("stage_policy_not_ready", "The server has not confirmed a supported capture format.");
+    }
+    const createIntent = createCaptureIntentForSession(session, context.binding.stagePolicy);
+    return patchSession(session.clientRecordingId, "capture", { createIntent });
+  }
+}
+
 async function sessionContext(session) {
   const stored = await storageGet(TRUSTED_CONTEXTS);
   const contexts = stored[TRUSTED_CONTEXTS] || {};
@@ -881,7 +937,6 @@ async function cancelRemoteSession(session, context, options = {}) {
 
 async function createRemoteSession(session, context, options = {}) {
   if (session.upload.serverSessionId) return session;
-  if (!session.capture.createPayload) throw makeError("capture_metadata_missing", "The capture request payload was not persisted.");
   const {
     allowRenew = true,
     canCommit = () => true,
@@ -889,6 +944,7 @@ async function createRemoteSession(session, context, options = {}) {
     persist = true,
     timeoutMs = 15000
   } = options;
+  session = await prepareCreateSession(session, context, timeoutMs, deadlineAt);
   return runCreateWithAttempt({
     session,
     persistAttempt: (current) => current.upload.createAttempted
@@ -897,10 +953,11 @@ async function createRemoteSession(session, context, options = {}) {
     postCreate: (current) => authorizedRequest(context, "api/extension/v1/recording-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(current.capture.createPayload)
+      body: JSON.stringify(createPayloadForSession(current))
     }, allowRenew, timeoutMs, deadlineAt),
     persistResult: (current, response) => {
       const remote = validateSessionResponse(response.body, current.endpoint);
+      validateCreateResponseForSession(response.body, current);
       const uploadPatch = {
         state: "receiving",
         serverSessionId: remote.id,

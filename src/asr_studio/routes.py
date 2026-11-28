@@ -485,6 +485,10 @@ def install_routes(
     async def processing_preferences_core_js() -> FileResponse:
         return _asset_response("processing-preferences-core.js", "text/javascript")
 
+    @app.get("/assets/processing-stage-policy-core.js", include_in_schema=False)
+    async def processing_stage_policy_core_js() -> FileResponse:
+        return _asset_response("processing-stage-policy-core.js", "text/javascript")
+
     @app.get("/assets/connections.js", include_in_schema=False)
     async def connections_js() -> Response:
         asset_path = WEB_DIR / "connections.js"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from test_chatgpt_provider import connect
 from asr_studio import extension_ingest, worker
 from asr_studio.chatgpt import ChatGPTProvider
 from asr_studio.runtime import RuntimeProfile, write_runtime_profile
+from asr_studio.storage import initialize
 
 
 def processing_settings(settings, directory, adapter):
@@ -50,6 +52,31 @@ def processing_settings(settings, directory, adapter):
     )
     provider.ensure()
     connect(provider)
+    # This is a disposable native fixture. Enable the real admission gate via
+    # the operator CLI so scheduler, worker, and publication assertions exercise
+    # the declared stage recipe instead of mutating the gate behind its API.
+    initialize(settings.data_dir)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "asr_studio.cli",
+            "stage-policy",
+            "enable",
+            "--acknowledge-old-processes-stopped",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env={
+            **os.environ,
+            "ASR_DATA_DIR": str(settings.data_dir),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+    )
+    assert json.loads(result.stdout)["admission"]["state"] == "enabled"
     return settings
 
 

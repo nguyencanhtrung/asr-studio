@@ -9,6 +9,17 @@ const t = (text, params) => (params ? { text, params } : { text });
 const done = (state, effects = []) => ({ state, effects });
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const TERMINAL = new Set(["succeeded", "canceled", "deleted"]);
+const GLOBAL_ACTION_BLOCKED_REASONS = new Set([
+  "stage_policy_admission_disabled",
+  "unknown_stage_policy",
+  "unknown_stage_policy_format",
+  "unknown_stage_policy_gate",
+]);
+const STAGE_HOLD_REASONS = new Set([
+  ...GLOBAL_ACTION_BLOCKED_REASONS,
+  "diarization_rollback_fence",
+]);
+const MUTATING_ACTIONS = new Set(["retry_notes", "apply_current_settings", "use_current_source"]);
 const POLL_DELAY = 1000;
 const POLL_ERROR_DELAY = 2000;
 
@@ -52,12 +63,17 @@ export function normalizeWorkflow(payload) {
     .filter((step) => isObject(step) && (step.kind === "transcription" || step.kind === "notes") && typeof step.state === "string")
     .map((step) => ({ ...step }));
   if (steps.length !== 2 || !steps.some((step) => step.kind === "transcription") || !steps.some((step) => step.kind === "notes")) return null;
+  const actionBlockedReasonPresent = Object.hasOwn(source, "action_blocked_reason");
   return {
     ...source,
     epoch,
     preferences_version: Number.isSafeInteger(Number(source.preferences_version)) ? Number(source.preferences_version) : null,
     steps,
     current_source: isObject(source.current_source) ? { ...source.current_source } : null,
+    action_blocked_reason_present: actionBlockedReasonPresent,
+    action_blocked_reason: actionBlockedReasonPresent && typeof source.action_blocked_reason === "string"
+      ? source.action_blocked_reason
+      : null,
     actions: {
       cancel: source.actions.cancel === true,
       retry_notes: source.actions.retry_notes === true,
@@ -208,7 +224,7 @@ function initialIntent(kind, workflow) {
 }
 
 function startAction(state, kind, requestId, intended = null) {
-  if (!state.workflow || state.action || !state.workflow.actions?.[kind]) return done(state);
+  if (!state.workflow || state.action || !state.workflow.actions?.[kind] || isMutationBlocked(state.workflow, kind)) return done(state);
   const action = { kind, requestId, phase: kind === "cancel" ? "sending" : "reading", intended: intended || initialIntent(kind, state.workflow) };
   if (kind === "cancel") {
     const body = { request_id: requestId, expected_pipeline_epoch: state.workflow.epoch };
@@ -299,7 +315,11 @@ function actionSucceeded(state, action) {
     : kind === "use_current_source"
       ? state.action.intended?.generation_id
         ? t("Đã áp dụng nguồn transcript đang hiển thị. Notes sẽ dùng phiên bản đã xác nhận.")
-        : t("Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.")
+        : stageEnabled(workflow, "asr")
+          ? stageEnabled(workflow, "notes")
+            ? t("Đã xác nhận thông tin cuộc họp. ASR tự động sẽ chép lời bản ghi gốc.")
+            : t("Đã xác nhận thông tin cuộc họp. ASR sẽ chép lời bản ghi gốc; Notes đang tắt.")
+          : t("Đã xác nhận thông tin cuộc họp. ASR và Notes đang tắt; bản ghi sẽ giữ nguyên.")
       : kind === "apply_current_settings"
         ? t("Đã áp dụng cài đặt đang hiển thị cho workflow này.")
         : t("Đã hủy xử lý tự động. Workflow đã được khóa, không tự chạy lại.");
@@ -425,32 +445,129 @@ const WAITING_REASONS = {
   interrupted_recording: t("Bản ghi bị gián đoạn. Xử lý tự động chỉ chạy khi bạn xác nhận chép lời phần đã ghi."),
   transcript_required: t("Đang chờ transcript trước khi tạo notes."),
   canceled_by_operator: t("Đã hủy bởi người dùng."),
+  stage_disabled: t("Stage này được tắt trong recipe của workflow."),
+  stage_policy_admission_disabled: t("Máy chủ chưa cho phép tự động xử lý. Kiểm tra cấu hình rồi tải lại trạng thái; ứng dụng không tự thử lại."),
+  unknown_stage_policy: t("Máy chủ chưa nhận diện được cấu hình xử lý nên workflow đang được giữ lại. Kiểm tra cấu hình rồi tải lại trạng thái."),
+  unknown_stage_policy_format: t("Định dạng cấu hình xử lý không được hỗ trợ nên workflow đang được giữ lại. Cập nhật cấu hình rồi tải lại trạng thái."),
+  unknown_stage_policy_gate: t("Máy chủ chưa xác minh được quyền chạy tự động nên workflow đang được giữ lại. Kiểm tra cấu hình rồi tải lại trạng thái."),
+  diarization_rollback_fence: t("Máy chủ đang tạm giữ chế độ không nhận dạng người nói vì lý do an toàn. Chờ người vận hành mở lại rồi tải lại trạng thái."),
 };
 
-function stepView(step) {
+function stepHoldReason(workflow, reasons = STAGE_HOLD_REASONS) {
+  return workflow?.steps?.find((step) => reasons.has(step.waiting_reason))?.waiting_reason || null;
+}
+
+function actionBlockedReason(workflow) {
+  if (!workflow || TERMINAL.has(workflow.state)) return null;
+  if (workflow.action_blocked_reason_present) {
+    return GLOBAL_ACTION_BLOCKED_REASONS.has(workflow.action_blocked_reason) ? workflow.action_blocked_reason : null;
+  }
+  return stepHoldReason(workflow, GLOBAL_ACTION_BLOCKED_REASONS);
+}
+
+function displayHoldReason(workflow) {
+  if (!workflow || TERMINAL.has(workflow.state)) return null;
+  if (workflow.action_blocked_reason_present) {
+    if (STAGE_HOLD_REASONS.has(workflow.action_blocked_reason)) return workflow.action_blocked_reason;
+    return stepHoldReason(workflow, new Set(["diarization_rollback_fence"]));
+  }
+  return stepHoldReason(workflow);
+}
+
+function stepReasonFor(workflow, step) {
+  if (!step) return null;
+  if (workflow?.action_blocked_reason_present
+    && workflow.action_blocked_reason === null
+    && GLOBAL_ACTION_BLOCKED_REASONS.has(step.waiting_reason)) return null;
+  return step.waiting_reason;
+}
+
+function isMutationBlocked(workflow, kind) {
+  return MUTATING_ACTIONS.has(kind) && Boolean(actionBlockedReason(workflow));
+}
+
+function hasAvailableMutationAction(workflow) {
+  return Boolean(workflow)
+    && !actionBlockedReason(workflow)
+    && (workflow.actions.retry_notes === true
+      || workflow.actions.apply_current_settings === true
+      || workflow.actions.use_current_source === true);
+}
+
+function holdText(reason) {
+  return WAITING_REASONS[reason] || t("Workflow đang được giữ lại để kiểm tra cấu hình xử lý.");
+}
+
+function stageEnabled(workflow, kind) {
+  const policy = workflow?.stage_policy;
+  if (!isObject(policy) || policy.format_version !== 1 || typeof policy.asr !== "boolean"
+    || typeof policy.diarization !== "boolean" || typeof policy.notes !== "boolean") return true;
+  if (kind === "asr") return policy.asr;
+  return policy.asr && policy[kind];
+}
+
+function stageSkipped(workflow, kind) {
+  return !stageEnabled(workflow, kind) || stepOf(workflow, kind)?.state === "skipped";
+}
+
+function stepView(step, waitingReason = step?.waiting_reason) {
   if (!step) return { state: "idle", value: t("Chưa bắt đầu"), reason: null };
   if (["accepted", "running", "stopping"].includes(step.state)) {
     return { state: "active", value: step.state === "stopping" ? t("Đang dừng") : t("Đang xử lý"), reason: null };
   }
+  if (step.state === "skipped") return { state: "skipped", value: t("Đã bỏ qua"), reason: WAITING_REASONS[waitingReason] || WAITING_REASONS.stage_disabled };
   if (step.state === "succeeded") return { state: "done", value: t("Hoàn tất"), reason: null };
-  if (["failed", "needs_attention"].includes(step.state)) return { state: "problem", value: t("Cần xử lý"), reason: WAITING_REASONS[step.waiting_reason] || t("Workflow cần bạn kiểm tra.") };
-  if (step.state === "canceled") return { state: "warning", value: t("Đã hủy"), reason: WAITING_REASONS[step.waiting_reason] || null };
-  return { state: "warning", value: t("Đang chờ"), reason: WAITING_REASONS[step.waiting_reason] || t("Đang chờ xử lý.") };
+  if (["failed", "needs_attention"].includes(step.state)) return { state: "problem", value: t("Cần xử lý"), reason: WAITING_REASONS[waitingReason] || t("Workflow cần bạn kiểm tra.") };
+  if (step.state === "canceled") return { state: "warning", value: t("Đã hủy"), reason: WAITING_REASONS[waitingReason] || null };
+  return { state: "warning", value: t("Đang chờ"), reason: WAITING_REASONS[waitingReason] || t("Đang chờ xử lý.") };
 }
 
-function overallText(workflow) {
+function overallText(workflow, holdReason = displayHoldReason(workflow)) {
   if (!workflow) return null;
-  if (workflow.state === "succeeded") return t("Transcript và notes đã hoàn tất.");
+  const asrSkipped = stageSkipped(workflow, "asr");
+  const notesSkipped = stageSkipped(workflow, "notes");
+  if (workflow.state === "succeeded") {
+    if (asrSkipped && notesSkipped) return t("Bản ghi đã lưu. Transcript và notes đã bỏ qua theo cài đặt.");
+    if (asrSkipped) return t("Bản ghi đã lưu. Transcript đã bỏ qua theo cài đặt; Notes không chạy.");
+    if (notesSkipped) return t("Transcript đã hoàn tất. Notes đã bỏ qua theo cài đặt.");
+    return t("Transcript và notes đã hoàn tất.");
+  }
   if (workflow.state === "canceled") return t("Đã hủy xử lý tự động. Workflow không tự chạy lại.");
-  if (workflow.state === "running") return t("Đang xử lý transcript và notes. Trạng thái sẽ cập nhật khi workflow tiến triển.");
-  if (workflow.state === "needs_attention") return t("Workflow cần một xác nhận trước khi tiếp tục.");
+  if (holdReason) return holdText(holdReason);
+  if (workflow.state === "running") {
+    if (asrSkipped && notesSkipped) return t("Đang hoàn tất bản ghi. Transcript và notes đã tắt.");
+    if (asrSkipped) return t("Đang xử lý notes. Transcript đã bỏ qua theo cài đặt.");
+    if (notesSkipped) return t("Đang xử lý transcript. Notes đã bỏ qua theo cài đặt.");
+    return t("Đang xử lý transcript và notes. Trạng thái sẽ cập nhật khi workflow tiến triển.");
+  }
+  if (workflow.state === "needs_attention") {
+    return hasAvailableMutationAction(workflow)
+      ? t("Workflow cần một xác nhận trước khi tiếp tục.")
+      : t("Workflow đang chờ worker, model hoặc provider đã chọn.");
+  }
   return t("Workflow đang chờ worker, model hoặc provider đã chọn.");
 }
 
-function sourceText(source) {
+function sourceText(source, workflow = null, { holdReason = null, canConfirm = false } = {}) {
   if (!source) return null;
+  if (holdReason) return t("Nguồn hiện tại được giữ nguyên trong lúc workflow chờ xử lý. Chưa có thao tác xác nhận nào khả dụng.");
   if (source.generation_id === null && source.source_version === null) {
-    return t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc.", {
+    if (!canConfirm) {
+      return stageEnabled(workflow, "asr")
+        ? t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Transcript chưa được tạo.", { metadata: source.metadata_version })
+        : t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Transcript và notes đang tắt.", { metadata: source.metadata_version });
+    }
+    return stageEnabled(workflow, "asr")
+      ? t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận để chép lời bản ghi gốc.", {
+        metadata: source.metadata_version,
+      })
+      : t("Chỉ có thông tin cuộc họp · phiên bản {metadata}. Xác nhận nguồn hiện tại.", {
+        metadata: source.metadata_version,
+      });
+  }
+  if (!stageEnabled(workflow, "asr")) {
+    return t("Nguồn đã chọn · nội dung phiên bản {source} · thông tin cuộc họp phiên bản {metadata}", {
+      source: source.source_version,
       metadata: source.metadata_version,
     });
   }
@@ -463,27 +580,39 @@ function sourceText(source) {
 export function selectProcessing(state) {
   const workflow = state.workflow;
   if (!workflow) return { visible: false, workflow: null, steps: [], actions: {}, message: null, error: state.error, notice: state.notice, action: state.action };
-  const transcript = stepView(stepOf(workflow, "transcription"));
-  const notes = stepView(stepOf(workflow, "notes"));
   const action = state.action;
   const intent = action?.intended;
-  const source = sourceText(workflow.current_source);
-  const interruptedStart = workflow.state === "needs_attention" &&
+  const asrEnabled = stageEnabled(workflow, "asr");
+  const notesEnabled = stageEnabled(workflow, "notes");
+  const holdReason = displayHoldReason(workflow);
+  const globalHoldReason = actionBlockedReason(workflow);
+  const transcriptStep = stepOf(workflow, "transcription");
+  const notesStep = stepOf(workflow, "notes");
+  const transcript = stepView(transcriptStep, stepReasonFor(workflow, transcriptStep));
+  const notes = stepView(notesStep, stepReasonFor(workflow, notesStep));
+  const canUseSource = !globalHoldReason && workflow.actions.use_current_source === true;
+  const source = sourceText(workflow.current_source, workflow, {
+    holdReason: globalHoldReason,
+    canConfirm: canUseSource,
+  });
+  const interruptedStart = canUseSource && !holdReason && workflow.state === "needs_attention" &&
     stepOf(workflow, "transcription")?.waiting_reason === "interrupted_recording";
-  const intended = action?.kind === "apply_current_settings" && intent?.asr
-    ? t("Áp dụng ASR {choice} · {language}; notes {provider} · {model} · {effort} · {output}.", {
+  const intended = globalHoldReason
+    ? null
+    : action?.kind === "apply_current_settings" && intent?.asr
+      ? t("Áp dụng ASR {choice} · {language}; notes {provider} · {model} · {effort} · {output}.", {
       choice: intent.asr.choice,
       language: intent.asr.language,
       provider: intent.notes.provider || t("chưa chọn provider"),
       model: intent.notes.model || t("chưa chọn model"),
       effort: intent.notes.reasoning_effort || t("mặc định"),
       output: intent.notes.output_language,
-    })
-    : action?.kind === "use_current_source" && intent && Object.hasOwn(intent, "generation_id")
-      ? sourceText(intent)
-      : action?.kind === "retry_notes" && intent?.source_snapshot_id
-        ? t("Tạo lại notes từ bản transcript đã lưu · cài đặt phiên bản {recipe}.", { recipe: intent.recipe_version })
-        : null;
+      })
+      : action?.kind === "use_current_source" && intent && Object.hasOwn(intent, "generation_id")
+        ? sourceText(intent, workflow, { canConfirm: canUseSource })
+        : action?.kind === "retry_notes" && intent?.source_snapshot_id
+          ? t("Tạo lại notes từ bản transcript đã lưu · cài đặt phiên bản {recipe}.", { recipe: intent.recipe_version })
+          : null;
   return {
     visible: true,
     workflow,
@@ -493,16 +622,24 @@ export function selectProcessing(state) {
     ],
     actions: {
       cancel: workflow.actions.cancel === true,
-      retryNotes: workflow.actions.retry_notes === true,
-      applySettings: workflow.actions.apply_current_settings === true,
-      useSource: workflow.actions.use_current_source === true,
+      retryNotes: !globalHoldReason && workflow.actions.retry_notes === true,
+      applySettings: !globalHoldReason && workflow.actions.apply_current_settings === true,
+      useSource: canUseSource,
     },
-    message: interruptedStart
-      ? t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.")
-      : overallText(workflow),
+    message: holdReason
+      ? holdText(holdReason)
+      : interruptedStart
+      ? asrEnabled
+        ? notesEnabled
+          ? t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.")
+          : t("Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời. Notes đang tắt.")
+        : t("Bản ghi bị gián đoạn. ASR và Notes đang tắt cho workflow này; xác nhận để giữ phần đã ghi.")
+      : overallText(workflow, holdReason),
     source,
-    sourceActionLabel: interruptedStart
-      ? t("Chép lời phần đã ghi")
+    sourceActionLabel: !canUseSource
+      ? null
+      : interruptedStart
+      ? asrEnabled ? t("Chép lời phần đã ghi") : t("Xác nhận phần đã ghi")
       : workflow.current_source?.generation_id === null && workflow.current_source?.source_version === null
         ? t("Xác nhận thông tin cuộc họp")
         : t("Dùng nguồn đang hiển thị"),

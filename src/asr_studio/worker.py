@@ -1129,13 +1129,14 @@ def run_worker(settings: Settings, *, role: str = "legacy") -> None:
         profile = select_runtime(settings)
         if profile.device == "cuda":
             _verify_torch_cuda()
-        try:
-            prepared_diarization_directory(settings.diarization_model_path)
-        except DiarizationConfigurationError as error:
-            raise RuntimeConfigurationError(
-                "Local Community-1 model is not prepared at "
-                f"{settings.diarization_model_path}: {error}"
-            ) from error
+        if role == "legacy":
+            try:
+                prepared_diarization_directory(settings.diarization_model_path)
+            except DiarizationConfigurationError as error:
+                raise RuntimeConfigurationError(
+                    "Local Community-1 model is not prepared at "
+                    f"{settings.diarization_model_path}: {error}"
+                ) from error
         write_runtime_profile(settings.data_dir, profile)
         heartbeat_writer(settings.data_dir, "starting")
         if role == "legacy":

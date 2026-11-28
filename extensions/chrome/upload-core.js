@@ -2,6 +2,7 @@ export const UPLOAD_RETRY_BACKOFF_MS = 5000;
 export const CANCEL_RETRY_BACKOFF_MS = 5000;
 export const NON_RETRYABLE_UPLOAD_STATES = new Set([
   "failed",
+  "needs_attention",
   "needs_reconnect",
   "auth_required",
   "receipt_mismatch",

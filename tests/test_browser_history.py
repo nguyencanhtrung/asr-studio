@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 import uvicorn
 from notes_helpers import StubNotesProvider, seed_completed_transcript
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect, sync_playwright
 from seeding import prepare_diarization_model, prepare_recording, seed_meeting
 
@@ -3958,8 +3959,72 @@ def test_transcript_reload_cannot_replace_a_newer_successful_save(live, browser_
     expect(page.get_by_role("button", name="Tải lại bản mới nhất")).to_have_count(0)
 
 
+@pytest.fixture
+def meeting_install_keyboard_trace(browser_context):
+    """Keep metadata-only diagnostics for the CI-only Escape failure, without retries."""
+    context, page = browser_context
+    received = []
+
+    def receive(kind, value):
+        received.append({"kind": kind, "received_at_ms": time.monotonic() * 1000, **value})
+
+    def record(kind, request, status=None):
+        if request.method == "GET" and re.search(r"/api/meetings/[^/?]+$", request.url):
+            receive("meeting-read", {"phase": kind, "status": status})
+
+    page.expose_binding("__recordMeetingInstallKey", lambda _source, event: receive("key", event))
+
+    page.on("request", lambda request: record("request", request))
+    page.on("response", lambda response: record("response", response.request, response.status))
+    page.on("requestfinished", lambda request: record("finished", request))
+    page.add_init_script(
+        """(() => {
+          window.__meetingInstallKeys = [];
+          const record = (event, phase) => {
+            if (event.key !== "Escape") return;
+            const target = event.target instanceof Element ? event.target : null;
+            const editor = document.querySelector(".segment-text-editor");
+            const entry = {
+              phase, key: event.key, keyCode: event.keyCode,
+              composing: event.isComposing, prevented: event.defaultPrevented,
+              target: target?.tagName || null,
+              targetIsEditor: Boolean(target?.matches(".segment-text-editor")),
+              targetInEditingRow: Boolean(target?.closest(".transcript-segment.is-editing")),
+              active: document.activeElement?.tagName || null,
+              activeIsEditor: document.activeElement === editor,
+              editorConnected: Boolean(editor?.isConnected),
+              editorVisible: Boolean(editor?.getClientRects().length),
+              busy: document.querySelector("#transcript-generation")?.getAttribute("aria-busy"),
+            };
+            window.__meetingInstallKeys.push(entry);
+            if (typeof window.__recordMeetingInstallKey === "function") {
+              void window.__recordMeetingInstallKey(entry).catch(() => {});
+            }
+          };
+          document.addEventListener("keydown", event => record(event, "capture"), true);
+          document.addEventListener("keydown", event => record(event, "bubble"));
+        })()"""
+    )
+    yield
+    try:
+        keyboard = page.evaluate("window.__meetingInstallKeys || []")
+    except PlaywrightError:
+        keyboard = {"unavailable": True}
+    print(
+        "MEETING_INSTALL_KEYBOARD_TRACE="
+        + json.dumps(
+            {
+                "browser": context.browser.version if context.browser else "unavailable",
+                "keyboard": keyboard,
+                "receipt_clock": "harness-monotonic",
+                "received_events": received,
+            }
+        )
+    )
+
+
 def test_meeting_install_preserves_newer_transcript_after_metadata_and_same_meeting_load(
-    live, browser_context
+    live, browser_context, meeting_install_keyboard_trace
 ):
     _context, page = browser_context
     meeting_id = seed_meeting(live.settings.data_dir, "Meeting install race", "2026-10-14")

@@ -28,9 +28,61 @@ that pair in the workflow defaults without changing provider stores or existing 
 A stale version returns an explicit conflict. The response version is retained and is used when a
 meeting adopts current settings.
 
+Stage policy is a separate, versioned contract. The authenticated operator reads
+`GET /api/processing-stage-policy/v1` and writes exactly
+`expected_preference_version`, `format_version`, `asr`, `diarization`, and `notes` with
+`PUT /api/processing-stage-policy/v1`. The response exposes policy format,
+`preference_version`, and admission separately. The current backend gate is
+`disabled` with reason `execution_not_ready`; this is intentionally not a runtime
+readiness claim. Existing six-field Preferences PUT and four-field Preferences PATCH
+remain unchanged.
+
+The Settings panel keeps the three stage switches compact. It explains the server admission gate
+separately from the saved draft. A successful save notice appears only after the response confirms
+the submitted version and values. Version, format, and admission reason stay in Advanced details.
+Notes needs a transcript but does not need speaker diarization.
+
+The extension capability response exposes the same format knowledge under
+`features.stage_policy`, but does not expose Settings booleans. A capable extension
+pins only the exact create intent `stage_policy: {format_version: 1}` before its first
+recording-session POST. The public connection object keeps its established identity shape; stage
+knowledge stays in the trusted binding and the durable capture intent. A row from before durable
+intents is legacy only when it has no `createIntent`, no endpoint stage-policy binding, and no
+`stage_policy` member in its stored request. An explicit unknown or malformed new intent is never
+treated as legacy. Before `createAttempted`, a successful capability probe may rebuild the intent
+from the exact stored request. After `createAttempted`, recovery replays that stored request
+without changing its identity, credentials, language, or first body.
+
+The local operator cutover is separate from the extension preference API. Use the current-source
+commands `python -m asr_studio.cli stage-policy status --json`, `disable --reason ...`, and
+`enable --acknowledge-compatible-processes-stopped`; `rollback --reason ...` is the disable path
+for binary replacement. For a first upgrade from a pre-policy release, pause new captures and
+settle or cancel existing work using that release's controls before stopping its app, scheduler,
+and workers. Back up persistent data, install the compatible source, and let its startup perform
+the additive upgrade with admission disabled. Start only compatible processes, inspect status,
+and enable with the explicit acknowledgement. The pre-policy release has no gate command.
+
+For maintenance after the gate exists, pause new captures and disable admission while the
+compatible workers are still running. Wait for reported `drained: true`, settling any legacy or
+manual slot owner through its existing controls too, before stopping and replacing the processes.
+Keep admission disabled until compatible runtime activation. Status reports
+accepted/running/stopping stage work and the actual processing-slot owner. See the detailed
+[operator cutover order](extension-stage-policy.md#operator-cutover-drain-and-rollback). There is no persisted `draining` mode, and an unknown gate remains
+fail-closed. Worker/model/provider readiness is a separate waiting condition after admission;
+the gate command does not claim inference readiness or silently choose a fallback.
+
 ## Meeting status
 
-The meeting page shows a compact automatic-processing panel with separate Transcript and Notes steps. It translates durable waiting and failure reasons such as worker offline, unavailable model, busy slot, unconfigured provider, unavailable provider, changed recipe, and source confirmation required.
+The meeting page shows a compact automatic-processing panel with separate Transcript and Notes steps. It translates durable waiting and failure reasons such as worker offline, unavailable model, busy slot, unconfigured provider, unavailable provider, changed recipe, and source confirmation required. A disabled stage is shown as **Skipped**, not as waiting, error, or canceled. A workflow with ASR or Notes disabled does not claim that missing generated output completed.
+
+The workflow response includes nullable `action_blocked_reason`, evaluated from the same
+live admission and quarantine guard as its mutation endpoints. While that guard blocks work,
+`retry_notes`, `apply_current_settings`, and `use_current_source` are unavailable; Cancel keeps
+its established lifecycle. Reading status does not modify the saved recipe, steps, attempts or
+source. A completed or skipped result stays completed or skipped during maintenance. A
+stage-local diarization fence has its own explanation and does not automatically remove valid
+Notes or source-recovery actions. Older responses without the optional field retain their
+existing waiting-reason interpretation.
 
 The workflow supports these public actions:
 
@@ -41,7 +93,7 @@ The workflow supports these public actions:
 
 The UI reads the current workflow and preference/source versions immediately before adoption. Notes retry creates only a notes attempt. It does not rerun ASR. Cancel fences the workflow and does not restart it. Current-source adoption is explicit and cannot overwrite unconfirmed transcript or metadata edits.
 
-When no current transcript generation exists, current-source adoption is the explicit confirmation of the meeting metadata and Notes-source revisions. It starts a fresh ASR attempt against the original recording, resets the waiting transcription and Notes steps, and creates no Notes snapshot until ASR publishes a real transcript. Existing-transcript adoption keeps the established Notes-only behavior and does not rerun ASR.
+When no current transcript generation exists, current-source adoption is the explicit confirmation of the meeting metadata and Notes-source revisions. With ASR enabled, it starts a fresh ASR attempt against the original recording, resets the waiting transcription and Notes steps, and creates no Notes snapshot until ASR publishes a real transcript. With ASR disabled, the action confirms the recorded part without promising transcription or Notes. Existing-transcript adoption keeps the established Notes-only behavior and does not rerun ASR. Notes does not require diarization.
 
 A saved prefix of an interrupted capture (`capture_complete: false`) creates its workflow in `needs_attention` with waiting reason `interrupted_recording`. The scheduler skips it until the operator adopts the current source; the UI labels that action **Transcribe recorded part**. The recording keeps `recording.interrupted = {code}` after processing starts.
 

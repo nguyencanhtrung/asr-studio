@@ -11,6 +11,7 @@ import {
   canonicalManifest,
   normalizeServerUrl,
   permissionPattern,
+  redactedBinding,
   resolveMeetingUrl
 } from "../protocol.js";
 
@@ -68,6 +69,24 @@ test("production binding requires the exact API endpoint and a separate web orig
     () => bindingFromCapabilities("https://asr.example.test/base", capabilities({ web_url: "http://localhost:8877" })),
     { code: "invalid_web_url" }
   );
+});
+
+test("public connection identity does not expose stage capability knowledge", () => {
+  const binding = bindingFromCapabilities("https://asr.example.test/base", capabilities({
+    features: {
+      stage_policy: {
+        supported: true,
+        contract_version: 1,
+        format_version: 1,
+        admission: { state: "disabled", format_version: 1, reason: "execution_not_ready" }
+      }
+    }
+  }));
+  const publicBinding = redactedBinding({ ...binding, paired: true });
+  assert.equal(Object.hasOwn(publicBinding, "stagePolicy"), false);
+  assert.deepEqual(Object.keys(publicBinding).sort(), [
+    "apiVersion", "backendId", "deviceExpiresAt", "limits", "paired", "protocol", "prototype", "serverUrl", "webOrigin", "webUrl"
+  ].sort());
 });
 
 test("endpoint normalization accepts only loopback HTTP and remote HTTPS", () => {

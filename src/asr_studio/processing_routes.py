@@ -15,9 +15,11 @@ from asr_studio.processing import (
     apply_current_settings,
     cancel_workflow,
     processing_preferences,
+    processing_stage_policy,
     processing_state,
     retry_notes,
     save_processing_preferences,
+    save_processing_stage_policy,
     save_workflow_preferences,
     use_current_source,
     validate_processing_preferences,
@@ -59,6 +61,35 @@ def install_processing_routes(
     chatgpt_provider: ChatGPTProvider,
     antigravity_provider: AntigravityProvider,
 ) -> None:
+    @app.get("/api/processing-stage-policy/v1")
+    async def get_processing_stage_policy() -> dict[str, object]:
+        return await run_in_threadpool(processing_stage_policy, settings.data_dir)
+
+    @app.put("/api/processing-stage-policy/v1")
+    async def put_processing_stage_policy(request: Request) -> dict[str, object]:
+        payload = await _json(
+            request,
+            {
+                "expected_preference_version",
+                "format_version",
+                "asr",
+                "diarization",
+                "notes",
+            },
+        )
+        try:
+            return await run_in_threadpool(
+                save_processing_stage_policy,
+                settings.data_dir,
+                expected_preference_version=payload["expected_preference_version"],
+                format_version=payload["format_version"],
+                asr=payload["asr"],
+                diarization=payload["diarization"],
+                notes=payload["notes"],
+            )
+        except ProcessingError as error:
+            _raise(error)
+
     @app.get("/api/processing-preferences")
     async def get_processing_preferences() -> dict[str, object]:
         return await run_in_threadpool(processing_preferences, settings.data_dir)
