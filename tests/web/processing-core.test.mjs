@@ -444,7 +444,8 @@ test("an interrupted recording without a source action does not prompt for an un
     meta: { loadId: 1 },
     response: { body: { id: "meeting-1", processing: held } },
   }).state);
-  assert.doesNotMatch(view.message.text, /Bấm Chép lời|xác nhận chép lời/);
+  assert.equal(view.message.text, "Workflow đang chờ worker, model hoặc provider đã chọn.");
+  assert.doesNotMatch(view.message.text, /xác nhận/i);
   assert.equal(view.sourceActionLabel, null);
   assert.doesNotMatch(view.source.text, /Xác nhận|Chép lời/);
 });
