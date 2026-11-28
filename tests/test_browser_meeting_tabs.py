@@ -282,7 +282,8 @@ def test_transcript_tab_holds_the_recording_block_and_the_transcript_with_counts
     panel = page.locator("#meeting-panel-transcript")
     for selector in (
         "#audio-heading",
-        ".player-bar #meeting-audio",
+        "#audio-transport",
+        "#audio-native-options > summary",
         "#transcription-panel",
         "#start-transcription",
         "#transcript-generation",
@@ -291,6 +292,17 @@ def test_transcript_tab_holds_the_recording_block_and_the_transcript_with_counts
         "#transcript-segments > li",
     ):
         expect(panel.locator(selector).first).to_be_visible()
+    # The compact transport and native options share the original real media element.
+    audio = panel.locator(".player-bar #meeting-audio")
+    expect(audio).to_have_count(1)
+    expect(audio).to_have_attribute("src", f"/api/meetings/{meeting_id}/audio")
+    expect(audio).to_have_attribute("controls", "")
+    assert audio.evaluate("element => element.paused && !element.autoplay")
+    panel.locator("#audio-native-options > summary").click()
+    expect(audio).to_be_visible()
+    expect(panel.locator("#audio-transport")).to_be_hidden()
+    panel.locator("#audio-native-options > summary").click()
+    expect(panel.locator("#audio-transport")).to_be_visible()
     expect(panel.locator("#transcript-segments > li")).to_have_count(3)
 
     expect(panel.locator("#notes-panel")).to_have_count(0)
@@ -1771,17 +1783,27 @@ def test_on_a_phone_the_tablist_is_right_under_the_header_and_the_provider_launc
             before: tabs.previousElementSibling.id,
             gap: box("#meeting-tabs").top - box("#meeting-status-strip").bottom,
             panel: box("#meeting-panel-transcript").top - box("#meeting-tabs").bottom,
-            title: box("#meeting-title").top,
-            launchers: box(".connection-launchers").bottom,
+            footerTop: box(".sidebar-footer").top,
+            footerBottom: box(".sidebar-footer").bottom,
+            footerHeight: box(".sidebar-footer").height,
+            footerPosition: getComputedStyle(document.querySelector(".sidebar-footer")).position,
+            launcherTop: box(".connection-launchers").top,
+            launcherBottom: box(".connection-launchers").bottom,
+            workspaceClearance: parseFloat(
+              getComputedStyle(document.querySelector(".workspace")).paddingBottom),
+            viewportHeight: innerHeight,
           };
         }"""
     )
     assert geometry["before"] == "meeting-status-strip"
     assert 0 <= geometry["gap"] <= 32, geometry  # nothing sits between the header and the tabs
     assert 0 <= geometry["panel"] <= 32, geometry
-    assert geometry["launchers"] <= geometry["title"], (
-        geometry
-    )  # the buttons stay above the meeting
+    # The phone footer stays reachable below the document and reserves content space.
+    assert geometry["footerPosition"] == "fixed", geometry
+    assert abs(geometry["footerBottom"] - geometry["viewportHeight"]) <= 1, geometry
+    assert geometry["footerTop"] <= geometry["launcherTop"], geometry
+    assert geometry["launcherBottom"] <= geometry["footerBottom"], geometry
+    assert geometry["workspaceClearance"] >= geometry["footerHeight"], geometry
 
     expect(page.locator(".workspace-header .connection-launchers")).to_have_count(0)
     launchers = page.locator(".sidebar-footer .connection-launcher")
