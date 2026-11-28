@@ -72,6 +72,19 @@ def test_transcript_layout_and_real_audio_transport(
     expect(page.locator("#transcript-review-only")).to_be_visible()
     expect(page.locator("#transcript-review-prev")).to_be_visible()
     expect(page.locator("#transcript-review-next")).to_be_visible()
+    accessible_names = {
+        "#transcript-review-prev": "Đoạn cần kiểm tra trước"
+        if language == "vi"
+        else "Previous segment needing review",
+        "#transcript-review-next": "Đoạn cần kiểm tra tiếp"
+        if language == "vi"
+        else "Next segment needing review",
+    }
+    for selector, name in accessible_names.items():
+        control = page.locator(selector)
+        expect(control).to_have_accessible_name(name)
+        expect(control).to_have_attribute("title", name)
+        expect(control.locator("svg")).to_have_attribute("aria-hidden", "true")
 
     ownership = page.evaluate(
         """() => ({
@@ -118,6 +131,48 @@ def test_transcript_layout_and_real_audio_transport(
     assert geometry["autoplay"] is False and geometry["paused"] is True, geometry
     assert geometry["player"]["bottom"] <= page.viewport_size["height"] + 1, geometry
     if width >= 1100:
+        toolbar = page.evaluate(
+            """() => {
+              const box = selector => {
+                const rect = document.querySelector(selector).getBoundingClientRect();
+                return {top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right};
+              };
+              const controls = [
+                box('#transcript-search'),
+                box('#transcript-filters .transcript-review-filter'),
+                box('#transcript-review-prev'),
+                box('#transcript-review-next'),
+              ];
+              return {
+                controls,
+                topDelta: Math.max(...controls.map(item => item.top))
+                  - Math.min(...controls.map(item => item.top)),
+                rowBottom: Math.max(...controls.map(item => item.bottom)),
+                status: box('#transcript-filter-status'),
+                overflow: document.documentElement.scrollWidth - innerWidth,
+              };
+            }"""
+        )
+        assert toolbar["topDelta"] <= 8, toolbar
+        assert toolbar["status"]["top"] >= toolbar["rowBottom"] - 1, toolbar
+        assert toolbar["overflow"] <= 0, toolbar
+        expect(page.locator("#transcript-filter-status")).to_contain_text("3/3")
+
+        # A real query reveals the clear action; it remains reachable and inside the reading
+        # column rather than being clipped by the one-row default navigation treatment.
+        page.locator("#transcript-search").fill("Costs look high")
+        clear = page.locator("#transcript-clear-filters")
+        expect(clear).to_be_visible()
+        assert clear.evaluate(
+            """element => {
+              const box = element.getBoundingClientRect();
+              const column = document.querySelector('.transcript-reading-column')
+                .getBoundingClientRect();
+              return box.left >= column.left && box.right <= column.right
+                && box.top >= 0 && box.bottom <= innerHeight;
+            }"""
+        )
+        page.locator("#transcript-clear-filters").click()
         assert geometry["context"]["x"] >= geometry["reading"]["right"] - 1, geometry
         assert geometry["reading"]["width"] / geometry["context"]["width"] >= 1.6, geometry
         assert page.locator("#transcript-context").evaluate("element => element.open")

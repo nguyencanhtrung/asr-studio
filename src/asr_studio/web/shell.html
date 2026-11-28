@@ -621,8 +621,14 @@
                     </label>
                     <label class="transcript-review-filter"><input id="transcript-review-only" type="checkbox" /> Chỉ đoạn cần kiểm tra</label>
                     <div class="transcript-review-navigation" role="group" aria-label="Điều hướng đoạn cần kiểm tra">
-                      <button id="transcript-review-prev" class="secondary-button" type="button">Đoạn cần kiểm tra trước</button>
-                      <button id="transcript-review-next" class="secondary-button" type="button">Đoạn cần kiểm tra tiếp</button>
+                      <button id="transcript-review-prev" class="secondary-button" type="button" aria-label="Đoạn cần kiểm tra trước" title="Đoạn cần kiểm tra trước">
+                        <svg class="transcript-review-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m12 4-6 6 6 6M6 10h8" /></svg>
+                        <span>Trước</span>
+                      </button>
+                      <button id="transcript-review-next" class="secondary-button" type="button" aria-label="Đoạn cần kiểm tra tiếp" title="Đoạn cần kiểm tra tiếp">
+                        <svg class="transcript-review-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m8 4 6 6-6 6M14 10H6" /></svg>
+                        <span>Tiếp</span>
+                      </button>
                       <button id="transcript-clear-filters" class="text-button" type="button" hidden>Xóa bộ lọc</button>
                     </div>
                     <p id="transcript-filter-status" class="field-help" role="status"></p>

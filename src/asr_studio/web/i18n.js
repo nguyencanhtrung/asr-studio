@@ -1026,6 +1026,8 @@ const { t, UI_LOCALE } = (() => {
       "Đang xử lý": "Processing",
       "Đoạn cần kiểm tra trước": "Previous segment needing review",
       "Đoạn cần kiểm tra tiếp": "Next segment needing review",
+      "Trước": "Previous",
+      "Tiếp": "Next",
       "Chỉ đoạn cần kiểm tra": "Only segments needing review",
       "Đang xử lý transcript. Chờ tác vụ kết thúc để tạo notes.": "Processing the transcript. Wait for the task to finish to create notes.",
       "Đang đưa trình phát bản ghi tới mốc nguồn…": "Moving the recording player to the source timestamp…",
