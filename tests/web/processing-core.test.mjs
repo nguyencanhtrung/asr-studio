@@ -336,8 +336,8 @@ test("metadata-only source adoption posts paired null generation and source vers
 test("metadata-only source text translates both ASR branches with the actual English translator", () => {
   const translator = englishTranslator();
   const expected = [
-    [true, "Meeting details only · revision 7. Confirm to transcribe the original recording."],
-    [false, "Meeting details only · revision 7. Confirm the current source."],
+    [true, "Meeting details only · revision 7. No transcript has been created."],
+    [false, "Meeting details only · revision 7. The transcript and notes are off."],
   ];
   const actual = [];
   for (const [asr] of expected) {
@@ -358,6 +358,26 @@ test("metadata-only source text translates both ASR branches with the actual Eng
     actual.push(translator.t(source.text, source.params));
   }
   assert.deepEqual(actual, expected.map(([, text]) => text));
+});
+
+test("a waiting metadata-only source stays descriptive when the server offers no source action", () => {
+  const result = reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: {
+      body: {
+        id: "meeting-1",
+        processing: workflow({
+          current_source: { generation_id: null, source_version: null, metadata_version: 7, notes_source_version: 1 },
+          actions: { cancel: true, retry_notes: false, apply_current_settings: false, use_current_source: false },
+        }),
+      },
+    },
+  });
+  const view = selectProcessing(result.state);
+  assert.equal(view.source.text, "Chỉ có thông tin cuộc họp · phiên bản {metadata}. Transcript chưa được tạo.");
+  assert.equal(view.sourceActionLabel, null);
+  assert.doesNotMatch(view.source.text, /Xác nhận|Chép lời/);
 });
 
 test("source adoption rejects a mixed null generation/source pair before posting", () => {
@@ -407,4 +427,202 @@ test("an interrupted recording waits for an explicit transcription start", () =>
   assert.equal(view.message.text, "Bản ghi bị gián đoạn nên chưa tự xử lý. Bấm Chép lời phần đã ghi để bắt đầu chép lời và tạo notes.");
   assert.equal(view.steps[0].state, "problem");
   assert.match(view.steps[0].reason.text, /gián đoạn/);
+});
+
+test("an interrupted recording without a source action does not prompt for an unavailable start", () => {
+  const held = workflow({
+    state: "needs_attention",
+    current_source: { generation_id: null, source_version: null, metadata_version: 1, notes_source_version: 1 },
+    steps: [
+      { id: "transcription", kind: "transcription", state: "needs_attention", waiting_reason: "interrupted_recording", source_snapshot_id: null, recipe_version: 1 },
+      { id: "notes", kind: "notes", state: "needs_attention", waiting_reason: "interrupted_recording", source_snapshot_id: null, recipe_version: 1 },
+    ],
+    actions: { cancel: true, retry_notes: false, apply_current_settings: false, use_current_source: false },
+  });
+  const view = selectProcessing(reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: held } },
+  }).state);
+  assert.doesNotMatch(view.message.text, /Bấm Chép lời|xác nhận chép lời/);
+  assert.equal(view.sourceActionLabel, null);
+  assert.doesNotMatch(view.source.text, /Xác nhận|Chép lời/);
+});
+
+const stageHoldEnglish = {
+  stage_policy_admission_disabled: "The server has not enabled automatic processing. Check the configuration and reload the status; the app will not retry automatically.",
+  unknown_stage_policy: "The server could not identify the processing configuration, so the workflow is being held. Check the configuration, then reload the status.",
+  unknown_stage_policy_format: "The processing configuration format is unsupported, so the workflow is being held. Update the configuration, then reload the status.",
+  unknown_stage_policy_gate: "The server could not verify permission to run automatically, so the workflow is being held. Check the configuration, then reload the status.",
+};
+
+function heldWorkflow(reason, overrides = {}) {
+  return workflow({
+    state: "needs_attention",
+    action_blocked_reason: reason,
+    current_source: { generation_id: null, source_version: null, metadata_version: 5, notes_source_version: 2 },
+    steps: [
+      { id: "transcription", kind: "transcription", state: "needs_attention", waiting_reason: reason, source_snapshot_id: null, recipe_version: 1 },
+      { id: "notes", kind: "notes", state: "needs_attention", waiting_reason: reason, source_snapshot_id: "snapshot-1", recipe_version: 2 },
+    ],
+    actions: { cancel: true, retry_notes: true, apply_current_settings: true, use_current_source: true },
+    ...overrides,
+  });
+}
+
+function oldHeldWorkflow(reason, overrides = {}) {
+  const next = heldWorkflow(reason, overrides);
+  delete next.action_blocked_reason;
+  return next;
+}
+
+test("global stage holds are truthful in Vietnamese and English and hide every mutation action", () => {
+  const translator = englishTranslator();
+  for (const [reason, expectedEnglish] of Object.entries(stageHoldEnglish)) {
+    const result = reduce(initialState, {
+      type: "history/meeting-loaded",
+      meta: { loadId: 1 },
+      response: { body: { id: "meeting-1", processing: heldWorkflow(reason) } },
+    });
+    const view = selectProcessing(result.state);
+    assert.equal(translator.t(view.message.text, view.message.params), expectedEnglish, reason);
+    assert.equal(view.actions.cancel, true, reason);
+    assert.equal(view.actions.retryNotes, false, reason);
+    assert.equal(view.actions.applySettings, false, reason);
+    assert.equal(view.actions.useSource, false, reason);
+    assert.equal(view.sourceActionLabel, null, reason);
+    assert.doesNotMatch(view.message.text, /Xác nhận|Bấm Chép lời/, reason);
+    assert.doesNotMatch(view.source.text, /Xác nhận|Chép lời/, reason);
+    assert.equal(view.steps[0].reason.text, view.message.text, reason);
+
+    for (const type of [
+      "processing/retry-notes-clicked",
+      "processing/apply-settings-clicked",
+      "processing/use-source-clicked",
+    ]) {
+      const blocked = reduce(result.state, { type, requestId: `${reason}-request` });
+      assert.equal(blocked.state.action, null, `${reason}: ${type}`);
+      assert.equal(blocked.effects.some((effect) => effect.type === "fetch"), false, `${reason}: ${type}`);
+    }
+    const cancel = reduce(result.state, { type: "processing/cancel-clicked", requestId: `${reason}-cancel` });
+    assert.equal(cancel.state.action.kind, "cancel", `${reason}: cancel remains available`);
+  }
+});
+
+test("old projections fall back to a known step hold and optional root reason wins over step text", () => {
+  const oldProjection = oldHeldWorkflow("stage_policy_admission_disabled");
+  const fallback = selectProcessing(reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: oldProjection } },
+  }).state);
+  assert.equal(fallback.workflow.action_blocked_reason_present, false);
+  assert.equal(fallback.message.text, "Máy chủ chưa cho phép tự động xử lý. Kiểm tra cấu hình rồi tải lại trạng thái; ứng dụng không tự thử lại.");
+
+  const rootReason = heldWorkflow("unknown_stage_policy_gate", {
+    steps: heldWorkflow("stage_policy_admission_disabled").steps,
+  });
+  const root = selectProcessing(reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: rootReason } },
+  }).state);
+  assert.equal(root.message.text, "Máy chủ chưa xác minh được quyền chạy tự động nên workflow đang được giữ lại. Kiểm tra cấu hình rồi tải lại trạng thái.");
+});
+
+test("a stage-local diarization fence keeps valid notes and source actions available", () => {
+  const local = oldHeldWorkflow("diarization_rollback_fence", {
+    current_source: { generation_id: "generation-1", source_version: 3, metadata_version: 5, notes_source_version: 2 },
+    steps: [
+      { id: "transcription", kind: "transcription", state: "needs_attention", waiting_reason: "diarization_rollback_fence", source_snapshot_id: null, recipe_version: 1 },
+      { id: "notes", kind: "notes", state: "waiting", waiting_reason: "provider_unconfigured", source_snapshot_id: "snapshot-1", recipe_version: 2 },
+    ],
+  });
+  const result = reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: local } },
+  });
+  const view = selectProcessing(result.state);
+  assert.match(view.message.text, /không nhận dạng người nói/);
+  assert.equal(view.actions.retryNotes, true);
+  assert.equal(view.actions.applySettings, true);
+  assert.equal(view.actions.useSource, true);
+  assert.equal(view.sourceActionLabel.text, "Dùng nguồn đang hiển thị");
+  for (const type of [
+    "processing/retry-notes-clicked",
+    "processing/apply-settings-clicked",
+    "processing/use-source-clicked",
+  ]) {
+    const started = reduce(result.state, { type, requestId: `diarization-${type}` });
+    assert.ok(started.effects.some((effect) => effect.type === "fetch"), type);
+  }
+});
+
+test("an explicit null global block reason clears stale step-gate fallback", () => {
+  const cleared = heldWorkflow("stage_policy_admission_disabled", {
+    action_blocked_reason: null,
+    current_source: { generation_id: null, source_version: null, metadata_version: 5, notes_source_version: 2 },
+  });
+  const view = selectProcessing(reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: { body: { id: "meeting-1", processing: cleared } },
+  }).state);
+  assert.equal(view.workflow.action_blocked_reason_present, true);
+  assert.equal(view.actions.retryNotes, true);
+  assert.equal(view.actions.applySettings, true);
+  assert.equal(view.actions.useSource, true);
+  assert.equal(view.message.text, "Workflow cần một xác nhận trước khi tiếp tục.");
+  assert.equal(view.steps[0].reason.text, "Workflow cần bạn kiểm tra.");
+  assert.equal(view.sourceActionLabel.text, "Xác nhận thông tin cuộc họp");
+});
+
+test("a completed ASR-off workflow keeps descriptive source metadata without a confirmation prompt", () => {
+  const result = reduce(initialState, {
+    type: "history/meeting-loaded",
+    meta: { loadId: 1 },
+    response: {
+      body: {
+        id: "meeting-1",
+        processing: workflow({
+          state: "succeeded",
+          action_blocked_reason: "stage_policy_admission_disabled",
+          stage_policy: { format_version: 1, asr: false, diarization: false, notes: false },
+          current_source: { generation_id: null, source_version: null, metadata_version: 8, notes_source_version: 2 },
+          steps: [
+            { id: "transcription", kind: "transcription", state: "skipped", waiting_reason: "stage_disabled", source_snapshot_id: null, recipe_version: 1 },
+            { id: "notes", kind: "notes", state: "skipped", waiting_reason: "stage_disabled", source_snapshot_id: null, recipe_version: 2 },
+          ],
+          actions: { cancel: false, retry_notes: false, apply_current_settings: false, use_current_source: false },
+        }),
+      },
+    },
+  });
+  const view = selectProcessing(result.state);
+  assert.match(view.message.text, /Bản ghi đã lưu/);
+  assert.match(view.source.text, /Transcript và notes đang tắt/);
+  assert.doesNotMatch(view.source.text, /Xác nhận/);
+  assert.equal(view.sourceActionLabel, null);
+});
+
+test("guard 409 responses use distinct localized error copy", () => {
+  const translator = englishTranslator();
+  const errors = {
+    stage_policy_admission_disabled: "The server has not enabled automatic processing. Check the configuration before trying again; the request was not retried.",
+    unknown_stage_policy: "The server could not identify the processing configuration; the request was held. Check the configuration before trying again.",
+    unknown_stage_policy_format: "The processing configuration format is unsupported; the request was held. Update the configuration before trying again.",
+    unknown_stage_policy_gate: "The server could not verify permission to run automatically; the request was held. Check the configuration before trying again.",
+    diarization_rollback_fence: "The server is holding speaker recognition off for safety; the request was not retried.",
+  };
+  for (const [code, expectedEnglish] of Object.entries(errors)) {
+    const started = reduce(loaded().state, { type: "processing/retry-notes-clicked", requestId: `${code}-request` });
+    const failed = reduce(started.state, {
+      type: "processing/action-failed",
+      meta: { meetingId: "meeting-1", requestId: `${code}-request`, kind: "retry_notes" },
+      error: { status: 409, body: { detail: { code } } },
+    });
+    assert.equal(failed.state.error.code, code);
+    assert.equal(translator.t(failed.state.error.text.text, failed.state.error.text.params), expectedEnglish, code);
+  }
 });
