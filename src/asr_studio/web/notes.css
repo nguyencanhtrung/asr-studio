@@ -1389,3 +1389,297 @@ a.notes-citation-chip:focus-visible {
     gap: 8px 12px;
   }
 }
+
+/* visual295 phase 1: Notes reads as a document inside the shared workbench. The
+   existing controls and state-driven visibility remain intact; only their composition changes. */
+.notes-panel {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.notes-panel:has(.notes-saved-work:not([hidden])) {
+  padding-top: 0;
+}
+
+.notes-heading-row {
+  padding: 12px 0 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.notes-heading-row h3 {
+  font-size: 1.5rem;
+  font-weight: 470;
+  letter-spacing: -.02em;
+  line-height: 1.2;
+}
+
+.notes-intro {
+  max-width: 68ch;
+  margin-top: 6px;
+  font-size: var(--text-small);
+}
+
+/* The meeting title and tab already identify this saved document. Keep the existing
+   heading/intro for the Notes panel's accessible name without spending a second visual header. */
+.notes-panel:has(.notes-saved-work:not([hidden])) .notes-heading-row {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.notes-saved-work {
+  margin-top: 14px;
+}
+
+.notes-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.notes-revision-select-wrap {
+  flex: none;
+  gap: 4px;
+}
+
+.notes-revision-select-wrap label {
+  font-size: var(--text-label);
+}
+
+.notes-revision-select-wrap select {
+  min-height: 36px;
+  padding-block: 5px;
+  background: var(--surface);
+}
+
+.notes-revision-meta {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-label);
+  line-height: 1.4;
+}
+
+.notes-toolbar-actions {
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.notes-toolbar-actions > .primary-button,
+.notes-toolbar-actions > .secondary-button,
+.notes-toolbar-actions > .text-button {
+  min-height: 36px;
+  padding-inline: 10px;
+  font-size: var(--text-control);
+}
+
+.notes-mode-toggle {
+  min-height: 36px;
+  border-color: var(--line-strong);
+}
+
+.notes-mode-button {
+  min-height: 34px;
+  padding-inline: 9px;
+  font-size: var(--text-control);
+}
+
+.notes-meta-row {
+  margin-top: 8px;
+}
+
+.notes-frame {
+  margin-top: 16px;
+  padding: clamp(28px, 4vw, 54px) clamp(20px, 5vw, 56px);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+/* An editable paper is a form control boundary, not a decorative reading rule. */
+.notes-frame:has(textarea:not([hidden])),
+.notes-frame:has(.notes-rich-editor:not([hidden])) {
+  border-color: var(--control-border);
+}
+
+.notes-draft-banner {
+  width: min(100%, 780px);
+  margin: 0 auto 18px;
+  padding: 8px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+}
+
+.notes-frame textarea,
+.notes-markdown-preview {
+  width: min(100%, 780px);
+  max-width: 780px;
+  min-height: 420px;
+  margin-inline: auto;
+}
+
+.notes-frame textarea {
+  min-height: 520px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.notes-markdown-preview {
+  min-height: 420px;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.notes-markdown-preview h4,
+.notes-markdown-preview h5,
+.notes-markdown-preview h6 {
+  margin-top: 26px;
+  margin-bottom: 8px;
+  font-weight: 470;
+  line-height: 1.25;
+}
+
+.notes-markdown-preview h4 {
+  font-size: 1.5rem;
+}
+
+.notes-markdown-preview h5 {
+  font-size: 1.3rem;
+}
+
+.notes-markdown-preview h6 {
+  font-size: 1.15rem;
+}
+
+.notes-markdown-preview p {
+  margin-bottom: 16px;
+}
+
+.notes-markdown-preview ul,
+.notes-markdown-preview ol {
+  margin-bottom: 16px;
+}
+
+.notes-markdown-preview li + li {
+  margin-top: 6px;
+}
+
+@media (max-width: 760px) {
+  .notes-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notes-toolbar-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .notes-heading-row {
+    padding-top: 10px;
+  }
+
+  .notes-toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .notes-toolbar-actions > #notes-mode-controls,
+  .notes-toolbar-actions > #notes-save,
+  .notes-toolbar-actions > #notes-edit-cancel {
+    grid-column: 1 / -1;
+  }
+
+  .notes-toolbar-actions > button,
+  .notes-toolbar-actions > #notes-mode-controls {
+    width: 100%;
+  }
+
+  .notes-toolbar-actions > #notes-mode-controls {
+    grid-column: auto;
+  }
+
+  .notes-toolbar-actions > #notes-history-open,
+  .notes-toolbar-actions > #notes-copy-rich,
+  .notes-toolbar-actions > #notes-copy-email {
+    grid-column: auto;
+  }
+
+  /* The legacy mobile rule uses two :not() selectors; keep the phase-1 compact
+     grouping specific enough to win without changing the action semantics. */
+  #notes-toolbar .notes-toolbar-actions > #notes-mode-controls,
+  #notes-toolbar .notes-toolbar-actions > #notes-history-open,
+  #notes-toolbar .notes-toolbar-actions > #notes-copy-rich,
+  #notes-toolbar .notes-toolbar-actions > #notes-copy-email {
+    grid-column: auto;
+  }
+
+  .notes-mode-toggle {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .notes-mode-button {
+    min-width: 0;
+  }
+
+  .notes-frame {
+    margin-top: 12px;
+    padding: 26px 18px;
+  }
+
+  .notes-frame textarea,
+  .notes-markdown-preview {
+    width: 100%;
+  }
+}
+
+/* Reading actions stay in a compact row; their full accessible names remain. */
+.notes-saved-work .notes-toolbar { grid-template-columns: minmax(180px, 1fr) auto; align-items: center; border-bottom: 0; padding-bottom: 0; }
+.notes-saved-work .notes-revision-select-wrap { min-width: 0; }
+.notes-toolbar .notes-revision-select-wrap > label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.notes-toolbar .notes-revision-select-wrap > select { width: 100%; max-width: 100%; text-overflow: ellipsis; }
+.notes-saved-work .notes-toolbar-actions { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+.notes-toolbar-actions button svg { width: 16px; height: 16px; flex-shrink: 0; stroke: currentColor; stroke-width: 1.4; }
+.notes-saved-work .notes-toolbar-actions > button,
+.notes-saved-work .notes-mode-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; }
+#notes-mode-write .notes-action-label,
+#notes-history-open .notes-action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.notes-saved-work #notes-mode-write,
+.notes-saved-work #notes-history-open { width: 36px; padding: 0; }
+.notes-document-details { margin-top: 12px; color: var(--ink-3); font-size: var(--text-small); }
+.notes-document-details summary { width: fit-content; cursor: pointer; padding-block: 4px; font-size: var(--text-control); }
+.notes-document-details .notes-revision-meta { margin-top: 6px; }
+.notes-panel .notes-status { font-size: var(--text-small); }
+@media (max-width: 1100px) {
+  .notes-saved-work #notes-copy-rich .notes-action-label,
+  .notes-saved-work #notes-copy-email .notes-action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .notes-saved-work #notes-copy-rich,
+  .notes-saved-work #notes-copy-email { width: 36px; padding: 0; }
+}
+@media (max-width: 760px) {
+  .notes-saved-work .notes-toolbar { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .notes-saved-work .notes-toolbar-actions { justify-content: flex-start; justify-self: stretch; width: 100%; }
+  .notes-saved-work .notes-mode-toggle { display: flex; width: auto; }
+  .notes-saved-work .notes-mode-button { min-height: 34px; }
+  .notes-saved-work .notes-toolbar-actions > button,
+  .notes-saved-work .notes-toolbar-actions > #notes-mode-controls { width: auto; grid-column: auto; }
+  .notes-frame { margin-top: 14px; }
+}

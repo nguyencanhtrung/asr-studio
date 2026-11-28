@@ -376,15 +376,22 @@ def test_phone_settings_open_from_the_top_bar_and_the_dialog_scrolls(
     gear = page.get_by_role("button", name="Cài đặt")
     expect(gear).to_be_visible()
     box = gear.bounding_box()
-    header = page.locator(".workspace-header").bounding_box()
-    assert box["y"] + box["height"] <= header["y"], box
+    footer = page.locator(".sidebar-footer")
+    footer_box = footer.bounding_box()
+    viewport_height = page.evaluate("window.innerHeight")
+    assert footer.evaluate("element => getComputedStyle(element).position") == "fixed"
+    assert footer_box["y"] >= viewport_height - 66 - 1, footer_box
+    assert footer_box["y"] + footer_box["height"] <= viewport_height + 0.5, footer_box
+    assert footer_box["x"] <= 0.5 and footer_box["x"] + footer_box["width"] >= width - 0.5
+    assert footer_box["y"] <= box["y"]
+    assert box["y"] + box["height"] <= footer_box["y"] + footer_box["height"] + 0.5, box
     assert 34 <= box["width"] <= 40 and abs(box["width"] - box["height"]) <= 0.5
-    sidebar = page.locator(".sidebar").bounding_box()
-    assert box["x"] + box["width"] <= sidebar["x"] + sidebar["width"] + 0.5
     assert overflow(page) <= 0
     expect(page.get_by_role("link", name="ASR Studio — về workspace")).to_be_visible()
 
-    page.get_by_text("Cuộc họp và lịch", exact=True).focus()
+    summary = page.locator("#sidebar-history > summary")
+    summary.focus()
+    expect(summary).to_be_focused()
     for expected in (
         "#launcher-chatgpt",
         "#launcher-antigravity",
@@ -418,7 +425,7 @@ def test_mobile_history_disclosure_starts_collapsed_and_keeps_native_keyboard_to
     _context, page = signed_in(viewport={"width": 390, "height": 700})
     page.goto(f"{live.url}/")
     history = page.locator("#sidebar-history")
-    summary = history.locator("summary")
+    summary = history.locator(":scope > summary")
     expect(history).not_to_have_attribute("open", "")
     summary.focus()
     page.keyboard.press("Enter")
@@ -1017,8 +1024,32 @@ def test_settings_heading_levels_and_provider_titles_use_the_two_sans_roles(live
     page.get_by_role("tab", name="AI Provider").click()
     page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
     provider_title = page.locator("#connection-section-title")
-    # The provider title starts where every other section's title starts: no rule above it.
-    assert abs(provider_title.evaluate("e => e.getBoundingClientRect().top") - title_top) <= 4
+    # Provider pages use bordered cards. Align the card with the section start,
+    # then keep the heading inside its padding rather than flush with the edge.
+    card = provider_title.evaluate(
+        """title => {
+          const card = title.closest('.connection-section');
+          const box = card.getBoundingClientRect();
+          const heading = title.getBoundingClientRect();
+          const style = getComputedStyle(card);
+          return {
+            top: box.top, bottom: box.bottom,
+            titleTop: heading.top, titleBottom: heading.bottom,
+            paddingTop: parseFloat(style.paddingTop),
+            paddingBottom: parseFloat(style.paddingBottom),
+            borders: ['Top', 'Right', 'Bottom', 'Left'].map(
+              side => parseFloat(style[`border${side}Width`])
+            ),
+          };
+        }"""
+    )
+    assert abs(card["top"] - title_top) <= 4, card
+    assert all(width > 0 for width in card["borders"]), card
+    assert card["paddingTop"] > 0, card
+    assert card["titleTop"] >= card["top"] + card["borders"][0] + card["paddingTop"] - 1, card
+    assert card["titleBottom"] <= card["bottom"] - card["borders"][2] - card["paddingBottom"] + 1, (
+        card
+    )
     assert provider_title.evaluate(
         "e => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]"
     ) == [

@@ -230,6 +230,8 @@ def test_managed_recording_upload_saves_and_restores_meeting(tmp_path):
             expect(page.locator("#status-recording")).to_contain_text("Bản ghi · Đã lưu")
             expect(page.locator("#status-transcript")).to_have_text("Transcript · Chưa chép lời")
             audio = page.locator("#meeting-audio")
+            expect(page.locator("#audio-transport")).to_be_visible()
+            page.locator("#audio-native-options > summary").click()
             expect(audio).to_be_visible()
             assert audio.evaluate("element => element.controls") is True
             assert audio.get_attribute("src") == f"/api/meetings/{meeting_id}/audio"
@@ -312,6 +314,8 @@ def test_managed_recording_upload_saves_and_restores_meeting(tmp_path):
             expect(page.locator("#meeting-title")).to_have_text("Điều phối sản phẩm — tuần 42")
             expect(page.locator("#meeting-date")).to_have_attribute("datetime", "2026-10-15")
             expect(page.locator("#meeting-language")).to_have_text("English")
+            expect(page.locator("#audio-transport")).to_be_visible()
+            page.locator("#audio-native-options > summary").click()
             expect(page.locator("#meeting-audio")).to_be_visible()
 
             # The meeting made through the real upload/import path is durable history.

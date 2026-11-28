@@ -51,7 +51,7 @@ typography:
     letterSpacing: "-0.035em"
   meeting-headline:
     fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
-    fontSize: "clamp(1.625rem, 3vw, 2.25rem)"
+    fontSize: "clamp(1.75rem, 3vw, 2.35rem)"
     fontWeight: 500
     lineHeight: 1.2
     letterSpacing: "-0.035em"
@@ -63,7 +63,7 @@ typography:
     letterSpacing: "-0.035em"
   calendar-title:
     fontFamily: "Newsreader Variable, Georgia, Times New Roman, serif"
-    fontSize: "1.75rem"
+    fontSize: "clamp(1.75rem, 3vw, 2.35rem)"
     fontWeight: 500
     lineHeight: 1.2
   dialog-title:
@@ -131,6 +131,11 @@ typography:
     fontSize: "0.75rem"
     fontWeight: 400
     lineHeight: 1.5
+  compact-breadcrumb:
+    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontSize: "0.6875rem"
+    fontWeight: 400
+    lineHeight: 1.4
   label:
     fontFamily: "JetBrains Mono, ui-monospace, monospace"
     fontSize: "0.75rem"
@@ -432,7 +437,7 @@ Navigation is a quiet ledger rail: mono wordmark, uppercase technical section la
 
 ### Operational Status
 
-Provider connection appears as two equal-width sticky sidebar-footer buttons, OpenAI and Google, directly above the GitHub/version block. On phones they become logo buttons using the inline OpenAI and Google SVG marks, with no third-party asset loading. The buttons sit beside the toggles, show a status LED at the top right, and hide the name visually. Each button pairs a status dot with explicit status text and its own accessible name. The ChatGPT usage link in the Settings dialog is 14px.
+Provider connection appears as two equal-width sticky sidebar-footer buttons, OpenAI and Google, directly above the GitHub/version block. On phones they become logo buttons using the inline OpenAI and Google SVG marks, with no third-party asset loading. The phone footer places these provider buttons beside the Settings/GitHub icon pair and its Version line; the theme/language toggles stay in the masthead. Provider buttons show a status LED at the top right and keep their full names accessible while hiding the text visually. Each button pairs a status dot with explicit status text and its own accessible name. The ChatGPT usage link in the Settings dialog is 14px.
 
 The dialog title is the Vietnamese **Cài đặt** h2 above a fixed-height two-column body. The desktop navigation has five top-level sections on a subtle surface, with **AI Provider** sub-items; the scrolling content column shows one section at a time. The selected tab uses the soft accent fill, accent border and heavier weight. At 680px and below, the list becomes a row above the content. At 22.5rem and below, the **Theme** choices use two even rows with one choice per row. Arrow keys, Home and End move between sections on either axis.
 
@@ -462,3 +467,40 @@ The dialog adds no new colour or size tokens; every size is a `--text-*` token. 
 - **Don't** introduce gradients, glass effects, heavy shadows, pill-shaped primary controls, or decorative card grids.
 - **Don't** stack uppercase mono overlabels directly above headings; put essential state in operational metadata.
 - **Don't** load fonts, icons, CSS, scripts, telemetry, or visual assets from third-party origins at runtime.
+
+
+## Workspace composition correction (#295)
+
+The handoff v2 prototype defines the visual composition. The previous functional
+parity work did not establish acceptance of its layout. Use a compact 252px rail,
+a quiet breadcrumb/header, one restrained meeting title, grouped real status,
+stable tabs, and a document toolbar outside the Notes paper. Reading mode shows
+copy/export/history/edit actions; Save and Cancel belong to an active draft.
+Provenance and routine processing detail follow the document. Keep live/error
+feedback and recovery actions available when needed.
+
+Transcript uses a reading column with an adjacent segment/speaker context panel
+on wide screens and a disclosure on smaller screens. Its compact transport docks
+at the bottom, above the persistent phone footer. An accessible Details disclosure
+exposes the browser's native controls on the same audio element. Seek, playback,
+volume, follow scrolling, source pins and generation ownership remain real.
+
+Settings remains a native modal with its full provider-specific forms. Its rail,
+selected states and quiet grouped surfaces share the workspace grammar; it does
+not become the prototype's workspace route. Calendar retains month/year selection,
+event chips, selected-day details and the undated bucket. Import retains its
+existing popup, server policy, validation, options and cancel/retry states.
+
+Keep the owner's original centered Settings/GitHub icon pair with Version below.
+On phones, keep provider launchers and that footer reachable above a reserved
+content inset. Model readiness, provider connection, selected defaults and online
+reachability come from their existing independent contracts. Prototype counts,
+installed models and connected badges are illustrative, never production state.
+
+
+The composition's headline endpoints and compact breadcrumb size above follow
+`.meeting-intro h2`, `.calendar-head h2` and the phone `.workspace-breadcrumb`
+rules in `shell.css`/`history.css`. Small status pills use a rounded outline;
+primary actions keep the existing small control radius. The calendar picker uses
+the theme's `--shadow-color`, including in dark mode. Notes source markers and
+email-compatible exported styling retain their existing semantic contracts.

@@ -699,7 +699,12 @@ def test_saved_source_stays_frozen_and_seeks_same_audio_after_live_edit(
     expect(page.locator("#notes-saved-work")).to_be_visible(timeout=10_000)
     audio = page.locator("#meeting-audio")
     page.locator("#meeting-tab-transcript").click()  # the player is in the transcript tab
+    expect(page.locator("#audio-transport")).to_be_visible()
+    page.locator("#audio-native-options > summary").click()
     expect(audio).to_be_visible()
+    assert audio.evaluate("element => element.controls && !element.autoplay && element.paused")
+    page.locator("#audio-native-options > summary").click()
+    expect(page.locator("#audio-transport")).to_be_visible()
     assert audio.get_attribute("src") == f"/api/meetings/{meeting_id}/audio"
     expect(page.locator("#notes-preview a[data-notes-source-link]")).to_have_count(0)
 
@@ -1701,6 +1706,9 @@ def test_fixed_link_returns_to_the_linked_notes_latest_while_detail_is_unavailab
         expect(history).to_be_visible()
     expect(work_selector).to_have_value(linked_id)
     expect(page.locator("#notes-preview")).to_contain_text("Latest of the linked Notes revision")
+    expect(page.locator("#notes-save")).to_be_hidden()
+    expect(page.locator("#notes-mode-view")).to_have_attribute("aria-pressed", "true")
+    page.locator("#notes-mode-write").click()
     expect(page.locator("#notes-save")).to_be_visible()
     assert not urlsplit(page.url).query
 
@@ -1806,7 +1814,9 @@ def test_return_to_latest_reconciles_a_newer_save_before_editing_or_copying(
     assert len(latest_reads) == 1
     latest_reads.pop().continue_()
     expect(preview).to_contain_text("Reconciled save four")
-    expect(save).to_be_visible()
+    # Returning to the latest revision leaves the reader in View mode. Save is
+    # intentionally exposed only after the user enters an editing mode.
+    expect(save).to_be_hidden()
     assert not urlsplit(page.url).query
     if control == "button":
         expect(chooser).to_be_hidden()
@@ -2655,6 +2665,9 @@ def test_fixed_return_to_latest_keeps_the_projected_floor_after_omission(live, s
     expect(chooser).to_be_focused()
     expect(chooser).to_have_value("")
     expect(preview).to_contain_text("Latest five")
+    expect(page.locator("#notes-save")).to_be_hidden()
+    expect(page.locator("#notes-mode-view")).to_have_attribute("aria-pressed", "true")
+    page.locator("#notes-mode-write").click()
     expect(page.locator("#notes-save")).to_be_visible()
     assert not urlsplit(page.url).query
 
@@ -2807,6 +2820,17 @@ def _contrast(foreground: str, background: str) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
+def _notes_content_width(page):
+    return page.evaluate(
+        """() => {
+          const frame = document.querySelector('.notes-frame');
+          const style = getComputedStyle(frame);
+          return frame.clientWidth
+            - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        }"""
+    )
+
+
 @pytest.mark.parametrize("width", [1440, 390])
 def test_saved_notes_are_one_full_width_frame_with_a_view_write_group(live, signed_in, width):
     _context, page = signed_in(viewport={"width": width, "height": 900})
@@ -2845,7 +2869,13 @@ def test_saved_notes_are_one_full_width_frame_with_a_view_write_group(live, sign
         expect(page.locator(shown)).to_be_visible()
         expect(page.locator(hidden)).to_be_hidden()
         box = page.locator(shown).bounding_box()
-        assert box is not None and abs(box["width"] - (frame["width"] - 2)) <= 1
+        available = _notes_content_width(page)
+        assert box is not None and box["width"] <= available + 1
+        if width >= 1000:
+            assert 720 <= box["width"] <= 800
+        else:
+            assert abs(box["width"] - available) <= 1
+        assert abs((box["x"] + box["width"] / 2) - (frame["x"] + frame["width"] / 2)) <= 1
 
 
 def test_notes_open_in_view_mode_and_remember_the_last_choice(live, signed_in):
@@ -2950,7 +2980,8 @@ def test_write_mode_shows_a_full_width_readable_textarea(live, signed_in):
     box, frame = textarea.bounding_box(), page.locator(".notes-frame").bounding_box()
     assert box is not None and frame is not None
     assert box["height"] >= 420
-    assert abs(box["width"] - (frame["width"] - 2)) <= 1
+    assert box["width"] <= _notes_content_width(page) + 1
+    assert 720 <= box["width"] <= 800
     # The height comes from min-height, not from the number of rows.
     assert textarea.evaluate("area => { area.rows = 2; return area.offsetHeight; }") >= 420
     assert float(textarea.evaluate("element => getComputedStyle(element).fontSize")[:-2]) >= 13
@@ -3015,6 +3046,7 @@ def test_unsaved_changes_mark_the_write_button_and_the_view(live, signed_in):
     expect(page.locator("#notes-preview")).to_contain_text("Not saved yet.")
     expect(dot).to_be_visible()
 
+    page.locator("#notes-mode-write").click()
     page.locator("#notes-save").click()
     expect(page.locator("#notes-copy-export-status")).to_contain_text(
         "Markdown đã được lưu", timeout=10_000
@@ -3029,38 +3061,22 @@ def test_one_toolbar_serves_both_modes_and_keeps_the_enable_rules(live, signed_i
     meeting_id, *_ = _seed_saved_notes(live.settings.data_dir)
     _open_saved_notes(live, page, meeting_id)
     toolbar = page.locator("#notes-toolbar")
-    controls = ["#notes-revision-selector", "#notes-save", "#notes-copy", "#notes-export"]
-    layout = """controls => {
-      const toolbar = document.querySelector("#notes-toolbar").getBoundingClientRect();
-      return controls.map(selector => {
-        const box = document.querySelector(selector).getBoundingClientRect();
-        return [box.x - toolbar.x, box.y - toolbar.y, box.width, box.height].map(Math.round);
-      });
-    }"""
     save, copy, export = (page.locator(f"#notes-{name}") for name in ("save", "copy", "export"))
 
-    layouts = []
     for mode in ("view", "write"):
         page.locator(f"#notes-mode-{mode}").click()
-        for selector in controls:
+        for selector in ("#notes-revision-selector", "#notes-copy", "#notes-export"):
             expect(toolbar.locator(selector)).to_be_visible()
-        layouts.append(page.evaluate(layout, controls))
-        expect(save).to_be_disabled()
+        if mode == "view":
+            expect(save).to_be_hidden()
+            expect(page.locator("#notes-edit-cancel")).to_be_hidden()
+        else:
+            expect(save).to_be_visible()
+            expect(save).to_be_disabled()
+            expect(page.locator("#notes-edit-cancel")).to_be_visible()
         expect(copy).to_be_enabled()
         expect(export).to_be_enabled()
-    assert layouts[0] == layouts[1]
-    # Empty action feedback uses no space; populated live regions sit by their controls.
     expect(page.locator("#notes-copy-export-status")).to_be_hidden()
-    assert page.evaluate(
-        """() => {
-          const toolbar = document.querySelector("#notes-toolbar").getBoundingClientRect();
-          const frame = document.querySelector(".notes-frame").getBoundingClientRect();
-          return ["#notes-draft-status"].map(selector => {
-            const box = document.querySelector(selector).getBoundingClientRect();
-            return box.top >= toolbar.bottom && box.bottom <= frame.top;
-          });
-        }"""
-    ) == [True]
     expect(save).to_have_accessible_name("Lưu bản nháp")
     expect(copy).to_have_accessible_name("Sao chép bản đã lưu")
     expect(export).to_have_accessible_name("Tải Markdown đã lưu")
@@ -3075,9 +3091,14 @@ def test_one_toolbar_serves_both_modes_and_keeps_the_enable_rules(live, signed_i
     page.locator("#notes-markdown").fill("# Another draft")
     for mode in ("write", "view"):
         page.locator(f"#notes-mode-{mode}").click()
-        expect(save).to_be_enabled()
+        if mode == "view":
+            expect(save).to_be_hidden()
+        else:
+            expect(save).to_be_enabled()
         expect(copy).to_be_disabled()
         expect(export).to_be_disabled()
+    page.locator("#notes-mode-write").click()
+    expect(save).to_be_enabled()
 
 
 def test_conflict_block_and_its_two_actions_show_in_both_modes(live, signed_in):
@@ -3172,6 +3193,7 @@ def test_beforeunload_warns_only_while_a_notes_or_transcript_draft_is_unsaved(li
     assert page.evaluate(warns) is True
     page.locator("#notes-mode-view").click()
     assert page.evaluate(warns) is True
+    page.locator("#notes-mode-write").click()
     page.locator("#notes-save").click()
     expect(page.locator("#notes-copy-export-status")).to_contain_text(
         "Markdown đã được lưu", timeout=10_000
@@ -3290,8 +3312,51 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     for name, (foreground, background) in pairs.items():
         assert _contrast(foreground, background) >= 4.5, (name, foreground, background)
 
-    # The document tools precede the mode switch; generation follows the document.
-    page.locator("#notes-edit-cancel").focus()
+    def mode_visuals():
+        return page.evaluate(
+            """() => [...document.querySelectorAll(
+              '#notes-mode-controls .notes-mode-button'
+            )].map(button => {
+              const style = getComputedStyle(button);
+              return {
+                id: button.id,
+                pressed: button.getAttribute('aria-pressed') === 'true',
+                background: style.backgroundColor,
+                color: style.color,
+                border: style.borderColor,
+              };
+            })"""
+        )
+
+    def assert_mode_visual_truth(active_mode):
+        visuals = mode_visuals()
+        active = [item for item in visuals if item["pressed"]]
+        idle = [item for item in visuals if not item["pressed"]]
+        assert [item["id"] for item in active] == [f"notes-mode-{active_mode}"]
+        assert idle
+
+        def signature(item):
+            return (item["background"], item["color"], item["border"])
+
+        assert len({signature(item) for item in idle}) == 1
+        assert signature(active[0]) != signature(idle[0])
+
+    def activate_mode_with_keyboard(mode):
+        button = page.locator(f"#notes-mode-{mode}")
+        button.focus()
+        page.keyboard.press("Space")
+        page.mouse.move(0, 0)
+        expect(button).to_have_attribute("aria-pressed", "true")
+
+    # The selected treatment must follow the live mode state, including the rich
+    # editor, while the pointer is away from the controls (no hover styling).
+    for mode in ("view", "rich", "view", "write", "view"):
+        activate_mode_with_keyboard(mode)
+        assert_mode_visual_truth(mode)
+
+    # The mode controls follow the revision selector in the reading toolbar.
+    # Save/Cancel are available only while editing, so use the visible selector.
+    page.locator("#notes-revision-selector").focus()
     for button in ("view", "rich", "write"):
         page.keyboard.press("Tab")
         focused = page.locator(f"#notes-mode-{button}")

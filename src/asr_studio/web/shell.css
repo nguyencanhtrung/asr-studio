@@ -3316,3 +3316,318 @@ textarea:focus-visible {
   .speaker-merge-controls { align-items: stretch; flex-direction: column; }
   .speaker-merge-controls label { min-width: 0; }
 }
+
+/* visual295 phase 1: a compact, editorial meeting shell. These rules are deliberately
+   scoped to the shared shell so transcript/settings retain their existing semantics. */
+.app-frame {
+  --sidebar-width: 252px;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+}
+
+.sidebar {
+  padding-top: 18px;
+}
+
+.recent-section {
+  margin-top: 24px;
+}
+
+.workspace {
+  padding-top: 0;
+}
+
+.workspace-header {
+  min-height: 64px;
+  height: 64px;
+  padding-bottom: 0;
+}
+
+.workspace-breadcrumb {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: .01em;
+}
+
+.workspace-breadcrumb a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.workspace-breadcrumb a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.workspace-breadcrumb [aria-current="page"] {
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-view {
+  padding-top: 34px;
+}
+
+.meeting-intro {
+  padding-bottom: 18px;
+}
+
+.meeting-intro h2 {
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  font-weight: 470;
+  letter-spacing: -.025em;
+}
+
+.meeting-metadata {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 16px;
+  border-color: var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--hairline);
+}
+
+.metadata-item {
+  padding: 10px 14px;
+  background: var(--surface-subtle);
+}
+
+.metadata-item dt {
+  margin-bottom: 4px;
+}
+
+.metadata-item dd {
+  font-size: var(--text-small);
+}
+
+.meeting-status-strip {
+  margin-bottom: 16px;
+}
+
+.meeting-tabs {
+  margin-bottom: 0;
+}
+
+/* The sidebar calendar's title is the primary navigation; month/year are an explicit
+   secondary control, never removed from the DOM or from the event delegation root. */
+.app-frame .mini-calendar-section {
+  margin-top: 22px;
+}
+
+.app-frame .mini-calendar-section .cal-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.app-frame .mini-calendar-section .calendar-picker-disclosure {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.app-frame .mini-calendar-section .calendar-picker-summary {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  overflow: hidden;
+  padding: 0 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--text-control);
+  list-style: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-frame .mini-calendar-section .calendar-picker-summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-frame .mini-calendar-section .calendar-picker-summary::after {
+  flex: 0 0 auto;
+  color: var(--ink-3);
+  content: "⌄";
+  font-size: var(--text-small);
+}
+
+.app-frame .mini-calendar-section .calendar-picker-disclosure[open] > .calendar-picker-summary::after {
+  content: "⌃";
+}
+
+.app-frame .mini-calendar-section .calendar-picker-summary:hover {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.app-frame .mini-calendar-section .calendar-picker-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4.25rem;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.app-frame .mini-calendar-section .calendar-picker-fields .cal-month,
+.app-frame .mini-calendar-section .calendar-picker-fields .cal-year {
+  width: 100%;
+  min-width: 0;
+}
+
+.app-frame .mini-calendar-section .cal-today {
+  flex: 0 0 auto;
+  min-height: 28px;
+}
+
+@media (max-width: 680px) {
+  .app-frame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace {
+    padding-top: 0;
+  }
+
+  .workspace-header {
+    height: 60px;
+    min-height: 60px;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .workspace-breadcrumb {
+    gap: 5px;
+    font-size: var(--text-label);
+  }
+
+  .meeting-view {
+    padding-top: 24px;
+  }
+
+  .meeting-metadata {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metadata-item {
+    padding: 9px 11px;
+  }
+
+  .metadata-item dt,
+  .metadata-item dd {
+    display: block;
+  }
+
+  .metadata-item dt {
+    margin-right: 0;
+    margin-bottom: 3px;
+  }
+}
+
+@media (max-width: 520px) {
+  .workspace-header {
+    gap: 5px;
+  }
+
+  .workspace-breadcrumb {
+    max-width: calc(100% - 48px);
+  }
+}
+
+/* Handoff composition: compact navigation and a quiet meeting summary. */
+.sidebar-masthead { gap: 8px; }
+.sidebar .brand { gap: 8px; min-width: 0; }
+.sidebar .brand-wordmark { font-family: var(--font-sans); font-size: var(--text-control); letter-spacing: 0; }
+.sidebar .brand-mark { width: 30px; height: 30px; flex: 0 0 30px; }
+.sidebar-masthead-controls { gap: 5px; }
+.sidebar-masthead-controls > button { width: 30px; min-width: 30px; height: 32px; padding: 0; }
+.workspace-breadcrumb { font-family: var(--font-sans); letter-spacing: 0; }
+.meeting-metadata { background: var(--surface); border-radius: var(--radius-md); }
+.meeting-metadata dt { font-family: var(--font-sans); font-size: var(--text-label); }
+.meeting-metadata dd { font-family: var(--font-sans); font-size: var(--text-small); }
+.meeting-status-strip { gap: 8px; padding: 12px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--surface); }
+.meeting-status-strip .meeting-status-item { min-height: 24px; padding: 3px 8px; border: 0; border-radius: 20px; background: var(--surface-subtle); font-size: var(--text-label); }
+.sidebar-menu-icon { display: none; }
+.app-frame .mini-calendar-section .cal-heading { position: relative; }
+.app-frame .mini-calendar-section .calendar-picker-disclosure { position: relative; flex: 1; margin: 0; padding: 0; border: 0; }
+.app-frame .mini-calendar-section .calendar-picker-summary { display: flex; justify-content: center; padding: 6px 3px; border: 0; border-radius: var(--radius-sm); font-family: var(--font-sans); font-size: var(--text-control); background: transparent; }
+.app-frame .mini-calendar-section .calendar-picker-summary::after { display: none; }
+.app-frame .mini-calendar-section .calendar-picker-fields { position: absolute; top: 100%; left: -28px; right: -28px; z-index: 5; display: grid; grid-template-columns: minmax(0, 1fr) 70px; gap: 6px; padding: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); box-shadow: 0 8px 20px var(--shadow-color); }
+.app-frame .mini-calendar-section .cal-pick { display: flex; justify-content: flex-end; margin: 0; }
+.app-frame .mini-calendar-section .cal-today { min-height: 28px; width: auto; padding: 2px 0; border: 0; color: var(--accent); font-size: var(--text-control); background: transparent; }
+@media (max-width: 680px) {
+  .sidebar { position: relative; min-height: 64px; padding: 12px 16px; }
+  .sidebar-masthead { min-height: 38px; }
+  .sidebar-masthead-controls { margin-right: 78px; }
+  .sidebar-history { margin-top: 0; }
+  /* Keep the native summary at the control type floor; its label span stays available
+     to assistive technology without creating an anonymous overflowing grid item. */
+  .sidebar-history > summary { position: absolute; top: 15px; right: 14px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--hairline); background: var(--surface); list-style: none; font-size: var(--text-control); }
+  .sidebar-history > summary::-webkit-details-marker { display: none; }
+  .sidebar-history > summary > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .sidebar-menu-icon { display: block; width: 18px; height: 18px; color: var(--ink-2); stroke: currentColor; stroke-width: 1.5; }
+  .sidebar-history[open] { padding-top: 14px; }
+  .sidebar-history:not([open]) + .sidebar-footer { display: contents; }
+  .sidebar-history:not([open]) + .sidebar-footer .connection-launchers,
+  .sidebar-history:not([open]) + .sidebar-footer .github-link,
+  .sidebar-history:not([open]) + .sidebar-footer .version-link { display: none; }
+  .sidebar-history:not([open]) + .sidebar-footer .sidebar-footer-meta { display: contents; }
+  .sidebar-history:not([open]) + .sidebar-footer .settings-button { position: absolute; top: 15px; right: 54px; width: 34px; height: 34px; }
+  .workspace-header { min-height: 46px; padding-block: 7px; }
+  .meeting-header { margin-top: 18px; }
+  .meeting-metadata { margin-top: 16px; }
+  .meeting-status-strip { padding: 8px; gap: 4px; }
+  .meeting-status-strip .meeting-status-item { font-size: var(--text-label); padding: 3px 5px; }
+}
+
+/* Import keeps its native dialog, validation and upload state; the form shares
+   the handoff's quiet surface and focused drop target. */
+.meeting-dialog .dialog-header h2 { font-weight: 470; }
+.meeting-dialog .dialog-promise { border: 1px solid var(--hairline); background: var(--surface-subtle); color: var(--ink-2); }
+.meeting-dialog .file-drop { min-height: 132px; justify-content: center; flex-wrap: wrap; padding: 24px; border-radius: var(--radius-md); }
+.meeting-dialog .file-drop-copy { flex: 0 1 auto; }
+.meeting-dialog :is(#meeting-name, #meeting-date-input, #create-asr-model) { min-height: 42px; border-color: var(--hairline); border-radius: var(--radius-sm); background: var(--surface); }
+.meeting-dialog .language-option { min-height: 42px; border-color: var(--control-border); background: var(--surface); }
+.meeting-dialog .language-option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.meeting-dialog .dialog-actions { background: var(--surface); border-top: 1px solid var(--hairline); }
+@media (max-width: 680px) {
+  .meeting-dialog { width: calc(100% - 24px); max-height: calc(100dvh - 24px); }
+  .meeting-dialog .dialog-shell { max-height: calc(100dvh - 24px); }
+  .meeting-dialog .dialog-header { padding: 18px 18px 12px; }
+  .meeting-dialog .dialog-content { padding: 12px 18px 18px; }
+  .meeting-dialog .dialog-promise { margin-inline: 18px; }
+  .meeting-dialog .file-drop { min-height: 132px; padding: 20px 12px; }
+}
+
+/* Keep provider status and the original product links immediately accessible on
+   phones too. The compact footer sits below the document, not above its title. */
+@media (max-width: 680px) {
+  .sidebar .sidebar-footer,
+  .sidebar-history:not([open]) + .sidebar-footer {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 40;
+    display: flex;
+    min-height: 66px;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0;
+    padding: 6px 16px;
+    border-top: 1px solid var(--hairline);
+    background: var(--sidebar-bg, var(--surface));
+  }
+  .sidebar-history:not([open]) + .sidebar-footer .connection-launchers { display: flex; }
+  .sidebar-history:not([open]) + .sidebar-footer :is(.github-link,.version-link) { display: inline-flex; }
+  .sidebar-history:not([open]) + .sidebar-footer .sidebar-footer-meta { display: grid; }
+  .sidebar-history:not([open]) + .sidebar-footer .settings-button { position: static; width: 2.25rem; height: 2.25rem; }
+  .sidebar-masthead-controls { margin-right: 38px; }
+  .workspace { padding-bottom: 90px; }
+}

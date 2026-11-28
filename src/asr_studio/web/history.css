@@ -1021,6 +1021,7 @@ button.speaker-chip:disabled .speaker-chip-mark {
 
 #meeting-panel-transcript .audio-heading {
   margin: 0;
+  padding-top: 10px;
 }
 
 #meeting-panel-transcript .source-label {
@@ -1099,3 +1100,533 @@ button.speaker-chip:disabled .speaker-chip-mark {
   color: var(--warning);
   font-size: var(--text-small);
 }
+
+/* Full calendar uses the same editorial hierarchy as the meeting workspace.
+   Existing day, chip and detail links keep their event and keyboard ownership. */
+.calendar-view .calendar-head h2 { font-family: var(--font-serif); font-size: clamp(1.75rem, 3vw, 2.35rem); font-weight: 470; }
+.calendar-view .calendar-layout { grid-template-columns: minmax(0, 1fr) minmax(230px, .34fr); gap: 18px; }
+.calendar-view .calendar-large { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 16px; min-width: 0; padding: 18px; }
+.calendar-view .calendar-large .cal-nav { grid-column: 1; grid-row: 1; justify-content: flex-start; gap: 8px; margin: 0; }
+.calendar-view .calendar-large .cal-title { order: -1; flex: 1; font-family: var(--font-serif); font-size: var(--text-title); font-weight: 470; }
+.calendar-view .calendar-large .cal-pick { grid-column: 2; grid-row: 1; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.calendar-view .calendar-large .cal-pick :is(select,input,button) { min-height: 34px; border-color: var(--hairline); border-radius: var(--radius-sm); background: var(--surface); font-size: var(--text-control); }
+.calendar-view .calendar-large .cal-month { width: 120px; }
+.calendar-view .calendar-large .cal-year { width: 74px; }
+.calendar-view .calendar-large .cal-summary { grid-column: 1 / -1; margin: 0 0 8px; font-family: var(--font-sans); font-size: var(--text-label); }
+.calendar-view .calendar-large :is(.cal-weekdays,.cal-days,.cal-undated) { grid-column: 1 / -1; }
+.calendar-view .calendar-large .cal-weekdays { padding: 4px 0; }
+.calendar-view .calendar-large .cal-cell { min-width: 0; min-height: 98px; padding: 8px; border: 1px solid transparent; border-radius: var(--radius-sm); }
+.calendar-view .calendar-large .cal-cell:has(.is-selected) { border-color: var(--accent); background: var(--accent-soft); }
+.calendar-view .calendar-large .cal-cell:has(.is-outside) { opacity: .6; }
+.calendar-view .calendar-large .cal-day { min-height: 22px; padding: 0; flex-wrap: nowrap; gap: 2px; background: transparent; font-size: var(--text-control); }
+.calendar-view .calendar-large .cal-day.is-selected { outline: none; }
+.calendar-view .calendar-large .cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.calendar-view .calendar-large .cal-count { min-width: 12px; padding: 0 2px; font-size: var(--text-label); }
+.calendar-view .calendar-large .cal-chip { padding: 3px 5px; border-left: 0; border-radius: 4px; font-size: var(--text-control); }
+.calendar-view .calendar-large .cal-undated { display: inline-flex; gap: 10px; justify-self: start; min-width: 0; width: auto; margin-top: 4px; background: var(--surface); }
+.calendar-view .day-panel { position: sticky; top: 84px; padding: 18px; }
+.calendar-view .day-panel h3 { font-family: var(--font-serif); font-size: var(--text-title); font-weight: 470; }
+.calendar-view .day-meeting { padding: 12px; border-radius: var(--radius-sm); background: var(--surface); }
+@media (max-width: 1100px) {
+  .calendar-view .calendar-large { grid-template-columns: minmax(0, 1fr); }
+  .calendar-view .calendar-large .cal-pick { grid-column: 1; grid-row: 2; }
+}
+@media (max-width: 900px) {
+  .calendar-view .calendar-layout { grid-template-columns: minmax(0, 1fr); }
+  .calendar-view .day-panel { position: static; }
+}
+@media (max-width: 520px) {
+  .calendar-view .calendar-large { padding: 12px 8px; }
+  .calendar-view .calendar-large .cal-title { font-size: var(--text-heading); }
+  .calendar-view .calendar-large .cal-cell { min-height: 62px; padding: 4px; }
+  .calendar-view .calendar-large .cal-days { gap: 4px; }
+  .calendar-view .calendar-large .cal-chip { padding: 2px; }
+  .calendar-view .calendar-large .cal-pick { gap: 5px; }
+}
+
+/* ---- Transcript reading surface: flat page, focused reading column, explicit context ---- */
+#meeting-panel-transcript {
+  padding-bottom: 96px;
+}
+
+:root:has(#meeting-view:not([hidden]) #meeting-panel-transcript:not([hidden])) {
+  scroll-padding-bottom: 104px;
+}
+
+#meeting-panel-transcript .transcription-panel {
+  margin-top: 20px;
+  padding: 0 0 92px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+#meeting-panel-transcript .transcript-processing-tools {
+  margin: 0 0 18px;
+}
+
+#meeting-panel-transcript .transcript-processing {
+  background: transparent;
+}
+
+#meeting-panel-transcript #transcript-generation {
+  margin-top: 20px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+#meeting-panel-transcript .generation-heading {
+  align-items: baseline;
+  padding-bottom: 4px;
+}
+
+#meeting-panel-transcript .generation-heading h4 {
+  font-family: var(--font-serif);
+  font-size: var(--text-title);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+#meeting-panel-transcript .transcript-workspace {
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 24px;
+  margin-top: 20px;
+}
+
+#meeting-panel-transcript .transcript-reading-column {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#meeting-panel-transcript .transcript-context {
+  grid-column: 2;
+  grid-row: 1;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100dvh - 32px);
+  padding: 16px;
+  border-color: var(--hairline);
+  background: var(--surface);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+#meeting-panel-transcript .transcript-context > summary {
+  color: var(--ink);
+  font-size: var(--text-control);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#meeting-panel-transcript .selected-segment {
+  padding-top: 18px;
+}
+
+#meeting-panel-transcript .transcript-filters {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px 14px;
+  margin: 0 0 16px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+#meeting-panel-transcript .transcript-search {
+  grid-column: 1;
+  gap: 0;
+  min-width: 0;
+  font-size: var(--text-control);
+}
+
+#meeting-panel-transcript .transcript-search input {
+  min-height: 38px;
+  padding-inline: 11px;
+  background: var(--surface);
+  font-size: var(--text-control);
+}
+
+#meeting-panel-transcript .transcript-review-filter {
+  align-self: end;
+  min-height: 38px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
+#meeting-panel-transcript .transcript-review-navigation {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+#meeting-panel-transcript .transcript-review-navigation > button {
+  min-width: 0;
+  min-height: 34px;
+  padding-inline: 9px;
+  font-size: var(--text-control);
+}
+
+#meeting-panel-transcript #transcript-filter-status {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+  margin: 0;
+  text-align: end;
+}
+
+#meeting-panel-transcript .transcript-reading .transcript-segments {
+  gap: 10px;
+  margin-top: 0;
+}
+
+#meeting-panel-transcript .transcript-segment {
+  grid-template-columns: minmax(66px, auto) minmax(0, 1fr);
+  gap: 9px 16px;
+  padding: 15px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  scroll-margin-top: 16px;
+  scroll-margin-bottom: 92px;
+}
+
+#meeting-panel-transcript .segment-edit-button,
+#meeting-panel-transcript .transcript-context > summary {
+  scroll-margin-bottom: 160px;
+}
+
+#meeting-panel-transcript .transcript-segment .segment-text,
+#meeting-panel-transcript .transcript-segment .segment-text-editor {
+  font-size: var(--text-reading);
+  line-height: 1.65;
+}
+
+#meeting-panel-transcript .segment-speaker,
+#meeting-panel-transcript .segment-speaker-control {
+  color: var(--ink-2);
+  font-size: var(--text-control);
+}
+
+#meeting-panel-transcript .segment-timestamp {
+  color: var(--accent);
+}
+
+#meeting-panel-transcript .transcript-segment.is-playback-active,
+#meeting-panel-transcript .transcript-segment[aria-current="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+/* ---- Compact real transport: the audio element remains the source of truth ---- */
+#meeting-panel-transcript .player-bar {
+  position: fixed;
+  top: auto;
+  right: clamp(28px, 4.4vw, 68px);
+  bottom: 12px;
+  left: calc(var(--sidebar-width, 17rem) + clamp(28px, 4.4vw, 68px));
+  z-index: 30;
+  display: flex;
+  height: auto;
+  min-height: 62px;
+  align-items: center;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: 0 12px 30px var(--shadow-color);
+}
+
+/* Native controls remain available through Details on the same media element. */
+
+#meeting-panel-transcript .audio-transport {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto auto minmax(120px, 1fr) auto minmax(100px, 120px);
+  align-items: center;
+  gap: 10px;
+}
+
+#meeting-panel-transcript .audio-transport-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--surface);
+  cursor: pointer;
+  place-items: center;
+}
+
+#meeting-panel-transcript .audio-transport-button:hover {
+  background: var(--ink);
+}
+
+#meeting-panel-transcript .audio-transport-button svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+#meeting-panel-transcript .audio-transport-time {
+  min-width: 70px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#meeting-panel-transcript .audio-seek-control,
+#meeting-panel-transcript .audio-volume-control,
+#meeting-panel-transcript .audio-rate-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+#meeting-panel-transcript #audio-seek,
+#meeting-panel-transcript #audio-volume {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+#meeting-panel-transcript #audio-seek:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+#meeting-panel-transcript #audio-rate {
+  min-height: 34px;
+  padding: 0 7px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-control);
+}
+
+#meeting-panel-transcript .audio-volume-control {
+  gap: 7px;
+}
+
+#meeting-panel-transcript .audio-volume-control svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  stroke: var(--ink-2);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+#meeting-panel-transcript .audio-transport-error {
+  margin: 0 12px 0 0;
+  color: var(--danger);
+  font-size: var(--text-label);
+}
+
+@media (min-width: 1430px) {
+  #meeting-panel-transcript .player-bar {
+    left: calc(var(--sidebar-width, 17rem) + (100vw - var(--sidebar-width, 17rem)) / 2 - 515px);
+    right: calc((100vw - var(--sidebar-width, 17rem)) / 2 - 515px);
+  }
+}
+
+@media (max-width: 1320px) {
+  #meeting-panel-transcript .transcript-workspace {
+    grid-template-columns: minmax(0, 1.8fr) minmax(260px, 1fr);
+  }
+}
+
+@media (max-width: 980px) {
+  #meeting-panel-transcript .player-bar {
+    right: clamp(25px, 4vw, 42px);
+    left: calc(var(--sidebar-width, 15rem) + clamp(25px, 4vw, 42px));
+  }
+}
+
+@media (max-width: 1099px) {
+  #meeting-panel-transcript .transcript-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #meeting-panel-transcript .transcript-reading-column,
+  #meeting-panel-transcript .transcript-context {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  #meeting-panel-transcript .transcript-context {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 700px) {
+  :root:has(#meeting-view:not([hidden]) #meeting-panel-transcript:not([hidden])) {
+    scroll-padding-bottom: 150px;
+  }
+
+  #meeting-panel-transcript {
+    padding-bottom: 142px;
+  }
+
+  #meeting-panel-transcript .transcription-panel {
+    padding-bottom: 132px;
+  }
+
+  #meeting-panel-transcript .transcript-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #meeting-panel-transcript .transcript-search,
+  #meeting-panel-transcript .transcript-review-filter,
+  #meeting-panel-transcript .transcript-review-navigation,
+  #meeting-panel-transcript #transcript-filter-status {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  #meeting-panel-transcript #transcript-filter-status {
+    text-align: start;
+  }
+
+  #meeting-panel-transcript .segment-edit-button,
+  #meeting-panel-transcript .transcript-context > summary {
+    scroll-margin-bottom: 180px;
+  }
+
+  #meeting-panel-transcript .audio-transport {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  #meeting-panel-transcript .audio-volume-control {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  #meeting-panel-transcript .player-bar {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    min-height: 116px;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    padding: 8px 12px;
+  }
+}
+
+@media (max-width: 680px) {
+  #meeting-panel-transcript .transcript-context {
+    padding: 14px;
+  }
+
+  #meeting-panel-transcript .transcript-segment {
+    grid-template-columns: minmax(60px, auto) minmax(0, 1fr);
+    gap: 8px 11px;
+    padding: 13px 12px;
+  }
+}
+
+#meeting-panel-transcript .player-bar { flex-wrap: wrap; }
+#meeting-panel-transcript .audio-transport { padding-right: 38px; }
+#meeting-panel-transcript .audio-transport-error { flex-basis: 100%; }
+#meeting-panel-transcript .audio-native-options { position: absolute; inset-block-start: 8px; inset-inline-end: 8px; z-index: 1; }
+#meeting-panel-transcript .audio-native-options > summary { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; list-style: none; }
+#meeting-panel-transcript .audio-native-options > summary::-webkit-details-marker { display: none; }
+#meeting-panel-transcript .audio-native-options > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#meeting-panel-transcript .audio-native-options > summary svg { width: 18px; height: 18px; }
+#meeting-panel-transcript .audio-native-options[open] { position: static; flex-basis: 100%; width: 100%; padding-top: 24px; }
+#meeting-panel-transcript .audio-native-options[open] > summary { position: absolute; top: 8px; right: 8px; }
+#meeting-panel-transcript .audio-native-options[open] #meeting-audio { display: block; width: 100%; }
+
+/* Review icons and short labels retain their size at every viewport. */
+#meeting-panel-transcript .transcript-review-navigation > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+#meeting-panel-transcript .transcript-review-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+/* The default desktop review controls share one readable row. Full review text stays in the
+   accessible name/title; the visible labels are intentionally short, so the status can remain
+   visible on its own quiet line without making the navigation stack. */
+@media (min-width: 1100px) {
+  #meeting-panel-transcript .transcript-filters {
+    grid-template-columns: minmax(230px, 1fr) auto minmax(0, 1.05fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+  }
+
+  #meeting-panel-transcript .transcript-search {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  #meeting-panel-transcript .transcript-review-filter {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  #meeting-panel-transcript .transcript-review-navigation {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  #meeting-panel-transcript #transcript-filter-status {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    align-self: start;
+    justify-self: end;
+    margin: 0;
+    text-align: end;
+  }
+
+  #meeting-panel-transcript #transcript-reveal-target {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    justify-self: start;
+  }
+}
+
+
+@media (max-width: 980px) {
+  #meeting-panel-transcript .audio-transport { grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; }
+  #meeting-panel-transcript .audio-volume-control { grid-column: 1 / -1; width: 100%; }
+}
+@media (min-width: 681px) and (max-width: 700px) {
+  #meeting-panel-transcript .player-bar { left: calc(var(--sidebar-width, 15rem) + clamp(25px, 4vw, 42px)); right: clamp(25px, 4vw, 42px); }
+}
+@media (max-width: 680px) {
+  #meeting-panel-transcript .player-bar { bottom: 78px; }
+  :root:has(#meeting-view:not([hidden]) #meeting-panel-transcript:not([hidden])) { scroll-padding-bottom: 220px; }
+}
+
+#meeting-panel-transcript .audio-transport-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

@@ -1026,6 +1026,8 @@ const { t, UI_LOCALE } = (() => {
       "Đang xử lý": "Processing",
       "Đoạn cần kiểm tra trước": "Previous segment needing review",
       "Đoạn cần kiểm tra tiếp": "Next segment needing review",
+      "Trước": "Previous",
+      "Tiếp": "Next",
       "Chỉ đoạn cần kiểm tra": "Only segments needing review",
       "Đang xử lý transcript. Chờ tác vụ kết thúc để tạo notes.": "Processing the transcript. Wait for the task to finish to create notes.",
       "Đang đưa trình phát bản ghi tới mốc nguồn…": "Moving the recording player to the source timestamp…",
@@ -1440,7 +1442,13 @@ const { t, UI_LOCALE } = (() => {
       "Đang gửi…": "Sending…",
       "Đang đọc trạng thái nhà cung cấp và danh sách model. Hãy đợi rồi thử lại.": "Reading provider status and model list. Wait, then try again.",
       "Đang đọc trạng thái nhà cung cấp và danh sách model…": "Reading provider status and model list…",
-      "“Không hết hạn” chỉ dành cho máy đáng tin cậy mà bạn kiểm soát.": "“Never expires” is only for trusted machines you control."
+      "“Không hết hạn” chỉ dành cho máy đáng tin cậy mà bạn kiểm soát.": "“Never expires” is only for trusted machines you control.",
+      "Phát bản ghi": "Play recording",
+      "Tạm dừng bản ghi": "Pause recording",
+      "Tốc độ phát": "Playback speed",
+      "Âm lượng": "Volume",
+      "Tua tới mốc bản ghi": "Seek in recording",
+      "Không phát được bản ghi này.": "This recording cannot be played."
     };
   }
 })();

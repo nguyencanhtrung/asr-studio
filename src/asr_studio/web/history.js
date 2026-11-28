@@ -326,6 +326,8 @@ function renderViews(s) {
   if (heading) {
     setProp($("#page-title"), "textContent", tr(heading.title));
     document.title = tr(heading.documentTitle);
+    const breadcrumb = $(".workspace-breadcrumb [aria-current='page']");
+    if (breadcrumb) setProp(breadcrumb, "textContent", s.view === "meeting" ? t("Cuộc họp") : s.view === "calendar" ? t("Lịch cuộc họp") : tr(heading.title));
   }
 }
 
@@ -342,6 +344,122 @@ function renderMeeting(meeting) {
   renderTranscription(meeting.transcription);
 }
 
+function formatAudioTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—:—";
+  const total = Math.floor(seconds);
+  const minutes = Math.floor(total / 60);
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  const suffix = `${String(remainingMinutes).padStart(hours ? 2 : 1, "0")}:${String(total % 60).padStart(2, "0")}`;
+  return hours ? `${hours}:${suffix}` : suffix;
+}
+
+function renderAudioTransport() {
+  const audio = $("#meeting-audio");
+  const player = $(".player-bar");
+  const transport = $("#audio-transport");
+  if (!audio || !player || !transport) return;
+  const playable = !player.hidden && audio.controls;
+  const nativeOptions = $("#audio-native-options");
+  if (playable && !player.hasAttribute("data-transport-initialized")) {
+    player.dataset.transportInitialized = "true";
+    if (nativeOptions && !nativeOptions.contains(document.activeElement)) nativeOptions.open = false;
+  }
+  transport.hidden = !playable || Boolean(nativeOptions?.open);
+  if (!playable) {
+    player.removeAttribute("data-enhanced");
+    audio.removeAttribute("aria-hidden");
+    return;
+  }
+
+  player.dataset.enhanced = "true";
+  if (nativeOptions?.open) audio.removeAttribute("aria-hidden");
+  else audio.setAttribute("aria-hidden", "true");
+  const playing = !audio.error && !audio.paused && !audio.ended;
+  const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+  const current = Number.isFinite(audio.currentTime) && audio.currentTime >= 0 ? audio.currentTime : 0;
+  const currentTime = $("#audio-current-time");
+  const durationTime = $("#audio-duration");
+  const seek = $("#audio-seek");
+  const playToggle = $("#audio-play-toggle");
+  const playIcon = $(".audio-play-icon");
+  const pauseIcon = $(".audio-pause-icon");
+  if (currentTime) currentTime.textContent = formatAudioTime(current);
+  if (durationTime) durationTime.textContent = formatAudioTime(duration);
+  if (seek) {
+    seek.max = String(duration || 0);
+    seek.value = String(duration ? Math.min(current, duration) : 0);
+    seek.disabled = !duration;
+    seek.setAttribute("aria-valuetext", `${formatAudioTime(current)} / ${formatAudioTime(duration)}`);
+  }
+  if (playToggle) {
+    playToggle.setAttribute("aria-pressed", String(playing));
+    const label = playing ? t("Tạm dừng bản ghi") : t("Phát bản ghi");
+    playToggle.setAttribute("aria-label", label);
+  }
+  if (playIcon) playIcon.hidden = playing;
+  if (pauseIcon) pauseIcon.hidden = !playing;
+  const rate = $("#audio-rate");
+  if (rate) {
+    const value = String(audio.playbackRate || 1);
+    rate.value = [...rate.options].some((option) => option.value === value) ? value : "1";
+  }
+  const volume = $("#audio-volume");
+  if (volume) volume.value = String(audio.muted ? 0 : audio.volume);
+}
+
+function setAudioTransportError(message = "") {
+  const error = $("#audio-transport-error");
+  if (!error) return;
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+async function toggleAudioPlayback() {
+  const audio = $("#meeting-audio");
+  const key = audio.dataset.audioKey;
+  const meetingId = audio.dataset.meetingId;
+  const current = () => audio.dataset.audioKey === key && audio.dataset.meetingId === meetingId;
+  if (audio.error || audio.paused || audio.ended) {
+    try {
+      await audio.play();
+      if (current() && !audio.error) setAudioTransportError();
+    } catch (error) {
+      // Pause and source replacement abort a pending play without a media failure.
+      if (current() && error.name !== "AbortError") setAudioTransportError(t("Không phát được bản ghi này."));
+    }
+  } else {
+    audio.pause();
+  }
+  if (current()) renderAudioTransport();
+}
+
+function seekAudioTransport() {
+  const audio = $("#meeting-audio");
+  const seek = $("#audio-seek");
+  const seconds = Number(seek?.value);
+  if (!seek || seek.disabled || !Number.isFinite(seconds) || !Number.isFinite(audio.duration)) return;
+  audio.currentTime = Math.max(0, Math.min(seconds, audio.duration));
+  updateActiveTranscriptIntervals();
+  renderAudioTransport();
+}
+
+function setAudioRate() {
+  const rate = Number($("#audio-rate")?.value);
+  if (!Number.isFinite(rate) || rate <= 0) return;
+  $("#meeting-audio").playbackRate = rate;
+  renderAudioTransport();
+}
+
+function setAudioVolume() {
+  const volume = Number($("#audio-volume")?.value);
+  if (!Number.isFinite(volume)) return;
+  const audio = $("#meeting-audio");
+  audio.volume = Math.max(0, Math.min(1, volume));
+  if (volume > 0) audio.muted = false;
+  renderAudioTransport();
+}
+
 function loadAudio(meeting) {
   const audio = $("#meeting-audio");
   const player = $(".player-bar");
@@ -351,7 +469,10 @@ function loadAudio(meeting) {
   player.hidden = !info.playable;
   audio.controls = info.playable;
   audio.dataset.meetingId = meeting.id;
-  if (audio.dataset.audioKey === audioKey) return;
+  if (audio.dataset.audioKey === audioKey) {
+    renderAudioTransport();
+    return;
+  }
   audio.dataset.audioKey = audioKey;
   if (info.playable) {
     audio.src = audioUrl;
@@ -361,6 +482,8 @@ function loadAudio(meeting) {
     audio.setAttribute("aria-disabled", "true");
   }
   audio.load();
+  setAudioTransportError();
+  renderAudioTransport();
 }
 
 // A meeting from the server became the current one: repaint what depends on the notes source lock and tell
@@ -541,6 +664,21 @@ function buildCalendar(root) {
   root.innerHTML = CALENDAR_TEMPLATE;
   const select = root.querySelector(".cal-month");
   for (let month = 0; month < 12; month += 1) select.add(new Option(MONTHS[month], String(month)));
+  if (root.dataset.calendar === "mini") {
+    // Keep navigation, direct month/year selection and delegated handlers in the
+    // calendar's own view. Only their presentation changes.
+    const title = root.querySelector(".cal-title");
+    const disclosure = document.createElement("details");
+    disclosure.className = "calendar-picker-disclosure";
+    const summary = document.createElement("summary");
+    summary.className = "calendar-picker-summary";
+    const fields = document.createElement("div");
+    fields.className = "calendar-picker-fields";
+    title.replaceWith(disclosure);
+    summary.append(title);
+    fields.append(select, root.querySelector(".cal-year"));
+    disclosure.append(summary, fields);
+  }
 }
 
 function renderCalendar(root, large, view) {
@@ -552,6 +690,8 @@ function renderCalendar(root, large, view) {
       ? activeElement.dataset.date
       : null;
   root.querySelector(".cal-title").textContent = `${MONTHS[month]} · ${year}`;
+  const picker = root.querySelector(".calendar-picker-summary");
+  if (picker) setAttr(picker, "aria-label", `${t("Tháng")} / ${t("Năm")}: ${MONTHS[month]} · ${year}`);
   root.querySelector(".cal-month").value = String(month);
   // A background refresh must not overwrite what the user is typing in the year box.
   const yearInput = root.querySelector(".cal-year");
@@ -1123,6 +1263,17 @@ function renderMeetingProcessingStatus(task, generation, processing = store.getS
 // The backend names a speaker nobody renamed "Speaker 3"; its chip invites a name.
 const DEFAULT_SPEAKER_NAME = /^Speaker \d+$/;
 
+// Recovery notices are grouped by generation, then by the kind of edit.  Keep speaker
+// changes before segment text so a rerun reads like the editor: identify the speaker,
+// then review the words.  This is presentation order only; the draft buckets remain
+// untouched and retain every manual edit.
+const TRANSCRIPT_DRAFT_FIELD_ORDER = {
+  speakerAddName: 0,
+  speakerName: 1,
+  speakerAssignment: 2,
+  segmentText: 3,
+};
+
 // The default names a transcript still carries, for the notes reminder to name them.
 function defaultSpeakerNames(generation) {
   const speakers = generation && Array.isArray(generation.speakers) ? generation.speakers : [];
@@ -1311,6 +1462,12 @@ function renderTranscriptDraftRecovery(transcription, shownId) {
       });
     }
   }
+  entries.sort((left, right) => {
+    const generationOrder = (left.generationNumber || 0) - (right.generationNumber || 0);
+    if (generationOrder) return generationOrder;
+    return (TRANSCRIPT_DRAFT_FIELD_ORDER[left.field] ?? Number.MAX_SAFE_INTEGER)
+      - (TRANSCRIPT_DRAFT_FIELD_ORDER[right.field] ?? Number.MAX_SAFE_INTEGER);
+  });
   const renderKey = JSON.stringify(entries);
   panel.hidden = entries.length === 0;
   if (panel.dataset.renderKey === renderKey) return;
@@ -2224,10 +2381,10 @@ function audioFacts() {
   };
   if (audio.paused || audio.ended) return facts;
   // Reading the notes while audio plays must not pull the page to the transcript: follow only
-  // while some of the list shows below the player bar.
+  // while some of the list is visible above the bottom transport.
   const bar = $(".player-bar").getBoundingClientRect();
   const list = $("#transcript-segments").getBoundingClientRect();
-  facts.visible = !(list.bottom <= bar.bottom || list.top >= window.innerHeight);
+  facts.visible = list.bottom > 0 && list.top < Math.min(bar.top, window.innerHeight);
   const focused = document.activeElement;
   facts.typing = Boolean(
     focused
@@ -2279,15 +2436,17 @@ function runPlaybackOp(op) {
     renderTranscriptFilters();
     return;
   }
-  if (op.op === "reveal") {
-    // Bring the source row into view when it is not, moving the page no further than that takes so the card above
-    // stays as visible as it can.
-    const bar = $(".player-bar").getBoundingClientRect();
-    const box = row.getBoundingClientRect();
-    if (box.top >= bar.bottom && box.bottom <= window.innerHeight) return;
-    dispatchBare({ type: "playback/scroll-started" });
-  }
-  row.scrollIntoView({ block: "nearest", behavior: op.smooth ? "smooth" : "auto" });
+  const bar = $(".player-bar").getBoundingClientRect();
+  const box = row.getBoundingClientRect();
+  const top = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
+  const margin = parseFloat(getComputedStyle(row).scrollMarginTop) || 0;
+  const ceiling = top + margin;
+  const floor = Math.min(bar.top - 12, window.innerHeight);
+  const delta = box.top < ceiling ? box.top - ceiling
+    : box.bottom > floor ? box.bottom - floor : 0;
+  if (!delta) return;
+  if (op.op === "reveal") dispatchBare({ type: "playback/scroll-started" });
+  window.scrollBy({ top: delta, behavior: op.smooth ? "smooth" : "instant" });
 }
 
 function paintPlayback(root, memory) {
@@ -2874,6 +3033,39 @@ function renderTaskProgress(progress, task) {
   $("#task-progress-stage").textContent = taskStageLabel(task);
 }
 
+// A completed rerun can repaint the reading column while the user is typing in its search.
+// Preserve that real keyboard context without taking over a different navigation or focus
+// target.  The fixed player (and the phone footer) are the only lower-edge occluders.
+function transcriptFocusGeometry(element) {
+  if (!element?.isConnected || !element.getClientRects().length) return;
+  const box = element.getBoundingClientRect();
+  const rootStyle = getComputedStyle(document.documentElement);
+  const ceiling = parseFloat(rootStyle.scrollPaddingTop) || 0;
+  const player = $(".player-bar");
+  const footer = $(".sidebar-footer");
+  let floor = window.innerHeight;
+  if (player && !player.hidden) floor = Math.min(floor, player.getBoundingClientRect().top - 12);
+  if (footer && getComputedStyle(footer).position === "fixed") {
+    floor = Math.min(floor, footer.getBoundingClientRect().top - 8);
+  }
+  return { box, ceiling, floor };
+}
+
+function transcriptControlVisible(element) {
+  const geometry = transcriptFocusGeometry(element);
+  return Boolean(geometry)
+    && geometry.box.top >= geometry.ceiling
+    && geometry.box.bottom <= geometry.floor;
+}
+
+function keepFocusedTranscriptControlVisible(element) {
+  const geometry = transcriptFocusGeometry(element);
+  if (!geometry) return;
+  const { box, ceiling, floor } = geometry;
+  const delta = box.top < ceiling ? box.top - ceiling : box.bottom > floor ? box.bottom - floor : 0;
+  if (delta) window.scrollBy({ top: delta, behavior: "instant" });
+}
+
 function renderTranscription(transcription) {
   const meeting = nav().meeting;
   const recording = recordingInfo(meeting);
@@ -2887,6 +3079,9 @@ function renderTranscription(transcription) {
   const advanced = $("#transcript-processing");
   const statusLine = $("#transcription-status");
   const statusHadFocus = document.activeElement === statusLine;
+  const search = $("#transcript-search");
+  const searchHadFocus = document.activeElement === search;
+  const searchWasVisible = searchHadFocus && transcriptControlVisible(search);
   const completed = Boolean(
     generation && (!task || task.status === "succeeded")
     && !view.requestBusy && !view.notice && !view.error.visible,
@@ -2986,6 +3181,9 @@ function renderTranscription(transcription) {
     const target = completed && !advanced.open
       ? advanced.querySelector(":scope > summary") : statusLine;
     target.focus();
+  }
+  if (searchWasVisible && completed && presentationChanged && document.activeElement === search) {
+    keepFocusedTranscriptControlVisible(search);
   }
 }
 
@@ -3602,12 +3800,33 @@ $("#transcript-segments").addEventListener("change", (event) => {
   if (select) dispatchAssignment(select, false);
 });
 for (const eventName of ["timeupdate", "play"]) {
-  $("#meeting-audio").addEventListener(eventName, updateActiveTranscriptIntervals);
+  $("#meeting-audio").addEventListener(eventName, () => {
+    updateActiveTranscriptIntervals();
+    renderAudioTransport();
+  });
 }
 $("#meeting-audio").addEventListener("seeking", () => dispatch({ type: "playback/seeking", ...audioFacts() }));
 $("#meeting-audio").addEventListener("seeked", () => dispatch({ type: "playback/seeked", ...audioFacts() }));
-$("#meeting-audio").addEventListener("loadedmetadata", () => dispatch({ type: "playback/metadata-loaded", ...audioFacts() }));
-$("#meeting-audio").addEventListener("error", () => dispatch({ type: "playback/audio-failed" }));
+$("#meeting-audio").addEventListener("loadedmetadata", () => {
+  dispatch({ type: "playback/metadata-loaded", ...audioFacts() });
+  setAudioTransportError();
+  renderAudioTransport();
+});
+$("#meeting-audio").addEventListener("pause", renderAudioTransport);
+$("#meeting-audio").addEventListener("ended", renderAudioTransport);
+$("#meeting-audio").addEventListener("durationchange", renderAudioTransport);
+$("#meeting-audio").addEventListener("ratechange", renderAudioTransport);
+$("#meeting-audio").addEventListener("volumechange", renderAudioTransport);
+$("#meeting-audio").addEventListener("error", () => {
+  dispatch({ type: "playback/audio-failed" });
+  setAudioTransportError(t("Không phát được bản ghi này."));
+  renderAudioTransport();
+});
+$("#audio-play-toggle").addEventListener("click", toggleAudioPlayback);
+$("#audio-seek").addEventListener("input", seekAudioTransport);
+$("#audio-rate").addEventListener("change", setAudioRate);
+$("#audio-volume").addEventListener("input", setAudioVolume);
+$("#audio-native-options").addEventListener("toggle", renderAudioTransport);
 // A wheel, a touch move, a scroll key or any scroll the app did not start counts as the user's. A scrollbar drag
 // sends no wheel or key first; our own smooth scroll keeps sending scroll events, which the core tells apart.
 for (const eventName of ["wheel", "touchmove"]) {

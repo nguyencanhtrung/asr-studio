@@ -727,9 +727,11 @@ def test_phone_footer_keeps_accessible_launchers_and_product_links(live, signed_
     assert abs(pair_center - (version_box["x"] + version_box["width"] / 2)) <= 0.5
     assert page.evaluate("document.documentElement.scrollWidth - innerWidth") <= 0
 
+    menu = page.locator("#sidebar-history > summary")
+    expect(menu).to_have_accessible_name("Cuộc họp và lịch")
     page.locator(".sidebar-masthead .lang-toggle").focus()
     for control in (
-        page.get_by_text("Cuộc họp và lịch", exact=True),
+        menu,
         launchers.nth(0),
         launchers.nth(1),
         gear,

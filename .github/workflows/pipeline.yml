@@ -89,7 +89,22 @@ jobs:
         env:
           ASR_RUN_BROWSER_TESTS: "1"
           ASR_REQUIRE_MEDIA_TOOLS: "1"
+          ASR_VISUAL_EVIDENCE_DIR: ${{ runner.temp }}/asr-studio-workspace
+          ASR_TRANSCRIPT_SCREENSHOT_DIR: ${{ runner.temp }}/asr-studio-workspace
         run: ./scripts/check.sh
+      - name: Capture handoff workspace evidence
+        env:
+          PYTHONPATH: src:tests
+        run: >-
+          timeout 240s uv run --no-sync python tests/visual/capture_workspace.py
+          "${RUNNER_TEMP}/asr-studio-workspace"
+      - name: Upload handoff workspace evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: asr-studio-workspace-${{ github.sha }}
+          path: ${{ runner.temp }}/asr-studio-workspace/
+          if-no-files-found: error
+          retention-days: 30
       - name: Test native Chrome extension
         env:
           ASR_RUN_EXTENSION_TESTS: "1"

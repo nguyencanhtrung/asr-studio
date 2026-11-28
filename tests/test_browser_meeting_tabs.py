@@ -282,7 +282,8 @@ def test_transcript_tab_holds_the_recording_block_and_the_transcript_with_counts
     panel = page.locator("#meeting-panel-transcript")
     for selector in (
         "#audio-heading",
-        ".player-bar #meeting-audio",
+        "#audio-transport",
+        "#audio-native-options > summary",
         "#transcription-panel",
         "#start-transcription",
         "#transcript-generation",
@@ -291,6 +292,17 @@ def test_transcript_tab_holds_the_recording_block_and_the_transcript_with_counts
         "#transcript-segments > li",
     ):
         expect(panel.locator(selector).first).to_be_visible()
+    # The compact transport and native options share the original real media element.
+    audio = panel.locator(".player-bar #meeting-audio")
+    expect(audio).to_have_count(1)
+    expect(audio).to_have_attribute("src", f"/api/meetings/{meeting_id}/audio")
+    expect(audio).to_have_attribute("controls", "")
+    assert audio.evaluate("element => element.paused && !element.autoplay")
+    panel.locator("#audio-native-options > summary").click()
+    expect(audio).to_be_visible()
+    expect(panel.locator("#audio-transport")).to_be_hidden()
+    panel.locator("#audio-native-options > summary").click()
+    expect(panel.locator("#audio-transport")).to_be_visible()
     expect(panel.locator("#transcript-segments > li")).to_have_count(3)
 
     expect(panel.locator("#notes-panel")).to_have_count(0)
@@ -1209,12 +1221,20 @@ def test_notes_tab_holds_the_whole_notes_part(live, signed_in):
         "#notes-revision-selector",
         "#notes-mode-view",
         "#notes-mode-write",
-        "#notes-save",
         "#notes-copy",
         "#notes-export",
         "#notes-preview",
     ):
         expect(panel.locator(selector)).to_be_visible()
+    # Save and Cancel are editing controls: the read view keeps them out of the
+    # toolbar, then exposes both when Write is selected.
+    expect(panel.locator("#notes-save")).to_be_hidden()
+    expect(panel.locator("#notes-edit-cancel")).to_be_hidden()
+    panel.locator("#notes-mode-write").click()
+    expect(panel.locator("#notes-save")).to_be_visible()
+    expect(panel.locator("#notes-edit-cancel")).to_be_visible()
+    panel.locator("#notes-mode-view").click()
+    expect(panel.locator("#notes-save")).to_be_hidden()
     # Nothing of the transcript or the recording is in this tab.
     for selector in (
         "#transcription-panel",
@@ -1540,6 +1560,8 @@ def test_the_seek_button_moves_the_player_that_sits_in_the_same_tab(live, signed
     expect_tab(page, "transcript")  # the card and the player it moves are in the same tab
     expect(page.locator("#notes-source-status")).to_contain_text("Đã tua bản ghi", timeout=10_000)
     audio = page.locator("#meeting-audio")
+    expect(page.locator("#audio-transport")).to_be_visible()
+    page.locator("#audio-native-options > summary").click()
     expect(audio).to_be_visible()
     page.evaluate("document.querySelector('#meeting-audio').pause()")
     page.evaluate("document.querySelector('#meeting-audio').currentTime = 20")
@@ -1769,17 +1791,27 @@ def test_on_a_phone_the_tablist_is_right_under_the_header_and_the_provider_launc
             before: tabs.previousElementSibling.id,
             gap: box("#meeting-tabs").top - box("#meeting-status-strip").bottom,
             panel: box("#meeting-panel-transcript").top - box("#meeting-tabs").bottom,
-            title: box("#meeting-title").top,
-            launchers: box(".connection-launchers").bottom,
+            footerTop: box(".sidebar-footer").top,
+            footerBottom: box(".sidebar-footer").bottom,
+            footerHeight: box(".sidebar-footer").height,
+            footerPosition: getComputedStyle(document.querySelector(".sidebar-footer")).position,
+            launcherTop: box(".connection-launchers").top,
+            launcherBottom: box(".connection-launchers").bottom,
+            workspaceClearance: parseFloat(
+              getComputedStyle(document.querySelector(".workspace")).paddingBottom),
+            viewportHeight: innerHeight,
           };
         }"""
     )
     assert geometry["before"] == "meeting-status-strip"
     assert 0 <= geometry["gap"] <= 32, geometry  # nothing sits between the header and the tabs
     assert 0 <= geometry["panel"] <= 32, geometry
-    assert geometry["launchers"] <= geometry["title"], (
-        geometry
-    )  # the buttons stay above the meeting
+    # The phone footer stays reachable below the document and reserves content space.
+    assert geometry["footerPosition"] == "fixed", geometry
+    assert abs(geometry["footerBottom"] - geometry["viewportHeight"]) <= 1, geometry
+    assert geometry["footerTop"] <= geometry["launcherTop"], geometry
+    assert geometry["launcherBottom"] <= geometry["footerBottom"], geometry
+    assert geometry["workspaceClearance"] >= geometry["footerHeight"], geometry
 
     expect(page.locator(".workspace-header .connection-launchers")).to_have_count(0)
     launchers = page.locator(".sidebar-footer .connection-launcher")
@@ -1950,21 +1982,24 @@ def test_the_pinned_player_and_its_clearance_belong_to_the_transcript_tab(live, 
     _context, page = signed_in(viewport=DESKTOP)
     meeting_id, *_ = seed_completed_transcript(live.settings.data_dir)
     open_meeting(page, live, meeting_id)
-    padding = "getComputedStyle(document.documentElement).scrollPaddingTop"
+    padding = "parseFloat(getComputedStyle(document.documentElement).scrollPaddingBottom) || 0"
     expect_tab(page, "transcript")
-    expect(page.locator(".player-bar")).to_be_visible()
-    assert page.evaluate(padding) == "72px"
-    assert page.locator(".player-bar").evaluate("e => getComputedStyle(e).position") == "sticky"
+    bar = page.locator(".player-bar")
+    expect(bar).to_be_visible()
+    assert bar.evaluate("e => getComputedStyle(e).position") == "fixed"
+    bounds = bar.bounding_box()
+    height = page.evaluate("innerHeight")
+    assert bounds and 0 < bounds["y"] < bounds["y"] + bounds["height"] <= height
+    reserved = page.evaluate(padding)
+    assert reserved >= height - bounds["y"]
     page.locator(NOTES_TAB).click()
     expect_tab(page, "notes")
-    expect(page.locator(".player-bar")).to_be_hidden()
-    assert page.evaluate(padding) not in {
-        "64px",
-        "72px",
-    }  # no player is pinned, so nothing is reserved
+    expect(bar).to_be_hidden()
+    assert page.evaluate(padding) < reserved  # no invisible dock reserves document space
     open_calendar(page)
     expect(page.locator("#calendar-view")).to_be_visible()
-    assert page.evaluate(padding) not in {"64px", "72px"}
+    expect(bar).to_be_hidden()
+    assert page.evaluate(padding) < reserved
 
 
 def test_changing_tab_is_a_view_change_and_makes_no_request(live, signed_in):

@@ -206,13 +206,20 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                 assert metrics["launchersInFooter"]
                 assert metrics["header"]["right"] <= metrics["workspaceContentRight"] + 0.5
                 if width == 360:
-                    assert metrics["launchers"]["bottom"] <= metrics["actions"]["top"] + 0.5
+                    assert metrics["launchers"]["top"] >= metrics["header"]["bottom"]
+                    assert metrics["launchers"]["bottom"] <= height
+                    assert metrics["footer"]["bottom"] <= height
                     assert metrics["versionVisible"]
                     page.locator(".theme-toggle").focus()
                     keyboard_order = []
-                    for _ in range(9):
+                    for index in range(10):
                         page.keyboard.press("Tab")
                         keyboard_order.append(_focus_identity(page))
+                        if index == 7:
+                            expect(page.locator(".workspace-breadcrumb a")).to_be_focused()
+                            expect(page.locator(".workspace-breadcrumb a")).to_have_attribute(
+                                "href", "/"
+                            )
                     assert keyboard_order == [
                         ".lang-toggle",
                         "summary",
@@ -221,6 +228,7 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                         "#settings-open",
                         "github-link",
                         "version-link",
+                        "a",  # Workspace breadcrumb, explicitly focused above
                         "#open-calendar",
                         ".header-create",
                     ]
@@ -240,15 +248,16 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                     metrics["keyboardOrder"] = keyboard_order
 
                 if width >= 1024:
-                    assert metrics["sidebar"]["width"] == 272
+                    assert metrics["sidebar"]["width"] == 252
                     assert metrics["versionVisible"]
                     assert metrics["sidebarOverflowY"] == "auto"
-                    assert metrics["sidebarScrollRange"] > 0
-                    scrolled = page.locator(".sidebar").evaluate(
-                        "element => { element.scrollTop = element.scrollHeight; "
-                        "return element.scrollTop; }"
-                    )
-                    assert scrolled > 0
+                    assert metrics["sidebarScrollRange"] >= 0
+                    if metrics["sidebarScrollRange"] > 0:
+                        scrolled = page.locator(".sidebar").evaluate(
+                            "element => { element.scrollTop = element.scrollHeight; "
+                            "return element.scrollTop; }"
+                        )
+                        assert scrolled > 0
                     page.locator(".version-link").focus()
                     assert page.locator(".version-link").evaluate(
                         "element => { const box = element.getBoundingClientRect(); "
@@ -271,7 +280,7 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
             finally:
                 context.close()
 
-    # The narrower desktop rail stays 240px without adding another screenshot pass.
+    # The handoff rail stays compact; a short viewport must still scroll safely.
     context, page = signed_in(
         color_scheme="light",
         viewport={"width": 900, "height": 700},
@@ -280,8 +289,19 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
     try:
         page.goto(f"{live.url}/", wait_until="networkidle")
         narrow_metrics = _layout_rectangles(page)
-        assert narrow_metrics["sidebar"]["width"] == 240
+        assert narrow_metrics["sidebar"]["width"] == 252
         evidence["rail_width_900"] = narrow_metrics["sidebar"]["width"]
+        page.set_viewport_size({"width": 900, "height": 420})
+        page.wait_for_function(
+            "() => Math.abs(document.querySelector('.sidebar').clientHeight - innerHeight) < 1"
+        )
+        short_metrics = _layout_rectangles(page)
+        assert short_metrics["sidebarScrollRange"] > 0
+        page.locator(".version-link").focus()
+        assert page.locator(".version-link").evaluate(
+            "element => { const box = element.getBoundingClientRect(); "
+            "return box.top >= 0 && box.bottom <= innerHeight; }"
+        )
     finally:
         context.close()
 
@@ -309,10 +329,8 @@ def test_layout_matrix_and_keyboard_order(live, signed_in, tmp_path):
                 assert focus_metrics["active"] == "secondary-button segment-edit-button"
                 assert focus_metrics["outline"]["style"] == "solid"
                 assert focus_metrics["outline"]["width"] >= 2
-                assert focus_metrics["scrollPaddingTop"] == "72px"
-                assert focus_metrics["playerHeight"] == "64px"
-                assert focus_metrics["playerClearance"] == "8px"
-                assert focus_metrics["outline"]["top"] >= focus_metrics["player"]["bottom"] - 0.5
+                assert focus_metrics["outline"]["top"] >= 0
+                assert focus_metrics["outline"]["bottom"] <= focus_metrics["player"]["top"] - 0.5
                 focus_screenshot = evidence_dir / f"{engine}-{theme}-focus-{width}x{height}.png"
                 page.screenshot(path=focus_screenshot, full_page=False, animations="disabled")
                 assert focus_screenshot.stat().st_size > 10_000
@@ -344,11 +362,13 @@ def test_last_calendar_day_full_focus_outline_clears_sticky_footer(live, signed_
         try:
             page.goto(f"{live.url}/", wait_until="networkidle")
             expect(page.locator("#recent-list a")).to_have_count(3)
+            page.locator("#mini-calendar .calendar-picker-summary").press("Enter")
             month = page.locator("#mini-calendar .cal-month")
             month.select_option("7")
             year = page.locator("#mini-calendar .cal-year")
             year.fill("2026")
             year.press("Enter")
+            page.locator("#mini-calendar .calendar-picker-summary").press("Enter")
 
             first_day = page.locator('#mini-calendar .cal-day[data-date="2026-08-01"]')
             first_day.focus()
