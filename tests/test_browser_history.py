@@ -1358,7 +1358,8 @@ def test_calendar_opens_from_the_sidebar_and_the_mobile_header(live, signed_in):
     expect(page.locator("#calendar-view")).to_be_visible()
     page.get_by_role("button", name="Quay lại notes").click()
 
-    disclosure = page.get_by_text("Cuộc họp và lịch", exact=True)
+    disclosure = page.locator("#sidebar-history > summary")
+    expect(disclosure).to_have_accessible_name("Cuộc họp và lịch")
     disclosure.press("Enter")
     expect(page.locator("#mini-calendar")).to_be_visible()
     page.keyboard.press("Tab")
@@ -1382,7 +1383,8 @@ def test_calendar_opens_from_the_sidebar_and_the_mobile_header(live, signed_in):
 
     page.set_viewport_size({"width": 375, "height": 800})
     page.get_by_role("button", name="Switch to English").click()
-    expect(page.get_by_text("Meetings and calendar", exact=True)).to_be_visible()
+    expect(disclosure).to_be_visible()
+    expect(disclosure).to_have_accessible_name("Meetings and calendar")
 
 
 def test_diarization_error_shows_sanitized_copyable_diagnostic_command(
