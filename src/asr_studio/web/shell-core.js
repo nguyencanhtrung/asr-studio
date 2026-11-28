@@ -106,6 +106,11 @@ const SERVER_ERROR_MESSAGES = {
   provider_confirmation_required: t("Cần xác nhận provider trước khi tiếp tục."),
   recipe_changed: t("Công thức notes đã thay đổi. Hãy tải lại rồi xác nhận lại."),
   processing_complete: t("Workflow đã hoàn tất; không còn thao tác cần chạy."),
+  stage_policy_admission_disabled: t("Máy chủ chưa cho phép tự động xử lý. Kiểm tra cấu hình trước khi thử lại; yêu cầu chưa được gửi lại."),
+  unknown_stage_policy: t("Máy chủ không nhận diện được cấu hình xử lý; yêu cầu đã được giữ lại. Kiểm tra cấu hình trước khi thử lại."),
+  unknown_stage_policy_format: t("Định dạng cấu hình xử lý không được hỗ trợ; yêu cầu đã được giữ lại. Cập nhật cấu hình trước khi thử lại."),
+  unknown_stage_policy_gate: t("Máy chủ chưa xác minh được quyền chạy tự động; yêu cầu đã được giữ lại. Kiểm tra cấu hình trước khi thử lại."),
+  diarization_rollback_fence: t("Máy chủ đang tạm giữ chế độ không nhận dạng người nói vì lý do an toàn; yêu cầu chưa được gửi lại."),
   invalid_processing_epoch: t("Phiên bản workflow không hợp lệ. Hãy tải lại rồi thử lại."),
   invalid_processing_version: t("Phiên bản xử lý không hợp lệ. Hãy tải lại rồi thử lại."),
   provider_busy: (provider) => provider
