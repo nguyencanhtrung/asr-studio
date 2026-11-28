@@ -38,6 +38,15 @@ Explicit activation keeps mixed-version deployment fail-closed at the cost of an
 cutover step. Silently treating unknown capability as a legacy request, sampling defaults at
 create time, and changing import defaults were rejected because they break recovery or parity.
 
+**Meeting action availability.** The read projection evaluates the existing live admission
+and quarantine guard before advertising the three guarded mutations. Its additive nullable
+`action_blocked_reason` explains a server hold without changing persisted workflow, source or
+revision state. Legacy workflows keep their prior availability. Meeting guidance distinguishes
+server holds from operator source consent, keeps terminal/skipped outcomes intact, and treats
+stage-local diarization fencing separately from valid Notes/source recovery. Maintained
+backend/core/browser regressions exercise these distinctions; the delivery PR records actual
+commands and generated evidence. No schema, credential or deployment change is introduced.
+
 **CI isolation.** Repository/browser checks and native Extension capture run on independent
 runners. A browser failure therefore retains the opportunity to collect native evidence.
 The existing required `Quality and browser tests` check waits for both lanes and runs even

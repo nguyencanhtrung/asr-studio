@@ -56,16 +56,33 @@ without changing its identity, credentials, language, or first body.
 The local operator cutover is separate from the extension preference API. Use the current-source
 commands `python -m asr_studio.cli stage-policy status --json`, `disable --reason ...`, and
 `enable --acknowledge-compatible-processes-stopped`; `rollback --reason ...` is the disable path
-for binary replacement. Stop the old app, scheduler, and worker first, disable and wait for the
-reported `drained: true`, then start the compatible current-source processes and enable with the
-explicit acknowledgement. Status reports accepted/running/stopping stage work and the actual
-processing-slot owner. There is no persisted `draining` mode, and an unknown gate remains
+for binary replacement. For a first upgrade from a pre-policy release, pause new captures and
+settle or cancel existing work using that release's controls before stopping its app, scheduler,
+and workers. Back up persistent data, install the compatible source, and let its startup perform
+the additive upgrade with admission disabled. Start only compatible processes, inspect status,
+and enable with the explicit acknowledgement. The pre-policy release has no gate command.
+
+For maintenance after the gate exists, pause new captures and disable admission while the
+compatible workers are still running. Wait for reported `drained: true`, settling any legacy or
+manual slot owner through its existing controls too, before stopping and replacing the processes.
+Keep admission disabled until compatible runtime activation. Status reports
+accepted/running/stopping stage work and the actual processing-slot owner. See the detailed
+[operator cutover order](extension-stage-policy.md#operator-cutover-drain-and-rollback). There is no persisted `draining` mode, and an unknown gate remains
 fail-closed. Worker/model/provider readiness is a separate waiting condition after admission;
 the gate command does not claim inference readiness or silently choose a fallback.
 
 ## Meeting status
 
 The meeting page shows a compact automatic-processing panel with separate Transcript and Notes steps. It translates durable waiting and failure reasons such as worker offline, unavailable model, busy slot, unconfigured provider, unavailable provider, changed recipe, and source confirmation required. A disabled stage is shown as **Skipped**, not as waiting, error, or canceled. A workflow with ASR or Notes disabled does not claim that missing generated output completed.
+
+The workflow response includes nullable `action_blocked_reason`, evaluated from the same
+live admission and quarantine guard as its mutation endpoints. While that guard blocks work,
+`retry_notes`, `apply_current_settings`, and `use_current_source` are unavailable; Cancel keeps
+its established lifecycle. Reading status does not modify the saved recipe, steps, attempts or
+source. A completed or skipped result stays completed or skipped during maintenance. A
+stage-local diarization fence has its own explanation and does not automatically remove valid
+Notes or source-recovery actions. Older responses without the optional field retain their
+existing waiting-reason interpretation.
 
 The workflow supports these public actions:
 
