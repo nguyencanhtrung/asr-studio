@@ -1747,12 +1747,6 @@ button.provider-overview-row:focus-visible {
   background: var(--surface);
 }
 
-.settings-provider-page > .connection-section:first-of-type {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
-}
-
 .settings-provider-page > .connection-section:last-of-type,
 .settings-provider-page > .connection-account-details:last-child {
   margin-bottom: 0;
