@@ -599,6 +599,7 @@ def claim_next_task(
                 _mark_stage_policy_attention,
                 _stage_is_enabled,
                 _stage_policy_admission_reason,
+                _workflow_policy_attention_reason,
                 _workflow_stage_policy,
             )
 
@@ -608,7 +609,11 @@ def claim_next_task(
             ).fetchone()
             policy = _workflow_stage_policy(workflow) if workflow is not None else None
             if policy is None:
-                admission_reason = "unknown_stage_policy"
+                admission_reason = (
+                    _workflow_policy_attention_reason(workflow) or "unknown_stage_policy"
+                    if workflow is not None
+                    else "unknown_stage_policy"
+                )
             elif not _stage_is_enabled(policy, task["kind"]):
                 admission_reason = "stage_disabled"
             else:

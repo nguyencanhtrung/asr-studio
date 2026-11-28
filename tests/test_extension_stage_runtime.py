@@ -130,6 +130,7 @@ def _ready_capable_workflow(
     source_changed: bool = False,
     gate_admission: str = "enabled",
     preference_format: int = 1,
+    session_format: int = 1,
 ):
     data_dir = tmp_path / f"data-{int(asr)}-{int(diarization)}-{int(notes)}"
     initialize(data_dir)
@@ -161,14 +162,17 @@ def _ready_capable_workflow(
             "id, owner_id, client_recording_id, capture_epoch, payload_fingerprint, language_hint, "
             "language_hint_omitted, mime_type, state, epoch, next_sequence, next_offset, "
             "stage_policy_format, stage_policy_intent_json) "
-            "VALUES (?, ?, ?, ?, ?, 'vi', 1, 'audio/webm;codecs=opus', 'archived', 1, 0, 0, 1, ?)",
+            "VALUES (?, ?, ?, ?, ?, 'vi', 1, 'audio/webm;codecs=opus', 'archived', 1, 0, 0, ?, ?)",
             (
                 session_id,
                 "o" * 16,
                 f"client-{session_id}",
                 f"capture-{session_id}",
                 "f" * 64,
-                json.dumps({"format_version": 1}, separators=(",", ":")),
+                session_format,
+                None
+                if session_format == 0
+                else json.dumps({"format_version": 1}, separators=(",", ":")),
             ),
         )
         connection.execute(
@@ -191,6 +195,376 @@ def _ready_capable_workflow(
             duration_seconds=12.0,
         )
     return data_dir, meeting_id
+
+
+def _processing_storage_snapshot(data_dir, meeting_id):
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        workflow = connection.execute(
+            "SELECT id, state, epoch, last_error_code, last_error_message, updated_at "
+            "FROM processing_workflows WHERE meeting_id = ?",
+            (meeting_id,),
+        ).fetchone()
+        assert workflow is not None
+        workflow_id = workflow[0]
+        steps = connection.execute(
+            "SELECT kind, state, waiting_reason, task_id, current_attempt_id, "
+            "source_snapshot_id, source_generation_id, source_version, "
+            "notes_source_version, metadata_version, recipe_version, updated_at "
+            "FROM processing_steps WHERE workflow_id = ? ORDER BY kind",
+            (workflow_id,),
+        ).fetchall()
+        attempts = connection.execute(
+            "SELECT step_id, attempt_number, state, task_id, error_code, updated_at "
+            "FROM processing_attempts WHERE step_id IN "
+            "(SELECT id FROM processing_steps WHERE workflow_id = ?) "
+            "ORDER BY step_id, attempt_number",
+            (workflow_id,),
+        ).fetchall()
+        outbox = connection.execute(
+            "SELECT event_key, event_type, payload_json, processed_at "
+            "FROM processing_outbox WHERE workflow_id = ? ORDER BY event_key",
+            (workflow_id,),
+        ).fetchall()
+        notes_sources = connection.execute(
+            "SELECT id, generation_id, source_version, notes_source_version, snapshot_json "
+            "FROM notes_sources WHERE meeting_id = ? ORDER BY id",
+            (meeting_id,),
+        ).fetchall()
+    return workflow, steps, attempts, outbox, notes_sources
+
+
+def _add_notes_source_marker(data_dir, meeting_id):
+    source_snapshot_id = "s" * 32
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_steps SET source_snapshot_id = ?, recipe_version = 1 "
+            "WHERE workflow_id = (SELECT id FROM processing_workflows WHERE meeting_id = ?) "
+            "AND kind = 'notes'",
+            (source_snapshot_id, meeting_id),
+        )
+        connection.commit()
+    return source_snapshot_id
+
+
+def _assert_gate_rejected_actions(data_dir, meeting_id, state, source_snapshot_id, expected_reason):
+    with pytest.raises(ProcessingError) as retry_error:
+        retry_notes(
+            data_dir,
+            meeting_id,
+            request_id="retry-gate-projection-01",
+            expected_epoch=state["epoch"],
+            source_snapshot_id=source_snapshot_id,
+            confirmed_recipe_version=1,
+        )
+    assert retry_error.value.code == expected_reason
+
+    with pytest.raises(ProcessingError) as settings_error:
+        apply_current_settings(
+            data_dir,
+            meeting_id,
+            expected_epoch=state["epoch"],
+            expected_preferences_version=state["preferences_version"],
+        )
+    assert settings_error.value.code == expected_reason
+
+    with pytest.raises(ProcessingError) as source_error:
+        use_current_source(
+            data_dir,
+            meeting_id,
+            expected_epoch=state["epoch"],
+            expected_generation_id=None,
+            expected_source_version=None,
+            expected_metadata_version=1,
+            expected_notes_source_version=1,
+        )
+    assert source_error.value.code == expected_reason
+
+
+def test_disabled_gate_projection_reports_hold_and_fences_three_mutation_actions(tmp_path):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=True,
+        diarization=False,
+        notes=True,
+        gate_admission="disabled",
+    )
+    source_snapshot_id = _add_notes_source_marker(data_dir, meeting_id)
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    assert state["state"] == "needs_attention"
+    assert state["action_blocked_reason"] == "stage_policy_admission_disabled"
+    assert state["actions"] == {
+        "cancel": True,
+        "retry_notes": False,
+        "apply_current_settings": False,
+        "use_current_source": False,
+    }
+
+    before = _processing_storage_snapshot(data_dir, meeting_id)
+    _assert_gate_rejected_actions(
+        data_dir,
+        meeting_id,
+        state,
+        source_snapshot_id,
+        "stage_policy_admission_disabled",
+    )
+    assert _processing_storage_snapshot(data_dir, meeting_id) == before
+
+
+def test_live_gate_projection_overrides_stale_source_reason_without_get_mutation(tmp_path):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=True,
+        diarization=False,
+        notes=True,
+        source_changed=True,
+    )
+    _add_notes_source_marker(data_dir, meeting_id)
+    initial = processing_state(data_dir, meeting_id)
+    assert initial is not None
+    assert initial["action_blocked_reason"] is None
+    assert initial["actions"] == {
+        "cancel": True,
+        "retry_notes": True,
+        "apply_current_settings": True,
+        "use_current_source": True,
+    }
+    assert all(
+        step["waiting_reason"] == "source_confirmation_required" for step in initial["steps"]
+    )
+
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_cutover_gate SET admission = 'disabled', reason = 'maintenance' "
+            "WHERE id = 1"
+        )
+        connection.commit()
+    before = _processing_storage_snapshot(data_dir, meeting_id)
+
+    held = processing_state(data_dir, meeting_id)
+    assert held is not None
+    assert held["state"] == "needs_attention"
+    assert held["action_blocked_reason"] == "stage_policy_admission_disabled"
+    assert held["actions"] == {
+        "cancel": True,
+        "retry_notes": False,
+        "apply_current_settings": False,
+        "use_current_source": False,
+    }
+    assert all(step["waiting_reason"] == "source_confirmation_required" for step in held["steps"])
+    assert _processing_storage_snapshot(data_dir, meeting_id) == before
+
+
+@pytest.mark.parametrize(
+    ("quarantine_format", "expected_reason"),
+    [(1, "unknown_stage_policy"), (99, "unknown_stage_policy_format")],
+)
+def test_quarantined_policy_projection_uses_specific_reason_and_blocks_actions(
+    tmp_path, quarantine_format, expected_reason
+):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=True,
+        diarization=False,
+        notes=True,
+        source_changed=True,
+    )
+    _add_notes_source_marker(data_dir, meeting_id)
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_workflows SET stage_policy_quarantine_format = ? "
+            "WHERE meeting_id = ?",
+            (quarantine_format, meeting_id),
+        )
+        connection.commit()
+
+    held = processing_state(data_dir, meeting_id)
+    assert held is not None
+    assert held["action_blocked_reason"] == expected_reason
+    assert held["actions"] == {
+        "cancel": True,
+        "retry_notes": False,
+        "apply_current_settings": False,
+        "use_current_source": False,
+    }
+    assert all(step["waiting_reason"] == "source_confirmation_required" for step in held["steps"])
+
+
+def test_unknown_gate_projection_uses_guard_reason_and_preserves_cancel(tmp_path):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=True,
+        diarization=False,
+        notes=True,
+        source_changed=True,
+    )
+    source_snapshot_id = _add_notes_source_marker(data_dir, meeting_id)
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute("UPDATE processing_cutover_gate SET format_version = 99 WHERE id = 1")
+        connection.commit()
+
+    held = processing_state(data_dir, meeting_id)
+    assert held is not None
+    assert held["action_blocked_reason"] == "unknown_stage_policy_gate"
+    assert held["actions"] == {
+        "cancel": True,
+        "retry_notes": False,
+        "apply_current_settings": False,
+        "use_current_source": False,
+    }
+    _assert_gate_rejected_actions(
+        data_dir, meeting_id, held, source_snapshot_id, "unknown_stage_policy_gate"
+    )
+
+
+def test_legacy_format_zero_keeps_actions_when_capable_gate_is_disabled(tmp_path):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=True,
+        diarization=True,
+        notes=True,
+        gate_admission="disabled",
+        session_format=0,
+    )
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    assert state["state"] == "waiting"
+    assert state["stage_policy"] == {
+        "format_version": 0,
+        "asr": True,
+        "diarization": True,
+        "notes": True,
+    }
+    assert state["action_blocked_reason"] is None
+    assert state["actions"] == {
+        "cancel": True,
+        "retry_notes": False,
+        "apply_current_settings": True,
+        "use_current_source": False,
+    }
+
+
+def test_terminal_skipped_projection_keeps_state_when_gate_changes(tmp_path):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=False,
+        diarization=False,
+        notes=True,
+    )
+    initial = processing_state(data_dir, meeting_id)
+    assert initial is not None
+    assert initial["state"] == "succeeded"
+    assert all(step["state"] == "skipped" for step in initial["steps"])
+
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_cutover_gate SET admission = 'disabled', reason = 'maintenance' "
+            "WHERE id = 1"
+        )
+        connection.commit()
+
+    terminal = processing_state(data_dir, meeting_id)
+    assert terminal is not None
+    assert terminal["state"] == "succeeded"
+    assert terminal["action_blocked_reason"] == "stage_policy_admission_disabled"
+    assert all(step["state"] == "skipped" for step in terminal["steps"])
+    assert terminal["actions"] == {
+        "cancel": False,
+        "retry_notes": False,
+        "apply_current_settings": False,
+        "use_current_source": False,
+    }
+
+
+def test_diarization_rollback_fence_does_not_block_notes_or_source_actions(tmp_path):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=True,
+        diarization=False,
+        notes=True,
+    )
+    _add_notes_source_marker(data_dir, meeting_id)
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        workflow_id = connection.execute(
+            "SELECT id FROM processing_workflows WHERE meeting_id = ?", (meeting_id,)
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE processing_workflows SET state = 'needs_attention', "
+            "last_error_code = 'diarization_rollback_fence' WHERE id = ?",
+            (workflow_id,),
+        )
+        connection.execute(
+            "UPDATE processing_steps SET state = 'needs_attention', "
+            "waiting_reason = 'diarization_rollback_fence' "
+            "WHERE workflow_id = ? AND kind = 'transcription'",
+            (workflow_id,),
+        )
+        connection.execute(
+            "UPDATE processing_steps SET state = 'needs_attention', "
+            "waiting_reason = 'provider_unavailable' "
+            "WHERE workflow_id = ? AND kind = 'notes'",
+            (workflow_id,),
+        )
+        connection.commit()
+
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    assert state["action_blocked_reason"] is None
+    assert state["actions"] == {
+        "cancel": True,
+        "retry_notes": True,
+        "apply_current_settings": True,
+        "use_current_source": True,
+    }
+    assert (
+        next(step for step in state["steps"] if step["kind"] == "transcription")["waiting_reason"]
+        == "diarization_rollback_fence"
+    )
+
+
+def test_claim_next_task_preserves_specific_unknown_format_quarantine_reason(tmp_path):
+    data_dir, meeting_id = _ready_capable_workflow(
+        tmp_path,
+        asr=True,
+        diarization=False,
+        notes=False,
+    )
+    state = processing_state(data_dir, meeting_id)
+    assert state is not None
+    transcription = next(step for step in state["steps"] if step["kind"] == "transcription")
+    attempt = next(item for item in state["attempts"] if item["step_id"] == transcription["id"])
+    with _connect(data_dir) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        admitted = admit_automatic_transcription(
+            connection,
+            workflow_id=state["id"],
+            epoch=state["epoch"],
+            request_id=attempt["request_id"],
+            request_hash="q" * 64,
+            model_path=Path("/models/whisper-small"),
+            asr_model="whisper-small",
+            language_hint="vi",
+            device="cpu",
+            compute_type="int8",
+            diarization_model_path=Path("/missing/community-1"),
+            duration_seconds=12.0,
+        )
+    assert admitted is not None
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        connection.execute(
+            "UPDATE processing_workflows SET stage_policy_quarantine_format = 99 WHERE id = ?",
+            (state["id"],),
+        )
+        connection.commit()
+
+    assert (
+        claim_next_task(data_dir, owner_id="quarantine-specific-owner", role="transcription")
+        is None
+    )
+    with sqlite3.connect(database_path(data_dir)) as connection:
+        assert connection.execute(
+            "SELECT status, error_code FROM tasks WHERE id = ?", (admitted["task_id"],)
+        ).fetchone() == ("canceled", "unknown_stage_policy_format")
 
 
 @pytest.mark.parametrize(

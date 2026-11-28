@@ -947,6 +947,7 @@ def processing_state(data_dir: Path, meeting_id: str) -> dict[str, object] | Non
             "ON generations.id = meetings.current_generation_id WHERE meetings.id = ?",
             (meeting_id,),
         ).fetchone()
+        action_blocked_reason = _stage_policy_admission_reason(connection, workflow)
     stage_policy = _workflow_stage_policy(workflow)
     stage_policy_view = (
         {
@@ -1026,12 +1027,16 @@ def processing_state(data_dir: Path, meeting_id: str) -> dict[str, object] | Non
             }
             for attempt in attempts
         ],
+        "action_blocked_reason": action_blocked_reason,
         "actions": {
             "cancel": workflow["state"] not in {"canceled", "deleted", "succeeded"},
-            "retry_notes": workflow["state"] not in {"canceled", "deleted"}
+            "retry_notes": action_blocked_reason is None
+            and workflow["state"] not in {"canceled", "deleted"}
             and any(step["kind"] == "notes" and step["source_snapshot_id"] for step in steps),
-            "apply_current_settings": workflow["state"] in {"waiting", "needs_attention"},
-            "use_current_source": workflow["state"] == "needs_attention",
+            "apply_current_settings": action_blocked_reason is None
+            and workflow["state"] in {"waiting", "needs_attention"},
+            "use_current_source": action_blocked_reason is None
+            and workflow["state"] == "needs_attention",
         },
     }
 
