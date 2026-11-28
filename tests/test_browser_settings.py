@@ -1024,8 +1024,32 @@ def test_settings_heading_levels_and_provider_titles_use_the_two_sans_roles(live
     page.get_by_role("tab", name="AI Provider").click()
     page.get_by_role("button", name=re.compile(r"^OpenAI:")).click()
     provider_title = page.locator("#connection-section-title")
-    # The provider title starts where every other section's title starts: no rule above it.
-    assert abs(provider_title.evaluate("e => e.getBoundingClientRect().top") - title_top) <= 4
+    # Provider pages use bordered cards. Align the card with the section start,
+    # then keep the heading inside its padding rather than flush with the edge.
+    card = provider_title.evaluate(
+        """title => {
+          const card = title.closest('.connection-section');
+          const box = card.getBoundingClientRect();
+          const heading = title.getBoundingClientRect();
+          const style = getComputedStyle(card);
+          return {
+            top: box.top, bottom: box.bottom,
+            titleTop: heading.top, titleBottom: heading.bottom,
+            paddingTop: parseFloat(style.paddingTop),
+            paddingBottom: parseFloat(style.paddingBottom),
+            borders: ['Top', 'Right', 'Bottom', 'Left'].map(
+              side => parseFloat(style[`border${side}Width`])
+            ),
+          };
+        }"""
+    )
+    assert abs(card["top"] - title_top) <= 4, card
+    assert all(width > 0 for width in card["borders"]), card
+    assert card["paddingTop"] > 0, card
+    assert card["titleTop"] >= card["top"] + card["borders"][0] + card["paddingTop"] - 1, card
+    assert card["titleBottom"] <= card["bottom"] - card["borders"][2] - card["paddingBottom"] + 1, (
+        card
+    )
     assert provider_title.evaluate(
         "e => [getComputedStyle(e).fontSize, getComputedStyle(e).fontWeight]"
     ) == [
