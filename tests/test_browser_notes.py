@@ -1814,7 +1814,9 @@ def test_return_to_latest_reconciles_a_newer_save_before_editing_or_copying(
     assert len(latest_reads) == 1
     latest_reads.pop().continue_()
     expect(preview).to_contain_text("Reconciled save four")
-    expect(save).to_be_visible()
+    # Returning to the latest revision leaves the reader in View mode. Save is
+    # intentionally exposed only after the user enters an editing mode.
+    expect(save).to_be_hidden()
     assert not urlsplit(page.url).query
     if control == "button":
         expect(chooser).to_be_hidden()
@@ -2818,6 +2820,17 @@ def _contrast(foreground: str, background: str) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
+def _notes_content_width(page):
+    return page.evaluate(
+        """() => {
+          const frame = document.querySelector('.notes-frame');
+          const style = getComputedStyle(frame);
+          return frame.clientWidth
+            - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        }"""
+    )
+
+
 @pytest.mark.parametrize("width", [1440, 390])
 def test_saved_notes_are_one_full_width_frame_with_a_view_write_group(live, signed_in, width):
     _context, page = signed_in(viewport={"width": width, "height": 900})
@@ -2856,7 +2869,13 @@ def test_saved_notes_are_one_full_width_frame_with_a_view_write_group(live, sign
         expect(page.locator(shown)).to_be_visible()
         expect(page.locator(hidden)).to_be_hidden()
         box = page.locator(shown).bounding_box()
-        assert box is not None and abs(box["width"] - (frame["width"] - 2)) <= 1
+        available = _notes_content_width(page)
+        assert box is not None and box["width"] <= available + 1
+        if width >= 1000:
+            assert 720 <= box["width"] <= 800
+        else:
+            assert abs(box["width"] - available) <= 1
+        assert abs((box["x"] + box["width"] / 2) - (frame["x"] + frame["width"] / 2)) <= 1
 
 
 def test_notes_open_in_view_mode_and_remember_the_last_choice(live, signed_in):
@@ -2961,7 +2980,8 @@ def test_write_mode_shows_a_full_width_readable_textarea(live, signed_in):
     box, frame = textarea.bounding_box(), page.locator(".notes-frame").bounding_box()
     assert box is not None and frame is not None
     assert box["height"] >= 420
-    assert abs(box["width"] - (frame["width"] - 2)) <= 1
+    assert box["width"] <= _notes_content_width(page) + 1
+    assert 720 <= box["width"] <= 800
     # The height comes from min-height, not from the number of rows.
     assert textarea.evaluate("area => { area.rows = 2; return area.offsetHeight; }") >= 420
     assert float(textarea.evaluate("element => getComputedStyle(element).fontSize")[:-2]) >= 13
@@ -3173,6 +3193,7 @@ def test_beforeunload_warns_only_while_a_notes_or_transcript_draft_is_unsaved(li
     assert page.evaluate(warns) is True
     page.locator("#notes-mode-view").click()
     assert page.evaluate(warns) is True
+    page.locator("#notes-mode-write").click()
     page.locator("#notes-save").click()
     expect(page.locator("#notes-copy-export-status")).to_contain_text(
         "Markdown đã được lưu", timeout=10_000

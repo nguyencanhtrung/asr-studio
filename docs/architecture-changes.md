@@ -3284,3 +3284,23 @@ credential, model default, Extension endpoint or deployment changes are included
 requires independent functional/visual acceptance, latest-main integration and
 exact-head CI before merge, followed by cleanup. Tag: design/accessibility.
 Targets: `DESIGN.md` and `docs/frontend-design.md`.
+
+
+### #295 parity hardening after full-suite validation
+
+The workspace keeps its bottom audio dock, separate Notes toolbar and 720–800px
+reading measure. Existing assertions now exercise those deliberate layouts while
+retaining revision reconciliation, source pins, actual media, draft recovery and
+native keyboard navigation. Editable Notes paper and language-choice controls use
+the contrast-safe control border; read-only paper retains the quiet hairline.
+Calendar controls and the phone breadcrumb use their semantic type floors. The
+icon-only native sidebar summary contains a visually hidden label instead of an
+anonymous text grid item or zero-size text.
+
+Transcript recovery notices are ordered by generation and edit kind without
+mutating draft buckets. A completed rerun keeps an already visible, focused search
+above the dock/footer; it does not bring back a search the reader deliberately
+scrolled away from. Native Tab order continues through the workspace breadcrumb
+and all audio/context controls. No custom Tab cycle is introduced. The same audio
+element, generation identity, saved sources and manual edits remain authoritative.
+These changes introduce no backend, authentication, storage or Extension contract.

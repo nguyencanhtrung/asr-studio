@@ -1269,3 +1269,12 @@ still match. Pause/source-change AbortError is not a playback failure. Raising a
 muted volume unmutes it. Follow scrolling uses the visible area above the bottom
 dock, retains the manual-scroll quiet interval and does not follow an offscreen
 list or interrupt a transcript field. The phone dock clears the original footer.
+
+
+#295 accessibility and parity: keep native forward focus order when moving controls
+between the reader and context column. A visible keyboard target may be kept above
+the fixed transport after a rerun, while manual scrolling away remains respected.
+Interactive paper and language choices use control borders; decorative read-only
+paper may use a hairline. Icon-only native summaries retain an accessible label
+in a clipped span and a real control-size font. Reading-measure tests enforce the
+720–800px desktop range and available phone width, not an incidental exact pixel.

@@ -257,3 +257,86 @@ def test_completed_rerun_keeps_visible_keyboard_context(
     )
     expect(target).to_be_focused()
     assert page.evaluate("window.scrollY") == pytest.approx(scroll, abs=1)
+
+
+def test_rerun_completion_respects_a_search_user_scrolled_away_from(
+    live, signed_in, ready_rerun_worker, tmp_path
+):
+    """A background completion must not undo deliberate scrolling while search keeps focus."""
+    _context, page = signed_in(viewport={"width": 390, "height": 900})
+    speakers = [{**READING_SPEAKERS[0], "first_seen_seconds": 0, "last_seen_seconds": 30}]
+    segments = [
+        {
+            **READING_SEGMENTS[0],
+            "id": uuid4().hex,
+            "start_seconds": index,
+            "end_seconds": index + 0.9,
+            "text": f"Reading segment {index + 1}: keep this place while the rerun completes.",
+        }
+        for index in range(30)
+    ]
+    meeting = seed_meeting(
+        live.settings.data_dir, "Manual scroll during rerun", duration_seconds=30
+    )
+    _publish_browser_generation(live, meeting, segments=segments, speakers=speakers)
+    _write_test_recording(live.settings.data_dir, meeting, tmp_path)
+    page.goto(f"{live.url}/meetings/{meeting}#transcript")
+    expect(page.locator(".segment-edit-button").first).to_be_enabled()
+    page.locator("#start-transcription").click()
+    submit = page.locator("#transcription-rerun-submit")
+    expect(submit).to_be_enabled()
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/tasks") and response.request.method == "POST"
+    ) as accepted:
+        submit.press("Enter")
+    assert accepted.value.status == 202
+    task = accepted.value.json()
+    search = page.locator("#transcript-search")
+    search.focus()
+    expect(search).to_be_focused()
+    page.mouse.move(190, 450)
+    page.mouse.wheel(0, 10_000)
+    page.wait_for_function(
+        "() => document.querySelector('#transcript-search').getBoundingClientRect().bottom < 0"
+    )
+    expect(search).to_be_focused()
+    page.evaluate("""() => {
+        window.completionScrollCalls = [];
+        const original = window.scrollBy.bind(window);
+        window.scrollBy = (...args) => {
+            window.completionScrollCalls.push(args);
+            return original(...args);
+        };
+    }""")
+    owner = "browser-manual-scroll-completion"
+    claimed = claim_next_task(live.settings.data_dir, owner_id=owner)
+    assert claimed and claimed["id"] == task["id"]
+    assert update_task_progress(
+        live.settings.data_dir,
+        task["id"],
+        owner_id=owner,
+        stage="publishing",
+        elapsed_seconds=1,
+        transcript_end_seconds=30,
+        segment_count=len(segments),
+    )
+    generation = publish_complete_generation(
+        live.settings.data_dir,
+        task["id"],
+        owner_id=owner,
+        segments=[dict(segment, id=uuid4().hex) for segment in segments],
+        speakers=speakers,
+        language_probability=0.9,
+        elapsed_seconds=1,
+    )
+    assert generation
+    page.evaluate(
+        "async id => (await import('/assets/history.js')).meetingHistory.refreshMeeting(id)",
+        meeting,
+    )
+    expect(page.locator("#transcript-context")).to_have_attribute(
+        "data-generation-id", generation["id"]
+    )
+    expect(search).to_be_focused()
+    assert page.evaluate("window.completionScrollCalls") == []
+    assert search.bounding_box()["y"] + search.bounding_box()["height"] < 0

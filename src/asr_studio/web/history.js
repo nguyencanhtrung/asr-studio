@@ -1263,6 +1263,17 @@ function renderMeetingProcessingStatus(task, generation, processing = store.getS
 // The backend names a speaker nobody renamed "Speaker 3"; its chip invites a name.
 const DEFAULT_SPEAKER_NAME = /^Speaker \d+$/;
 
+// Recovery notices are grouped by generation, then by the kind of edit.  Keep speaker
+// changes before segment text so a rerun reads like the editor: identify the speaker,
+// then review the words.  This is presentation order only; the draft buckets remain
+// untouched and retain every manual edit.
+const TRANSCRIPT_DRAFT_FIELD_ORDER = {
+  speakerAddName: 0,
+  speakerName: 1,
+  speakerAssignment: 2,
+  segmentText: 3,
+};
+
 // The default names a transcript still carries, for the notes reminder to name them.
 function defaultSpeakerNames(generation) {
   const speakers = generation && Array.isArray(generation.speakers) ? generation.speakers : [];
@@ -1451,6 +1462,12 @@ function renderTranscriptDraftRecovery(transcription, shownId) {
       });
     }
   }
+  entries.sort((left, right) => {
+    const generationOrder = (left.generationNumber || 0) - (right.generationNumber || 0);
+    if (generationOrder) return generationOrder;
+    return (TRANSCRIPT_DRAFT_FIELD_ORDER[left.field] ?? Number.MAX_SAFE_INTEGER)
+      - (TRANSCRIPT_DRAFT_FIELD_ORDER[right.field] ?? Number.MAX_SAFE_INTEGER);
+  });
   const renderKey = JSON.stringify(entries);
   panel.hidden = entries.length === 0;
   if (panel.dataset.renderKey === renderKey) return;
@@ -3016,6 +3033,39 @@ function renderTaskProgress(progress, task) {
   $("#task-progress-stage").textContent = taskStageLabel(task);
 }
 
+// A completed rerun can repaint the reading column while the user is typing in its search.
+// Preserve that real keyboard context without taking over a different navigation or focus
+// target.  The fixed player (and the phone footer) are the only lower-edge occluders.
+function transcriptFocusGeometry(element) {
+  if (!element?.isConnected || !element.getClientRects().length) return;
+  const box = element.getBoundingClientRect();
+  const rootStyle = getComputedStyle(document.documentElement);
+  const ceiling = parseFloat(rootStyle.scrollPaddingTop) || 0;
+  const player = $(".player-bar");
+  const footer = $(".sidebar-footer");
+  let floor = window.innerHeight;
+  if (player && !player.hidden) floor = Math.min(floor, player.getBoundingClientRect().top - 12);
+  if (footer && getComputedStyle(footer).position === "fixed") {
+    floor = Math.min(floor, footer.getBoundingClientRect().top - 8);
+  }
+  return { box, ceiling, floor };
+}
+
+function transcriptControlVisible(element) {
+  const geometry = transcriptFocusGeometry(element);
+  return Boolean(geometry)
+    && geometry.box.top >= geometry.ceiling
+    && geometry.box.bottom <= geometry.floor;
+}
+
+function keepFocusedTranscriptControlVisible(element) {
+  const geometry = transcriptFocusGeometry(element);
+  if (!geometry) return;
+  const { box, ceiling, floor } = geometry;
+  const delta = box.top < ceiling ? box.top - ceiling : box.bottom > floor ? box.bottom - floor : 0;
+  if (delta) window.scrollBy({ top: delta, behavior: "instant" });
+}
+
 function renderTranscription(transcription) {
   const meeting = nav().meeting;
   const recording = recordingInfo(meeting);
@@ -3029,6 +3079,9 @@ function renderTranscription(transcription) {
   const advanced = $("#transcript-processing");
   const statusLine = $("#transcription-status");
   const statusHadFocus = document.activeElement === statusLine;
+  const search = $("#transcript-search");
+  const searchHadFocus = document.activeElement === search;
+  const searchWasVisible = searchHadFocus && transcriptControlVisible(search);
   const completed = Boolean(
     generation && (!task || task.status === "succeeded")
     && !view.requestBusy && !view.notice && !view.error.visible,
@@ -3128,6 +3181,9 @@ function renderTranscription(transcription) {
     const target = completed && !advanced.open
       ? advanced.querySelector(":scope > summary") : statusLine;
     target.focus();
+  }
+  if (searchWasVisible && completed && presentationChanged && document.activeElement === search) {
+    keepFocusedTranscriptControlVisible(search);
   }
 }
 

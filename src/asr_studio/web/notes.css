@@ -1481,7 +1481,7 @@ a.notes-citation-chip:focus-visible {
 .notes-toolbar-actions > .text-button {
   min-height: 36px;
   padding-inline: 10px;
-  font-size: var(--text-label);
+  font-size: var(--text-control);
 }
 
 .notes-mode-toggle {
@@ -1492,7 +1492,7 @@ a.notes-citation-chip:focus-visible {
 .notes-mode-button {
   min-height: 34px;
   padding-inline: 9px;
-  font-size: var(--text-label);
+  font-size: var(--text-control);
 }
 
 /* Viết is the clear edit entry point in view mode, while Xem/Markdown remain reachable. */
@@ -1522,6 +1522,12 @@ a.notes-citation-chip:focus-visible {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   background: var(--surface);
+}
+
+/* An editable paper is a form control boundary, not a decorative reading rule. */
+.notes-frame:has(textarea:not([hidden])),
+.notes-frame:has(.notes-rich-editor:not([hidden])) {
+  border-color: var(--control-border);
 }
 
 .notes-draft-banner {
@@ -1676,7 +1682,7 @@ a.notes-citation-chip:focus-visible {
 .notes-saved-work #notes-mode-write,
 .notes-saved-work #notes-history-open { width: 36px; padding: 0; }
 .notes-document-details { margin-top: 12px; color: var(--ink-3); font-size: var(--text-small); }
-.notes-document-details summary { width: fit-content; cursor: pointer; padding-block: 4px; }
+.notes-document-details summary { width: fit-content; cursor: pointer; padding-block: 4px; font-size: var(--text-control); }
 .notes-document-details .notes-revision-meta { margin-top: 6px; }
 .notes-panel .notes-status { font-size: var(--text-small); }
 @media (max-width: 1100px) {

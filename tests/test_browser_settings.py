@@ -376,15 +376,22 @@ def test_phone_settings_open_from_the_top_bar_and_the_dialog_scrolls(
     gear = page.get_by_role("button", name="Cài đặt")
     expect(gear).to_be_visible()
     box = gear.bounding_box()
-    header = page.locator(".workspace-header").bounding_box()
-    assert box["y"] + box["height"] <= header["y"], box
+    footer = page.locator(".sidebar-footer")
+    footer_box = footer.bounding_box()
+    viewport_height = page.evaluate("window.innerHeight")
+    assert footer.evaluate("element => getComputedStyle(element).position") == "fixed"
+    assert footer_box["y"] >= viewport_height - 66 - 1, footer_box
+    assert footer_box["y"] + footer_box["height"] <= viewport_height + 0.5, footer_box
+    assert footer_box["x"] <= 0.5 and footer_box["x"] + footer_box["width"] >= width - 0.5
+    assert footer_box["y"] <= box["y"]
+    assert box["y"] + box["height"] <= footer_box["y"] + footer_box["height"] + 0.5, box
     assert 34 <= box["width"] <= 40 and abs(box["width"] - box["height"]) <= 0.5
-    sidebar = page.locator(".sidebar").bounding_box()
-    assert box["x"] + box["width"] <= sidebar["x"] + sidebar["width"] + 0.5
     assert overflow(page) <= 0
     expect(page.get_by_role("link", name="ASR Studio — về workspace")).to_be_visible()
 
-    page.get_by_text("Cuộc họp và lịch", exact=True).focus()
+    summary = page.locator("#sidebar-history > summary")
+    summary.focus()
+    expect(summary).to_be_focused()
     for expected in (
         "#launcher-chatgpt",
         "#launcher-antigravity",
@@ -418,7 +425,7 @@ def test_mobile_history_disclosure_starts_collapsed_and_keeps_native_keyboard_to
     _context, page = signed_in(viewport={"width": 390, "height": 700})
     page.goto(f"{live.url}/")
     history = page.locator("#sidebar-history")
-    summary = history.locator("summary")
+    summary = history.locator(":scope > summary")
     expect(history).not_to_have_attribute("open", "")
     summary.focus()
     page.keyboard.press("Enter")

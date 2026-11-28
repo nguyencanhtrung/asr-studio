@@ -1108,7 +1108,7 @@ button.speaker-chip:disabled .speaker-chip-mark {
 .calendar-view .calendar-large .cal-nav { grid-column: 1; grid-row: 1; justify-content: flex-start; gap: 8px; margin: 0; }
 .calendar-view .calendar-large .cal-title { order: -1; flex: 1; font-family: var(--font-serif); font-size: var(--text-title); font-weight: 470; }
 .calendar-view .calendar-large .cal-pick { grid-column: 2; grid-row: 1; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
-.calendar-view .calendar-large .cal-pick :is(select,input,button) { min-height: 34px; border-color: var(--hairline); border-radius: var(--radius-sm); background: var(--surface); font-size: var(--text-small); }
+.calendar-view .calendar-large .cal-pick :is(select,input,button) { min-height: 34px; border-color: var(--hairline); border-radius: var(--radius-sm); background: var(--surface); font-size: var(--text-control); }
 .calendar-view .calendar-large .cal-month { width: 120px; }
 .calendar-view .calendar-large .cal-year { width: 74px; }
 .calendar-view .calendar-large .cal-summary { grid-column: 1 / -1; margin: 0 0 8px; font-family: var(--font-sans); font-size: var(--text-label); }
@@ -1117,11 +1117,11 @@ button.speaker-chip:disabled .speaker-chip-mark {
 .calendar-view .calendar-large .cal-cell { min-width: 0; min-height: 98px; padding: 8px; border: 1px solid transparent; border-radius: var(--radius-sm); }
 .calendar-view .calendar-large .cal-cell:has(.is-selected) { border-color: var(--accent); background: var(--accent-soft); }
 .calendar-view .calendar-large .cal-cell:has(.is-outside) { opacity: .6; }
-.calendar-view .calendar-large .cal-day { min-height: 22px; padding: 0; flex-wrap: nowrap; gap: 2px; background: transparent; font-size: var(--text-label); }
+.calendar-view .calendar-large .cal-day { min-height: 22px; padding: 0; flex-wrap: nowrap; gap: 2px; background: transparent; font-size: var(--text-control); }
 .calendar-view .calendar-large .cal-day.is-selected { outline: none; }
 .calendar-view .calendar-large .cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .calendar-view .calendar-large .cal-count { min-width: 12px; padding: 0 2px; font-size: var(--text-label); }
-.calendar-view .calendar-large .cal-chip { padding: 3px 5px; border-left: 0; border-radius: 4px; font-size: var(--text-label); }
+.calendar-view .calendar-large .cal-chip { padding: 3px 5px; border-left: 0; border-radius: 4px; font-size: var(--text-control); }
 .calendar-view .calendar-large .cal-undated { display: inline-flex; gap: 10px; justify-self: start; min-width: 0; width: auto; margin-top: 4px; background: var(--surface); }
 .calendar-view .day-panel { position: sticky; top: 84px; padding: 18px; }
 .calendar-view .day-panel h3 { font-family: var(--font-serif); font-size: var(--text-title); font-weight: 470; }
@@ -1212,7 +1212,7 @@ button.speaker-chip:disabled .speaker-chip-mark {
 
 #meeting-panel-transcript .transcript-context > summary {
   color: var(--ink);
-  font-size: var(--text-label);
+  font-size: var(--text-control);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1266,7 +1266,7 @@ button.speaker-chip:disabled .speaker-chip-mark {
   min-width: 0;
   min-height: 34px;
   padding-inline: 9px;
-  font-size: var(--text-label);
+  font-size: var(--text-control);
 }
 
 #meeting-panel-transcript #transcript-filter-status {
@@ -1414,7 +1414,7 @@ button.speaker-chip:disabled .speaker-chip-mark {
   background: var(--surface-subtle);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: var(--text-label);
+  font-size: var(--text-control);
 }
 
 #meeting-panel-transcript .audio-volume-control {

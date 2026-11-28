@@ -90,6 +90,13 @@ def rect(locator):
     )
 
 
+def assert_row_clear_of_bottom_dock(page, row):
+    """The source row stays visible in the reading surface, above the fixed transport."""
+    bar, box = rect(page.locator(".player-bar")), rect(row)
+    assert box["top"] >= 0 and box["bottom"] <= bar["top"] - 1, (bar, box)
+    assert box["bottom"] <= page.viewport_size["height"] + 1
+
+
 def long_document(segment_ids):
     return {
         "schema_version": 1,
@@ -231,10 +238,13 @@ def test_an_edited_bullet_loses_its_chips_and_no_other_bullet_loses_or_gains_any
     assert moved["Confirm the review date."] == ["00:04"]
 
     # Saved, the edit survives a reload and the stored citations are untouched.
+    # Returning to the saved revision leaves the intentional Write step as the gate for saving.
+    page.locator("#notes-mode-write").click()
     page.locator("#notes-save").click()
     expect(page.locator("#notes-copy-export-status")).to_contain_text(
         "Markdown đã được lưu", timeout=10_000
     )
+    page.locator("#notes-mode-view").click()
     page.reload()
     expect(page.locator("#notes-preview li").first).to_be_visible(timeout=10_000)
     assert chip_labels(page)["Who will review the draft?"] == []
@@ -389,7 +399,7 @@ def test_each_revision_shows_chips_that_open_its_own_saved_source(live, signed_i
     expect(page.locator("#notes-source-difference")).to_contain_text("đã được sửa")
 
 
-# ---- AC 5: a click opens the Transcript tab and the card under the player, plays, marks; Back ----
+# ---- AC 5: a click opens the Transcript source panel, plays, marks; Back ----
 
 
 def test_a_click_opens_the_source_under_the_player_plays_it_and_marks_its_row(
@@ -416,13 +426,12 @@ def test_a_click_opens_the_source_under_the_player_plays_it_and_marks_its_row(
     assert audio.evaluate("element => element.currentTime >= 24.7")  # sought, and playing on
     assert audio.evaluate("element => !element.paused || element.ended")
 
-    # The segment it names is marked, labelled, and brought into view below the sticky player.
+    # The segment it names is marked, labelled, and brought into view above the bottom dock.
     row = page.locator(".transcript-segment.is-notes-source")
     expect(row).to_have_count(1)
     assert row.get_attribute("data-segment-id") == segment_ids[25]
     expect(row.locator(".segment-source-mark")).to_have_text("Nguồn của mục notes")
-    bar, box = rect(page.locator(".player-bar")), rect(row)
-    assert box["top"] >= bar["bottom"] - 1 and box["bottom"] <= page.viewport_size["height"] + 1
+    assert_row_clear_of_bottom_dock(page, row)
     assert page.evaluate("window.scrollY") > 0  # the list was far below the card
 
     url = urlsplit(page.url)
@@ -491,7 +500,9 @@ def test_a_browser_that_refuses_to_play_still_opens_and_seeks_the_source(live, s
 
 
 @pytest.mark.parametrize("preference", ["no-preference", "reduce"])
-def test_the_card_sits_directly_under_the_player_in_the_transcript_tab(live, signed_in, preference):
+def test_the_card_sits_in_the_transcript_surface_clear_of_the_bottom_dock(
+    live, signed_in, preference
+):
     _context, page = signed_in(viewport=DESKTOP, reduced_motion=preference)
     meeting_id, *_ = seed_cited_notes(live.settings.data_dir)
     open_notes(live, page, meeting_id)
@@ -500,27 +511,35 @@ def test_the_card_sits_directly_under_the_player_in_the_transcript_tab(live, sig
     page.locator(CHIP).first.click()
     expect_tab(page, "transcript")
     expect(page.locator("#notes-source-view")).to_be_visible()
-    assert page.evaluate(
+    # The card belongs to the transcript surface before the reading/context workspace. The
+    # transport is a fixed bottom dock, so its visual rect cannot be used as the card's
+    # preceding-flow box. Verify the panel ownership and the real visibility clearance instead.
+    layout = page.evaluate(
         """() => {
           const card = document.querySelector("#notes-source-view");
-          return card.parentElement.id === "meeting-panel-transcript"
-            && card.previousElementSibling.classList.contains("player-bar")
-            && card.nextElementSibling.id === "transcription-panel";
+          const panel = card.closest("#meeting-panel-transcript");
+          const player = panel?.querySelector(".player-bar");
+          const context = panel?.querySelector(".transcript-context");
+          const box = element => {
+            const rect = element.getBoundingClientRect();
+            return {
+              top: rect.top, bottom: rect.bottom, left: rect.left,
+              right: rect.right, width: rect.width,
+            };
+          };
+          return {
+            parent: card.parentElement.id,
+            player: box(player),
+            card: box(card),
+            context: box(context),
+          };
         }"""
     )
-    # The citation can reveal its row while the test is sampling. Read both boxes at scroll top
-    # in one browser evaluation so they share the same scroll position.
-    scroll_top, gap = page.evaluate(
-        """() => {
-          window.scrollTo({ top: 0, behavior: "instant" });
-          const card = document.querySelector("#meeting-panel-transcript > #notes-source-view");
-          const player = card.previousElementSibling;
-          const gap = card.getBoundingClientRect().top - player.getBoundingClientRect().bottom;
-          return [window.scrollY, gap];
-        }"""
-    )
-    assert scroll_top == 0
-    assert 0 <= gap <= 32  # nothing but the page's own gap between them
+    assert layout["parent"] == "meeting-panel-transcript"
+    assert layout["context"]["width"] > 0
+    assert layout["card"]["left"] >= 0
+    assert layout["card"]["right"] <= page.viewport_size["width"] + 1
+    assert layout["card"]["bottom"] <= layout["player"]["top"] + 1
 
 
 def test_a_second_click_on_the_same_chip_plays_the_source_again(live, signed_in, tmp_path):
@@ -650,8 +669,7 @@ def test_a_pasted_link_opens_the_source_as_a_click_does(live, signed_in, tmp_pat
     assert pasted.locator("#meeting-audio").evaluate("element => element.currentTime >= 24.7")
     row = pasted.locator(".transcript-segment.is-notes-source")
     assert row.get_attribute("data-segment-id") == segment_ids[25]
-    bar, box = rect(pasted.locator(".player-bar")), rect(row)
-    assert box["top"] >= bar["bottom"] - 1 and box["bottom"] <= pasted.viewport_size["height"] + 1
+    assert_row_clear_of_bottom_dock(pasted, row)
 
     # Without the hash the link still lands where the card is; with #notes the notes tab shows
     # and the source stays loaded for the tab switch.
@@ -747,9 +765,17 @@ def test_a_chip_takes_keyboard_focus_with_a_visible_ring_and_opens_on_enter(live
     meeting_id, *_ = seed_cited_notes(live.settings.data_dir)
     open_notes(live, page, meeting_id)
 
-    # The view/write switch sits above the frame, so its Viết is the Tab stop before the chips.
+    # The toolbar now keeps history/copy actions alongside the mode switch. Start at Viết
+    # and walk the native tab order to the chips without asserting incidental adjacency.
     page.locator("#notes-mode-write").focus()
-    page.keyboard.press("Tab")
+    for _ in range(32):
+        page.keyboard.press("Tab")
+        if page.evaluate(
+            "() => document.activeElement?.matches('#notes-preview a.notes-citation-chip')"
+        ):
+            break
+    else:
+        raise AssertionError("Tab never reached the first citation chip")
     focused = page.locator(CHIP).first
     expect(focused).to_be_focused()
     ring = focused.evaluate(
@@ -772,7 +798,7 @@ def test_a_chip_takes_keyboard_focus_with_a_visible_ring_and_opens_on_enter(live
 
 
 @pytest.mark.parametrize(
-    ("preference", "behavior"), [("reduce", "auto"), ("no-preference", "smooth")]
+    ("preference", "behavior"), [("reduce", "instant"), ("no-preference", "smooth")]
 )
 def test_the_row_is_scrolled_into_view_only_with_motion_the_reader_allows(
     live, signed_in, tmp_path, preference, behavior
@@ -782,18 +808,18 @@ def test_the_row_is_scrolled_into_view_only_with_motion_the_reader_allows(
     open_notes(live, page, meeting_id)
     page.evaluate(
         """() => {
-          const original = Element.prototype.scrollIntoView;
+          const original = window.scrollBy;
           window.__scrolls = [];
-          Element.prototype.scrollIntoView = function (options) {
-            window.__scrolls.push(options);
-            return original.call(this, options);
+          window.scrollBy = function (...args) {
+            window.__scrolls.push(args.length === 1 ? args[0] : { left: args[0], top: args[1] });
+            return original.apply(this, args);
           };
         }"""
     )
     page.locator(CHIP).filter(has_text="00:25").click()
     expect(page.locator(".transcript-segment.is-notes-source")).to_have_count(1)
     scrolls = page.evaluate("window.__scrolls")
-    assert scrolls[0]["block"] == "nearest"
+    assert scrolls and all(call.get("top") for call in scrolls)
     # Playback may follow along too, but never with motion the reader switched off.
     assert {call["behavior"] for call in scrolls} == {behavior}
 
@@ -825,8 +851,7 @@ def test_a_row_near_the_first_screen_lands_between_the_player_bar_and_the_viewpo
     expect(row).to_have_count(1)
     assert row.get_attribute("data-segment-id") == segment_ids[1]
     expect(page.locator("#notes-source-status")).to_contain_text("tua", timeout=10_000)
-    bar, box = rect(page.locator(".player-bar")), rect(row)
-    assert box["top"] >= bar["bottom"] - 1 and box["bottom"] <= page.viewport_size["height"] + 1
+    assert_row_clear_of_bottom_dock(page, row)
 
 
 def test_a_tab_switch_keeps_keyboard_focus_on_a_citation_chip(live, signed_in):

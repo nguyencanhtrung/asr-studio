@@ -1221,12 +1221,20 @@ def test_notes_tab_holds_the_whole_notes_part(live, signed_in):
         "#notes-revision-selector",
         "#notes-mode-view",
         "#notes-mode-write",
-        "#notes-save",
         "#notes-copy",
         "#notes-export",
         "#notes-preview",
     ):
         expect(panel.locator(selector)).to_be_visible()
+    # Save and Cancel are editing controls: the read view keeps them out of the
+    # toolbar, then exposes both when Write is selected.
+    expect(panel.locator("#notes-save")).to_be_hidden()
+    expect(panel.locator("#notes-edit-cancel")).to_be_hidden()
+    panel.locator("#notes-mode-write").click()
+    expect(panel.locator("#notes-save")).to_be_visible()
+    expect(panel.locator("#notes-edit-cancel")).to_be_visible()
+    panel.locator("#notes-mode-view").click()
+    expect(panel.locator("#notes-save")).to_be_hidden()
     # Nothing of the transcript or the recording is in this tab.
     for selector in (
         "#transcription-panel",

@@ -1644,7 +1644,7 @@ button.provider-overview-row:focus-visible {
   border-color: transparent;
   border-radius: var(--radius-sm);
   color: var(--ink-2);
-  font-size: var(--text-small);
+  font-size: var(--text-control);
   font-weight: 500;
   line-height: 1.35;
   transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
@@ -1802,7 +1802,7 @@ button.provider-overview-row:focus-visible {
 
 .connection-account-details > summary {
   padding: 0 0 10px;
-  font-size: var(--text-small);
+  font-size: var(--text-control);
 }
 
 .connection-account-details[open] > summary {
@@ -1993,7 +1993,7 @@ button.provider-overview-row:focus-visible {
 
 .settings-field .language-option {
   min-height: 40px;
-  border-color: var(--hairline);
+  border-color: var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--surface-subtle);
   font-size: var(--text-small);
