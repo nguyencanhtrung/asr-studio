@@ -3312,6 +3312,48 @@ def test_notes_frame_fits_360px_with_visible_focus_and_readable_colors(live, sig
     for name, (foreground, background) in pairs.items():
         assert _contrast(foreground, background) >= 4.5, (name, foreground, background)
 
+    def mode_visuals():
+        return page.evaluate(
+            """() => [...document.querySelectorAll(
+              '#notes-mode-controls .notes-mode-button'
+            )].map(button => {
+              const style = getComputedStyle(button);
+              return {
+                id: button.id,
+                pressed: button.getAttribute('aria-pressed') === 'true',
+                background: style.backgroundColor,
+                color: style.color,
+                border: style.borderColor,
+              };
+            })"""
+        )
+
+    def assert_mode_visual_truth(active_mode):
+        visuals = mode_visuals()
+        active = [item for item in visuals if item["pressed"]]
+        idle = [item for item in visuals if not item["pressed"]]
+        assert [item["id"] for item in active] == [f"notes-mode-{active_mode}"]
+        assert idle
+
+        def signature(item):
+            return (item["background"], item["color"], item["border"])
+
+        assert len({signature(item) for item in idle}) == 1
+        assert signature(active[0]) != signature(idle[0])
+
+    def activate_mode_with_keyboard(mode):
+        button = page.locator(f"#notes-mode-{mode}")
+        button.focus()
+        page.keyboard.press("Space")
+        page.mouse.move(0, 0)
+        expect(button).to_have_attribute("aria-pressed", "true")
+
+    # The selected treatment must follow the live mode state, including the rich
+    # editor, while the pointer is away from the controls (no hover styling).
+    for mode in ("view", "rich", "view", "write", "view"):
+        activate_mode_with_keyboard(mode)
+        assert_mode_visual_truth(mode)
+
     # The mode controls follow the revision selector in the reading toolbar.
     # Save/Cancel are available only while editing, so use the visible selector.
     page.locator("#notes-revision-selector").focus()
