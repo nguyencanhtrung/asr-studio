@@ -85,6 +85,18 @@ def test_transcript_layout_and_real_audio_transport(
         expect(control).to_have_accessible_name(name)
         expect(control).to_have_attribute("title", name)
         expect(control.locator("svg")).to_have_attribute("aria-hidden", "true")
+        compact = control.evaluate(
+            """button => {
+              const icon = button.querySelector('svg').getBoundingClientRect();
+              const label = document.createRange();
+              label.selectNodeContents(button.querySelector('span'));
+              return {width: icon.width, height: icon.height,
+                labelLines: label.getClientRects().length};
+            }"""
+        )
+        assert 0 < compact["width"] <= 24, compact
+        assert 0 < compact["height"] <= 24, compact
+        assert compact["labelLines"] == 1, compact
 
     ownership = page.evaluate(
         """() => ({

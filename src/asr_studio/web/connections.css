@@ -685,12 +685,6 @@ button.provider-overview-row:focus-visible {
   line-height: 1.65;
 }
 
-.settings-provider-page > .connection-section:first-of-type {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
-}
-
 .device-section .connection-section-heading h4 {
   font-size: var(--text-body);
 }

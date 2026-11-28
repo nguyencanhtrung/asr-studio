@@ -1553,6 +1553,24 @@ button.speaker-chip:disabled .speaker-chip-mark {
 #meeting-panel-transcript .audio-native-options[open] > summary { position: absolute; top: 8px; right: 8px; }
 #meeting-panel-transcript .audio-native-options[open] #meeting-audio { display: block; width: 100%; }
 
+/* Review icons and short labels retain their size at every viewport. */
+#meeting-panel-transcript .transcript-review-navigation > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+#meeting-panel-transcript .transcript-review-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
 /* The default desktop review controls share one readable row. Full review text stays in the
    accessible name/title; the visible labels are intentionally short, so the status can remain
    visible on its own quiet line without making the navigation stack. */
@@ -1580,23 +1598,6 @@ button.speaker-chip:disabled .speaker-chip-mark {
     min-width: 0;
     justify-content: flex-end;
     align-items: center;
-  }
-
-  #meeting-panel-transcript .transcript-review-navigation > button {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    white-space: nowrap;
-  }
-
-  #meeting-panel-transcript .transcript-review-icon {
-    width: 14px;
-    height: 14px;
-    flex: 0 0 auto;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.8;
   }
 
   #meeting-panel-transcript #transcript-filter-status {
