@@ -404,3 +404,47 @@ def test_current_play_failure_distinguishes_user_abort_from_media_error(
         expect(error).to_be_visible()
         expect(error).to_have_text("Không phát được bản ghi này.")
     assert page.locator("#meeting-audio").evaluate("audio => audio.paused && !audio.autoplay")
+
+
+@pytest.mark.parametrize("play_result", ["reject", "resolve"])
+@pytest.mark.parametrize("language", ["vi", "en"])
+def test_audio_error_is_not_announced_as_playing(live, signed_in, tmp_path, language, play_result):
+    _context, page = signed_in(viewport={"width": 1440, "height": 900})
+    _open_transcript(live, page, tmp_path, language=language)
+    source = page.locator("#meeting-audio").get_attribute("src")
+    key = page.locator("#meeting-audio").get_attribute("data-audio-key")
+    # Firefox can report a real output failure with paused=false. Reproduce those
+    # observed media facts without playing sound or changing the saved recording.
+    page.evaluate(
+        """outcome => {
+          const audio = document.querySelector('#meeting-audio');
+          Object.defineProperty(audio, 'paused', {configurable: true, value: false});
+          Object.defineProperty(audio, 'error', {configurable: true,
+            value: {code: 3, message: 'Fixture audio output unavailable'}});
+          window.audioRetryProbe = {play: 0, pause: 0};
+          audio.play = () => {
+            window.audioRetryProbe.play += 1;
+            return outcome === 'reject'
+              ? Promise.reject(new Error('Fixture output still unavailable'))
+              : Promise.resolve();
+          };
+          audio.pause = () => { window.audioRetryProbe.pause += 1; };
+          audio.dispatchEvent(new Event('error'));
+        }"""
+    )
+    play = page.locator("#audio-play-toggle")
+    expect(play).to_have_attribute("aria-pressed", "false")
+    expect(play).to_have_accessible_name("Phát bản ghi" if language == "vi" else "Play recording")
+    expect(page.locator("#audio-transport-error")).to_have_text(
+        "Không phát được bản ghi này." if language == "vi" else "This recording cannot be played."
+    )
+    play.click()
+    expect(play).to_be_focused()
+    page.wait_for_function("() => window.audioRetryProbe.play === 1", timeout=5000)
+    assert page.evaluate("window.audioRetryProbe") == {"play": 1, "pause": 0}
+    expect(page.locator("#audio-transport-error")).to_be_visible()
+    page.locator("#audio-native-options > summary").click()
+    expect(page.locator("#meeting-audio")).to_be_visible()
+    expect(page.locator("#meeting-audio")).to_have_attribute("src", source)
+    expect(page.locator("#meeting-audio")).to_have_attribute("data-audio-key", key)
+    expect(play).to_have_attribute("aria-pressed", "false")

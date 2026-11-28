@@ -3311,3 +3311,8 @@ These changes introduce no backend, authentication, storage or Extension contrac
 Provider detail cards keep a complete border and inset header instead of inheriting the old uncarded first-section reset. Notes mode styling follows the actual pressed mode across reading, rich editing and Markdown; the edit entry does not pretend to be selected while reading. Transcript review navigation uses compact localized labels with full accessible names; ordinary desktop controls share a row while conditional filter/source actions retain space.
 
 The normative frontend-design sections now describe the bottom audio dock, safe focus/follow area, source-card flow, mobile context after the reading list, accessible mini-calendar and original Settings/GitHub/version footer. Historical top-player height limits and duplicate follow-scroll guidance are removed rather than contradicted by an appended note. Actual current-candidate rendered/CI evidence belongs in the issue/PR; no performance or live-provider claim is added. Tag: design/accessibility. Target: docs/frontend-design.md.
+
+
+### #295 media error state
+
+The audio transport treats a media error as stopped even when the browser still reports `paused=false`. The play action follows the same condition, so it attempts playback rather than pausing an already failed stream. Failure copy describes playback failure without assuming that the saved recording is invalid. The selected source, native controls and download remain available; no recording, provider, backend or storage contract changes.

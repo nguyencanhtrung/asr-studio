@@ -375,7 +375,7 @@ function renderAudioTransport() {
   player.dataset.enhanced = "true";
   if (nativeOptions?.open) audio.removeAttribute("aria-hidden");
   else audio.setAttribute("aria-hidden", "true");
-  const playing = !audio.paused && !audio.ended;
+  const playing = !audio.error && !audio.paused && !audio.ended;
   const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
   const current = Number.isFinite(audio.currentTime) && audio.currentTime >= 0 ? audio.currentTime : 0;
   const currentTime = $("#audio-current-time");
@@ -420,10 +420,10 @@ async function toggleAudioPlayback() {
   const key = audio.dataset.audioKey;
   const meetingId = audio.dataset.meetingId;
   const current = () => audio.dataset.audioKey === key && audio.dataset.meetingId === meetingId;
-  if (audio.paused || audio.ended) {
+  if (audio.error || audio.paused || audio.ended) {
     try {
       await audio.play();
-      if (current()) setAudioTransportError();
+      if (current() && !audio.error) setAudioTransportError();
     } catch (error) {
       // Pause and source replacement abort a pending play without a media failure.
       if (current() && error.name !== "AbortError") setAudioTransportError(t("Không phát được bản ghi này."));
@@ -3819,7 +3819,7 @@ $("#meeting-audio").addEventListener("ratechange", renderAudioTransport);
 $("#meeting-audio").addEventListener("volumechange", renderAudioTransport);
 $("#meeting-audio").addEventListener("error", () => {
   dispatch({ type: "playback/audio-failed" });
-  setAudioTransportError(t("Không thể giải mã bản ghi. Tải lại file âm thanh hợp lệ rồi thử lại."));
+  setAudioTransportError(t("Không phát được bản ghi này."));
   renderAudioTransport();
 });
 $("#audio-play-toggle").addEventListener("click", toggleAudioPlayback);
